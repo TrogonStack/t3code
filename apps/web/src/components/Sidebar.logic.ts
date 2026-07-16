@@ -570,3 +570,46 @@ export function sortProjectsForSidebar<
     return left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
   });
 }
+
+/**
+ * Order a sorted thread list so spawned subagent threads sit directly under
+ * their parent. Children keep their relative sort order; children whose
+ * parent is not in the list (archived, deleted) stay top-level.
+ */
+export function orderThreadsWithSubagents<
+  T extends {
+    readonly id: string;
+    readonly environmentId: string;
+  },
+>(
+  threads: readonly T[],
+  getParentThreadId: (thread: T) => string | null,
+): { ordered: T[]; subagentThreads: ReadonlySet<T> } {
+  const threadKeys = new Set(threads.map((thread) => `${thread.environmentId}:${thread.id}`));
+  const childrenByParent = new Map<string, T[]>();
+  const subagentThreads = new Set<T>();
+  const topLevel: T[] = [];
+
+  for (const thread of threads) {
+    const parentThreadId = getParentThreadId(thread);
+    const parentKey = parentThreadId === null ? null : `${thread.environmentId}:${parentThreadId}`;
+    if (parentKey !== null && threadKeys.has(parentKey)) {
+      const siblings = childrenByParent.get(parentKey) ?? [];
+      siblings.push(thread);
+      childrenByParent.set(parentKey, siblings);
+      subagentThreads.add(thread);
+    } else {
+      topLevel.push(thread);
+    }
+  }
+
+  const ordered: T[] = [];
+  for (const thread of topLevel) {
+    ordered.push(thread);
+    const children = childrenByParent.get(`${thread.environmentId}:${thread.id}`);
+    if (children) {
+      ordered.push(...children);
+    }
+  }
+  return { ordered, subagentThreads };
+}
