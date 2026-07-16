@@ -738,6 +738,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const data = asRecord(payload?.data);
     if (data?.item !== undefined) {
       entry.toolData = data.item;
+    } else if (data !== undefined) {
+      entry.toolData = data;
     }
   }
   if (itemType) {
