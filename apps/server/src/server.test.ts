@@ -81,6 +81,7 @@ import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -1147,6 +1148,9 @@ const jsonRequestBody = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
+const responseTextEffect = (response: HttpClientResponse.HttpClientResponse) =>
+  response.text.pipe(Effect.mapError((cause) => new TestHttpRequestError({ cause })));
+
 const responseJsonEffect = <A>(response: HttpClientResponse.HttpClientResponse) =>
   response.json.pipe(
     Effect.map((json) => json as A),
@@ -1290,6 +1294,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 302);
       assert.equal(response.headers.location, "http://127.0.0.1:5173/foo/bar?token=test-token");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("wires threads MCP tool services through the production routes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const credential = yield* McpSessionRegistry.issueActiveMcpCredential({
+        threadId: ThreadId.make("00000000-0000-4000-8000-00000000f0f0"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        capabilities: new Set(["preview", "threads"]),
+      });
+      assert.ok(credential);
+
+      const headers = {
+        authorization: credential!.config.authorizationHeader,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      };
+      const initializeResponse = yield* fetchEffect("/mcp", {
+        method: "POST",
+        headers,
+        body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"server-test","version":"1.0.0"}}}',
+      });
+      assert.equal(initializeResponse.status, 200);
+      const sessionId = initializeResponse.headers["mcp-session-id"];
+      assert.ok(sessionId);
+
+      const callResponse = yield* fetchEffect("/mcp", {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId! },
+        body: '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"spawn_thread","arguments":{"prompt":"wiring probe"}}}',
+      });
+      const callBody = yield* responseTextEffect(callResponse);
+      assert.notInclude(callBody, "Service not found");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

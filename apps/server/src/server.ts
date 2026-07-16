@@ -50,6 +50,12 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
+import * as ThreadBootstrap from "./orchestration/Services/ThreadBootstrap.ts";
+import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
+import * as Crypto from "effect/Crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -374,7 +380,30 @@ export const makeRoutesLayerWith = <ROut, E, R>(mcpToolkitDependencies: Layer.La
     ),
   ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
 
-export const makeRoutesLayer = makeRoutesLayerWith(RuntimeCoreDependenciesLive);
+// Everything the MCP threads toolkit resolves at tools/call time must be an
+// exposed output of this bundle; services satisfied higher in the graph
+// type-check but are absent from the captured registration context.
+const McpToolkitDependenciesLive = Layer.mergeAll(
+  RuntimeCoreDependenciesLive,
+  ProviderAdapterRegistryLive.pipe(Layer.provide(RuntimeCoreDependenciesLive)),
+  NodeCrypto.layer,
+);
+
+type McpToolkitDependency =
+  | OrchestrationEngine.OrchestrationEngineService
+  | ProjectionSnapshotQuery.ProjectionSnapshotQuery
+  | ThreadBootstrap.ThreadBootstrapService
+  | ProviderAdapterRegistry.ProviderAdapterRegistry
+  | GitWorkflowService.GitWorkflowService
+  | Crypto.Crypto;
+
+const _assertMcpToolkitDependenciesExposed: [McpToolkitDependency] extends [
+  Layer.Success<typeof McpToolkitDependenciesLive>,
+]
+  ? true
+  : never = true;
+
+export const makeRoutesLayer = makeRoutesLayerWith(McpToolkitDependenciesLive);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
