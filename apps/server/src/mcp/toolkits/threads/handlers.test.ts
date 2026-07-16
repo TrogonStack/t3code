@@ -241,6 +241,38 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
+  it.effect("frees slots when a child turn settles before its session updates", () =>
+    Effect.gen(function* () {
+      const settledChild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          latestTurn: {
+            turnId: "00000000-0000-4000-8000-00000000dddd",
+            state: "completed",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: NOW,
+            assistantMessageId: null,
+            pendingMessageId: null,
+          } as never,
+          session: { status: "running" } as never,
+        });
+      const harness = yield* makeHarness({
+        snapshotThreads: [
+          settledChild("31"),
+          settledChild("32"),
+          settledChild("33"),
+          settledChild("34"),
+        ],
+      });
+      const result = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer));
+      assert.isString(result.threadId);
+    }),
+  );
+
   it.effect("does not count long-dead turnless children against the limit", () =>
     Effect.gen(function* () {
       const staleChild = (suffix: string) =>

@@ -154,16 +154,13 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             if ((thread.parentThreadId ?? null) !== scope.threadId) {
               return false;
             }
-            if (thread.latestTurn?.state === "running") {
-              return true;
+            if (thread.latestTurn !== null) {
+              return thread.latestTurn.state === "running";
             }
             if (thread.session !== null) {
               return thread.session.status === "starting" || thread.session.status === "running";
             }
-            return (
-              thread.latestTurn === null &&
-              nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS
-            );
+            return nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS;
           }).length;
           if (runningChildren >= SUBAGENT_MAX_RUNNING_CHILDREN) {
             return yield* Effect.fail(
