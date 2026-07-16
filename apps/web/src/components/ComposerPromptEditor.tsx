@@ -1165,13 +1165,14 @@ function ComposerInlineTokenPastePlugin() {
           };
           const firstMention = mentions[0];
           if (firstMention && firstMention.start === 0) {
-            const anchorOffset = getExpandedAbsoluteOffsetForPoint(
-              selection.anchor.getNode(),
-              selection.anchor.offset,
+            const startPoint = selection.isBackward() ? selection.focus : selection.anchor;
+            const insertionOffset = getExpandedAbsoluteOffsetForPoint(
+              startPoint.getNode(),
+              startPoint.offset,
             );
             const precedingChar = $getRoot()
               .getTextContent()
-              .slice(anchorOffset - 1, anchorOffset);
+              .slice(insertionOffset - 1, insertionOffset);
             if (precedingChar.length > 0 && !/\s/.test(precedingChar)) {
               nodes.push($createTextNode(" "));
             }

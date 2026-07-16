@@ -119,9 +119,7 @@ export default function FileBrowserPanel({
           });
           return;
         }
-        const currentValue = composer.readSnapshot().value;
-        const needsLeadingSpace = currentValue.length > 0 && !/\s$/.test(currentValue);
-        const inserted = composer.insertTextAtEnd(`${needsLeadingSpace ? " " : ""}${mention} `);
+        const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
         if (!inserted) {
           toastManager.add({
             type: "error",
