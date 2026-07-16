@@ -1144,7 +1144,7 @@ function ComposerInlineTokenPastePlugin() {
         if (mentions.length === 0) {
           return false;
         }
-        event.preventDefault();
+        let inserted = false;
         editor.update(() => {
           const selection = $getSelection();
           if (!$isRangeSelection(selection)) {
@@ -1163,6 +1163,19 @@ function ComposerInlineTokenPastePlugin() {
               }
             }
           };
+          const firstMention = mentions[0];
+          if (firstMention && firstMention.start === 0) {
+            const anchorOffset = getExpandedAbsoluteOffsetForPoint(
+              selection.anchor.getNode(),
+              selection.anchor.offset,
+            );
+            const precedingChar = $getRoot()
+              .getTextContent()
+              .slice(anchorOffset - 1, anchorOffset);
+            if (precedingChar.length > 0 && !/\s/.test(precedingChar)) {
+              nodes.push($createTextNode(" "));
+            }
+          }
           let cursor = 0;
           for (const mention of mentions) {
             if (mention.start < cursor) {
@@ -1183,7 +1196,12 @@ function ComposerInlineTokenPastePlugin() {
             nodes.push($createTextNode(" "));
           }
           selection.insertNodes(nodes);
+          inserted = true;
         });
+        if (!inserted) {
+          return false;
+        }
+        event.preventDefault();
         return true;
       },
       COMMAND_PRIORITY_HIGH,
