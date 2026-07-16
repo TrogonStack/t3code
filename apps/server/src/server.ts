@@ -350,22 +350,31 @@ const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-export const makeRoutesLayer = Layer.mergeAll(
+export const makeRoutesLayerWith = <ROut, E, R>(mcpToolkitDependencies: Layer.Layer<ROut, E, R>) =>
   Layer.mergeAll(
-    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
-      Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
-      Layer.provide(serverEnvironmentHttpApiLayer),
-      Layer.provide(environmentAuthenticatedAuthLayer),
+    Layer.mergeAll(
+      HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+        Layer.provide(authHttpApiLayer),
+        Layer.provide(connectHttpApiLayer),
+        Layer.provide(orchestrationHttpApiLayer),
+        Layer.provide(serverEnvironmentHttpApiLayer),
+        Layer.provide(environmentAuthenticatedAuthLayer),
+      ),
+      otlpTracesProxyRouteLayer,
+      assetRouteLayer,
+      staticAndDevRouteLayer,
+      websocketRpcRouteLayer,
     ),
-    otlpTracesProxyRouteLayer,
-    assetRouteLayer,
-    staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
-  ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+    // Tool handlers resolve their services from the context the toolkit is
+    // registered in; satisfying them higher up type-checks but is absent at
+    // tools/call, so the threads toolkit dependencies are injected here.
+    McpHttpServer.layer.pipe(
+      Layer.provide(McpSessionRegistry.layer),
+      Layer.provide(mcpToolkitDependencies),
+    ),
+  ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+
+export const makeRoutesLayer = makeRoutesLayerWith(RuntimeCoreDependenciesLive);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {

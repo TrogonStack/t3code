@@ -71,7 +71,7 @@ import { vi } from "vite-plus/test";
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import * as ServerConfig from "./config.ts";
-import { makeRoutesLayer } from "./server.ts";
+import { makeRoutesLayerWith } from "./server.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -80,6 +80,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -335,6 +336,7 @@ const buildAppUnderTest = (options?: {
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
+    providerAdapterRegistry?: Partial<ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
@@ -539,7 +541,58 @@ const buildAppUnderTest = (options?: {
       Layer.provide(vcsStatusBroadcasterLayer),
     );
 
-    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
+    const projectionSnapshotQueryLayer = Layer.mock(
+      ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+    )({
+      getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getArchivedShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+      getProjectShellById: () => Effect.succeed(Option.none()),
+      getThreadShellById: () => Effect.succeed(Option.none()),
+      getThreadDetailById: () => Effect.succeed(Option.none()),
+      getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+      getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+      getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+      getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const providerAdapterRegistryLayer = Layer.mock(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+    )({
+      getInstanceInfo: (instanceId) =>
+        Effect.succeed({
+          instanceId,
+          driverKind: "claudeAgent",
+          displayName: undefined,
+          enabled: true,
+          continuationIdentity: "session-id",
+        } as never),
+      ...options?.layers?.providerAdapterRegistry,
+    });
+    const mcpToolkitDependenciesLayer = Layer.mergeAll(
+      orchestrationEngineLayer,
+      projectionSnapshotQueryLayer,
+      threadBootstrapLayer,
+      gitWorkflowLayer,
+      providerAdapterRegistryLayer,
+    );
+
+    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayerWith(mcpToolkitDependenciesLayer), {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
@@ -687,36 +740,7 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(orchestrationEngineLayer),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getArchivedShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          getProjectShellById: () => Effect.succeed(Option.none()),
-          getThreadShellById: () => Effect.succeed(Option.none()),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
-          getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-          getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-          getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-          getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
+      Layer.provide(projectionSnapshotQueryLayer),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
           getTurnDiff: () =>
