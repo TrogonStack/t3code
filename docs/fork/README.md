@@ -6,6 +6,20 @@ divergence, newest last. When upstream ships an equivalent, update the status
 here and note what replaced our version instead of deleting the entry, so the
 history of what we carried and why stays reconstructable.
 
+## Writing an entry
+
+Entries are product focused. Describe what someone can do now and why we
+wanted it, not how it was built. No touched-file lists, component names, or
+implementation details; the linked PR already carries all of that, and code
+detail in the ledger goes stale the moment the code moves.
+
+Each entry uses these sections:
+
+- **What you can do now**: the user-visible capabilities, as bullets.
+- **Why**: the product rationale for carrying the divergence.
+- **Upstream considerations**: whether and how we would submit it upstream,
+  and anything that affects the rebase burden.
+
 ## Statuses
 
 - `active`: carried by this fork, not in upstream.
