@@ -20,6 +20,7 @@ import {
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
+  orderThreadsWithSubagents,
 } from "./Sidebar.logic";
 import {
   EnvironmentId,
@@ -1064,5 +1065,61 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(timestamp).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
+  });
+});
+
+describe("orderThreadsWithSubagents", () => {
+  const thread = (id: string, parentThreadId: string | null = null, environmentId = "env-1") => ({
+    id,
+    environmentId,
+    parentThreadId,
+  });
+
+  it("keeps the incoming order when no thread has a parent", () => {
+    const threads = [thread("a"), thread("b"), thread("c")];
+    const { ordered, subagentThreads } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["a", "b", "c"]);
+    expect(subagentThreads.size).toBe(0);
+  });
+
+  it("moves children directly under their parent, preserving child order", () => {
+    const threads = [
+      thread("child-2", "parent"),
+      thread("other"),
+      thread("child-1", "parent"),
+      thread("parent"),
+    ];
+    const { ordered, subagentThreads } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["other", "parent", "child-2", "child-1"]);
+    expect([...subagentThreads].map((entry) => entry.id).toSorted()).toEqual([
+      "child-1",
+      "child-2",
+    ]);
+  });
+
+  it("keeps orphaned children top-level when the parent is absent", () => {
+    const threads = [thread("orphan", "archived-parent"), thread("solo")];
+    const { ordered, subagentThreads } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["orphan", "solo"]);
+    expect(subagentThreads.size).toBe(0);
+  });
+
+  it("does not match parents across environments", () => {
+    const threads = [thread("parent", null, "env-1"), thread("child", "parent", "env-2")];
+    const { ordered, subagentThreads } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["parent", "child"]);
+    expect(subagentThreads.size).toBe(0);
   });
 });
