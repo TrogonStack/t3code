@@ -15,6 +15,7 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
+import { SubagentThreadLinks } from "./SubagentThreadLinks";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { cn } from "~/lib/utils";
 
@@ -23,6 +24,7 @@ interface ChatHeaderProps {
   activeThreadId: ThreadId;
   draftId?: DraftId;
   activeThreadTitle: string;
+  activeParentThreadId: ThreadId | null;
   activeProjectName: string | undefined;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
@@ -57,6 +59,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   draftId,
   activeThreadTitle,
+  activeParentThreadId,
   activeProjectName,
   openInCwd,
   activeProjectScripts,
@@ -92,6 +95,11 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
         </Tooltip>
+        <SubagentThreadLinks
+          environmentId={activeThreadEnvironmentId}
+          threadId={activeThreadId}
+          parentThreadId={activeParentThreadId}
+        />
       </div>
       <div
         data-chat-header-actions
