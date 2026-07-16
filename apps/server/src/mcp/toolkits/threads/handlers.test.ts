@@ -10,6 +10,7 @@ import {
   SubagentThreadError,
   ThreadId,
 } from "@t3tools/contracts";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -176,7 +177,11 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
             readonly parentThreadId: string;
             readonly modelSelection: { readonly instanceId: string; readonly model: string };
           };
-          readonly prepareWorktree?: { readonly projectCwd: string; readonly baseBranch: string };
+          readonly prepareWorktree?: {
+            readonly projectCwd: string;
+            readonly baseBranch: string;
+            readonly branch: string;
+          };
           readonly runSetupScript?: boolean;
         };
       };
@@ -188,11 +193,29 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         instanceId: CLAUDE_INSTANCE,
         model: "claude-opus-4-6",
       });
-      assert.deepStrictEqual(command.bootstrap.prepareWorktree, {
-        projectCwd: projectShell.workspaceRoot,
-        baseBranch: "main",
-      });
+      assert.strictEqual(command.bootstrap.prepareWorktree?.projectCwd, projectShell.workspaceRoot);
+      assert.strictEqual(command.bootstrap.prepareWorktree?.baseBranch, "main");
+      assert.isTrue(isTemporaryWorktreeBranch(command.bootstrap.prepareWorktree?.branch ?? ""));
       assert.strictEqual(command.bootstrap.runSetupScript, true);
+    }),
+  );
+
+  it.effect("gives each spawned child its own worktree branch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const handlers = yield* makeThreadsToolkitHandlers;
+      yield* handlers.spawn_thread(spawnInput).pipe(Effect.provide(harness.layer));
+      yield* handlers.spawn_thread(spawnInput).pipe(Effect.provide(harness.layer));
+
+      const commands = yield* Ref.get(harness.dispatched);
+      const branches = commands.map(
+        (command) =>
+          (command as { readonly bootstrap: { readonly prepareWorktree?: { branch: string } } })
+            .bootstrap.prepareWorktree?.branch,
+      );
+      assert.strictEqual(branches.length, 2);
+      assert.isDefined(branches[0]);
+      assert.notStrictEqual(branches[0], branches[1]);
     }),
   );
 
@@ -272,6 +295,30 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
           runningChild("02"),
           runningChild("03"),
           runningChild("04"),
+        ],
+      });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
+      assert.strictEqual(error.reason, "concurrency_exceeded");
+    }),
+  );
+
+  it.effect("counts children pending their first session toward the limit", () =>
+    Effect.gen(function* () {
+      const pendingChild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          latestTurn: null,
+          session: null,
+        });
+      const harness = yield* makeHarness({
+        snapshotThreads: [
+          pendingChild("01"),
+          pendingChild("02"),
+          pendingChild("03"),
+          pendingChild("04"),
         ],
       });
       const error = yield* (yield* makeThreadsToolkitHandlers)

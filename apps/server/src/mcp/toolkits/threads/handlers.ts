@@ -11,6 +11,7 @@ import {
   SubagentThreadError,
   ThreadId,
 } from "@t3tools/contracts";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -142,11 +143,21 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
           const shellSnapshot = yield* projectionSnapshotQuery
             .getShellSnapshot()
             .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
-          const runningChildren = shellSnapshot.threads.filter(
-            (thread) =>
-              (thread.parentThreadId ?? null) === scope.threadId &&
-              thread.latestTurn?.state === "running",
-          ).length;
+          // A freshly spawned child has no latest turn until its provider
+          // session reports in, so pending children must count against the
+          // cap alongside running ones.
+          const runningChildren = shellSnapshot.threads.filter((thread) => {
+            if ((thread.parentThreadId ?? null) !== scope.threadId) {
+              return false;
+            }
+            if (thread.latestTurn?.state === "running") {
+              return true;
+            }
+            if (thread.session !== null) {
+              return thread.session.status === "starting" || thread.session.status === "running";
+            }
+            return thread.latestTurn === null;
+          }).length;
           if (runningChildren >= SUBAGENT_MAX_RUNNING_CHILDREN) {
             return yield* Effect.fail(
               subagentError(
@@ -208,7 +219,7 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
           const messageId = MessageId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie));
 
           let prepareWorktree:
-            | { readonly projectCwd: string; readonly baseBranch: string }
+            | { readonly projectCwd: string; readonly baseBranch: string; readonly branch: string }
             | undefined;
           if (envMode === "worktree") {
             const baseBranch =
@@ -225,7 +236,14 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
                 ),
               );
             }
-            prepareWorktree = { projectCwd: project.workspaceRoot, baseBranch };
+            const branchHex = (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).replaceAll("-", "");
+            prepareWorktree = {
+              projectCwd: project.workspaceRoot,
+              baseBranch,
+              branch: buildTemporaryWorktreeBranchName((byteLength) =>
+                branchHex.slice(0, byteLength * 2),
+              ),
+            };
           }
 
           yield* threadBootstrap
