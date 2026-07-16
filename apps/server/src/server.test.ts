@@ -77,6 +77,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -519,6 +520,24 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const projectSetupScriptRunnerLayer = Layer.mock(
+      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+    )({
+      runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      ...options?.layers?.projectSetupScriptRunner,
+    });
+    const orchestrationEngineLayer = Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+      readEvents: () => Stream.empty,
+      dispatch: () => Effect.succeed({ sequence: 0 }),
+      streamDomainEvents: Stream.empty,
+      ...options?.layers?.orchestrationEngine,
+    });
+    const threadBootstrapLayer = ThreadBootstrapLive.pipe(
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(gitWorkflowLayer),
+      Layer.provide(projectSetupScriptRunnerLayer),
+      Layer.provide(vcsStatusBroadcasterLayer),
+    );
 
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -637,12 +656,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
-      Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
-      ),
+      Layer.provide(Layer.mergeAll(threadBootstrapLayer, projectSetupScriptRunnerLayer)),
       Layer.provide(
         Layer.mock(TerminalManager.TerminalManager)({
           ...options?.layers?.terminalManager,
@@ -672,14 +686,7 @@ const buildAppUnderTest = (options?: {
           }),
         ),
       ),
-      Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          ...options?.layers?.orchestrationEngine,
-        }),
-      ),
+      Layer.provide(orchestrationEngineLayer),
       Layer.provide(
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),

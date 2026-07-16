@@ -49,6 +49,7 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -284,7 +285,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreDependenciesWithoutThreadBootstrapLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -319,12 +320,18 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      ServerSecretStore.layer,
       CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
       CloudManagedEndpointRuntimeLive,
     ),
+  ),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesWithoutThreadBootstrapLive.pipe(
+  Layer.provideMerge(
+    ThreadBootstrapLive.pipe(Layer.provide(RuntimeCoreDependenciesWithoutThreadBootstrapLive)),
   ),
 );
 
