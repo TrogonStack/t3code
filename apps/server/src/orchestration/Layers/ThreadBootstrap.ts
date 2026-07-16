@@ -320,10 +320,11 @@ const makeThreadBootstrap = Effect.gen(function* () {
       return yield* bootstrapProgram.pipe(
         Effect.catchCause((cause) => {
           const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-          if (Cause.hasInterruptsOnly(cause)) {
-            return Effect.fail(dispatchError);
-          }
-          return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+          // Interruptions roll back too; a created-but-never-started thread
+          // must not outlive its bootstrap.
+          return Effect.uninterruptible(cleanupCreatedThread()).pipe(
+            Effect.flatMap(() => Effect.fail(dispatchError)),
+          );
         }),
       );
     });

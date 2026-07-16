@@ -25,7 +25,7 @@ import * as ProjectionSnapshotQuery from "../../../orchestration/Services/Projec
 import * as ThreadBootstrap from "../../../orchestration/Services/ThreadBootstrap.ts";
 import * as ProviderAdapterRegistry from "../../../provider/Services/ProviderAdapterRegistry.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { threadsToolkitHandlers } from "./handlers.ts";
+import { makeThreadsToolkitHandlers } from "./handlers.ts";
 
 const PARENT_THREAD_ID = ThreadId.make("00000000-0000-4000-8000-00000000aaaa");
 const CHILD_THREAD_ID = ThreadId.make("00000000-0000-4000-8000-00000000bbbb");
@@ -160,7 +160,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
   it.effect("spawns a worktree-isolated child linked to the parent", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      const result = yield* threadsToolkitHandlers
+      const result = yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread(spawnInput)
         .pipe(Effect.provide(harness.layer));
 
@@ -201,7 +201,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
       const harness = yield* makeHarness({
         parentShell: makeThreadShell({ branch: "feature", worktreePath: "/worktrees/feature" }),
       });
-      yield* threadsToolkitHandlers
+      yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread({ ...spawnInput, envMode: "local" })
         .pipe(Effect.provide(harness.layer));
 
@@ -218,12 +218,31 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
+  it.effect("clamps a child runtime mode that escalates past the parent", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        parentShell: makeThreadShell({ runtimeMode: "approval-required" }),
+      });
+      yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread({ ...spawnInput, runtimeMode: "full-access" })
+        .pipe(Effect.provide(harness.layer));
+
+      const commands = yield* Ref.get(harness.dispatched);
+      const command = commands[0] as {
+        readonly runtimeMode: string;
+        readonly bootstrap: { readonly createThread: { readonly runtimeMode: string } };
+      };
+      assert.strictEqual(command.runtimeMode, "approval-required");
+      assert.strictEqual(command.bootstrap.createThread.runtimeMode, "approval-required");
+    }),
+  );
+
   it.effect("rejects spawning from a spawned child", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         parentShell: makeThreadShell({ parentThreadId: CHILD_THREAD_ID }),
       });
-      const error = yield* threadsToolkitHandlers
+      const error = yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread(spawnInput)
         .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.instanceOf(error, SubagentThreadError);
@@ -255,7 +274,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
           runningChild("04"),
         ],
       });
-      const error = yield* threadsToolkitHandlers
+      const error = yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread(spawnInput)
         .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.strictEqual(error.reason, "concurrency_exceeded");
@@ -265,7 +284,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
   it.effect("requires a model when the provider differs from the parent", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
-      const error = yield* threadsToolkitHandlers
+      const error = yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread({ ...spawnInput, providerInstanceId: ProviderInstanceId.make("codex") })
         .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.strictEqual(error.reason, "unknown_provider");
@@ -277,7 +296,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
       const harness = yield* makeHarness({
         childShell: makeThreadShell({ id: CHILD_THREAD_ID, parentThreadId: null }),
       });
-      const error = yield* threadsToolkitHandlers
+      const error = yield* (yield* makeThreadsToolkitHandlers)
         .await_thread({ threadId: CHILD_THREAD_ID })
         .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.strictEqual(error.reason, "not_a_child");
@@ -297,7 +316,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         childShell: makeThreadShell({ id: CHILD_THREAD_ID, parentThreadId: PARENT_THREAD_ID }),
         childDetail: Effect.succeed(Option.some(detail)),
       });
-      const result = yield* threadsToolkitHandlers
+      const result = yield* (yield* makeThreadsToolkitHandlers)
         .await_thread({ threadId: CHILD_THREAD_ID })
         .pipe(Effect.provide(harness.layer));
       assert.strictEqual(result.status, "completed");
@@ -315,7 +334,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         childShell: makeThreadShell({ id: CHILD_THREAD_ID, parentThreadId: PARENT_THREAD_ID }),
         childDetail: Effect.succeed(Option.some(runningDetail)),
       });
-      const result = yield* threadsToolkitHandlers
+      const result = yield* (yield* makeThreadsToolkitHandlers)
         .await_thread({ threadId: CHILD_THREAD_ID, timeoutSeconds: 0 })
         .pipe(Effect.provide(harness.layer));
       assert.strictEqual(result.status, "timeout");
@@ -338,7 +357,8 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         domainEvents: Stream.fromPubSub(events),
       });
 
-      const awaiting = yield* threadsToolkitHandlers
+      const handlersForFork = yield* makeThreadsToolkitHandlers;
+      const awaiting = yield* handlersForFork
         .await_thread({ threadId: CHILD_THREAD_ID, timeoutSeconds: 30 })
         .pipe(Effect.provide(harness.layer), Effect.forkChild);
 
