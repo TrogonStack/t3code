@@ -14,6 +14,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -265,10 +266,45 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
   );
 });
 
+const DEV_BROWSER_OPEN_MARKER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+// Dev watch restarts re-run startup; without this guard every server-code
+// edit pops a fresh browser tab.
+const shouldSkipDevAutoOpen = Effect.gen(function* () {
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  if (serverConfig.devUrl === undefined) {
+    return false;
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const now = yield* DateTime.now;
+  const markerPath = path.join(serverConfig.stateDir, "dev-browser-opened");
+  const markerFresh = yield* fs.stat(markerPath).pipe(
+    Effect.map((info) =>
+      Option.match(info.mtime, {
+        onNone: () => false,
+        onSome: (modifiedAt) =>
+          DateTime.toEpochMillis(now) - modifiedAt.getTime() < DEV_BROWSER_OPEN_MARKER_MAX_AGE_MS,
+      }),
+    ),
+    Effect.orElseSucceed(() => false),
+  );
+  if (markerFresh) {
+    return true;
+  }
+  yield* fs
+    .writeFileString(markerPath, DateTime.formatIso(now))
+    .pipe(Effect.catch(() => Effect.void));
+  return false;
+});
+
 const maybeOpenBrowser = (target: string) =>
   Effect.gen(function* () {
     const serverConfig = yield* ServerConfig.ServerConfig;
     if (serverConfig.noBrowser) {
+      return;
+    }
+    if (yield* shouldSkipDevAutoOpen) {
       return;
     }
     const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
