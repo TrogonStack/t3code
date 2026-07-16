@@ -30,6 +30,7 @@ import { ThreadsToolkit } from "./tools.ts";
 
 const SUBAGENT_TITLE_MAX_CHARS = 60;
 const SUBAGENT_AWAIT_POLL_INTERVAL = Duration.seconds(5);
+const SUBAGENT_PENDING_GRACE_MS = Duration.toMillis(Duration.minutes(5));
 
 const subagentError = (
   reason: SubagentThreadError["reason"],
@@ -145,7 +146,10 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
           // A freshly spawned child has no latest turn until its provider
           // session reports in, so pending children must count against the
-          // cap alongside running ones.
+          // cap alongside running ones. The pending state is time-bounded:
+          // a child that dies before its session ever reports in must not
+          // occupy a slot forever.
+          const nowMillis = DateTime.toEpochMillis(yield* DateTime.now);
           const runningChildren = shellSnapshot.threads.filter((thread) => {
             if ((thread.parentThreadId ?? null) !== scope.threadId) {
               return false;
@@ -156,7 +160,10 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             if (thread.session !== null) {
               return thread.session.status === "starting" || thread.session.status === "running";
             }
-            return thread.latestTurn === null;
+            return (
+              thread.latestTurn === null &&
+              nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS
+            );
           }).length;
           if (runningChildren >= SUBAGENT_MAX_RUNNING_CHILDREN) {
             return yield* Effect.fail(

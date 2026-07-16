@@ -241,6 +241,26 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
+  it.effect("does not count long-dead turnless children against the limit", () =>
+    Effect.gen(function* () {
+      const staleChild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          latestTurn: null,
+          session: null,
+          createdAt: "1969-12-31T00:00:00.000Z",
+        });
+      const harness = yield* makeHarness({
+        snapshotThreads: [staleChild("21"), staleChild("22"), staleChild("23"), staleChild("24")],
+      });
+      const result = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer));
+      assert.isString(result.threadId);
+    }),
+  );
+
   it.effect("clamps a child runtime mode that escalates past the parent", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
