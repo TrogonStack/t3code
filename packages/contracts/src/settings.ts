@@ -239,9 +239,17 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    nativeTaskRedirect: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({
+        title: "Route subagents through T3 Code",
+        description:
+          "Redirect Claude's built-in Task tool to T3 Code's spawn_thread so subagents run as visible threads.",
+      }),
+    ),
   },
   {
-    order: ["binaryPath", "homePath", "launchArgs"],
+    order: ["binaryPath", "homePath", "launchArgs", "nativeTaskRedirect"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -478,6 +486,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
+  nativeTaskRedirect: Schema.optionalKey(Schema.Boolean),
 });
 
 const CursorSettingsPatch = Schema.Struct({

@@ -187,6 +187,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         customModels: ["claude-custom"],
         launchArgs: "",
+        nativeTaskRedirect: true,
       });
       assert.deepEqual(
         next.textGenerationModelSelection,
@@ -427,6 +428,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/claude",
         homePath: "",
         customModels: [],
+        nativeTaskRedirect: true,
         launchArgs: "",
       });
       assert.deepEqual(next.providers.opencode, {
