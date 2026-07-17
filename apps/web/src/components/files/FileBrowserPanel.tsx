@@ -172,26 +172,36 @@ export default function FileBrowserPanel({
     [entries],
   );
 
-  // The tree stores the dragged row's path as text/plain from inside its
-  // shadow DOM, and the drag data store stays writable for every dragstart
-  // listener in the dispatch, so the composed event can be re-tagged here
-  // with the composer mention payload without reaching into the tree.
+  // Tag tree drags with the composer mention payload. The row is read from
+  // the composed event path (the tree's shadow root is open), so this does
+  // not depend on running after the tree's own dragstart handler; the drag
+  // data store is writable for every dragstart listener in the dispatch.
   const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const panel = panelRef.current;
     if (panel === null) {
       return;
     }
+    const draggedTreePath = (event: DragEvent): string | null => {
+      for (const node of event.composedPath()) {
+        if (node instanceof HTMLElement) {
+          const itemPath = node.getAttribute("data-item-path");
+          if (itemPath !== null) {
+            return itemPath;
+          }
+        }
+      }
+      return event.dataTransfer?.getData("text/plain") ?? null;
+    };
     const tagDragWithMention = (event: DragEvent) => {
       if (event.dataTransfer === null) {
         return;
       }
-      const mention = composerMentionFromTreePath(event.dataTransfer.getData("text/plain"));
+      const mention = composerMentionFromTreePath(draggedTreePath(event) ?? "");
       if (mention === null) {
         return;
       }
       event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mention);
-      event.dataTransfer.effectAllowed = "copyMove";
     };
     panel.addEventListener("dragstart", tagDragWithMention);
     return () => panel.removeEventListener("dragstart", tagDragWithMention);

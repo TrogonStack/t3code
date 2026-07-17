@@ -1885,7 +1885,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = "copy";
+    // The tree constrains the drag to effectAllowed "move"; naming any other
+    // effect here makes the browser cancel the drop outright.
+    event.dataTransfer.dropEffect = "move";
     setIsDragOverComposer(true);
   };
 
@@ -1906,6 +1908,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (mention.length === 0) return;
     if (insertComposerTextAtEnd(`${mention} `)) {
       focusComposer();
+    } else {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: "The composer is busy; try again once it is ready.",
+      });
     }
   };
   const handleInterruptPrimaryAction = useCallback(() => {
