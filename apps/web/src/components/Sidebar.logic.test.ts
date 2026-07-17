@@ -1113,6 +1113,22 @@ describe("orderThreadsWithSubagents", () => {
     expect(subagentThreads.size).toBe(0);
   });
 
+  it("nests grandchildren recursively without dropping any thread", () => {
+    const threads = [thread("grandchild", "child"), thread("child", "parent"), thread("parent")];
+    const { ordered, subagentThreads } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["parent", "child", "grandchild"]);
+    expect(subagentThreads.size).toBe(2);
+  });
+
+  it("keeps every thread when parent links form a cycle", () => {
+    const threads = [thread("a", "b"), thread("b", "a")];
+    const { ordered } = orderThreadsWithSubagents(threads, (entry) => entry.parentThreadId);
+    expect(ordered.map((entry) => entry.id).toSorted()).toEqual(["a", "b"]);
+  });
+
   it("does not match parents across environments", () => {
     const threads = [thread("parent", null, "env-1"), thread("child", "parent", "env-2")];
     const { ordered, subagentThreads } = orderThreadsWithSubagents(

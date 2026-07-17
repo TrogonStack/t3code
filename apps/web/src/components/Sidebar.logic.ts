@@ -604,12 +604,26 @@ export function orderThreadsWithSubagents<
   }
 
   const ordered: T[] = [];
-  for (const thread of topLevel) {
+  const emitted = new Set<T>();
+  const emit = (thread: T) => {
+    if (emitted.has(thread)) {
+      return;
+    }
+    emitted.add(thread);
     ordered.push(thread);
     const children = childrenByParent.get(`${thread.environmentId}:${thread.id}`);
     if (children) {
-      ordered.push(...children);
+      for (const child of children) {
+        emit(child);
+      }
     }
+  };
+  for (const thread of topLevel) {
+    emit(thread);
+  }
+  // Cycle or deep-nesting safety net: never drop a thread from the sidebar.
+  for (const thread of threads) {
+    emit(thread);
   }
   return { ordered, subagentThreads };
 }
