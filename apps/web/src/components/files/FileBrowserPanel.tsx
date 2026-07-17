@@ -132,6 +132,7 @@ export default function FileBrowserPanel({
     showEntryContextMenuRef.current = showEntryContextMenu;
   });
 
+  const dragInProgressRef = useRef(false);
   const { model } = useFileTree({
     composition: {
       contextMenu: {
@@ -150,6 +151,11 @@ export default function FileBrowserPanel({
     initialExpansion: 1,
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      // Starting a drag selects the dragged row; that selection is a side
+      // effect of the gesture, not a request to open the file.
+      if (dragInProgressRef.current) {
+        return;
+      }
       const selectedPath = selectedPaths.at(-1)?.replace(/\/$/, "");
       if (selectedPath && entryKindsRef.current.get(selectedPath) === "file") {
         onOpenFile(selectedPath);
@@ -176,6 +182,8 @@ export default function FileBrowserPanel({
   // the composed event path (the tree's shadow root is open), so this does
   // not depend on running after the tree's own dragstart handler; the drag
   // data store is writable for every dragstart listener in the dispatch.
+  // The capture phase runs before the tree's own dragstart handler selects
+  // the dragged row, so the flag is up before that selection is emitted.
   const panelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const panel = panelRef.current;
@@ -193,19 +201,37 @@ export default function FileBrowserPanel({
       }
       return event.dataTransfer?.getData("text/plain") ?? null;
     };
+    let draggedPath: string | null = null;
     const tagDragWithMention = (event: DragEvent) => {
       if (event.dataTransfer === null) {
         return;
       }
-      const mention = composerMentionFromTreePath(draggedTreePath(event) ?? "");
-      if (mention === null) {
+      const itemPath = draggedTreePath(event);
+      const mention = composerMentionFromTreePath(itemPath ?? "");
+      if (itemPath === null || mention === null) {
         return;
       }
+      draggedPath = itemPath;
+      dragInProgressRef.current = true;
       event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mention);
     };
-    panel.addEventListener("dragstart", tagDragWithMention);
-    return () => panel.removeEventListener("dragstart", tagDragWithMention);
-  }, []);
+    const markDragEnded = () => {
+      dragInProgressRef.current = false;
+      // The drag selected the row as a gesture side effect; drop that
+      // selection so the row is not left active and a later click on it
+      // still produces a selection change that opens the file.
+      if (draggedPath !== null) {
+        model.getItem(draggedPath)?.deselect();
+        draggedPath = null;
+      }
+    };
+    panel.addEventListener("dragstart", tagDragWithMention, true);
+    panel.addEventListener("dragend", markDragEnded);
+    return () => {
+      panel.removeEventListener("dragstart", tagDragWithMention, true);
+      panel.removeEventListener("dragend", markDragEnded);
+    };
+  }, [model]);
 
   return (
     <div
