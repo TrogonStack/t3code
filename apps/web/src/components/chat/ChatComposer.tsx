@@ -78,7 +78,6 @@ import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
-import { MOBILE_COMPOSER_VIEW_TRANSITION_NAME } from "./draftHeroTransition";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
@@ -2062,9 +2061,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       onSubmit={submitComposer}
       className="mx-auto w-full min-w-0 max-w-3xl"
       data-chat-composer-form="true"
-      style={
-        isMobileViewport ? { viewTransitionName: MOBILE_COMPOSER_VIEW_TRANSITION_NAME } : undefined
-      }
     >
       <div
         className={cn(

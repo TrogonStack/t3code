@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { useOpenAddProjectCommandPalette } from "~/commandPaletteContext";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useProjects, useThreadShells } from "~/state/entities";
-import { sortProjectsForSidebar } from "../Sidebar.logic";
+import { sortScopedProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
   MenuItem,
@@ -32,7 +32,7 @@ export function DraftHeroHeadline({
   const openAddProject = useOpenAddProjectCommandPalette();
 
   const orderedProjects = useMemo(
-    () => sortProjectsForSidebar(projects, threads, "updated_at"),
+    () => sortScopedProjectsForSidebar(projects, threads, "updated_at"),
     [projects, threads],
   );
   const projectByKey = useMemo(
@@ -91,7 +91,13 @@ export function DraftHeroHeadline({
       </MenuPopup>
     </Menu>
   ) : (
-    <span className="text-muted-foreground/60">{activeProjectTitle ?? "Add a project"}</span>
+    <button
+      type="button"
+      onClick={openAddProject}
+      className="pointer-events-auto inline cursor-pointer border-current border-b border-dotted text-muted-foreground/60 underline-offset-8 transition-opacity hover:opacity-75 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      {activeProjectTitle ?? "Add a project"}
+    </button>
   );
 
   return (

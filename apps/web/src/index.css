@@ -11,38 +11,34 @@ html[data-mobile-composer-route-transition="true"]::view-transition-new(root) {
   animation: none;
 }
 
-html[data-mobile-composer-route-transition="true"]::view-transition-group(t3-mobile-composer),
-html[data-mobile-composer-route-transition="true"]::view-transition-group(t3-mobile-composer-chrome) {
+html[data-mobile-composer-route-transition="true"]::view-transition-group(t3-mobile-composer) {
   animation-duration: 180ms;
   animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-html[data-mobile-composer-route-transition="true"]::view-transition-image-pair(t3-mobile-composer),
-html[data-mobile-composer-route-transition="true"]::view-transition-image-pair(t3-mobile-composer-chrome) {
+html[data-mobile-composer-route-transition="true"]::view-transition-image-pair(t3-mobile-composer) {
   isolation: isolate;
 }
 
-html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobile-composer),
-html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobile-composer-chrome) {
+html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobile-composer) {
   animation: t3-mobile-composer-old 180ms linear both;
   mix-blend-mode: normal;
 }
 
-html[data-mobile-composer-route-transition="true"]::view-transition-new(t3-mobile-composer),
-html[data-mobile-composer-route-transition="true"]::view-transition-new(t3-mobile-composer-chrome) {
+html[data-mobile-composer-route-transition="true"]::view-transition-new(t3-mobile-composer) {
   animation: t3-mobile-composer-new 180ms linear both;
   mix-blend-mode: normal;
 }
 
-/* The expanded and compact composers have different internal layouts. Keep
-   one snapshot visible at a time so their controls cannot ghost over each
-   other while the shared geometry continues moving and resizing. */
+/* The expanded and compact composers have different internal layouts. Use a
+   brief crossfade while their shared wrapper moves so the layout change does
+   not read as a single-frame cut. */
 @keyframes t3-mobile-composer-old {
   0%,
-  54.99% {
+  35% {
     opacity: 1;
   }
-  55%,
+  65%,
   100% {
     opacity: 0;
   }
@@ -50,10 +46,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-new(t3-mobil
 
 @keyframes t3-mobile-composer-new {
   0%,
-  54.99% {
+  35% {
     opacity: 0;
   }
-  55%,
+  65%,
   100% {
     opacity: 1;
   }
