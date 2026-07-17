@@ -584,10 +584,9 @@ export function orderThreadsWithSubagents<
 >(
   threads: readonly T[],
   getParentThreadId: (thread: T) => string | null,
-): { ordered: T[]; subagentThreads: ReadonlySet<T> } {
+): { ordered: T[]; subagentDepthByThread: ReadonlyMap<T, number> } {
   const threadKeys = new Set(threads.map((thread) => `${thread.environmentId}:${thread.id}`));
   const childrenByParent = new Map<string, T[]>();
-  const subagentThreads = new Set<T>();
   const topLevel: T[] = [];
 
   for (const thread of threads) {
@@ -597,33 +596,32 @@ export function orderThreadsWithSubagents<
       const siblings = childrenByParent.get(parentKey) ?? [];
       siblings.push(thread);
       childrenByParent.set(parentKey, siblings);
-      subagentThreads.add(thread);
     } else {
       topLevel.push(thread);
     }
   }
 
   const ordered: T[] = [];
-  const emitted = new Set<T>();
-  const emit = (thread: T) => {
-    if (emitted.has(thread)) {
+  const subagentDepthByThread = new Map<T, number>();
+  const emit = (thread: T, depth: number) => {
+    if (subagentDepthByThread.has(thread)) {
       return;
     }
-    emitted.add(thread);
+    subagentDepthByThread.set(thread, depth);
     ordered.push(thread);
     const children = childrenByParent.get(`${thread.environmentId}:${thread.id}`);
     if (children) {
       for (const child of children) {
-        emit(child);
+        emit(child, depth + 1);
       }
     }
   };
   for (const thread of topLevel) {
-    emit(thread);
+    emit(thread, 0);
   }
   // Cycle or deep-nesting safety net: never drop a thread from the sidebar.
   for (const thread of threads) {
-    emit(thread);
+    emit(thread, 0);
   }
-  return { ordered, subagentThreads };
+  return { ordered, subagentDepthByThread };
 }

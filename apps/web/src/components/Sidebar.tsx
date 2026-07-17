@@ -322,7 +322,7 @@ function buildThreadJumpLabelMap(input: {
 
 interface SidebarThreadRowProps {
   thread: SidebarThreadSummary;
-  isSubagent: boolean;
+  subagentDepth: number;
   projectCwd: string | null;
   orderedProjectThreadKeys: readonly string[];
   isActive: boolean;
@@ -361,7 +361,7 @@ interface SidebarThreadRowProps {
 
 export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const {
-    isSubagent,
+    subagentDepth,
     orderedProjectThreadKeys,
     isActive,
     jumpLabel,
@@ -676,7 +676,8 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 
   return (
     <SidebarMenuSubItem
-      className={cn("w-full", isSubagent && "pl-3.5")}
+      className="w-full"
+      style={subagentDepth > 0 ? { paddingLeft: `${subagentDepth * 0.875}rem` } : undefined}
       data-thread-item
       onMouseLeave={handleMouseLeave}
       onBlurCapture={handleBlurCapture}
@@ -696,7 +697,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          {isSubagent && (
+          {subagentDepth > 0 && (
             <CornerDownRightIcon
               aria-hidden="true"
               className="size-3 shrink-0 text-muted-foreground/40"
@@ -899,7 +900,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
 });
 
 interface SidebarProjectThreadListProps {
-  subagentThreads: ReadonlySet<SidebarThreadSummary>;
+  subagentDepthByThread: ReadonlyMap<SidebarThreadSummary, number>;
   projectKey: string;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
@@ -951,7 +952,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   props: SidebarProjectThreadListProps,
 ) {
   const {
-    subagentThreads,
+    subagentDepthByThread,
     projectKey,
     projectExpanded,
     hasOverflowingThreads,
@@ -1012,7 +1013,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             <SidebarThreadRow
               key={threadKey}
               thread={thread}
-              isSubagent={subagentThreads.has(thread)}
+              subagentDepth={subagentDepthByThread.get(thread) ?? 0}
               projectCwd={projectCwd}
               orderedProjectThreadKeys={orderedProjectThreadKeys}
               isActive={activeRouteThreadKey === threadKey}
@@ -1261,7 +1262,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     return counts;
   }, [memberProjectByScopedKey, project.memberProjects, projectThreads]);
 
-  const { projectStatus, subagentThreads, visibleProjectThreads, orderedProjectThreadKeys } =
+  const { projectStatus, subagentDepthByThread, visibleProjectThreads, orderedProjectThreadKeys } =
     useMemo(() => {
       const lastVisitedAtByThreadKey = new Map(
         projectThreads.map((thread, index) => [
@@ -1280,7 +1281,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           },
         });
       };
-      const { ordered: visibleProjectThreads, subagentThreads } = orderThreadsWithSubagents(
+      const { ordered: visibleProjectThreads, subagentDepthByThread } = orderThreadsWithSubagents(
         sortThreads(
           projectThreads.filter((thread) => thread.archivedAt === null),
           threadSortOrder,
@@ -1295,7 +1296,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
         ),
         projectStatus,
-        subagentThreads,
+        subagentDepthByThread,
         visibleProjectThreads,
       };
     }, [projectThreads, threadLastVisitedAts, threadSortOrder]);
@@ -2333,7 +2334,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         hiddenThreadStatus={hiddenThreadStatus}
         orderedProjectThreadKeys={orderedProjectThreadKeys}
         renderedThreads={renderedThreads}
-        subagentThreads={subagentThreads}
+        subagentDepthByThread={subagentDepthByThread}
         showEmptyThreadState={showEmptyThreadState}
         shouldShowThreadPanel={shouldShowThreadPanel}
         isThreadListExpanded={isThreadListExpanded}
