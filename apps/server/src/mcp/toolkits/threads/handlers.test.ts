@@ -85,8 +85,9 @@ interface HarnessOptions {
   readonly childDetail?: Effect.Effect<Option.Option<OrchestrationThread>>;
   readonly domainEvents?: Stream.Stream<OrchestrationEvent>;
   readonly instanceEnabled?: boolean;
-  /** Resolvable by id but absent from the shell snapshot, like archived threads. */
+  /** Resolvable by id but absent from both snapshots, like purged threads. */
   readonly lookupOnlyThreads?: ReadonlyArray<OrchestrationThreadShell>;
+  readonly archivedThreads?: ReadonlyArray<OrchestrationThreadShell>;
 }
 
 const makeHarness = (options: HarnessOptions = {}) =>
@@ -101,6 +102,7 @@ const makeHarness = (options: HarnessOptions = {}) =>
           parentShell,
           ...(childShell === undefined ? [] : [childShell]),
           ...(options.snapshotThreads ?? []),
+          ...(options.archivedThreads ?? []),
           ...(options.lookupOnlyThreads ?? []),
         ];
         const found = candidates.find((shell) => shell.id === threadId);
@@ -111,6 +113,13 @@ const makeHarness = (options: HarnessOptions = {}) =>
           snapshotSequence: 1,
           projects: [projectShell],
           threads: [parentShell, ...(options.snapshotThreads ?? [])],
+          updatedAt: NOW,
+        }),
+      getArchivedShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 1,
+          projects: [projectShell],
+          threads: options.archivedThreads ?? [],
           updatedAt: NOW,
         }),
       getProjectShellById: () => Effect.succeed(Option.some(projectShell)),
@@ -401,6 +410,86 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
           runningChild("06"),
           runningChild("07"),
           runningChild("08"),
+        ],
+      });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
+      assert.strictEqual(error.reason, "concurrency_exceeded");
+    }),
+  );
+
+  it.effect("counts archived running children toward the tree budget", () =>
+    Effect.gen(function* () {
+      const runningTurn = {
+        turnId: "00000000-0000-4000-8000-00000000dddd",
+        state: "running",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: null,
+        assistantMessageId: null,
+        pendingMessageId: null,
+      } as never;
+      const archivedRunningChild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          archivedAt: NOW,
+          latestTurn: runningTurn,
+        });
+      const harness = yield* makeHarness({
+        archivedThreads: [
+          archivedRunningChild("71"),
+          archivedRunningChild("72"),
+          archivedRunningChild("73"),
+          archivedRunningChild("74"),
+          archivedRunningChild("75"),
+          archivedRunningChild("76"),
+          archivedRunningChild("77"),
+          archivedRunningChild("78"),
+        ],
+      });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
+      assert.strictEqual(error.reason, "concurrency_exceeded");
+    }),
+  );
+
+  it.effect("reaches running descendants hidden behind an archived intermediate", () =>
+    Effect.gen(function* () {
+      const intermediateId = ThreadId.make("00000000-0000-4000-8000-0000000000ee");
+      const runningGrandchild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: intermediateId,
+          latestTurn: {
+            turnId: "00000000-0000-4000-8000-00000000dddd",
+            state: "running",
+            requestedAt: NOW,
+            startedAt: NOW,
+            completedAt: null,
+            assistantMessageId: null,
+            pendingMessageId: null,
+          } as never,
+        });
+      const harness = yield* makeHarness({
+        archivedThreads: [
+          makeThreadShell({
+            id: intermediateId,
+            parentThreadId: PARENT_THREAD_ID,
+            archivedAt: NOW,
+          }),
+        ],
+        snapshotThreads: [
+          runningGrandchild("81"),
+          runningGrandchild("82"),
+          runningGrandchild("83"),
+          runningGrandchild("84"),
+          runningGrandchild("85"),
+          runningGrandchild("86"),
+          runningGrandchild("87"),
+          runningGrandchild("88"),
         ],
       });
       const error = yield* (yield* makeThreadsToolkitHandlers)

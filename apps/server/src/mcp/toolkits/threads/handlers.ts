@@ -148,9 +148,18 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
                 }),
               ),
             );
-          const shellSnapshot = yield* projectionSnapshotQuery
-            .getShellSnapshot()
-            .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
+          // The budget traversal needs archived threads too: archiving a
+          // running child must not free its slot, and an archived
+          // intermediate node must not hide its descendants from the walk.
+          const [shellSnapshot, archivedShellSnapshot] = yield* Effect.all([
+            projectionSnapshotQuery
+              .getShellSnapshot()
+              .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message))),
+            projectionSnapshotQuery
+              .getArchivedShellSnapshot()
+              .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message))),
+          ]);
+          const knownThreads = [...shellSnapshot.threads, ...archivedShellSnapshot.threads];
 
           // Walk the ancestry to bound tree depth and find the tree root; the
           // running-subagent budget is shared by the whole tree, not per
@@ -192,7 +201,7 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
           // a child that dies before its session ever reports in must not
           // occupy a slot forever.
           const nowMillis = DateTime.toEpochMillis(yield* DateTime.now);
-          const occupiesSlot = (thread: (typeof shellSnapshot.threads)[number]): boolean => {
+          const occupiesSlot = (thread: (typeof knownThreads)[number]): boolean => {
             if (thread.latestTurn !== null) {
               return thread.latestTurn.state === "running";
             }
@@ -209,8 +218,8 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             }
             return nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS;
           };
-          const childrenByParent = new Map<string, Array<(typeof shellSnapshot.threads)[number]>>();
-          for (const thread of shellSnapshot.threads) {
+          const childrenByParent = new Map<string, Array<(typeof knownThreads)[number]>>();
+          for (const thread of knownThreads) {
             const threadParentId = thread.parentThreadId ?? null;
             if (threadParentId !== null) {
               const siblings = childrenByParent.get(threadParentId) ?? [];
