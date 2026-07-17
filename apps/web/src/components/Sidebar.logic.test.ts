@@ -20,6 +20,7 @@ import {
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
+  orderThreadsWithSubagents,
 } from "./Sidebar.logic";
 import {
   EnvironmentId,
@@ -1064,5 +1065,74 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(timestamp).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
+  });
+});
+
+describe("orderThreadsWithSubagents", () => {
+  const thread = (id: string, parentThreadId: string | null = null, environmentId = "env-1") => ({
+    id,
+    environmentId,
+    parentThreadId,
+  });
+
+  it("keeps the incoming order when no thread has a parent", () => {
+    const threads = [thread("a"), thread("b"), thread("c")];
+    const { ordered, subagentDepthByThread } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["a", "b", "c"]);
+    expect([...subagentDepthByThread.values()].every((depth) => depth === 0)).toBe(true);
+  });
+
+  it("moves children directly under their parent, preserving child order", () => {
+    const threads = [
+      thread("child-2", "parent"),
+      thread("other"),
+      thread("child-1", "parent"),
+      thread("parent"),
+    ];
+    const { ordered, subagentDepthByThread } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["other", "parent", "child-2", "child-1"]);
+    expect(ordered.map((entry) => subagentDepthByThread.get(entry))).toEqual([0, 0, 1, 1]);
+  });
+
+  it("keeps orphaned children top-level when the parent is absent", () => {
+    const threads = [thread("orphan", "archived-parent"), thread("solo")];
+    const { ordered, subagentDepthByThread } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["orphan", "solo"]);
+    expect([...subagentDepthByThread.values()].every((depth) => depth === 0)).toBe(true);
+  });
+
+  it("nests grandchildren recursively without dropping any thread", () => {
+    const threads = [thread("grandchild", "child"), thread("child", "parent"), thread("parent")];
+    const { ordered, subagentDepthByThread } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["parent", "child", "grandchild"]);
+    expect(ordered.map((entry) => subagentDepthByThread.get(entry))).toEqual([0, 1, 2]);
+  });
+
+  it("keeps every thread when parent links form a cycle", () => {
+    const threads = [thread("a", "b"), thread("b", "a")];
+    const { ordered } = orderThreadsWithSubagents(threads, (entry) => entry.parentThreadId);
+    expect(ordered.map((entry) => entry.id).toSorted()).toEqual(["a", "b"]);
+  });
+
+  it("does not match parents across environments", () => {
+    const threads = [thread("parent", null, "env-1"), thread("child", "parent", "env-2")];
+    const { ordered, subagentDepthByThread } = orderThreadsWithSubagents(
+      threads,
+      (entry) => entry.parentThreadId,
+    );
+    expect(ordered.map((entry) => entry.id)).toEqual(["parent", "child"]);
+    expect([...subagentDepthByThread.values()].every((depth) => depth === 0)).toBe(true);
   });
 });

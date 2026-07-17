@@ -14,6 +14,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -22,6 +23,7 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -2599,6 +2601,114 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  it.effect("redirects the native Task tool to the threads MCP toolkit", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-claude-test"),
+        threadId: THREAD_ID,
+        providerSessionId: "mcp-session-task-redirect",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer test",
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID)),
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+      const createInput = harness.getLastCreateQueryInput();
+      const canUseTool = createInput?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const result = yield* Effect.promise(() =>
+        canUseTool(
+          "Task",
+          { subagent_type: "general", prompt: "do it", description: "task" },
+          { signal: new AbortController().signal, toolUseID: "tool-use-task-1" },
+        ),
+      );
+      assert.equal(result.behavior, "deny");
+      if (result.behavior === "deny") {
+        assert.include(result.message, "mcp__t3-code__spawn_thread");
+      }
+
+      const systemPrompt = createInput?.options.systemPrompt;
+      assert.deepInclude(systemPrompt, { type: "preset", preset: "claude_code" });
+      assert.include(
+        (systemPrompt as { append?: string }).append ?? "",
+        "mcp__t3-code__await_thread",
+      );
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
+  });
+
+  it.effect("leaves the native Task tool alone when the redirect is disabled", () => {
+    const harness = makeHarness({ claudeConfig: { nativeTaskRedirect: false } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-claude-test"),
+        threadId: THREAD_ID,
+        providerSessionId: "mcp-session-task-off",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer test",
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => McpProviderSession.clearMcpProviderSession(THREAD_ID)),
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate this",
+        attachments: [],
+      });
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+      const createInput = harness.getLastCreateQueryInput();
+      const canUseTool = createInput?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const result = yield* Effect.promise(() =>
+        canUseTool(
+          "Task",
+          { subagent_type: "general", prompt: "do it", description: "task" },
+          { signal: new AbortController().signal, toolUseID: "tool-use-task-2" },
+        ),
+      );
+      assert.equal(result.behavior, "allow");
+      const systemPrompt = createInput?.options.systemPrompt as { append?: string };
+      assert.isUndefined(systemPrompt.append);
+    }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 
   it.effect("bridges approval request/response lifecycle through canUseTool", () => {

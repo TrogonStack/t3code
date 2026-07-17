@@ -95,6 +95,12 @@ import {
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { ThreadId } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
+import { useThreadShells } from "~/state/entities";
+import { buildThreadRouteParams } from "~/threadRoutes";
+import { parseSubagentToolCall } from "./subagentToolCall.ts";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
@@ -1908,12 +1914,29 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot } = props;
   const activity = use(TimelineRowActivityCtx);
+  const shared = use(TimelineRowCtx);
+  const navigate = useNavigate();
+  const threadShells = useThreadShells();
   const [expanded, setExpanded] = useState(false);
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
-  const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
-  const rawPreview = workEntryPreview(workEntry, workspaceRoot);
+  const subagent = parseSubagentToolCall(workEntry);
+  const subagentShell =
+    subagent?.threadId != null
+      ? threadShells.find(
+          (shell) =>
+            shell.environmentId === shared.activeThreadEnvironmentId &&
+            shell.id === subagent.threadId,
+        )
+      : undefined;
+  const subagentLabel = subagentShell?.title ?? subagent?.title ?? null;
+  const entryIconName = showWarningIndicator
+    ? "x"
+    : subagent !== null
+      ? "bot"
+      : workEntryIconName(workEntry);
+  const heading = subagent?.heading ?? toolWorkEntryHeading(workEntry);
+  const rawPreview = subagent !== null ? null : workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
     normalizeCompactToolLabel(rawPreview).toLowerCase() ===
@@ -1921,6 +1944,18 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
+  const openSubagentThread = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    if (subagent?.threadId == null) {
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(
+        scopeThreadRef(shared.activeThreadEnvironmentId, ThreadId.make(subagent.threadId)),
+      ),
+    });
+  };
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const canExpand = expandedBody !== null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
@@ -1982,6 +2017,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span className={cn("min-w-0 shrink truncate", headingClass)}>{heading}</span>
+              {subagent !== null && subagentLabel !== null ? (
+                subagent.threadId !== null ? (
+                  <button
+                    type="button"
+                    onClick={openSubagentThread}
+                    className="min-w-0 shrink-[2] cursor-pointer truncate rounded-full border border-border/60 px-1.5 text-[11px] leading-4 text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+                  >
+                    {subagentLabel}
+                  </button>
+                ) : (
+                  <span className="min-w-0 shrink-[2] truncate rounded-full border border-border/40 px-1.5 text-[11px] leading-4 text-muted-foreground/70">
+                    {subagentLabel}
+                  </span>
+                )
+              ) : null}
               {preview && (
                 <span className="min-w-0 flex-1 truncate text-muted-foreground/55">{preview}</span>
               )}

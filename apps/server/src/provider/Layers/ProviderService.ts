@@ -53,6 +53,7 @@ import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -214,8 +215,23 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  const capabilitiesForInstance = (providerInstanceId: ProviderInstanceId) =>
+    registry.getInstanceInfo(providerInstanceId).pipe(
+      Effect.map(
+        (info): ReadonlySet<McpInvocationContext.McpCapability> =>
+          info.driverKind === "claudeAgent"
+            ? new Set(["preview", "threads"])
+            : new Set(["preview"]),
+      ),
+      Effect.orElseSucceed(
+        (): ReadonlySet<McpInvocationContext.McpCapability> => new Set(["preview"]),
+      ),
+    );
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
-    McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
+    capabilitiesForInstance(providerInstanceId).pipe(
+      Effect.flatMap((capabilities) =>
+        McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId, capabilities }),
+      ),
       Effect.tap((credential) =>
         credential
           ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))

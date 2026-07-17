@@ -71,14 +71,17 @@ import { vi } from "vite-plus/test";
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import * as ServerConfig from "./config.ts";
-import { makeRoutesLayer } from "./server.ts";
+import { makeRoutesLayerWith } from "./server.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -334,6 +337,7 @@ const buildAppUnderTest = (options?: {
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
+    providerAdapterRegistry?: Partial<ProviderAdapterRegistry.ProviderAdapterRegistry["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
@@ -519,8 +523,77 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const projectSetupScriptRunnerLayer = Layer.mock(
+      ProjectSetupScriptRunner.ProjectSetupScriptRunner,
+    )({
+      runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      ...options?.layers?.projectSetupScriptRunner,
+    });
+    const orchestrationEngineLayer = Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
+      readEvents: () => Stream.empty,
+      dispatch: () => Effect.succeed({ sequence: 0 }),
+      streamDomainEvents: Stream.empty,
+      ...options?.layers?.orchestrationEngine,
+    });
+    const threadBootstrapLayer = ThreadBootstrapLive.pipe(
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(gitWorkflowLayer),
+      Layer.provide(projectSetupScriptRunnerLayer),
+      Layer.provide(vcsStatusBroadcasterLayer),
+    );
 
-    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
+    const projectionSnapshotQueryLayer = Layer.mock(
+      ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+    )({
+      getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getArchivedShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+      getProjectShellById: () => Effect.succeed(Option.none()),
+      getThreadShellById: () => Effect.succeed(Option.none()),
+      getThreadDetailById: () => Effect.succeed(Option.none()),
+      getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+      getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+      getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+      getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const providerAdapterRegistryLayer = Layer.mock(
+      ProviderAdapterRegistry.ProviderAdapterRegistry,
+    )({
+      getInstanceInfo: (instanceId) =>
+        Effect.succeed({
+          instanceId,
+          driverKind: "claudeAgent",
+          displayName: undefined,
+          enabled: true,
+          continuationIdentity: "session-id",
+        } as never),
+      ...options?.layers?.providerAdapterRegistry,
+    });
+    const mcpToolkitDependenciesLayer = Layer.mergeAll(
+      orchestrationEngineLayer,
+      projectionSnapshotQueryLayer,
+      threadBootstrapLayer,
+      gitWorkflowLayer,
+      providerAdapterRegistryLayer,
+    );
+
+    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayerWith(mcpToolkitDependenciesLayer), {
       disableListenLog: true,
       disableLogger: true,
     }).pipe(
@@ -637,12 +710,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
-      Layer.provide(
-        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
-          runForThread: () => Effect.succeed({ status: "no-script" as const }),
-          ...options?.layers?.projectSetupScriptRunner,
-        }),
-      ),
+      Layer.provide(Layer.mergeAll(threadBootstrapLayer, projectSetupScriptRunnerLayer)),
       Layer.provide(
         Layer.mock(TerminalManager.TerminalManager)({
           ...options?.layers?.terminalManager,
@@ -672,44 +740,8 @@ const buildAppUnderTest = (options?: {
           }),
         ),
       ),
-      Layer.provide(
-        Layer.mock(OrchestrationEngine.OrchestrationEngineService)({
-          readEvents: () => Stream.empty,
-          dispatch: () => Effect.succeed({ sequence: 0 }),
-          streamDomainEvents: Stream.empty,
-          ...options?.layers?.orchestrationEngine,
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getArchivedShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          getProjectShellById: () => Effect.succeed(Option.none()),
-          getThreadShellById: () => Effect.succeed(Option.none()),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
-          getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-          getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-          getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-          getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(projectionSnapshotQueryLayer),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
           getTurnDiff: () =>
@@ -1116,6 +1148,9 @@ const jsonRequestBody = (value: unknown): string => {
   return JSON.stringify(value);
 };
 
+const responseTextEffect = (response: HttpClientResponse.HttpClientResponse) =>
+  response.text.pipe(Effect.mapError((cause) => new TestHttpRequestError({ cause })));
+
 const responseJsonEffect = <A>(response: HttpClientResponse.HttpClientResponse) =>
   response.json.pipe(
     Effect.map((json) => json as A),
@@ -1259,6 +1294,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 302);
       assert.equal(response.headers.location, "http://127.0.0.1:5173/foo/bar?token=test-token");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("wires threads MCP tool services through the production routes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const credential = yield* McpSessionRegistry.issueActiveMcpCredential({
+        threadId: ThreadId.make("00000000-0000-4000-8000-00000000f0f0"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        capabilities: new Set(["preview", "threads"]),
+      });
+      assert.ok(credential);
+
+      const headers = {
+        authorization: credential!.config.authorizationHeader,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+      };
+      const initializeResponse = yield* fetchEffect("/mcp", {
+        method: "POST",
+        headers,
+        body: '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"server-test","version":"1.0.0"}}}',
+      });
+      assert.equal(initializeResponse.status, 200);
+      const sessionId = initializeResponse.headers["mcp-session-id"];
+      assert.ok(sessionId);
+
+      const callResponse = yield* fetchEffect("/mcp", {
+        method: "POST",
+        headers: { ...headers, "mcp-session-id": sessionId! },
+        body: '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"spawn_thread","arguments":{"prompt":"wiring probe"}}}',
+      });
+      const callBody = yield* responseTextEffect(callResponse);
+      assert.notInclude(callBody, "Service not found");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

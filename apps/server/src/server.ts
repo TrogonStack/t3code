@@ -49,6 +49,13 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
+import * as ThreadBootstrap from "./orchestration/Services/ThreadBootstrap.ts";
+import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
+import * as Crypto from "effect/Crypto";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -284,7 +291,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreDependenciesWithoutThreadBootstrapLive = ReactorLayerLive.pipe(
   // Core Services
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
@@ -319,12 +326,18 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
-  Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      ServerSecretStore.layer,
       CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
       CloudManagedEndpointRuntimeLive,
     ),
+  ),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesWithoutThreadBootstrapLive.pipe(
+  Layer.provideMerge(
+    ThreadBootstrapLive.pipe(Layer.provide(RuntimeCoreDependenciesWithoutThreadBootstrapLive)),
   ),
 );
 
@@ -343,22 +356,53 @@ const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-export const makeRoutesLayer = Layer.mergeAll(
+export const makeRoutesLayerWith = <ROut, E, R>(mcpToolkitDependencies: Layer.Layer<ROut, E, R>) =>
   Layer.mergeAll(
-    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
-      Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
-      Layer.provide(serverEnvironmentHttpApiLayer),
-      Layer.provide(environmentAuthenticatedAuthLayer),
+    Layer.mergeAll(
+      HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+        Layer.provide(authHttpApiLayer),
+        Layer.provide(connectHttpApiLayer),
+        Layer.provide(orchestrationHttpApiLayer),
+        Layer.provide(serverEnvironmentHttpApiLayer),
+        Layer.provide(environmentAuthenticatedAuthLayer),
+      ),
+      otlpTracesProxyRouteLayer,
+      assetRouteLayer,
+      staticAndDevRouteLayer,
+      websocketRpcRouteLayer,
     ),
-    otlpTracesProxyRouteLayer,
-    assetRouteLayer,
-    staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
-  ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+    // Tool handlers resolve their services from the context the toolkit is
+    // registered in; satisfying them higher up type-checks but is absent at
+    // tools/call, so the threads toolkit dependencies are injected here.
+    McpHttpServer.layer.pipe(
+      Layer.provide(McpSessionRegistry.layer),
+      Layer.provide(mcpToolkitDependencies),
+    ),
+  ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+
+// Everything the MCP threads toolkit resolves at tools/call time must be an
+// exposed output of this bundle; services satisfied higher in the graph
+// type-check but are absent from the captured registration context.
+const McpToolkitDependenciesLive = Layer.mergeAll(
+  RuntimeCoreDependenciesLive,
+  ProviderAdapterRegistryLive.pipe(Layer.provide(RuntimeCoreDependenciesLive)),
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+type McpToolkitDependency =
+  | OrchestrationEngine.OrchestrationEngineService
+  | ProjectionSnapshotQuery.ProjectionSnapshotQuery
+  | ThreadBootstrap.ThreadBootstrapService
+  | ProviderAdapterRegistry.ProviderAdapterRegistry
+  | GitWorkflowService.GitWorkflowService
+  | Crypto.Crypto;
+
+const _assertMcpToolkitDependenciesExposed: [McpToolkitDependency] extends [
+  Layer.Success<typeof McpToolkitDependenciesLive>,
+]
+  ? true
+  : never = true;
+
+export const makeRoutesLayer = makeRoutesLayerWith(McpToolkitDependenciesLive);
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {

@@ -570,3 +570,58 @@ export function sortProjectsForSidebar<
     return left.title.localeCompare(right.title) || left.id.localeCompare(right.id);
   });
 }
+
+/**
+ * Order a sorted thread list so spawned subagent threads sit directly under
+ * their parent. Children keep their relative sort order; children whose
+ * parent is not in the list (archived, deleted) stay top-level.
+ */
+export function orderThreadsWithSubagents<
+  T extends {
+    readonly id: string;
+    readonly environmentId: string;
+  },
+>(
+  threads: readonly T[],
+  getParentThreadId: (thread: T) => string | null,
+): { ordered: T[]; subagentDepthByThread: ReadonlyMap<T, number> } {
+  const threadKeys = new Set(threads.map((thread) => `${thread.environmentId}:${thread.id}`));
+  const childrenByParent = new Map<string, T[]>();
+  const topLevel: T[] = [];
+
+  for (const thread of threads) {
+    const parentThreadId = getParentThreadId(thread);
+    const parentKey = parentThreadId === null ? null : `${thread.environmentId}:${parentThreadId}`;
+    if (parentKey !== null && threadKeys.has(parentKey)) {
+      const siblings = childrenByParent.get(parentKey) ?? [];
+      siblings.push(thread);
+      childrenByParent.set(parentKey, siblings);
+    } else {
+      topLevel.push(thread);
+    }
+  }
+
+  const ordered: T[] = [];
+  const subagentDepthByThread = new Map<T, number>();
+  const emit = (thread: T, depth: number) => {
+    if (subagentDepthByThread.has(thread)) {
+      return;
+    }
+    subagentDepthByThread.set(thread, depth);
+    ordered.push(thread);
+    const children = childrenByParent.get(`${thread.environmentId}:${thread.id}`);
+    if (children) {
+      for (const child of children) {
+        emit(child, depth + 1);
+      }
+    }
+  };
+  for (const thread of topLevel) {
+    emit(thread, 0);
+  }
+  // Cycle or deep-nesting safety net: never drop a thread from the sidebar.
+  for (const thread of threads) {
+    emit(thread, 0);
+  }
+  return { ordered, subagentDepthByThread };
+}

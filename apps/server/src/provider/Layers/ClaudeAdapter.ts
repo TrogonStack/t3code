@@ -885,6 +885,11 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+const SUBAGENT_THREAD_TOOLS_PROMPT = [
+  "# Subagents",
+  "Delegate work by spawning subagent threads with mcp__t3-code__spawn_thread (one call per subagent; put the complete task in `prompt` because the subagent starts with no other context). Collect each result with mcp__t3-code__await_thread. Subagents run as separate T3 Code threads the user can open and steer; they may spawn their own subagents up to 5 levels deep, and at most 8 subagents may run at once across a tree. Do not use the built-in Task tool for subagents.",
+].join("\n");
+
 const CLAUDE_SETTING_SOURCES = [
   "user",
   "project",
@@ -3267,6 +3272,20 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           return yield* handleAskUserQuestion(context, toolInput, callbackOptions);
         }
 
+        // Route Claude's built-in subagent tool through the t3-code MCP
+        // toolkit so subagents run as first-class, user-visible threads.
+        if (
+          toolName === "Task" &&
+          claudeSettings.nativeTaskRedirect &&
+          McpProviderSession.readMcpProviderSession(input.threadId) !== undefined
+        ) {
+          return {
+            behavior: "deny",
+            message:
+              "Native subagents are disabled here. Spawn subagents with the mcp__t3-code__spawn_thread tool (one call per subagent, full task in `prompt`), then collect each result with mcp__t3-code__await_thread.",
+          } satisfies PermissionResult;
+        }
+
         if (toolName === "ExitPlanMode") {
           const planMarkdown = extractExitPlanModePlan(toolInput);
           if (planMarkdown) {
@@ -3444,7 +3463,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
-        systemPrompt: { type: "preset", preset: "claude_code" },
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          ...(claudeSettings.nativeTaskRedirect && mcpSession !== undefined
+            ? { append: SUBAGENT_THREAD_TOOLS_PROMPT }
+            : {}),
+        },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         // `ultracode` is a Claude Code setting, not an API effort level. It is
         // normalized to `xhigh` above and paired with `settings.ultracode`.
