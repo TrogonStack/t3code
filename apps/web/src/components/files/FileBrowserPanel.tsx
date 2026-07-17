@@ -8,6 +8,10 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
+import {
+  COMPOSER_MENTION_DRAG_TYPE,
+  composerMentionFromTreePath,
+} from "~/components/chat/composerMentionDrag";
 import { toastManager } from "~/components/ui/toast";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -137,6 +141,9 @@ export default function FileBrowserPanel({
         },
       },
     },
+    // Rows only need to be draggable so entries can be dropped into the chat
+    // composer; rearranging files inside the tree stays off.
+    dragAndDrop: { canDrop: () => false },
     density: "compact",
     fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
@@ -165,8 +172,34 @@ export default function FileBrowserPanel({
     [entries],
   );
 
+  // The tree stores the dragged row's path as text/plain from inside its
+  // shadow DOM, and the drag data store stays writable for every dragstart
+  // listener in the dispatch, so the composed event can be re-tagged here
+  // with the composer mention payload without reaching into the tree.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) {
+      return;
+    }
+    const tagDragWithMention = (event: DragEvent) => {
+      if (event.dataTransfer === null) {
+        return;
+      }
+      const mention = composerMentionFromTreePath(event.dataTransfer.getData("text/plain"));
+      if (mention === null) {
+        return;
+      }
+      event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mention);
+      event.dataTransfer.effectAllowed = "copyMove";
+    };
+    panel.addEventListener("dragstart", tagDragWithMention);
+    return () => panel.removeEventListener("dragstart", tagDragWithMention);
+  }, []);
+
   return (
     <div
+      ref={panelRef}
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
     >
