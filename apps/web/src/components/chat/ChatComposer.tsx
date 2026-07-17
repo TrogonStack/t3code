@@ -43,7 +43,10 @@ import {
   replaceTextRange,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
-import { COMPOSER_MENTION_DRAG_TYPE, dataTransferHasComposerMention } from "./composerMentionDrag";
+import {
+  dataTransferHasComposerMention,
+  makeComposerMentionDragHandlers,
+} from "./composerMentionDrag";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -1871,27 +1874,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return applyPromptReplacement(rangeEnd, rangeEnd, text);
   };
 
-  // File-tree drags land as mentions. Handled in the capture phase with the
-  // event stopped so the editor never sees the drop and cannot fall back to
-  // inserting the raw dragged path as plain text.
-  const onComposerMentionDragEnterCapture = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopPropagation();
-    setIsDragOverComposer(true);
-  };
-
-  const onComposerMentionDragOverCapture = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopPropagation();
-    // The tree constrains the drag to effectAllowed "move"; naming any other
-    // effect here makes the browser cancel the drop outright.
-    event.dataTransfer.dropEffect = "move";
-    setIsDragOverComposer(true);
-  };
+  // File-tree drags land as mentions. Handled in the capture phase so the
+  // editor never sees the drop; the load-bearing rules (native stop, "move"
+  // effect, no eager focus) live in makeComposerMentionDragHandlers.
+  const composerMentionDragHandlers = makeComposerMentionDragHandlers({
+    insertMentionAtEnd: insertComposerTextAtEnd,
+    setDragActive: setIsDragOverComposer,
+    onInsertRejected: () => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: "The composer is busy; try again once it is ready.",
+      });
+    },
+  });
 
   const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLDivElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
@@ -1899,29 +1895,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
     setIsDragOverComposer(false);
-  };
-
-  const onComposerMentionDropCapture = (event: React.DragEvent<HTMLDivElement>) => {
-    if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
-    // Synthetic stopPropagation only halts React's dispatch; the native event
-    // would still reach the editor, whose own drop handling syncs its stale
-    // state back over the inserted mention. Stop the native event too.
-    event.preventDefault();
-    event.stopPropagation();
-    event.nativeEvent.stopPropagation();
-    setIsDragOverComposer(false);
-    const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);
-    if (mention.length === 0) return;
-    // No eager focus here: applyPromptReplacement already focuses on the next
-    // frame, after the editor has reconciled the inserted mention. Focusing
-    // the still-stale editor now would sync its empty state back over it.
-    if (!insertComposerTextAtEnd(`${mention} `)) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to add to chat",
-        description: "The composer is busy; try again once it is ready.",
-      });
-    }
   };
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
@@ -2112,10 +2085,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onDragOver={onComposerDragOver}
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
-        onDragEnterCapture={onComposerMentionDragEnterCapture}
-        onDragOverCapture={onComposerMentionDragOverCapture}
+        onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
+        onDragOverCapture={composerMentionDragHandlers.onDragOver}
         onDragLeaveCapture={onComposerMentionDragLeaveCapture}
-        onDropCapture={onComposerMentionDropCapture}
+        onDropCapture={composerMentionDragHandlers.onDrop}
       >
         <div
           ref={composerSurfaceRef}

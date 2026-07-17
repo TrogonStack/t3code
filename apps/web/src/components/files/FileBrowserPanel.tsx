@@ -8,10 +8,6 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
-import {
-  COMPOSER_MENTION_DRAG_TYPE,
-  composerMentionFromTreePath,
-} from "~/components/chat/composerMentionDrag";
 import { toastManager } from "~/components/ui/toast";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -20,6 +16,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 
+import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBrowserPanelProps {
@@ -132,7 +129,14 @@ export default function FileBrowserPanel({
     showEntryContextMenuRef.current = showEntryContextMenu;
   });
 
-  const dragInProgressRef = useRef(false);
+  const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
+  const dragMention = useMemo(
+    () =>
+      createFileTreeDragMentionController({
+        deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
+      }),
+    [],
+  );
   const { model } = useFileTree({
     composition: {
       contextMenu: {
@@ -153,7 +157,7 @@ export default function FileBrowserPanel({
     onSelectionChange: (selectedPaths) => {
       // Starting a drag selects the dragged row; that selection is a side
       // effect of the gesture, not a request to open the file.
-      if (dragInProgressRef.current) {
+      if (dragMention.isDragInProgress()) {
         return;
       }
       const selectedPath = selectedPaths.at(-1)?.replace(/\/$/, "");
@@ -183,55 +187,25 @@ export default function FileBrowserPanel({
   // not depend on running after the tree's own dragstart handler; the drag
   // data store is writable for every dragstart listener in the dispatch.
   // The capture phase runs before the tree's own dragstart handler selects
-  // the dragged row, so the flag is up before that selection is emitted.
+  // the dragged row, so the drag flag is up before that selection emits.
   const panelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    treeModelRef.current = model;
+  }, [model]);
   useEffect(() => {
     const panel = panelRef.current;
     if (panel === null) {
       return;
     }
-    const draggedTreePath = (event: DragEvent): string | null => {
-      for (const node of event.composedPath()) {
-        if (node instanceof HTMLElement) {
-          const itemPath = node.getAttribute("data-item-path");
-          if (itemPath !== null) {
-            return itemPath;
-          }
-        }
-      }
-      return event.dataTransfer?.getData("text/plain") ?? null;
-    };
-    let draggedPath: string | null = null;
-    const tagDragWithMention = (event: DragEvent) => {
-      if (event.dataTransfer === null) {
-        return;
-      }
-      const itemPath = draggedTreePath(event);
-      const mention = composerMentionFromTreePath(itemPath ?? "");
-      if (itemPath === null || mention === null) {
-        return;
-      }
-      draggedPath = itemPath;
-      dragInProgressRef.current = true;
-      event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mention);
-    };
-    const markDragEnded = () => {
-      dragInProgressRef.current = false;
-      // The drag selected the row as a gesture side effect; drop that
-      // selection so the row is not left active and a later click on it
-      // still produces a selection change that opens the file.
-      if (draggedPath !== null) {
-        model.getItem(draggedPath)?.deselect();
-        draggedPath = null;
-      }
-    };
-    panel.addEventListener("dragstart", tagDragWithMention, true);
-    panel.addEventListener("dragend", markDragEnded);
+    const handleDragStart = (event: DragEvent) => dragMention.handleDragStart(event);
+    const handleDragEnd = () => dragMention.handleDragEnd();
+    panel.addEventListener("dragstart", handleDragStart, true);
+    panel.addEventListener("dragend", handleDragEnd);
     return () => {
-      panel.removeEventListener("dragstart", tagDragWithMention, true);
-      panel.removeEventListener("dragend", markDragEnded);
+      panel.removeEventListener("dragstart", handleDragStart, true);
+      panel.removeEventListener("dragend", handleDragEnd);
     };
-  }, [model]);
+  }, [dragMention]);
 
   return (
     <div
