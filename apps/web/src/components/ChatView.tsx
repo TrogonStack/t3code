@@ -1327,7 +1327,7 @@ function ChatViewContent(props: ChatViewProps) {
       return next;
     });
     setLocalServerErrorsByThreadKey((existing) => {
-      if ((existing[routeThreadKey] ?? null) !== null) {
+      if ((existing[routeThreadKey] ?? null) === pendingDraftError) {
         return existing;
       }
       return {
