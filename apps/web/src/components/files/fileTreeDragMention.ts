@@ -5,7 +5,6 @@ import {
 
 interface FileTreeDragTransfer {
   setData(format: string, data: string): void;
-  getData(format: string): string;
 }
 
 export interface FileTreeDragStartEvent {
@@ -53,6 +52,8 @@ export function createFileTreeDragMentionController(
       if (event.dataTransfer === null) {
         return;
       }
+      // Only drags that originate on a tree row are mentions; a text/plain
+      // fallback would also tag drags of selected text from the panel chrome.
       let itemPath: string | null = null;
       for (const node of event.composedPath()) {
         itemPath = itemPathOf(node);
@@ -60,7 +61,6 @@ export function createFileTreeDragMentionController(
           break;
         }
       }
-      itemPath ??= event.dataTransfer.getData("text/plain") || null;
       const mention = composerMentionFromTreePath(itemPath ?? "");
       if (itemPath === null || mention === null) {
         return;

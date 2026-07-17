@@ -1861,11 +1861,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const insertComposerTextAtEnd = (text: string): boolean => {
+    // Pending plan questions keep the composer usable (the replacement path
+    // routes text into the custom answer), so they do not block insertion.
     if (
       text.length === 0 ||
       isConnecting ||
       isComposerApprovalState ||
-      pendingUserInputs.length > 0 ||
       (environmentUnavailable !== null && activePendingProgress === null)
     ) {
       return false;
