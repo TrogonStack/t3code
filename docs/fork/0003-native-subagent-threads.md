@@ -19,8 +19,14 @@
   script), so parallel children do not trample one checkout; read-only tasks
   can opt into sharing the parent's checkout.
 - The parent thread's header shows a live subagent chip (count, running
-  indicator, jump-to-child menu), and each child shows a "spawned by" chip
-  linking back to its orchestrator.
+  indicator, jump-to-child menu with the same status labels used everywhere
+  else in the app), and each child shows a "spawned by" chip linking back to
+  its orchestrator.
+- The sidebar nests subagent threads under their parent, indented by tree
+  depth, so a multi-level delegation chain reads as the tree it is.
+- Spawn and await calls render in the conversation as subagent rows with the
+  child's name as a clickable pill that jumps to its thread, instead of raw
+  MCP payloads.
 - Guardrails: subagent trees can nest up to five levels deep, and at most
   eight subagents may run at once across a tree.
 
