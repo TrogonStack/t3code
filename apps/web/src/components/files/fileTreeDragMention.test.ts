@@ -72,6 +72,35 @@ describe("createFileTreeDragMentionController", () => {
     expect(controller.isDragInProgress()).toBe(false);
   });
 
+  it("drags the whole selection when the dragged row is part of it", () => {
+    const deselected: Array<string> = [];
+    const controller = createFileTreeDragMentionController({
+      deselect: (path) => deselected.push(path),
+    });
+    controller.handleSelectionChange(["docs/index.md", "docs/api.md", "src/app.ts"]);
+    const transfer = makeTransfer();
+    controller.handleDragStart({
+      dataTransfer: transfer,
+      composedPath: () => [rowNode("docs/api.md")],
+    });
+    expect(transfer.getData(COMPOSER_MENTION_DRAG_TYPE)).toBe(
+      "[index.md](docs/index.md) [api.md](docs/api.md) [app.ts](src/app.ts)",
+    );
+    controller.handleDragEnd();
+    expect(deselected).toEqual(["docs/index.md", "docs/api.md", "src/app.ts"]);
+  });
+
+  it("drags only the row under the cursor when it is outside the selection", () => {
+    const controller = createFileTreeDragMentionController({ deselect: () => {} });
+    controller.handleSelectionChange(["docs/index.md"]);
+    const transfer = makeTransfer();
+    controller.handleDragStart({
+      dataTransfer: transfer,
+      composedPath: () => [rowNode("src/app.ts")],
+    });
+    expect(transfer.getData(COMPOSER_MENTION_DRAG_TYPE)).toBe("[app.ts](src/app.ts)");
+  });
+
   it("does not deselect anything when no drag was started", () => {
     const deselected: Array<string> = [];
     const controller = createFileTreeDragMentionController({

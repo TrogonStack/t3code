@@ -24,6 +24,8 @@ export interface FileTreeDragMentionController {
    * this is set are gesture side effects, not requests to open a file.
    */
   isDragInProgress(): boolean;
+  /** Mirror of the tree's current selection, needed for multi-row drags. */
+  handleSelectionChange(selectedPaths: ReadonlyArray<string>): void;
   handleDragStart(event: FileTreeDragStartEvent): void;
   handleDragEnd(): void;
 }
@@ -39,15 +41,19 @@ const itemPathOf = (node: unknown): string | null => {
 /**
  * Tags file-tree drags with the composer mention payload and keeps the drag
  * from acting like a click: while the drag runs, selection changes are
- * suppressed, and when it ends the dragged row is deselected so it is not
- * left highlighted and a later click on it still fires a selection change.
+ * suppressed, and when it ends the dragged rows are deselected so nothing is
+ * left highlighted and a later click on them still fires a selection change.
  */
 export function createFileTreeDragMentionController(
   host: FileTreeDragMentionHost,
 ): FileTreeDragMentionController {
-  let draggedPath: string | null = null;
+  let selection: ReadonlyArray<string> = [];
+  let draggedPaths: ReadonlyArray<string> = [];
   return {
-    isDragInProgress: () => draggedPath !== null,
+    isDragInProgress: () => draggedPaths.length > 0,
+    handleSelectionChange(selectedPaths) {
+      selection = selectedPaths;
+    },
     handleDragStart(event) {
       if (event.dataTransfer === null) {
         return;
@@ -61,19 +67,29 @@ export function createFileTreeDragMentionController(
           break;
         }
       }
-      const mention = composerMentionFromTreePath(itemPath ?? "");
-      if (itemPath === null || mention === null) {
+      if (itemPath === null) {
         return;
       }
-      draggedPath = itemPath;
-      event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mention);
+      // Same rule the tree applies to the drag itself: dragging a row that is
+      // part of the current selection drags the whole selection.
+      const dragged = selection.includes(itemPath) ? selection : [itemPath];
+      const mentions = dragged
+        .map((path) => composerMentionFromTreePath(path))
+        .filter((mention): mention is string => mention !== null);
+      if (mentions.length === 0) {
+        return;
+      }
+      draggedPaths = dragged;
+      event.dataTransfer.setData(COMPOSER_MENTION_DRAG_TYPE, mentions.join(" "));
     },
     handleDragEnd() {
-      if (draggedPath === null) {
+      if (draggedPaths.length === 0) {
         return;
       }
-      host.deselect(draggedPath);
-      draggedPath = null;
+      for (const path of draggedPaths) {
+        host.deselect(path);
+      }
+      draggedPaths = [];
     },
   };
 }

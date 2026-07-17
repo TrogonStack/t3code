@@ -7,7 +7,11 @@
 
 - Drag any file or folder from the workspace file explorer and drop it on the
   chat composer; it lands as the same mention pill that "@" autocomplete and
-  "Add to chat" produce, ready to send.
+  "Add to chat" produce, ready to send. Dragging a multi-selection (shift or
+  cmd click) drops every selected entry as its own pill.
+- Dragging never acts like a click: the dragged rows are not opened and are
+  not left selected, so the explorer behaves the same after a drag as before
+  it.
 - While a tree drag hovers over the composer, the composer highlights the
   same way it does for image drops, so the drop target is obvious.
 - Rearranging files inside the explorer via drag stays disabled; dragging is

@@ -155,6 +155,7 @@ export default function FileBrowserPanel({
     initialExpansion: 1,
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      dragMention.handleSelectionChange(selectedPaths);
       // Starting a drag selects the dragged row; that selection is a side
       // effect of the gesture, not a request to open the file.
       if (dragMention.isDragInProgress()) {
