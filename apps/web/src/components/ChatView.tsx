@@ -1307,6 +1307,35 @@ function ChatViewContent(props: ChatViewProps) {
     ? null
     : ((draftId ? localDraftErrorsByDraftId[draftId] : null) ?? null);
   const localServerError = localServerErrorsByThreadKey[routeThreadKey] ?? null;
+  // Draft errors are keyed by draftId while server errors are keyed by thread
+  // key, so a pending draft error must migrate when the server thread loads or
+  // a failed send would silently disappear on promotion.
+  useEffect(() => {
+    if (!serverThread || !draftId) {
+      return;
+    }
+    const pendingDraftError = localDraftErrorsByDraftId[draftId] ?? null;
+    if (pendingDraftError === null) {
+      return;
+    }
+    setLocalDraftErrorsByDraftId((existing) => {
+      if ((existing[draftId] ?? null) === null) {
+        return existing;
+      }
+      const next = { ...existing };
+      delete next[draftId];
+      return next;
+    });
+    setLocalServerErrorsByThreadKey((existing) => {
+      if ((existing[routeThreadKey] ?? null) !== null) {
+        return existing;
+      }
+      return {
+        ...existing,
+        [routeThreadKey]: pendingDraftError,
+      };
+    });
+  }, [draftId, localDraftErrorsByDraftId, routeThreadKey, serverThread]);
   const localDraftThread = useMemo(
     () =>
       draftThread
