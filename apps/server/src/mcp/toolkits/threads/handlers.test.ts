@@ -84,6 +84,7 @@ interface HarnessOptions {
   readonly snapshotThreads?: ReadonlyArray<OrchestrationThreadShell>;
   readonly childDetail?: Effect.Effect<Option.Option<OrchestrationThread>>;
   readonly domainEvents?: Stream.Stream<OrchestrationEvent>;
+  readonly instanceEnabled?: boolean;
 }
 
 const makeHarness = (options: HarnessOptions = {}) =>
@@ -117,7 +118,7 @@ const makeHarness = (options: HarnessOptions = {}) =>
           instanceId,
           driverKind: "claudeAgent",
           displayName: undefined,
-          enabled: true,
+          enabled: options.instanceEnabled ?? true,
           continuationIdentity: "session-id",
         } as never),
     });
@@ -411,6 +412,73 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
+  it.effect("counts turnless children with idle sessions toward the limit", () =>
+    Effect.gen(function* () {
+      const idleChild = (suffix: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          latestTurn: null,
+          session: { status: "ready" } as never,
+        });
+      const harness = yield* makeHarness({
+        snapshotThreads: [
+          idleChild("41"),
+          idleChild("42"),
+          idleChild("43"),
+          idleChild("44"),
+          idleChild("45"),
+          idleChild("46"),
+          idleChild("47"),
+          idleChild("48"),
+        ],
+      });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
+      assert.strictEqual(error.reason, "concurrency_exceeded");
+    }),
+  );
+
+  it.effect("frees slots held by turnless children whose sessions ended", () =>
+    Effect.gen(function* () {
+      const deadChild = (suffix: string, status: string) =>
+        makeThreadShell({
+          id: ThreadId.make(`00000000-0000-4000-8000-0000000000${suffix}`),
+          parentThreadId: PARENT_THREAD_ID,
+          latestTurn: null,
+          session: { status } as never,
+        });
+      const harness = yield* makeHarness({
+        snapshotThreads: [
+          deadChild("51", "error"),
+          deadChild("52", "stopped"),
+          deadChild("53", "interrupted"),
+          deadChild("54", "error"),
+          deadChild("55", "error"),
+          deadChild("56", "stopped"),
+          deadChild("57", "stopped"),
+          deadChild("58", "error"),
+        ],
+      });
+      const result = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer));
+      assert.isString(result.threadId);
+    }),
+  );
+
+  it.effect("rejects spawning onto a disabled provider instance", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ instanceEnabled: false });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
+      assert.strictEqual(error.reason, "unknown_provider");
+      assert.include(error.detail, "disabled");
+    }),
+  );
+
   it.effect("requires a model when the provider differs from the parent", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
@@ -451,6 +519,25 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         .pipe(Effect.provide(harness.layer));
       assert.strictEqual(result.status, "completed");
       assert.strictEqual(result.finalMessage, "All done.");
+    }),
+  );
+
+  it.effect("fails fast when a turnless child session ended in error", () =>
+    Effect.gen(function* () {
+      const deadDetail = {
+        latestTurn: null,
+        session: { status: "error" },
+        messages: [],
+      } as unknown as OrchestrationThread;
+      const harness = yield* makeHarness({
+        childShell: makeThreadShell({ id: CHILD_THREAD_ID, parentThreadId: PARENT_THREAD_ID }),
+        childDetail: Effect.succeed(Option.some(deadDetail)),
+      });
+      const result = yield* (yield* makeThreadsToolkitHandlers)
+        .await_thread({ threadId: CHILD_THREAD_ID })
+        .pipe(Effect.provide(harness.layer));
+      assert.strictEqual(result.status, "failed");
+      assert.strictEqual(result.finalMessage, null);
     }),
   );
 

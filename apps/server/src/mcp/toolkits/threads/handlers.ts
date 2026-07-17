@@ -87,7 +87,19 @@ const readSettledResult = (
       } satisfies AwaitThreadResult;
     }
     const latestTurn = thread.value.latestTurn;
-    if (latestTurn === null || latestTurn.state === "running") {
+    if (latestTurn === null) {
+      // A terminal session with no projected turn means the child died
+      // during bootstrap; report that instead of polling until timeout.
+      const sessionStatus = thread.value.session?.status;
+      if (sessionStatus === "interrupted") {
+        return { threadId, status: "interrupted", finalMessage: null } satisfies AwaitThreadResult;
+      }
+      if (sessionStatus === "stopped" || sessionStatus === "error") {
+        return { threadId, status: "failed", finalMessage: null } satisfies AwaitThreadResult;
+      }
+      return undefined;
+    }
+    if (latestTurn.state === "running") {
       return undefined;
     }
     const finalMessage =
@@ -161,11 +173,9 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             }
           }
           if (callerDepth + 1 > SUBAGENT_MAX_DEPTH) {
-            return yield* Effect.fail(
-              subagentError(
-                "depth_exceeded",
-                `Subagent trees can nest at most ${SUBAGENT_MAX_DEPTH} levels.`,
-              ),
+            return yield* subagentError(
+              "depth_exceeded",
+              `Subagent trees can nest at most ${SUBAGENT_MAX_DEPTH} levels.`,
             );
           }
 
@@ -179,8 +189,16 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             if (thread.latestTurn !== null) {
               return thread.latestTurn.state === "running";
             }
-            if (thread.session !== null) {
-              return thread.session.status === "starting" || thread.session.status === "running";
+            const sessionStatus = thread.session?.status;
+            if (sessionStatus === "starting" || sessionStatus === "running") {
+              return true;
+            }
+            if (
+              sessionStatus === "stopped" ||
+              sessionStatus === "error" ||
+              sessionStatus === "interrupted"
+            ) {
+              return false;
             }
             return nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS;
           };
@@ -212,16 +230,14 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
             }
           }
           if (runningDescendants >= SUBAGENT_MAX_RUNNING_PER_TREE) {
-            return yield* Effect.fail(
-              subagentError(
-                "concurrency_exceeded",
-                `At most ${SUBAGENT_MAX_RUNNING_PER_TREE} subagents may run at once across a tree. Await some with await_thread before spawning more.`,
-              ),
+            return yield* subagentError(
+              "concurrency_exceeded",
+              `At most ${SUBAGENT_MAX_RUNNING_PER_TREE} subagents may run at once across a tree. Await some with await_thread before spawning more.`,
             );
           }
 
           const instanceId = input.providerInstanceId ?? parentShell.modelSelection.instanceId;
-          yield* providerAdapterRegistry
+          const instanceInfo = yield* providerAdapterRegistry
             .getInstanceInfo(instanceId)
             .pipe(
               Effect.mapError(() =>
@@ -231,17 +247,21 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
                 ),
               ),
             );
+          if (!instanceInfo.enabled) {
+            return yield* subagentError(
+              "unknown_provider",
+              `Provider instance '${instanceId}' is disabled.`,
+            );
+          }
           const model =
             input.model ??
             (instanceId === parentShell.modelSelection.instanceId
               ? parentShell.modelSelection.model
               : undefined);
           if (model === undefined) {
-            return yield* Effect.fail(
-              subagentError(
-                "unknown_provider",
-                "model is required when providerInstanceId differs from the calling thread's provider.",
-              ),
+            return yield* subagentError(
+              "unknown_provider",
+              "model is required when providerInstanceId differs from the calling thread's provider.",
             );
           }
 
@@ -282,11 +302,9 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
                 Effect.map((status) => status.refName),
               ));
             if (baseBranch === null) {
-              return yield* Effect.fail(
-                subagentError(
-                  "spawn_failed",
-                  'Cannot prepare a worktree: the project has no current branch. Retry with envMode "local".',
-                ),
+              return yield* subagentError(
+                "spawn_failed",
+                'Cannot prepare a worktree: the project has no current branch. Retry with envMode "local".',
               );
             }
             const branchHex = (yield* crypto.randomUUIDv4.pipe(Effect.orDie)).replaceAll("-", "");
@@ -352,8 +370,9 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
           ),
         );
         if ((childShell.parentThreadId ?? null) !== scope.threadId) {
-          return yield* Effect.fail(
-            subagentError("not_a_child", "Only threads spawned by this thread can be awaited."),
+          return yield* subagentError(
+            "not_a_child",
+            "Only threads spawned by this thread can be awaited.",
           );
         }
 

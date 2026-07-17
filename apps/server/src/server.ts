@@ -386,8 +386,7 @@ export const makeRoutesLayerWith = <ROut, E, R>(mcpToolkitDependencies: Layer.La
 const McpToolkitDependenciesLive = Layer.mergeAll(
   RuntimeCoreDependenciesLive,
   ProviderAdapterRegistryLive.pipe(Layer.provide(RuntimeCoreDependenciesLive)),
-  NodeCrypto.layer,
-);
+).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 type McpToolkitDependency =
   | OrchestrationEngine.OrchestrationEngineService
