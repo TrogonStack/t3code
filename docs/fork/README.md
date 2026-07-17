@@ -34,3 +34,4 @@ Each entry uses these sections:
 | 0001 | [File explorer mention actions and zoom-aware context menus](./0001-file-explorer-mention-actions.md) | [#1](https://github.com/TrogonStack/t3code/pull/1) | active |
 | 0002 | [Draft hero landing on the index route](./0002-draft-hero-landing.md)                                 | [#2](https://github.com/TrogonStack/t3code/pull/2) | active |
 | 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md)                 | [#3](https://github.com/TrogonStack/t3code/pull/3) | active |
+| 0004 | [Drag files from the explorer into the chat](./0004-file-tree-drag-to-chat.md)                        | [#4](https://github.com/TrogonStack/t3code/pull/4) | active |
