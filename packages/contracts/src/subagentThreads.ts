@@ -4,7 +4,8 @@ import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.t
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { RuntimeMode } from "./orchestration.ts";
 
-export const SUBAGENT_MAX_RUNNING_CHILDREN = 4;
+export const SUBAGENT_MAX_DEPTH = 5;
+export const SUBAGENT_MAX_RUNNING_PER_TREE = 8;
 export const SUBAGENT_AWAIT_DEFAULT_TIMEOUT_SECONDS = 600;
 
 export const SubagentEnvMode = Schema.Literals(["worktree", "local"]);

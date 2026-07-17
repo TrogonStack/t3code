@@ -5,7 +5,8 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   SUBAGENT_AWAIT_DEFAULT_TIMEOUT_SECONDS,
-  SUBAGENT_MAX_RUNNING_CHILDREN,
+  SUBAGENT_MAX_DEPTH,
+  SUBAGENT_MAX_RUNNING_PER_TREE,
   type RuntimeMode,
   type SpawnThreadInput,
   SubagentThreadError,
@@ -135,25 +136,46 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
                 }),
               ),
             );
-          if ((parentShell.parentThreadId ?? null) !== null) {
-            return yield* Effect.fail(
-              subagentError("depth_exceeded", "Spawned subagent threads cannot spawn further."),
-            );
-          }
-
           const shellSnapshot = yield* projectionSnapshotQuery
             .getShellSnapshot()
             .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
+          const shellById = new Map(shellSnapshot.threads.map((thread) => [thread.id, thread]));
+
+          // Walk the ancestry to bound tree depth and find the tree root; the
+          // running-subagent budget is shared by the whole tree, not per
+          // spawning thread.
+          let callerDepth = 0;
+          let rootThreadId = scope.threadId;
+          {
+            const visited = new Set<string>([parentShell.id]);
+            let current = parentShell;
+            while ((current.parentThreadId ?? null) !== null) {
+              const ancestor = shellById.get(current.parentThreadId as ThreadId);
+              if (ancestor === undefined || visited.has(ancestor.id)) {
+                break;
+              }
+              visited.add(ancestor.id);
+              callerDepth += 1;
+              rootThreadId = ancestor.id;
+              current = ancestor;
+            }
+          }
+          if (callerDepth + 1 > SUBAGENT_MAX_DEPTH) {
+            return yield* Effect.fail(
+              subagentError(
+                "depth_exceeded",
+                `Subagent trees can nest at most ${SUBAGENT_MAX_DEPTH} levels.`,
+              ),
+            );
+          }
+
           // A freshly spawned child has no latest turn until its provider
           // session reports in, so pending children must count against the
           // cap alongside running ones. The pending state is time-bounded:
           // a child that dies before its session ever reports in must not
           // occupy a slot forever.
           const nowMillis = DateTime.toEpochMillis(yield* DateTime.now);
-          const runningChildren = shellSnapshot.threads.filter((thread) => {
-            if ((thread.parentThreadId ?? null) !== scope.threadId) {
-              return false;
-            }
+          const occupiesSlot = (thread: (typeof shellSnapshot.threads)[number]): boolean => {
             if (thread.latestTurn !== null) {
               return thread.latestTurn.state === "running";
             }
@@ -161,12 +183,39 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
               return thread.session.status === "starting" || thread.session.status === "running";
             }
             return nowMillis - Date.parse(thread.createdAt) < SUBAGENT_PENDING_GRACE_MS;
-          }).length;
-          if (runningChildren >= SUBAGENT_MAX_RUNNING_CHILDREN) {
+          };
+          const childrenByParent = new Map<string, Array<(typeof shellSnapshot.threads)[number]>>();
+          for (const thread of shellSnapshot.threads) {
+            const threadParentId = thread.parentThreadId ?? null;
+            if (threadParentId !== null) {
+              const siblings = childrenByParent.get(threadParentId) ?? [];
+              siblings.push(thread);
+              childrenByParent.set(threadParentId, siblings);
+            }
+          }
+          let runningDescendants = 0;
+          {
+            const visited = new Set<string>();
+            const stack = [rootThreadId as string];
+            while (stack.length > 0) {
+              const currentId = stack.pop();
+              if (currentId === undefined || visited.has(currentId)) {
+                continue;
+              }
+              visited.add(currentId);
+              for (const child of childrenByParent.get(currentId) ?? []) {
+                if (occupiesSlot(child)) {
+                  runningDescendants += 1;
+                }
+                stack.push(child.id);
+              }
+            }
+          }
+          if (runningDescendants >= SUBAGENT_MAX_RUNNING_PER_TREE) {
             return yield* Effect.fail(
               subagentError(
                 "concurrency_exceeded",
-                `At most ${SUBAGENT_MAX_RUNNING_CHILDREN} subagent threads may run at once. Await one with await_thread before spawning more.`,
+                `At most ${SUBAGENT_MAX_RUNNING_PER_TREE} subagents may run at once across a tree. Await some with await_thread before spawning more.`,
               ),
             );
           }

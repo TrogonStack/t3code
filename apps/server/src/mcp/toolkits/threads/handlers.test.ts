@@ -312,10 +312,33 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
-  it.effect("rejects spawning from a spawned child", () =>
+  it.effect("allows a spawned child to spawn within the depth limit", () =>
     Effect.gen(function* () {
+      const grandparent = makeThreadShell({ id: CHILD_THREAD_ID, parentThreadId: null });
       const harness = yield* makeHarness({
         parentShell: makeThreadShell({ parentThreadId: CHILD_THREAD_ID }),
+        snapshotThreads: [grandparent],
+      });
+      const result = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer));
+      assert.isString(result.threadId);
+    }),
+  );
+
+  it.effect("rejects spawning past the tree depth limit", () =>
+    Effect.gen(function* () {
+      const chainId = (level: number) =>
+        ThreadId.make(`00000000-0000-4000-8000-0000000000${40 + level}`);
+      const ancestors = [1, 2, 3, 4, 5].map((level) =>
+        makeThreadShell({
+          id: chainId(level),
+          parentThreadId: level === 1 ? null : chainId(level - 1),
+        }),
+      );
+      const harness = yield* makeHarness({
+        parentShell: makeThreadShell({ parentThreadId: chainId(5) }),
+        snapshotThreads: ancestors,
       });
       const error = yield* (yield* makeThreadsToolkitHandlers)
         .spawn_thread(spawnInput)
@@ -325,7 +348,7 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
     }),
   );
 
-  it.effect("rejects spawning past the running-children limit", () =>
+  it.effect("rejects spawning past the tree-wide running limit", () =>
     Effect.gen(function* () {
       const runningChild = (suffix: string) =>
         makeThreadShell({
@@ -347,6 +370,10 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
           runningChild("02"),
           runningChild("03"),
           runningChild("04"),
+          runningChild("05"),
+          runningChild("06"),
+          runningChild("07"),
+          runningChild("08"),
         ],
       });
       const error = yield* (yield* makeThreadsToolkitHandlers)
@@ -367,10 +394,14 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         });
       const harness = yield* makeHarness({
         snapshotThreads: [
-          pendingChild("01"),
-          pendingChild("02"),
-          pendingChild("03"),
-          pendingChild("04"),
+          pendingChild("11"),
+          pendingChild("12"),
+          pendingChild("13"),
+          pendingChild("14"),
+          pendingChild("15"),
+          pendingChild("16"),
+          pendingChild("17"),
+          pendingChild("18"),
         ],
       });
       const error = yield* (yield* makeThreadsToolkitHandlers)

@@ -887,7 +887,7 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
 ]);
 const SUBAGENT_THREAD_TOOLS_PROMPT = [
   "# Subagents",
-  "Delegate work by spawning subagent threads with mcp__t3-code__spawn_thread (one call per subagent; put the complete task in `prompt` because the subagent starts with no other context). Collect each result with mcp__t3-code__await_thread. Subagents run as separate T3 Code threads the user can open and steer; at most 4 may run at once and they cannot spawn further subagents. Do not use the built-in Task tool for subagents.",
+  "Delegate work by spawning subagent threads with mcp__t3-code__spawn_thread (one call per subagent; put the complete task in `prompt` because the subagent starts with no other context). Collect each result with mcp__t3-code__await_thread. Subagents run as separate T3 Code threads the user can open and steer; they may spawn their own subagents up to 5 levels deep, and at most 8 subagents may run at once across a tree. Do not use the built-in Task tool for subagents.",
 ].join("\n");
 
 const CLAUDE_SETTING_SOURCES = [
