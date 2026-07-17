@@ -85,6 +85,8 @@ interface HarnessOptions {
   readonly childDetail?: Effect.Effect<Option.Option<OrchestrationThread>>;
   readonly domainEvents?: Stream.Stream<OrchestrationEvent>;
   readonly instanceEnabled?: boolean;
+  /** Resolvable by id but absent from the shell snapshot, like archived threads. */
+  readonly lookupOnlyThreads?: ReadonlyArray<OrchestrationThreadShell>;
 }
 
 const makeHarness = (options: HarnessOptions = {}) =>
@@ -94,14 +96,16 @@ const makeHarness = (options: HarnessOptions = {}) =>
     const childShell = options.childShell;
 
     const projectionLayer = Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-      getThreadShellById: (threadId) =>
-        Effect.succeed(
-          threadId === parentShell.id
-            ? Option.some(parentShell)
-            : threadId === childShell?.id
-              ? Option.some(childShell)
-              : Option.none(),
-        ),
+      getThreadShellById: (threadId) => {
+        const candidates = [
+          parentShell,
+          ...(childShell === undefined ? [] : [childShell]),
+          ...(options.snapshotThreads ?? []),
+          ...(options.lookupOnlyThreads ?? []),
+        ];
+        const found = candidates.find((shell) => shell.id === threadId);
+        return Effect.succeed(found === undefined ? Option.none() : Option.some(found));
+      },
       getShellSnapshot: () =>
         Effect.succeed({
           snapshotSequence: 1,
@@ -345,6 +349,28 @@ it.layer(NodeServices.layer)("threads toolkit handlers", (it) => {
         .spawn_thread(spawnInput)
         .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.instanceOf(error, SubagentThreadError);
+      assert.strictEqual(error.reason, "depth_exceeded");
+    }),
+  );
+
+  it.effect("counts archived ancestors toward the depth limit", () =>
+    Effect.gen(function* () {
+      const chainId = (level: number) =>
+        ThreadId.make(`00000000-0000-4000-8000-0000000000${60 + level}`);
+      const archivedAncestors = [1, 2, 3, 4, 5].map((level) =>
+        makeThreadShell({
+          id: chainId(level),
+          parentThreadId: level === 1 ? null : chainId(level - 1),
+          archivedAt: NOW,
+        }),
+      );
+      const harness = yield* makeHarness({
+        parentShell: makeThreadShell({ parentThreadId: chainId(5) }),
+        lookupOnlyThreads: archivedAncestors,
+      });
+      const error = yield* (yield* makeThreadsToolkitHandlers)
+        .spawn_thread(spawnInput)
+        .pipe(Effect.provide(harness.layer), Effect.flip);
       assert.strictEqual(error.reason, "depth_exceeded");
     }),
   );

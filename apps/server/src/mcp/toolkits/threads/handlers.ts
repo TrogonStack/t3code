@@ -151,25 +151,32 @@ export const makeThreadsToolkitHandlers = Effect.gen(function* () {
           const shellSnapshot = yield* projectionSnapshotQuery
             .getShellSnapshot()
             .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
-          const shellById = new Map(shellSnapshot.threads.map((thread) => [thread.id, thread]));
 
           // Walk the ancestry to bound tree depth and find the tree root; the
           // running-subagent budget is shared by the whole tree, not per
-          // spawning thread.
+          // spawning thread. Ancestors are resolved individually because the
+          // shell snapshot omits archived threads, and an archived ancestor
+          // must still count toward depth.
           let callerDepth = 0;
           let rootThreadId = scope.threadId;
           {
             const visited = new Set<string>([parentShell.id]);
-            let current = parentShell;
-            while ((current.parentThreadId ?? null) !== null) {
-              const ancestor = shellById.get(current.parentThreadId as ThreadId);
-              if (ancestor === undefined || visited.has(ancestor.id)) {
+            let parentId = parentShell.parentThreadId ?? null;
+            while (
+              parentId !== null &&
+              !visited.has(parentId) &&
+              callerDepth < SUBAGENT_MAX_DEPTH
+            ) {
+              const ancestor = yield* projectionSnapshotQuery
+                .getThreadShellById(parentId)
+                .pipe(Effect.mapError((error) => subagentError("spawn_failed", error.message)));
+              if (Option.isNone(ancestor)) {
                 break;
               }
-              visited.add(ancestor.id);
+              visited.add(parentId);
               callerDepth += 1;
-              rootThreadId = ancestor.id;
-              current = ancestor;
+              rootThreadId = ancestor.value.id;
+              parentId = ancestor.value.parentThreadId ?? null;
             }
           }
           if (callerDepth + 1 > SUBAGENT_MAX_DEPTH) {
