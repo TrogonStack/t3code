@@ -1878,6 +1878,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.preventDefault();
     event.stopPropagation();
+    event.nativeEvent.stopPropagation();
     setIsDragOverComposer(true);
   };
 
@@ -1885,6 +1886,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
     event.preventDefault();
     event.stopPropagation();
+    event.nativeEvent.stopPropagation();
     // The tree constrains the drag to effectAllowed "move"; naming any other
     // effect here makes the browser cancel the drop outright.
     event.dataTransfer.dropEffect = "move";
@@ -1901,14 +1903,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const onComposerMentionDropCapture = (event: React.DragEvent<HTMLDivElement>) => {
     if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
+    // Synthetic stopPropagation only halts React's dispatch; the native event
+    // would still reach the editor, whose own drop handling syncs its stale
+    // state back over the inserted mention. Stop the native event too.
     event.preventDefault();
     event.stopPropagation();
+    event.nativeEvent.stopPropagation();
     setIsDragOverComposer(false);
     const mention = event.dataTransfer.getData(COMPOSER_MENTION_DRAG_TYPE);
     if (mention.length === 0) return;
-    if (insertComposerTextAtEnd(`${mention} `)) {
-      focusComposer();
-    } else {
+    // No eager focus here: applyPromptReplacement already focuses on the next
+    // frame, after the editor has reconciled the inserted mention. Focusing
+    // the still-stale editor now would sync its empty state back over it.
+    if (!insertComposerTextAtEnd(`${mention} `)) {
       toastManager.add({
         type: "error",
         title: "Unable to add to chat",
