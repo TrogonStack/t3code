@@ -184,7 +184,7 @@ class ComposerMentionNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
     return dom;
   }
 
@@ -322,7 +322,7 @@ class ComposerSkillNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
     return dom;
   }
 
@@ -393,7 +393,7 @@ class ComposerTerminalContextNode extends DecoratorNode<React.ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = "composer-inline-chip relative inline-flex align-middle leading-none";
     return dom;
   }
 
@@ -1119,6 +1119,44 @@ function ComposerInlineTokenBackspacePlugin() {
   return null;
 }
 
+/**
+ * Chips render as non-editable decorators, so the browser never paints the
+ * native text selection over them; without help, a selection spanning chips
+ * is only visible in the slivers between them. Mirror the selection onto the
+ * chips with a data attribute the stylesheet turns into a highlight overlay.
+ */
+function ComposerChipSelectionPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    let selectedKeys = new Set<string>();
+    return editor.registerUpdateListener(() => {
+      const nextKeys = new Set<string>();
+      editor.getEditorState().read(() => {
+        const selection = $getSelection();
+        if ($isRangeSelection(selection) && !selection.isCollapsed()) {
+          for (const node of selection.getNodes()) {
+            if (node instanceof DecoratorNode) {
+              nextKeys.add(node.getKey());
+            }
+          }
+        }
+      });
+      for (const key of selectedKeys) {
+        if (!nextKeys.has(key)) {
+          editor.getElementByKey(key)?.removeAttribute("data-composer-chip-selected");
+        }
+      }
+      for (const key of nextKeys) {
+        editor.getElementByKey(key)?.setAttribute("data-composer-chip-selected", "true");
+      }
+      selectedKeys = nextKeys;
+    });
+  }, [editor]);
+
+  return null;
+}
+
 function ComposerInlineTokenPastePlugin() {
   const [editor] = useLexicalComposerContext();
 
@@ -1711,6 +1749,7 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerInlineTokenBackspacePlugin />
         <ComposerInlineTokenPastePlugin />
+        <ComposerChipSelectionPlugin />
         <HistoryPlugin />
       </div>
     </ComposerTerminalContextActionsContext>
