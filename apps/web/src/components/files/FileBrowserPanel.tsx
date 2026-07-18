@@ -111,12 +111,21 @@ export default function FileBrowserPanel({
         return;
       }
       if (clicked === "add-to-chat") {
-        const inserted = composerRef?.current?.insertTextAtEnd(`${mention} `) ?? false;
-        if (!inserted) {
+        const composer = composerRef?.current;
+        if (!composer) {
           toastManager.add({
             type: "error",
             title: "Unable to add to chat",
             description: "Open a chat for this project and try again.",
+          });
+          return;
+        }
+        const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
+        if (!inserted) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to add to chat",
+            description: "The chat isn't ready to accept input right now.",
           });
         }
       }
