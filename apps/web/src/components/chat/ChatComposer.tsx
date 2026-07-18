@@ -45,6 +45,10 @@ import {
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
+  dataTransferHasComposerMention,
+  makeComposerMentionDragHandlers,
+} from "./composerMentionDrag";
+import {
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
@@ -1878,6 +1882,44 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     addComposerImages(files);
     focusComposer();
   };
+
+  const insertComposerTextAtEnd = (text: string): boolean => {
+    // Pending plan questions keep the composer usable (the replacement path
+    // routes text into the custom answer), so they do not block insertion.
+    if (
+      text.length === 0 ||
+      isConnecting ||
+      isComposerApprovalState ||
+      (environmentUnavailable !== null && activePendingProgress === null)
+    ) {
+      return false;
+    }
+    const rangeEnd = promptRef.current.length;
+    return applyPromptReplacement(rangeEnd, rangeEnd, text);
+  };
+
+  // File-tree drags land as mentions. Handled in the capture phase so the
+  // editor never sees the drop; the load-bearing rules (native stop, "move"
+  // effect, no eager focus) live in makeComposerMentionDragHandlers.
+  const composerMentionDragHandlers = makeComposerMentionDragHandlers({
+    insertMentionAtEnd: insertComposerTextAtEnd,
+    setDragActive: setIsDragOverComposer,
+    onInsertRejected: () => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: "The composer is busy; try again once it is ready.",
+      });
+    },
+  });
+
+  const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setIsDragOverComposer(false);
+  };
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
@@ -2087,6 +2129,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onDragOver={onComposerDragOver}
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
+        onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
+        onDragOverCapture={composerMentionDragHandlers.onDragOver}
+        onDragLeaveCapture={onComposerMentionDragLeaveCapture}
+        onDropCapture={composerMentionDragHandlers.onDrop}
       >
         <div
           ref={composerSurfaceRef}
