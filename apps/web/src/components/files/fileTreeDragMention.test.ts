@@ -43,7 +43,7 @@ describe("createFileTreeDragMentionController", () => {
     // selection also carries text/plain, and tagging it would drop an invalid
     // pill into the composer.
     const controller = createFileTreeDragMentionController({ deselect: () => {} });
-    const transfer = makeTransfer("trogonai");
+    const transfer = makeTransfer("selected text");
     controller.handleDragStart({ dataTransfer: transfer, composedPath: () => [{}] });
     expect(transfer.data.has(COMPOSER_MENTION_DRAG_TYPE)).toBe(false);
     expect(controller.isDragInProgress()).toBe(false);

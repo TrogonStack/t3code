@@ -28,7 +28,10 @@ import {
   KEY_ENTER_COMMAND,
   KEY_TAB_COMMAND,
   COMMAND_PRIORITY_HIGH,
+  COMMAND_PRIORITY_LOW,
   KEY_BACKSPACE_COMMAND,
+  BLUR_COMMAND,
+  FOCUS_COMMAND,
   $getRoot,
   HISTORY_MERGE_TAG,
   DecoratorNode,
@@ -1178,7 +1181,24 @@ function ComposerChipSelectionPlugin() {
 
   useEffect(() => {
     let selectedKeys = new Set<string>();
-    return editor.registerUpdateListener(() => {
+    // Lexical keeps the range selection on blur without emitting an update,
+    // so focus is tracked separately; while blurred the native highlight is
+    // gone and the mirrored one has to go with it.
+    let hasFocus = editor.getRootElement() === document.activeElement;
+
+    const applyKeys = (nextKeys: Set<string>) => {
+      for (const key of selectedKeys) {
+        if (!nextKeys.has(key)) {
+          editor.getElementByKey(key)?.removeAttribute("data-composer-chip-selected");
+        }
+      }
+      for (const key of nextKeys) {
+        editor.getElementByKey(key)?.setAttribute("data-composer-chip-selected", "true");
+      }
+      selectedKeys = nextKeys;
+    };
+
+    const readSelectedKeys = () => {
       const nextKeys = new Set<string>();
       editor.getEditorState().read(() => {
         const selection = $getSelection();
@@ -1190,16 +1210,35 @@ function ComposerChipSelectionPlugin() {
           }
         }
       });
-      for (const key of selectedKeys) {
-        if (!nextKeys.has(key)) {
-          editor.getElementByKey(key)?.removeAttribute("data-composer-chip-selected");
-        }
-      }
-      for (const key of nextKeys) {
-        editor.getElementByKey(key)?.setAttribute("data-composer-chip-selected", "true");
-      }
-      selectedKeys = nextKeys;
+      return nextKeys;
+    };
+
+    const unregisterUpdate = editor.registerUpdateListener(() => {
+      applyKeys(hasFocus ? readSelectedKeys() : new Set());
     });
+    const unregisterFocus = editor.registerCommand(
+      FOCUS_COMMAND,
+      () => {
+        hasFocus = true;
+        applyKeys(readSelectedKeys());
+        return false;
+      },
+      COMMAND_PRIORITY_LOW,
+    );
+    const unregisterBlur = editor.registerCommand(
+      BLUR_COMMAND,
+      () => {
+        hasFocus = false;
+        applyKeys(new Set());
+        return false;
+      },
+      COMMAND_PRIORITY_LOW,
+    );
+    return () => {
+      unregisterUpdate();
+      unregisterFocus();
+      unregisterBlur();
+    };
   }, [editor]);
 
   return null;

@@ -329,7 +329,10 @@ const RuntimeCoreDependenciesWithoutThreadBootstrapLive = ReactorLayerLive.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       ServerSecretStore.layer,
-      CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+      CloudCliTokenManager.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ExternalLauncher.layer),
+      ),
       CloudManagedEndpointRuntimeLive,
     ),
   ),
