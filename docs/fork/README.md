@@ -1,10 +1,10 @@
 # Fork divergence ledger
 
-This directory tracks everything this fork carries that is not in upstream
-[pingdotgg/t3code](https://github.com/pingdotgg/t3code). One numbered entry per
-divergence, newest last. When upstream ships an equivalent, update the status
-here and note what replaced our version instead of deleting the entry, so the
-history of what we carried and why stays reconstructable.
+This directory tracks only what this fork currently carries that is not in
+upstream [pingdotgg/t3code](https://github.com/pingdotgg/t3code). One numbered
+entry per divergence, newest last. Once upstream merges an equivalent, the
+divergence is gone, so its entry is deleted outright; git history is the
+record if it is ever needed. Numbers are never reused.
 
 ## Writing an entry
 
@@ -24,15 +24,9 @@ Each entry uses these sections:
 
 - `active`: carried by this fork, not in upstream.
 - `submitted`: proposed to upstream, waiting on the outcome.
-- `upstreamed`: merged into upstream; our patch was dropped or reconciled.
-- `superseded`: upstream shipped a different solution; our patch was dropped.
 
 ## Ledger
 
-| #    | Divergence                                                                                            | PR                                                 | Status |
-| ---- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
-| 0001 | [File explorer mention actions and zoom-aware context menus](./0001-file-explorer-mention-actions.md) | [#1](https://github.com/TrogonStack/t3code/pull/1) | active |
-| 0002 | [Draft hero landing on the index route](./0002-draft-hero-landing.md)                                 | [#2](https://github.com/TrogonStack/t3code/pull/2) | active |
-| 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md)                 | [#3](https://github.com/TrogonStack/t3code/pull/3) | active |
-| 0004 | [Drag files from the explorer into the chat](./0004-file-tree-drag-to-chat.md)                        | [#4](https://github.com/TrogonStack/t3code/pull/4) | active |
-| 0005 | [Selection highlight over composer chips](./0005-composer-chip-selection-highlight.md)                | [#5](https://github.com/TrogonStack/t3code/pull/5) | active |
+| #    | Divergence                                                                            | PR                                                 | Status |
+| ---- | ------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
+| 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md) | [#3](https://github.com/TrogonStack/t3code/pull/3) | active |
