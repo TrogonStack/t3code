@@ -206,6 +206,7 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { ForkThreadDialog } from "./ForkThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
@@ -1229,6 +1230,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
+  const [forkDialogState, setForkDialogState] = useState<{
+    threadRef: ScopedThreadRef;
+    title: string;
+    upToMessageId?: MessageId;
+  } | null>(null);
   const [terminalUiLaunchContext, setTerminalUiLaunchContext] =
     useState<TerminalLaunchContext | null>(null);
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
@@ -5083,6 +5089,21 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const activeThreadRefForForkRef = useRef(activeThreadRef);
+  activeThreadRefForForkRef.current = activeThreadRef;
+  const activeThreadTitleRef = useRef(activeThread?.title);
+  activeThreadTitleRef.current = activeThread?.title;
+  const onForkFromMessage = useCallback((messageId: MessageId) => {
+    const threadRef = activeThreadRefForForkRef.current;
+    if (!threadRef) {
+      return;
+    }
+    setForkDialogState({
+      threadRef,
+      title: activeThreadTitleRef.current ?? "Untitled thread",
+      upToMessageId: messageId,
+    });
+  }, []);
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -5269,6 +5290,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onOpenTurnDiff={onOpenTurnDiff}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
+                onForkFromMessage={onForkFromMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
                 markdownCwd={gitCwd ?? undefined}
@@ -5503,6 +5525,23 @@ function ChatViewContent(props: ChatViewProps) {
                   }
                 }}
                 onPrepared={handlePreparedPullRequestThread}
+              />
+            ) : null}
+
+            {forkDialogState ? (
+              <ForkThreadDialog
+                open
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setForkDialogState(null);
+                  }
+                }}
+                environmentId={forkDialogState.threadRef.environmentId}
+                sourceThreadId={forkDialogState.threadRef.threadId}
+                sourceThreadTitle={forkDialogState.title}
+                {...(forkDialogState.upToMessageId !== undefined
+                  ? { upToMessageId: forkDialogState.upToMessageId }
+                  : {})}
               />
             ) : null}
           </div>

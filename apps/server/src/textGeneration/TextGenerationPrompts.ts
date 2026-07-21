@@ -7,7 +7,7 @@
  * @module textGenerationPrompts
  */
 import * as Schema from "effect/Schema";
-import type { ChatAttachment } from "@t3tools/contracts";
+import type { ChatAttachment, OrchestrationMessage } from "@t3tools/contracts";
 
 import { limitSection } from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
@@ -215,4 +215,43 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
   });
 
   return { prompt, outputSchema };
+}
+
+// ---------------------------------------------------------------------------
+// Thread fork summary
+// ---------------------------------------------------------------------------
+
+export interface ThreadForkSummaryPromptInput {
+  messages: ReadonlyArray<OrchestrationMessage>;
+  policy?: TextGenerationPolicy | undefined;
+}
+
+export function renderTranscript(messages: ReadonlyArray<OrchestrationMessage>): string {
+  return messages
+    .filter((message) => message.text.trim().length > 0)
+    .map((message) => `${message.role.toUpperCase()}: ${message.text.trim()}`)
+    .join("\n\n");
+}
+
+export function buildThreadForkSummaryPrompt(input: ThreadForkSummaryPromptInput) {
+  const promptSections = [
+    "You write dense recaps of coding-agent conversations for a fresh continuation thread.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    '- Address the agent directly in second person (e.g. "You were asked to...", "You had just...").',
+    "- Cover what the user wants, decisions already made, and the current state of the work.",
+    "- Mention concrete file paths, function names, and open next steps when they appear in the transcript.",
+    "- Be dense and specific, not vague. Skip pleasantries and filler.",
+    "- Write it as a single continuous recap, not a list of chat turns.",
+    "",
+    "Transcript:",
+    limitSection(renderTranscript(input.messages), 16_000),
+    ...policyInstruction(input.policy?.threadForkSummaryInstructions),
+  ];
+
+  const outputSchema = Schema.Struct({
+    summary: Schema.String,
+  });
+
+  return { prompt: promptSections.join("\n"), outputSchema };
 }

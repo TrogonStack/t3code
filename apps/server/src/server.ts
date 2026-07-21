@@ -51,6 +51,7 @@ import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
 import * as ThreadBootstrap from "./orchestration/Services/ThreadBootstrap.ts";
+import { ThreadForkLive } from "./orchestration/Layers/ThreadFork.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
@@ -341,6 +342,9 @@ const RuntimeCoreDependenciesWithoutThreadBootstrapLive = ReactorLayerLive.pipe(
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesWithoutThreadBootstrapLive.pipe(
   Layer.provideMerge(
     ThreadBootstrapLive.pipe(Layer.provide(RuntimeCoreDependenciesWithoutThreadBootstrapLive)),
+  ),
+  Layer.provideMerge(
+    ThreadForkLive.pipe(Layer.provide(RuntimeCoreDependenciesWithoutThreadBootstrapLive)),
   ),
 );
 

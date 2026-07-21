@@ -8,11 +8,13 @@
  */
 import {
   IsoDateTime,
+  MessageId,
   ModelSelection,
   NonNegativeInt,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadForkMode,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -33,6 +35,10 @@ export const ProjectionThread = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   parentThreadId: Schema.NullOr(ThreadId),
+  forkedFromThreadId: Schema.NullOr(ThreadId),
+  forkedUpToMessageId: Schema.NullOr(MessageId),
+  forkMode: Schema.NullOr(ThreadForkMode),
+  pendingForkContext: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

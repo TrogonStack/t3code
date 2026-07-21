@@ -12,6 +12,7 @@
  * @module ProviderService
  */
 import type {
+  MessageId,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
   ProviderRespondToRequestInput,
@@ -23,6 +24,7 @@ import type {
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -31,6 +33,15 @@ import type * as Stream from "effect/Stream";
 import type { ProviderServiceError } from "../Errors.ts";
 import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
 import type { ProviderInstanceRoutingInfo } from "./ProviderAdapterRegistry.ts";
+
+/**
+ * Outcome of a provider-native fork attempt. `supported: false` covers both
+ * "adapter has no native fork" and "native fork failed at runtime" - either
+ * way, the caller must fall back to context-injection.
+ */
+export type ProviderForkConversationResult =
+  | { readonly supported: true; readonly resumeCursor: unknown }
+  | { readonly supported: false };
 
 /**
  * ProviderServiceShape - Service API for provider session and turn orchestration.
@@ -104,6 +115,19 @@ export interface ProviderServiceShape {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Fork the source thread's provider-native session into the new thread, when
+   * the source's adapter supports it. Returns `{supported: false}` when the
+   * adapter has no native fork or the attempt fails at runtime; callers must
+   * fall back to context-injection in that case.
+   */
+  readonly forkConversation: (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly newThreadId: ThreadId;
+    readonly upToMessageId: MessageId | null;
+    readonly upToTurnId: TurnId | null;
+  }) => Effect.Effect<ProviderForkConversationResult, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

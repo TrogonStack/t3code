@@ -8,6 +8,7 @@
  */
 import {
   type CanUseTool,
+  forkSession,
   query,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -27,6 +28,7 @@ import {
   type CanonicalRequestType,
   type ClaudeSettings,
   EventId,
+  type MessageId,
   type ProviderApprovalDecision,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -88,6 +90,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { type ProviderThreadForkResult } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
@@ -201,6 +204,14 @@ interface ClaudeSessionContext {
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   stopped: boolean;
+  /**
+   * Maps an assistant text block's synthetic `itemId` (the same value
+   * `ProviderRuntimeIngestion` mints the canonical `MessageId` from, as
+   * `assistant:${itemId}`) to the Claude SDK message uuid current when that
+   * block was last touched. Lets `forkThread` resolve a t3code `MessageId`
+   * back to the SDK's own `SDKAssistantMessage.uuid` for `forkSession`.
+   */
+  readonly assistantMessageUuidByItemId: Map<string, string>;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -1217,6 +1228,21 @@ function toSessionError(
   return undefined;
 }
 
+const ASSISTANT_MESSAGE_ID_PREFIX = "assistant:";
+
+/**
+ * Recovers the assistant text block's synthetic `itemId` from a `MessageId`.
+ * Must match `ProviderRuntimeIngestion.ts`'s minting convention
+ * (`assistant:${itemId}`) for completed assistant-text `item.completed`
+ * events, which Claude always emits with a concrete `itemId` (no
+ * turnId/eventId fallback).
+ */
+function assistantItemIdFromMessageId(messageId: MessageId): string {
+  return messageId.startsWith(ASSISTANT_MESSAGE_ID_PREFIX)
+    ? messageId.slice(ASSISTANT_MESSAGE_ID_PREFIX.length)
+    : messageId;
+}
+
 function toRequestError(threadId: ThreadId, method: string, cause: unknown): ProviderAdapterError {
   const sessionError = toSessionError(threadId, cause);
   if (sessionError) {
@@ -1642,6 +1668,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
       if (entry.block.fallbackText.length === 0) {
         entry.block.fallbackText = text;
+      }
+
+      if (typeof message.uuid === "string" && message.uuid.length > 0) {
+        context.assistantMessageUuidByItemId.set(entry.block.itemId, message.uuid);
       }
 
       if (entry.block.streamClosed && !entry.block.completionEmitted) {
@@ -3590,6 +3620,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
         stopped: false,
+        assistantMessageUuidByItemId: new Map(),
       };
       yield* Ref.set(contextRef, context);
       sessions.set(threadId, context);
@@ -3798,6 +3829,44 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  const forkThread: ClaudeAdapterShape["forkThread"] = Effect.fn("forkThread")(function* (input) {
+    const context = yield* requireSession(input.sourceThreadId);
+    const sourceSessionId = context.resumeSessionId;
+    if (!sourceSessionId) {
+      return yield* new ProviderAdapterValidationError({
+        provider: PROVIDER,
+        operation: "forkThread",
+        issue: `Thread '${input.sourceThreadId}' has no resumable Claude session id to fork.`,
+      });
+    }
+
+    let upToMessageId: string | undefined;
+    if (input.upToMessageId !== null) {
+      upToMessageId = context.assistantMessageUuidByItemId.get(
+        assistantItemIdFromMessageId(input.upToMessageId),
+      );
+      if (!upToMessageId) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "forkThread",
+          issue: `Message '${input.upToMessageId}' does not correspond to a known Claude SDK message uuid on thread '${input.sourceThreadId}'.`,
+        });
+      }
+    }
+
+    const result = yield* Effect.tryPromise({
+      try: () => forkSession(sourceSessionId, upToMessageId ? { upToMessageId } : undefined),
+      catch: (cause) => toRequestError(input.sourceThreadId, "claude.forkSession", cause),
+    });
+
+    return {
+      resumeCursor: {
+        threadId: input.newThreadId,
+        resume: result.sessionId,
+      },
+    } satisfies ProviderThreadForkResult;
+  });
+
   const respondToRequest: ClaudeAdapterShape["respondToRequest"] = Effect.fn("respondToRequest")(
     function* (threadId, requestId, decision) {
       const context = yield* requireSession(threadId);
@@ -3880,12 +3949,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      nativeFork: true,
     },
     startSession,
     sendTurn,
     interruptTurn,
     readThread,
     rollbackThread,
+    forkThread,
     respondToRequest,
     respondToUserInput,
     stopSession,

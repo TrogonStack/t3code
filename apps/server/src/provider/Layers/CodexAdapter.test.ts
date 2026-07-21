@@ -7,6 +7,7 @@ import {
   ApprovalRequestId,
   CodexSettings,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderItemId,
@@ -43,6 +44,7 @@ import {
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeSendTurnInput,
   type CodexSessionRuntimeShape,
+  type CodexThreadForkResult,
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
@@ -54,6 +56,7 @@ class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
@@ -103,6 +106,13 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       }),
   );
 
+  public readonly forkThreadImpl = vi.fn(
+    (_lastTurnId: TurnId | null): Promise<CodexThreadForkResult> =>
+      Promise.resolve({
+        threadId: "provider-thread-fork-1",
+      }),
+  );
+
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -139,6 +149,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   rollbackThread(numTurns: number) {
     return Effect.promise(() => this.rollbackThreadImpl(numTurns));
+  }
+
+  forkThread(lastTurnId: TurnId | null) {
+    return Effect.promise(() => this.forkThreadImpl(lastTurnId));
   }
 
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
@@ -1147,6 +1161,154 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         lastOutputTokens: 6,
         lastReasoningOutputTokens: 0,
         compactsAutomatically: true,
+      });
+    }),
+  );
+});
+
+const forkThreadRuntimeFactory = makeRuntimeFactory();
+const forkThreadLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    Effect.gen(function* () {
+      const codexConfig = decodeCodexSettings({});
+      return yield* makeCodexAdapter(codexConfig, {
+        makeRuntime: forkThreadRuntimeFactory.factory,
+      });
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+forkThreadLayer("CodexAdapterLive forkThread", (it) => {
+  it.effect("forks the entire thread when upToMessageId is null", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-fork-full"),
+        runtimeMode: "full-access",
+      });
+      const runtime = forkThreadRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.forkThread);
+      runtime.forkThreadImpl.mockClear();
+
+      const result = yield* adapter.forkThread({
+        sourceThreadId: asThreadId("thread-fork-full"),
+        newThreadId: asThreadId("thread-fork-full-new"),
+        upToMessageId: null,
+        upToTurnId: null,
+      });
+
+      NodeAssert.deepStrictEqual(runtime.forkThreadImpl.mock.calls[0]?.[0], null);
+      NodeAssert.deepStrictEqual(result, {
+        resumeCursor: { threadId: "provider-thread-fork-1" },
+      });
+    }),
+  );
+
+  it.effect("resolves upToMessageId to the matching turn id before forking", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-fork-cutoff"),
+        runtimeMode: "full-access",
+      });
+      const runtime = forkThreadRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.forkThread);
+      runtime.forkThreadImpl.mockClear();
+      runtime.readThreadImpl.mockResolvedValueOnce({
+        threadId: "provider-thread-1",
+        turns: [
+          {
+            id: asTurnId("turn-1"),
+            items: [{ id: "item-1", type: "userMessage", content: [] }],
+          },
+          {
+            id: asTurnId("turn-2"),
+            items: [{ id: "item-2", type: "agentMessage", text: "hi" }],
+          },
+        ],
+      });
+
+      const result = yield* adapter.forkThread({
+        sourceThreadId: asThreadId("thread-fork-cutoff"),
+        newThreadId: asThreadId("thread-fork-cutoff-new"),
+        upToMessageId: asMessageId("item-1"),
+        upToTurnId: null,
+      });
+
+      NodeAssert.deepStrictEqual(runtime.forkThreadImpl.mock.calls[0]?.[0], asTurnId("turn-1"));
+      NodeAssert.deepStrictEqual(result, {
+        resumeCursor: { threadId: "provider-thread-fork-1" },
+      });
+    }),
+  );
+
+  it.effect("fails validation when upToMessageId matches no known turn", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-fork-unknown"),
+        runtimeMode: "full-access",
+      });
+      const runtime = forkThreadRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.forkThread);
+      runtime.forkThreadImpl.mockClear();
+      runtime.readThreadImpl.mockResolvedValueOnce({
+        threadId: "provider-thread-1",
+        turns: [],
+      });
+
+      const result = yield* adapter
+        .forkThread({
+          sourceThreadId: asThreadId("thread-fork-unknown"),
+          newThreadId: asThreadId("thread-fork-unknown-new"),
+          upToMessageId: asMessageId("missing-message"),
+          upToTurnId: null,
+        })
+        .pipe(Effect.result);
+
+      NodeAssert.equal(result?._tag, "Failure");
+      NodeAssert.equal(result?.failure._tag, "ProviderAdapterValidationError");
+      NodeAssert.equal(runtime.forkThreadImpl.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("uses a pre-resolved upToTurnId without calling readThread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-fork-preresolved"),
+        runtimeMode: "full-access",
+      });
+      const runtime = forkThreadRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.ok(adapter.forkThread);
+      runtime.forkThreadImpl.mockClear();
+      runtime.readThreadImpl.mockClear();
+
+      const result = yield* adapter.forkThread({
+        sourceThreadId: asThreadId("thread-fork-preresolved"),
+        newThreadId: asThreadId("thread-fork-preresolved-new"),
+        upToMessageId: asMessageId("item-1"),
+        upToTurnId: asTurnId("turn-1"),
+      });
+
+      NodeAssert.deepStrictEqual(runtime.forkThreadImpl.mock.calls[0]?.[0], asTurnId("turn-1"));
+      NodeAssert.equal(runtime.readThreadImpl.mock.calls.length, 0);
+      NodeAssert.deepStrictEqual(result, {
+        resumeCursor: { threadId: "provider-thread-fork-1" },
       });
     }),
   );

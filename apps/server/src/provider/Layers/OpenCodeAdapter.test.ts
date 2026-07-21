@@ -16,10 +16,12 @@ import * as TestClock from "effect/testing/TestClock";
 import { beforeEach } from "vite-plus/test";
 
 import {
+  MessageId,
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
@@ -73,7 +75,7 @@ const runtimeMock = {
     transientErrorSessionIds: new Set<string>(),
     sessionDirectoryById: new Map<string, string>(),
     sessionUpdateCalls: [] as Array<{ sessionID: string; permission: unknown }>,
-    forkCalls: [] as Array<{ sessionID: string; directory?: string }>,
+    forkCalls: [] as Array<{ sessionID: string; directory?: string; messageID?: string }>,
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -165,10 +167,22 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           runtimeMock.state.sessionUpdateCalls.push({ sessionID, permission });
           return { data: { id: sessionID } };
         },
-        fork: async ({ sessionID, directory }: { sessionID: string; directory?: string }) => {
+        fork: async ({
+          sessionID,
+          directory,
+          messageID,
+        }: {
+          sessionID: string;
+          directory?: string;
+          messageID?: string;
+        }) => {
           // Fork clones history into a new session bound to the directory.
           const forkedId = `${sessionID}_fork`;
-          runtimeMock.state.forkCalls.push({ sessionID, ...(directory ? { directory } : {}) });
+          runtimeMock.state.forkCalls.push({
+            sessionID,
+            ...(directory ? { directory } : {}),
+            ...(messageID ? { messageID } : {}),
+          });
           if (directory) {
             runtimeMock.state.sessionDirectoryById.set(forkedId, directory);
           }
@@ -970,6 +984,60 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         { sessionID: "http://127.0.0.1:9999/session" },
       ]);
       NodeAssert.deepEqual(snapshot.turns, []);
+    }),
+  );
+
+  it.effect("forks the whole thread when no cutoff is given", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      NodeAssert.ok(adapter.forkThread);
+      const threadId = asThreadId("thread-fork-full");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.forkThread({
+        sourceThreadId: threadId,
+        newThreadId: asThreadId("thread-fork-full-new"),
+        upToMessageId: null,
+        upToTurnId: null,
+      });
+
+      NodeAssert.equal(runtimeMock.state.forkCalls.length, 1);
+      NodeAssert.equal(runtimeMock.state.forkCalls[0]?.sessionID, "http://127.0.0.1:9999/session");
+      NodeAssert.equal(runtimeMock.state.forkCalls[0]?.messageID, undefined);
+      NodeAssert.deepEqual(result, {
+        resumeCursor: {
+          schemaVersion: 1,
+          sessionId: "http://127.0.0.1:9999/session_fork",
+        },
+      });
+    }),
+  );
+
+  it.effect("uses a pre-resolved upToTurnId as the OpenCode-native fork cutoff", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      NodeAssert.ok(adapter.forkThread);
+      const threadId = asThreadId("thread-fork-cutoff");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.forkThread({
+        sourceThreadId: threadId,
+        newThreadId: asThreadId("thread-fork-cutoff-new"),
+        upToMessageId: MessageId.make("assistant-1"),
+        upToTurnId: TurnId.make("assistant-1"),
+      });
+
+      NodeAssert.equal(runtimeMock.state.forkCalls.length, 1);
+      NodeAssert.equal(runtimeMock.state.forkCalls[0]?.sessionID, "http://127.0.0.1:9999/session");
+      NodeAssert.equal(runtimeMock.state.forkCalls[0]?.messageID, "assistant-1");
     }),
   );
 

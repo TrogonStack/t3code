@@ -341,6 +341,9 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+export const ThreadForkMode = Schema.Literals(["full-history", "summary"]);
+export type ThreadForkMode = typeof ThreadForkMode.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -353,6 +356,15 @@ export const OrchestrationThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkedUpToMessageId: Schema.optional(Schema.NullOr(MessageId)),
+  forkMode: Schema.optional(Schema.NullOr(ThreadForkMode)),
+  /**
+   * Text to inject ahead of the first real outgoing provider prompt after a
+   * fork whose new thread has no native provider memory (summary mode, or
+   * full-history mode with no/failed native fork). Cleared once consumed.
+   */
+  pendingForkContextText: Schema.optional(Schema.NullOr(Schema.String)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -400,6 +412,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkedFromThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  forkedUpToMessageId: Schema.optional(Schema.NullOr(MessageId)),
+  forkMode: Schema.optional(Schema.NullOr(ThreadForkMode)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -543,6 +558,17 @@ const ThreadCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadForkCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  newThreadId: ThreadId,
+  upToMessageId: Schema.optional(MessageId),
+  mode: ThreadForkMode,
+  title: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
 const ThreadDeleteCommand = Schema.Struct({
   type: Schema.Literal("thread.delete"),
   commandId: CommandId,
@@ -570,6 +596,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pendingForkContextText: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -701,6 +728,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -722,6 +750,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
   ThreadCreateCommand,
+  ThreadForkCommand,
   ThreadDeleteCommand,
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
@@ -802,6 +831,26 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadForkFinalizeCommand = Schema.Struct({
+  type: Schema.Literal("thread.fork.finalize"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  newThreadId: ThreadId,
+  upToMessageId: Schema.NullOr(MessageId),
+  mode: ThreadForkMode,
+  title: Schema.optional(TrimmedNonEmptyString),
+  summaryText: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * Text to inject ahead of the new thread's first real outgoing provider
+   * prompt when it has no native provider memory (summary mode, or
+   * full-history mode with no/failed native fork). `null` when the new
+   * thread got real provider memory via native fork.
+   */
+  pendingForkContextText: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+});
+export type ThreadForkFinalizeCommand = typeof ThreadForkFinalizeCommand.Type;
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -810,6 +859,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadForkFinalizeCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -824,6 +874,7 @@ export const OrchestrationEventType = Schema.Literals([
   "project.meta-updated",
   "project.deleted",
   "thread.created",
+  "thread.forked",
   "thread.deleted",
   "thread.archived",
   "thread.unarchived",
@@ -891,6 +942,26 @@ export const ThreadCreatedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadForkedPayload = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  messages: Schema.Array(OrchestrationMessage),
+  forkedFromThreadId: ThreadId,
+  forkedUpToMessageId: Schema.NullOr(MessageId),
+  forkMode: ThreadForkMode,
+  pendingForkContextText: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
@@ -913,6 +984,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  pendingForkContextText: Schema.optional(Schema.NullOr(Schema.String)),
   updatedAt: IsoDateTime,
 });
 
@@ -1058,6 +1130,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.created"),
     payload: ThreadCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.forked"),
+    payload: ThreadForkedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

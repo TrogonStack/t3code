@@ -78,6 +78,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { ThreadBootstrapLive } from "./orchestration/Layers/ThreadBootstrap.ts";
+import { ThreadForkService } from "./orchestration/Services/ThreadFork.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ProviderAdapterRegistry from "./provider/Services/ProviderAdapterRegistry.ts";
@@ -334,6 +335,7 @@ const buildAppUnderTest = (options?: {
     projectSetupScriptRunner?: Partial<
       ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]
     >;
+    threadFork?: Partial<ThreadForkService["Service"]>;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
@@ -541,6 +543,10 @@ const buildAppUnderTest = (options?: {
       Layer.provide(projectSetupScriptRunnerLayer),
       Layer.provide(vcsStatusBroadcasterLayer),
     );
+    const threadForkLayer = Layer.mock(ThreadForkService)({
+      dispatchFork: () => Effect.succeed({ sequence: 0 }),
+      ...options?.layers?.threadFork,
+    });
 
     const projectionSnapshotQueryLayer = Layer.mock(
       ProjectionSnapshotQuery.ProjectionSnapshotQuery,
@@ -710,7 +716,9 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provideMerge(vcsStatusBroadcasterLayer),
-      Layer.provide(Layer.mergeAll(threadBootstrapLayer, projectSetupScriptRunnerLayer)),
+      Layer.provide(
+        Layer.mergeAll(threadBootstrapLayer, threadForkLayer, projectSetupScriptRunnerLayer),
+      ),
       Layer.provide(
         Layer.mock(TerminalManager.TerminalManager)({
           ...options?.layers?.terminalManager,

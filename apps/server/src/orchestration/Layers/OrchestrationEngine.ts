@@ -68,6 +68,12 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateKind: "project",
         aggregateId: command.projectId,
       };
+    case "thread.fork":
+    case "thread.fork.finalize":
+      return {
+        aggregateKind: "thread",
+        aggregateId: command.newThreadId,
+      };
     default:
       return {
         aggregateKind: "thread",

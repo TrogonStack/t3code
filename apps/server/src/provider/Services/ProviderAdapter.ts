@@ -9,6 +9,7 @@
  */
 import type {
   ApprovalRequestId,
+  MessageId,
   ProviderApprovalDecision,
   ProviderDriverKind,
   ProviderUserInputAnswers,
@@ -30,6 +31,35 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Declares whether this adapter can fork a provider-native session via `forkThread`.
+   */
+  readonly nativeFork: boolean;
+}
+
+export interface ProviderThreadForkInput {
+  readonly sourceThreadId: ThreadId;
+  readonly newThreadId: ThreadId;
+  /**
+   * Cutoff message; `null` means fork the entire thread history.
+   */
+  readonly upToMessageId: MessageId | null;
+  /**
+   * The turn containing `upToMessageId`, pre-resolved by the caller from the
+   * read model. `null` whenever `upToMessageId` is `null` or the cutoff
+   * message has no associated turn. Adapters that key native forks off a
+   * turn boundary (e.g. Codex) should prefer this over re-deriving a turn
+   * from `upToMessageId` themselves.
+   */
+  readonly upToTurnId: TurnId | null;
+}
+
+export interface ProviderThreadForkResult {
+  /**
+   * Opaque provider-native cursor for the forked session, to be persisted
+   * under the new thread's provider binding.
+   */
+  readonly resumeCursor: unknown;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -113,6 +143,15 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     numTurns: number,
   ) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /**
+   * Fork a provider-native session into a new session. Only present when
+   * `capabilities.nativeFork` is true; callers must fall back to
+   * context-injection when absent or when this fails at runtime.
+   */
+  readonly forkThread?: (
+    input: ProviderThreadForkInput,
+  ) => Effect.Effect<ProviderThreadForkResult, TError>;
 
   /**
    * Stop all sessions owned by this adapter.

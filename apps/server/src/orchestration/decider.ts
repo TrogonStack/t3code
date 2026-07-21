@@ -261,6 +261,92 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.fork": {
+      return yield* new OrchestrationCommandInvariantError({
+        commandType: command.type,
+        detail: "thread.fork must be dispatched through ThreadForkService, not the plain engine.",
+      });
+    }
+
+    case "thread.fork.finalize": {
+      const source = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.newThreadId,
+      });
+
+      let messages: ReadonlyArray<(typeof source.messages)[number]>;
+      if (command.mode === "summary") {
+        if (command.summaryText === undefined) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "summaryText is required to finalize a summary-mode thread fork.",
+          });
+        }
+        const messageId = yield* Crypto.Crypto.pipe(
+          Effect.flatMap((crypto) => crypto.randomUUIDv4),
+        );
+        messages = [
+          {
+            id: messageId as (typeof source.messages)[number]["id"],
+            role: "assistant",
+            text: command.summaryText,
+            turnId: null,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        ];
+      } else {
+        if (command.upToMessageId === null) {
+          messages = source.messages;
+        } else {
+          const cutoffIndex = source.messages.findIndex(
+            (message) => message.id === command.upToMessageId,
+          );
+          if (cutoffIndex === -1) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Message '${command.upToMessageId}' does not exist on source thread '${command.sourceThreadId}'.`,
+            });
+          }
+          messages = source.messages.slice(0, cutoffIndex + 1);
+        }
+      }
+
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.newThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.forked",
+        payload: {
+          threadId: command.newThreadId,
+          projectId: source.projectId,
+          title: command.title ?? `${source.title} (fork)`,
+          modelSelection: source.modelSelection,
+          runtimeMode: source.runtimeMode,
+          interactionMode: source.interactionMode,
+          branch: source.branch,
+          worktreePath: source.worktreePath,
+          messages,
+          forkedFromThreadId: command.sourceThreadId,
+          forkedUpToMessageId: command.upToMessageId,
+          forkMode: command.mode,
+          pendingForkContextText: command.pendingForkContextText,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,
@@ -357,6 +443,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.pendingForkContextText !== undefined
+            ? { pendingForkContextText: command.pendingForkContextText }
+            : {}),
           updatedAt: occurredAt,
         },
       };

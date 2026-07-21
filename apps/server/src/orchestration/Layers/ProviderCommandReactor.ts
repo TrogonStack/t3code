@@ -605,7 +605,22 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const pendingForkContextText = thread.pendingForkContextText ?? null;
+    if (pendingForkContextText !== null) {
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.meta.update",
+          commandId: yield* serverCommandId("fork-context-consumed"),
+          threadId: input.threadId,
+          pendingForkContextText: null,
+        })
+        .pipe(Effect.ignoreCause({ log: true }));
+    }
+    const messageTextWithForkContext =
+      pendingForkContextText !== null
+        ? `${pendingForkContextText}\n\n---\n\n${input.messageText}`
+        : input.messageText;
+    const normalizedInput = toNonEmptyProviderInput(messageTextWithForkContext);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

@@ -10,9 +10,11 @@
  * @module ProviderServiceLive
  */
 import {
+  MessageId,
   ModelSelection,
   NonNegativeInt,
   ThreadId,
+  TurnId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
@@ -73,6 +75,13 @@ type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["S
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
   numTurns: NonNegativeInt,
+});
+
+const ProviderForkConversationInput = Schema.Struct({
+  sourceThreadId: ThreadId,
+  newThreadId: ThreadId,
+  upToMessageId: Schema.NullOr(MessageId),
+  upToTurnId: Schema.NullOr(TurnId),
 });
 
 function toValidationError(
@@ -1024,6 +1033,75 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const forkConversation: ProviderServiceMethod<"forkConversation"> = Effect.fn("forkConversation")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.forkConversation",
+        schema: ProviderForkConversationInput,
+        payload: rawInput,
+      });
+      let metricProvider = "unknown";
+      return yield* Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.sourceThreadId,
+          operation: "ProviderService.forkConversation",
+          allowRecovery: true,
+        });
+        metricProvider = routed.adapter.provider;
+        if (typeof routed.adapter.forkThread !== "function") {
+          return { supported: false } as const;
+        }
+        yield* Effect.annotateCurrentSpan({
+          "provider.operation": "fork-conversation",
+          "provider.kind": routed.adapter.provider,
+          "provider.thread_id": input.sourceThreadId,
+          "provider.fork.new_thread_id": input.newThreadId,
+        });
+        return yield* routed.adapter
+          .forkThread({
+            sourceThreadId: routed.threadId,
+            newThreadId: input.newThreadId,
+            upToMessageId: input.upToMessageId,
+            upToTurnId: input.upToTurnId,
+          })
+          .pipe(
+            Effect.tap((forked) =>
+              directory.upsert({
+                threadId: input.newThreadId,
+                provider: routed.adapter.provider,
+                providerInstanceId: routed.instanceId,
+                status: "stopped",
+                resumeCursor: forked.resumeCursor,
+              }),
+            ),
+            Effect.tap(() =>
+              analytics.record("provider.conversation.forked", {
+                provider: routed.adapter.provider,
+              }),
+            ),
+            Effect.map(
+              (forked) => ({ supported: true, resumeCursor: forked.resumeCursor }) as const,
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.conversation.fork-failed", {
+                provider: routed.adapter.provider,
+                threadId: input.sourceThreadId,
+                cause,
+              }).pipe(Effect.as({ supported: false } as const)),
+            ),
+          );
+      }).pipe(
+        withMetrics({
+          counter: providerTurnsTotal,
+          outcomeAttributes: () =>
+            providerMetricAttributes(metricProvider, {
+              operation: "fork",
+            }),
+        }),
+      );
+    },
+  );
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
@@ -1095,6 +1173,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
+    forkConversation,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

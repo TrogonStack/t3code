@@ -1,5 +1,6 @@
 import {
   EventId,
+  type MessageId,
   type OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -80,6 +81,27 @@ function parseOpenCodeResume(raw: unknown): { readonly sessionId: string } | und
     return undefined;
   }
   return { sessionId: record.sessionId.trim() };
+}
+
+/**
+ * Recover the OpenCode-native assistant message id backing a t3code
+ * `MessageId`. For OpenCode, `MessageId`s for assistant turns are minted as
+ * `` `assistant:${nativeId}` `` (segment index 0) by
+ * `assistantSegmentMessageId` in `ProviderRuntimeIngestion.ts` — the inverse
+ * of that convention. User-authored messages have no such native id (their
+ * `MessageId` is client-generated and never touches OpenCode), so this
+ * returns `undefined` for anything but a segment-0 assistant message id.
+ */
+function openCodeMessageIdFromMessageId(messageId: MessageId): string | undefined {
+  const prefix = "assistant:";
+  if (!messageId.startsWith(prefix)) {
+    return undefined;
+  }
+  const rest = messageId.slice(prefix.length);
+  if (rest.includes(":segment:") || rest.length === 0) {
+    return undefined;
+  }
+  return rest;
 }
 
 /**
@@ -1682,6 +1704,49 @@ export function makeOpenCodeAdapter(
       },
     );
 
+    const forkThread: OpenCodeAdapterShape["forkThread"] = Effect.fn("forkThread")(
+      function* (input) {
+        const context = yield* ensureSessionContext(sessions, input.sourceThreadId);
+
+        let messageID: string | undefined;
+        if (input.upToTurnId !== null) {
+          messageID = input.upToTurnId;
+        } else if (input.upToMessageId !== null) {
+          messageID = openCodeMessageIdFromMessageId(input.upToMessageId);
+          if (!messageID) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "forkThread",
+              issue: `Cannot resolve upToMessageId '${input.upToMessageId}' to an OpenCode-native message id.`,
+            });
+          }
+        }
+
+        const forkedSession = yield* runOpenCodeSdk("session.fork", () =>
+          context.client.session.fork({
+            sessionID: context.openCodeSessionId,
+            directory: context.directory,
+            ...(messageID ? { messageID } : {}),
+          }),
+        ).pipe(Effect.mapError(toRequestError));
+        const forked = forkedSession.data;
+        if (!forked) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session.fork",
+            detail: "OpenCode session.fork returned no session payload.",
+          });
+        }
+
+        return {
+          resumeCursor: {
+            schemaVersion: OPENCODE_RESUME_VERSION,
+            sessionId: forked.id,
+          },
+        };
+      },
+    );
+
     const stopAll: OpenCodeAdapterShape["stopAll"] = () =>
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
@@ -1701,6 +1766,7 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        nativeFork: true,
       },
       startSession,
       sendTurn,
@@ -1712,6 +1778,7 @@ export function makeOpenCodeAdapter(
       hasSession,
       readThread,
       rollbackThread,
+      forkThread,
       stopAll,
       get streamEvents() {
         return Stream.fromQueue(runtimeEvents);

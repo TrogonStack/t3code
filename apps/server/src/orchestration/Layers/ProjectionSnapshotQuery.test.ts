@@ -294,6 +294,10 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch: null,
           worktreePath: null,
           parentThreadId: null,
+          forkedFromThreadId: null,
+          forkedUpToMessageId: null,
+          forkMode: null,
+          pendingForkContextText: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -405,6 +409,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           branch: null,
           worktreePath: null,
           parentThreadId: null,
+          forkedFromThreadId: null,
+          forkedUpToMessageId: null,
+          forkMode: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

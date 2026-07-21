@@ -22,6 +22,7 @@ import {
   RuntimeRequestId,
   ProviderApprovalDecision,
   ThreadId,
+  TurnId,
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -50,15 +51,21 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import type {
+  ProviderThreadForkInput,
+  ProviderThreadForkResult,
+} from "../Services/ProviderAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
   makeCodexSessionRuntime,
+  type CodexResumeCursor,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
+  type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
@@ -120,6 +127,21 @@ function mapCodexRuntimeError(
     detail: error.message,
     cause: error,
   });
+}
+
+function resolveForkCutoffTurnId(
+  snapshot: CodexThreadSnapshot,
+  upToMessageId: string,
+): TurnId | undefined {
+  for (const turn of snapshot.turns) {
+    if (turn.id === upToMessageId) {
+      return turn.id;
+    }
+    if (turn.items.some((item) => item.id === upToMessageId)) {
+      return turn.id;
+    }
+  }
+  return undefined;
 }
 
 type CodexLifecycleItem =
@@ -1622,6 +1644,37 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
   };
 
+  const forkThread: CodexAdapterShape["forkThread"] = (input: ProviderThreadForkInput) =>
+    Effect.gen(function* () {
+      const session = yield* requireSession(input.sourceThreadId);
+
+      let lastTurnId: TurnId | null = input.upToTurnId;
+      if (input.upToMessageId !== null && lastTurnId === null) {
+        const snapshot = yield* session.runtime.readThread;
+        const resolved = resolveForkCutoffTurnId(snapshot, input.upToMessageId);
+        if (!resolved) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: `Message '${input.upToMessageId}' does not correspond to a known Codex turn on thread '${input.sourceThreadId}'.`,
+          });
+        }
+        lastTurnId = resolved;
+      }
+
+      const result = yield* session.runtime.forkThread(lastTurnId);
+      return {
+        resumeCursor: { threadId: result.threadId } satisfies CodexResumeCursor,
+      } satisfies ProviderThreadForkResult;
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError" ||
+        cause._tag === "ProviderAdapterValidationError"
+          ? cause
+          : mapCodexRuntimeError(input.sourceThreadId, "thread/fork", cause),
+      ),
+    );
+
   const respondToRequest: CodexAdapterShape["respondToRequest"] = (threadId, requestId, decision) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.respondToRequest(requestId, decision)),
@@ -1703,12 +1756,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      nativeFork: true,
     },
     startSession,
     sendTurn,
     interruptTurn,
     readThread,
     rollbackThread,
+    forkThread,
     respondToRequest,
     respondToUserInput,
     stopSession,

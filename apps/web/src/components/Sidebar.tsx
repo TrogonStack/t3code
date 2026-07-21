@@ -23,6 +23,7 @@ import {
   ThreadWorktreeIndicator,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ForkThreadDialog } from "./ForkThreadDialog";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -1230,6 +1231,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     null,
   );
   const [projectRenameTitle, setProjectRenameTitle] = useState("");
+  const [forkThreadTarget, setForkThreadTarget] = useState<{
+    threadRef: ScopedThreadRef;
+    title: string;
+  } | null>(null);
   const [projectGroupingTarget, setProjectGroupingTarget] =
     useState<SidebarProjectGroupMember | null>(null);
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
@@ -2104,6 +2109,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [updateThreadMetadata],
   );
 
+  const openForkThreadDialog = useCallback((threadRef: ScopedThreadRef, title: string) => {
+    setForkThreadTarget({ threadRef, title });
+  }, []);
+
+  const closeForkThreadDialog = useCallback(() => {
+    setForkThreadTarget(null);
+  }, []);
+
   const closeProjectRenameDialog = useCallback(() => {
     setProjectRenameTarget(null);
     setProjectRenameTitle("");
@@ -2196,6 +2209,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         [
           { id: "rename", label: "Rename thread" },
           { id: "mark-unread", label: "Mark unread" },
+          { id: "fork", label: "Fork thread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
@@ -2210,6 +2224,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       if (clicked === "mark-unread") {
         markThreadUnread(threadKey, thread.latestTurn?.completedAt);
+        return;
+      }
+      if (clicked === "fork") {
+        openForkThreadDialog(threadRef, thread.title);
         return;
       }
       if (clicked === "copy-path") {
@@ -2261,6 +2279,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       deleteThread,
       markThreadUnread,
       memberProjectByScopedKey,
+      openForkThreadDialog,
       project.workspaceRoot,
       startThreadRename,
     ],
@@ -2458,6 +2477,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+
+      {forkThreadTarget ? (
+        <ForkThreadDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              closeForkThreadDialog();
+            }
+          }}
+          environmentId={forkThreadTarget.threadRef.environmentId}
+          sourceThreadId={forkThreadTarget.threadRef.threadId}
+          sourceThreadTitle={forkThreadTarget.title}
+        />
+      ) : null}
 
       <Dialog
         open={projectGroupingTarget !== null}
