@@ -58,6 +58,15 @@ import Migration0035 from "./Migrations/035_ProjectionThreadsSnoozed.ts";
  *
  * Uses Migrator.fromRecord which parses the key format and
  * returns migrations sorted by ID.
+ *
+ * The migrator only remembers the highest id that has run, not which ids
+ * ran, so an id already shipped here must never be reassigned - even when it
+ * collides with an id upstream (pingdotgg/t3code) adds independently. Slot
+ * the incoming migration after whatever is already used instead.
+ *
+ * New TrogonStack-only migrations should use ids >= 1000, a block upstream
+ * will never grow into, so future syncs can't collide with them at all. `33`
+ * (ProjectionThreadParent) predates this convention and is grandfathered.
  */
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
