@@ -57,7 +57,8 @@ const deriveSubagentTitle = (prompt: string): string => {
 const RUNTIME_MODE_PERMISSIVENESS: Record<RuntimeMode, number> = {
   "approval-required": 0,
   "auto-accept-edits": 1,
-  "full-access": 2,
+  auto: 2,
+  "full-access": 3,
 };
 
 // A child may not run more permissively than the thread that spawned it.
