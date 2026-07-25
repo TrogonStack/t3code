@@ -45,7 +45,7 @@ import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexe
 import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
-import Migration0033 from "./Migrations/033_ProjectionThreadParent.ts";
+import Migration0033 from "./Migrations/fork/033_ProjectionThreadParent.ts";
 import Migration0034 from "./Migrations/034_ProjectionThreadsSettled.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadsSnoozed.ts";
 
@@ -65,7 +65,8 @@ import Migration0035 from "./Migrations/035_ProjectionThreadsSnoozed.ts";
  * the incoming migration after whatever is already used instead.
  *
  * New TrogonStack-only migrations should use ids >= 1000, a block upstream
- * will never grow into, so future syncs can't collide with them at all. `33`
+ * will never grow into, so future syncs can't collide with them at all, and
+ * live under `./Migrations/fork/` so they read as fork-only on sight. `33`
  * (ProjectionThreadParent) predates this convention and is grandfathered.
  */
 export const migrationEntries = [
