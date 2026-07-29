@@ -41,7 +41,6 @@ const invocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext,
   providerInstanceId: CLAUDE_INSTANCE,
   capabilities: new Set<McpInvocationContext.McpCapability>(["threads"]),
   issuedAt: 0,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 });
 
 const makeThreadShell = (
