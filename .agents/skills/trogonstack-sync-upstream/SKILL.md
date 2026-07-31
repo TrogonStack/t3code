@@ -39,9 +39,10 @@ Record every nontrivial resolution decision as you go; each one becomes a PR bod
 
 ### Migration rules (apps/server/src/persistence)
 
-- Fork-only migrations live in `apps/server/src/persistence/Migrations/fork/` and use ids >= 1000, a block upstream never grows into. Id `33` (ProjectionThreadParent) predates this convention and is grandfathered.
-- Never renumber a migration id that has already shipped on this fork, even if upstream independently reuses that id. The migrator only remembers the highest id that ran, so reassigning a shipped id makes installs silently skip it. Slot incoming upstream migrations around what already shipped instead.
-- After resolving `Migrations.ts`, run the fail-fast guard: `vp test run apps/server/src/persistence/Migrations.test.ts`. It rejects fork migrations outside their reserved id block.
+- Upstream migrations sync as-is, keeping their own ids. `Migrations.ts` and every file under `apps/server/src/persistence/Migrations/` (excluding `fork/`) must stay byte-identical to upstream. If either conflicts during a sync, take upstream's side wholesale rather than hand-merging.
+- Fork-only schema never lands in `Migrations.ts`. It lives only in `apps/server/src/persistence/ForkMigrations.ts`, numbered independently under `apps/server/src/persistence/Migrations/fork/`, and tracked in its own `trogonstack_fork_migrations` ledger table instead of the shared `effect_sql_migrations` table.
+- Because the two chains never share a ledger, id collisions between fork and upstream migrations are structurally impossible - there is nothing to renumber or offset during a sync.
+- After resolving `Migrations.ts`, run the fail-fast guard: `vp test run apps/server/src/persistence/ForkMigrations.test.ts`. It rejects any fork migration name that leaks into the shared `migrationEntries` chain.
 
 ## 4. Verify
 
