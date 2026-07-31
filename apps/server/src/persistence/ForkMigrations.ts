@@ -69,6 +69,11 @@ export const runForkMigrations = Effect.fn("runForkMigrations")(function* ({
  *
  * No-ops for fresh installs (no shared ledger table yet) and for installs
  * already realigned (no id-33 ProjectionThreadParent row left to move).
+ *
+ * TODO: delete this function, its call in Layers/Sqlite.ts, and the legacy
+ * scenarios in ForkMigrations.test.ts once every install that ran the old
+ * shared-chain fork history has started up with it at least once. Fresh
+ * installs never need it.
  */
 export const realignSharedMigrationLedger = Effect.fn("realignSharedMigrationLedger")(function* () {
   const sql = yield* SqlClient.SqlClient;
