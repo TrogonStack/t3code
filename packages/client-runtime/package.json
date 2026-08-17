@@ -47,6 +47,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/background-work": {
+      "types": "./src/state/backgroundWork.ts",
+      "default": "./src/state/backgroundWork.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
