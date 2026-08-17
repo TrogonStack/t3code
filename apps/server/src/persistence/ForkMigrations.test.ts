@@ -9,6 +9,8 @@ import {
   forkMigrationEntries,
   realignSharedMigrationLedger,
   runForkMigrations,
+  SharedMigrationLedgerMismatchError,
+  verifySharedMigrationLedger,
 } from "./ForkMigrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 
@@ -54,6 +56,7 @@ layer("fresh install", (it) => {
       const sql = yield* SqlClient.SqlClient;
 
       yield* realignSharedMigrationLedger();
+      yield* verifySharedMigrationLedger();
       yield* runMigrations();
       yield* runForkMigrations();
 
@@ -68,6 +71,100 @@ layer("fresh install", (it) => {
       const sharedLedger = yield* selectSharedLedger(sql);
       assert.strictEqual(sharedLedger[sharedLedger.length - 1]?.migration_id, UPSTREAM_MAX);
       assert.ok(!sharedLedger.some((row) => row.name === "ProjectionThreadParent"));
+    }),
+  );
+});
+
+// Each layer() block gets its own in-memory database, so every ledger scenario
+// needs its own block rather than sharing one with the others.
+layer("verifySharedMigrationLedger on a fresh database", (it) => {
+  it.effect("passes when the ledger table does not exist yet", () =>
+    Effect.gen(function* () {
+      yield* verifySharedMigrationLedger();
+    }),
+  );
+});
+
+layer("verifySharedMigrationLedger after the shared chain runs", (it) => {
+  it.effect("passes, and keeps passing with ids beyond this build's chain", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations();
+      yield* runForkMigrations();
+      yield* verifySharedMigrationLedger();
+
+      yield* sql`
+        INSERT INTO effect_sql_migrations (migration_id, name, created_at)
+        VALUES (${UPSTREAM_MAX + 1}, 'SomeFutureMigration', CURRENT_TIMESTAMP)
+      `;
+
+      yield* verifySharedMigrationLedger();
+    }),
+  );
+});
+
+layer("verifySharedMigrationLedger on a partially migrated database", (it) => {
+  it.effect("passes when the ledger stops partway through the chain", () =>
+    Effect.gen(function* () {
+      yield* runMigrations({ toMigrationInclusive: 20 });
+      yield* verifySharedMigrationLedger();
+    }),
+  );
+});
+
+layer("verifySharedMigrationLedger with a divergent branch's chain", (it) => {
+  it.effect("fails, naming the migrations that would be skipped", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      // Reproduces ~/.t3/dev/state.sqlite: the shared chain ran through 32, then
+      // a branch that numbered its OrchestrationV2 chain at 33+ took over, so
+      // this build's 33.. never ran and their columns are missing.
+      yield* runMigrations({ toMigrationInclusive: 32 });
+      const divergent = ["OrchestrationV2", "OrchestrationV2Subagents", "ScheduledTasks"];
+      for (const [index, name] of divergent.entries()) {
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name, created_at)
+          VALUES (${33 + index}, ${name}, CURRENT_TIMESTAMP)
+        `;
+      }
+
+      const error = yield* Effect.flip(verifySharedMigrationLedger());
+
+      assert.instanceOf(error, SharedMigrationLedgerMismatchError);
+      assert.strictEqual(error.latestLedgerId, 35);
+      assert.deepStrictEqual(
+        error.skipped.map(({ id }) => id),
+        [33, 34, 35],
+      );
+      assert.deepStrictEqual(error.skipped[0], {
+        id: 33,
+        expected: "ProjectionThreadsSettled",
+        recorded: "OrchestrationV2",
+      });
+      assert.include(error.message, "ProjectionThreadsSettled");
+      assert.include(error.message, "OrchestrationV2");
+      assert.include(error.message, "T3CODE_HOME");
+    }),
+  );
+});
+
+layer("verifySharedMigrationLedger with a gap in the ledger", (it) => {
+  it.effect("reports the missing id as a skipped migration", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations({ toMigrationInclusive: 20 });
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 15`;
+
+      const error = yield* Effect.flip(verifySharedMigrationLedger());
+
+      assert.instanceOf(error, SharedMigrationLedgerMismatchError);
+      assert.deepStrictEqual(error.skipped, [
+        { id: 15, expected: "ProjectionTurnsSourceProposedPlan", recorded: null },
+      ]);
+      assert.include(error.message, "no row");
     }),
   );
 });
@@ -97,6 +194,7 @@ layer("legacy full install", (it) => {
       `;
 
       yield* realignSharedMigrationLedger();
+      yield* verifySharedMigrationLedger();
       yield* runMigrations();
       yield* runForkMigrations();
 
@@ -156,6 +254,7 @@ layer("legacy mid-history install", (it) => {
       `;
 
       yield* realignSharedMigrationLedger();
+      yield* verifySharedMigrationLedger();
       yield* runMigrations();
       yield* runForkMigrations();
 
