@@ -1400,12 +1400,74 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   /**
-   * A dropped folder always belongs to the device hosting this window, so it
-   * skips the environment and source pickers and goes straight to confirming
-   * the path against the primary environment.
+   * A WSL UNC path names a folder inside a Linux backend rather than on the
+   * Windows host, so it only becomes a project once it is matched to the
+   * environment running that distro and rewritten as a Linux path. Callers
+   * that already read the desktop's WSL state pass it in to avoid a second
+   * bridge round trip.
+   */
+  const resolveWslProjectTarget = useCallback(
+    async (path: string, knownWslState: DesktopWslState | null) => {
+      const wslState =
+        knownWslState ?? (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
+      let primaryRunningDistro: string | null = null;
+      try {
+        primaryRunningDistro =
+          window.desktopBridge
+            ?.getLocalEnvironmentBootstraps()
+            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
+          null;
+      } catch {
+        // Keep UNC routing strict when the live primary identity cannot be read.
+      }
+      return resolveWslProjectSelection(
+        path,
+        applyWslEnvironmentConfiguration(
+          environments.flatMap((environment) => {
+            const backendId = desktopLocalBackendId(environment.entry.target);
+            if (!backendId) {
+              return [];
+            }
+
+            const bootstrap = desktopLocalBootstraps.find(
+              (candidate) => candidate.httpBaseUrl === environment.displayUrl,
+            );
+            const runningDistro = bootstrap?.runningDistro ?? null;
+            return [{ environmentId: environment.environmentId, backendId, runningDistro }];
+          }),
+          primaryEnvironmentId,
+          wslState,
+          primaryRunningDistro,
+        ),
+      );
+    },
+    [desktopLocalBootstraps, environments, primaryEnvironmentId],
+  );
+
+  /**
+   * A dropped folder skips the environment and source pickers and goes straight
+   * to confirming the path. It normally belongs to the device hosting this
+   * window, except for a WSL UNC path, which belongs to whichever backend runs
+   * the distro it names.
    */
   const startAddProjectAtPath = useCallback(
-    (path: string): void => {
+    async (path: string): Promise<void> => {
+      if (parseWslUncPath(path)) {
+        const selection = await resolveWslProjectTarget(path, null);
+        if (!selection) {
+          setOpen(false);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not add WSL project",
+              description: "Start the matching WSL backend, then drop the folder again.",
+            }),
+          );
+          return;
+        }
+        void startAddProjectBrowse(selection.environmentId, selection.linuxPath);
+        return;
+      }
       const environment = environments.find(
         (candidate) => candidate.environmentId === primaryEnvironmentId,
       );
@@ -1425,7 +1487,7 @@ function OpenCommandPaletteDialog(props: {
       }
       void startAddProjectBrowse(primaryEnvironmentId, path);
     },
-    [environments, primaryEnvironmentId, setOpen, startAddProjectBrowse],
+    [environments, primaryEnvironmentId, resolveWslProjectTarget, setOpen, startAddProjectBrowse],
   );
 
   useLayoutEffect(() => {
@@ -1434,7 +1496,7 @@ function OpenCommandPaletteDialog(props: {
     }
     clearOpenIntent();
     if (openIntent.path) {
-      startAddProjectAtPath(openIntent.path);
+      void startAddProjectAtPath(openIntent.path);
       return;
     }
     openAddProjectFlow();
@@ -2262,37 +2324,7 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     if (parseWslUncPath(pickedPath)) {
-      desktopWslState ??= (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
-      let primaryRunningDistro: string | null = null;
-      try {
-        primaryRunningDistro =
-          window.desktopBridge
-            ?.getLocalEnvironmentBootstraps()
-            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
-          null;
-      } catch {
-        // Keep UNC routing strict when the live primary identity cannot be read.
-      }
-      const selection = resolveWslProjectSelection(
-        pickedPath,
-        applyWslEnvironmentConfiguration(
-          environments.flatMap((environment) => {
-            const backendId = desktopLocalBackendId(environment.entry.target);
-            if (!backendId) {
-              return [];
-            }
-
-            const bootstrap = desktopLocalBootstraps.find(
-              (candidate) => candidate.httpBaseUrl === environment.displayUrl,
-            );
-            const runningDistro = bootstrap?.runningDistro ?? null;
-            return [{ environmentId: environment.environmentId, backendId, runningDistro }];
-          }),
-          primaryEnvironmentId,
-          desktopWslState ?? null,
-          primaryRunningDistro,
-        ),
-      );
+      const selection = await resolveWslProjectTarget(pickedPath, desktopWslState);
       if (!selection) {
         toastManager.add(
           stackedThreadToast({
@@ -2317,13 +2349,12 @@ function OpenCommandPaletteDialog(props: {
     browseEnvironmentId,
     browseEnvironmentPlatform,
     canOpenProjectFromFileManager,
-    desktopLocalBootstraps,
-    environments,
     fileManagerInitialPath,
     handleAddProject,
     handleAddProjectForEnvironment,
     isPickingProjectFolder,
     primaryEnvironmentId,
+    resolveWslProjectTarget,
   ]);
 
   const inputAccessory =
