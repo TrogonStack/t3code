@@ -14,6 +14,13 @@ import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 
 const UPSTREAM_MAX = Math.max(...migrationEntries.map(([id]) => id));
 
+// Highest upstream id that existed while the fork still shipped
+// ProjectionThreadParent inside the shared chain. A legacy install can only
+// have reached this far, so the simulations below stop here before shifting
+// the ledger; running the modern chain first would leave real rows sitting on
+// the ids the shift moves into.
+const LEGACY_UPSTREAM_MAX = 35;
+
 const selectSharedLedger = (sql: SqlClient.SqlClient) =>
   sql<{ readonly migration_id: number; readonly name: string }>`
     SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
@@ -70,7 +77,7 @@ layer("legacy full install", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: LEGACY_UPSTREAM_MAX });
 
       yield* sql`
         ALTER TABLE projection_threads
