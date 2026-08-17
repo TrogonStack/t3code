@@ -89,6 +89,8 @@ export interface AcpSessionRequestLogEvent {
 export interface AcpSessionRuntimeStartResult {
   readonly sessionId: string;
   readonly initializeResult: EffectAcpSchema.InitializeResponse;
+  /** Agent response to `authenticate`, the only place most agents report account identity. */
+  readonly authenticateResult: EffectAcpSchema.AuthenticateResponse;
   readonly sessionSetupResult:
     | EffectAcpSchema.LoadSessionResponse
     | EffectAcpSchema.NewSessionResponse
@@ -545,7 +547,7 @@ export const make = (
         methodId: options.authMethodId,
       } satisfies EffectAcpSchema.AuthenticateRequest;
 
-      yield* runLoggedRequest(
+      const authenticateResult = yield* runLoggedRequest(
         "authenticate",
         authenticatePayload,
         acp.agent.authenticate(authenticatePayload),
@@ -650,6 +652,7 @@ export const make = (
       const nextState = {
         sessionId,
         initializeResult,
+        authenticateResult,
         sessionSetupResult,
         modelConfigId: extractModelConfigId(sessionSetupResult),
       } satisfies AcpStartedState;

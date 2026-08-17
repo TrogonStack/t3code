@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect } from "vite-plus/test";
 
-import { makeGrokAcpRuntime } from "./GrokAcpSupport.ts";
+import { grokAuthFromAcpAuthenticate, makeGrokAcpRuntime } from "./GrokAcpSupport.ts";
 
 const makeProbeRuntime = Effect.gen(function* () {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -32,6 +32,19 @@ describe.runIf(process.env.T3_GROK_ACP_PROBE === "1")("Grok ACP CLI probe", () =
       const runtime = yield* makeProbeRuntime;
       const started = yield* runtime.start();
       expect(started.initializeResult).toBeDefined();
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("authenticate carries credentials the provider snapshot can report", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeProbeRuntime;
+      const started = yield* runtime.start();
+
+      // A successful `authenticate` is the only auth signal the Grok CLI gives
+      // us. If this regresses, the settings card falls back to claiming
+      // authentication could not be verified.
+      const auth = grokAuthFromAcpAuthenticate(started.authenticateResult, process.env);
+      expect(auth.status).toBe("authenticated");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

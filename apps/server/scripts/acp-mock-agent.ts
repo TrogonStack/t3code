@@ -35,6 +35,8 @@ const emitStaleXAiPromptCompleteBeforeSecondHang =
   process.env.T3_ACP_EMIT_STALE_XAI_PROMPT_COMPLETE_BEFORE_SECOND_HANG === "1";
 const emitOverlappingXAiPromptCompleteOutOfOrder =
   process.env.T3_ACP_EMIT_OVERLAPPING_XAI_PROMPT_COMPLETE_OUT_OF_ORDER === "1";
+const failAuthenticate = process.env.T3_ACP_FAIL_AUTHENTICATE === "1";
+const authenticateEmail = process.env.T3_ACP_AUTHENTICATE_EMAIL;
 const failPrompt = process.env.T3_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.T3_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.T3_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
@@ -307,7 +309,11 @@ const program = Effect.gen(function* () {
     }),
   );
 
-  yield* agent.handleAuthenticate(() => Effect.succeed({}));
+  yield* agent.handleAuthenticate(() =>
+    failAuthenticate
+      ? Effect.fail(AcpError.AcpRequestError.authRequired())
+      : Effect.succeed(authenticateEmail ? { _meta: { email: authenticateEmail } } : {}),
+  );
 
   yield* agent.handleCreateSession(() =>
     Effect.succeed({

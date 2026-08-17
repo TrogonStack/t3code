@@ -1,10 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
+  grokAuthFailureFromAcpCause,
+  grokAuthFromAcpAuthenticate,
   resolveGrokAcpBaseModelId,
 } from "./GrokAcpSupport.ts";
 
@@ -32,6 +35,53 @@ describe("buildGrokAcpSpawnInput", () => {
         GROK_OAUTH2_REFERRER: "t3code",
       },
     });
+  });
+});
+
+describe("grokAuthFromAcpAuthenticate", () => {
+  it("reports the account email Grok returns from authenticate", () => {
+    expect(
+      grokAuthFromAcpAuthenticate({
+        _meta: { email: " grok-user@example.com ", auth_mode: "Oidc", team_id: "team-1" },
+      }),
+    ).toEqual({ status: "authenticated", email: "grok-user@example.com" });
+  });
+
+  it("labels API key credentials when authenticate reports no account", () => {
+    expect(grokAuthFromAcpAuthenticate({}, { XAI_API_KEY: "secret" })).toEqual({
+      status: "authenticated",
+      type: "API key",
+    });
+  });
+
+  it("treats a bare authenticate success as authenticated without identity", () => {
+    expect(grokAuthFromAcpAuthenticate({ _meta: { email: "   " } }, {})).toEqual({
+      status: "authenticated",
+    });
+    expect(grokAuthFromAcpAuthenticate({ _meta: null }, {})).toEqual({ status: "authenticated" });
+  });
+});
+
+describe("grokAuthFailureFromAcpCause", () => {
+  it("maps an ACP auth-required failure to an unauthenticated snapshot", () => {
+    const failure = grokAuthFailureFromAcpCause(
+      Cause.fail(EffectAcpErrors.AcpRequestError.authRequired()),
+    );
+    expect(failure?.auth).toEqual({ status: "unauthenticated" });
+    expect(failure?.message).toContain("not authenticated");
+  });
+
+  it("leaves unrelated ACP failures to the generic startup message", () => {
+    expect(
+      grokAuthFailureFromAcpCause(
+        Cause.fail(EffectAcpErrors.AcpRequestError.invalidParams("session id not known")),
+      ),
+    ).toBeUndefined();
+    expect(
+      grokAuthFailureFromAcpCause(
+        Cause.fail(new EffectAcpErrors.AcpSpawnError({ command: "grok", cause: "boom" })),
+      ),
+    ).toBeUndefined();
   });
 });
 
