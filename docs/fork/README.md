@@ -27,6 +27,7 @@ Each entry uses these sections:
 
 ## Ledger
 
-| #    | Divergence                                                                            | PR                                                 | Status |
-| ---- | ------------------------------------------------------------------------------------- | -------------------------------------------------- | ------ |
-| 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md) | [#3](https://github.com/TrogonStack/t3code/pull/3) | active |
+| #    | Divergence                                                                                     | PR                                                   | Status |
+| ---- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------ |
+| 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md)          | [#3](https://github.com/TrogonStack/t3code/pull/3)   | active |
+| 0007 | [API-key Codex installs are not reported as broken](./0007-codex-api-key-auth-is-supported.md) | [#15](https://github.com/TrogonStack/t3code/pull/15) | active |
