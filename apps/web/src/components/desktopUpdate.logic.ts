@@ -1,7 +1,24 @@
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
-import { isWindowsPlatform } from "../lib/utils";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
+
+const DESKTOP_RELEASE_TAG_URL = "https://github.com/pingdotgg/t3code/releases/tag";
+
+/**
+ * The main process fills `downloadedVersion` from the updater's `update-downloaded`
+ * event, which is dispatched on its own fiber. A download RPC can therefore resolve
+ * before that write lands, so fall back to the version the download was started for.
+ */
+export function getDesktopUpdateDownloadedVersion(state: DesktopUpdateState): string | null {
+  return state.downloadedVersion ?? state.availableVersion;
+}
+
+/** Release notes for an exact downloaded build; nightly suffixes are part of the tag. */
+export function getDesktopUpdateReleaseUrl(version: string | null): string | null {
+  const normalizedVersion = version?.trim();
+  if (!normalizedVersion) return null;
+  return `${DESKTOP_RELEASE_TAG_URL}/v${encodeURIComponent(normalizedVersion)}`;
+}
 
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
@@ -79,13 +96,9 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
 
 export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
-  platform = "",
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  const windowsInstallWarning = isWindowsPlatform(platform)
-    ? "\n\nOn Windows, T3 Code may remain closed for several minutes while the update installs, and no installer window may appear. T3 Code will reopen automatically when installation finishes."
-    : "";
-  return `Install update${version ? ` ${version}` : ""} and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.${windowsInstallWarning}`;
+  return `Install update${version ? ` ${version}` : ""} and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {
