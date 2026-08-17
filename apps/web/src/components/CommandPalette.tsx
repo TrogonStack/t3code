@@ -1410,6 +1410,10 @@ function OpenCommandPaletteDialog(props: {
         (candidate) => candidate.environmentId === primaryEnvironmentId,
       );
       if (!primaryEnvironmentId || !canCreateProjectInEnvironment(environment?.connection.phase)) {
+        // The drop opened the palette only to reach this surface, so a failure
+        // leaves the user back on the sidebar with the error, not on an empty
+        // palette they never asked for.
+        setOpen(false);
         toastManager.add(
           stackedThreadToast({
             type: "error",
@@ -1421,7 +1425,7 @@ function OpenCommandPaletteDialog(props: {
       }
       void startAddProjectBrowse(primaryEnvironmentId, path);
     },
-    [environments, primaryEnvironmentId, startAddProjectBrowse],
+    [environments, primaryEnvironmentId, setOpen, startAddProjectBrowse],
   );
 
   useLayoutEffect(() => {
