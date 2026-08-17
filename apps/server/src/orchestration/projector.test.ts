@@ -6,6 +6,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -90,6 +91,10 @@ describe("orchestration projector", () => {
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        snoozedUntil: null,
+        snoozedAt: null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],
@@ -100,12 +105,12 @@ describe("orchestration projector", () => {
     ]);
   });
 
-  it("applies thread.forked events", async () => {
-    const now = "2026-01-01T00:00:00.000Z";
-    const model = createEmptyReadModel(now);
+  effectIt.effect("applies thread.forked events", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const model = createEmptyReadModel(now);
 
-    const next = await Effect.runPromise(
-      projectEvent(
+      const next = yield* projectEvent(
         model,
         makeEvent({
           sequence: 1,
@@ -144,51 +149,55 @@ describe("orchestration projector", () => {
             updatedAt: now,
           },
         }),
-      ),
-    );
+      );
 
-    expect(next.snapshotSequence).toBe(1);
-    expect(next.threads).toEqual([
-      {
-        id: "thread-fork",
-        projectId: "project-1",
-        title: "Source Thread (fork)",
-        modelSelection: {
-          instanceId: "codex",
-          model: "gpt-5-codex",
-        },
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        parentThreadId: null,
-        forkedFromThreadId: "thread-source",
-        forkedUpToMessageId: "message-1",
-        forkMode: "full-history",
-        pendingForkContextText: "context text",
-        latestTurn: null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        deletedAt: null,
-        messages: [
-          {
-            id: "message-1",
-            role: "user",
-            text: "First message",
-            turnId: null,
-            streaming: false,
-            createdAt: now,
-            updatedAt: now,
+      expect(next.snapshotSequence).toBe(1);
+      expect(next.threads).toEqual([
+        {
+          id: "thread-fork",
+          projectId: "project-1",
+          title: "Source Thread (fork)",
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5-codex",
           },
-        ],
-        proposedPlans: [],
-        activities: [],
-        checkpoints: [],
-        session: null,
-      },
-    ]);
-  });
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          parentThreadId: null,
+          forkedFromThreadId: "thread-source",
+          forkedUpToMessageId: "message-1",
+          forkMode: "full-history",
+          pendingForkContextText: "context text",
+          latestTurn: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          snoozedUntil: null,
+          snoozedAt: null,
+          deletedAt: null,
+          messages: [
+            {
+              id: "message-1",
+              role: "user",
+              text: "First message",
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+          session: null,
+        },
+      ]);
+    }),
+  );
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {
     const now = "2026-01-01T00:00:00.000Z";

@@ -1,7 +1,9 @@
-import { type GrokSettings, ProviderDriverKind } from "@t3tools/contracts";
+import { type GrokSettings, ProviderDriverKind, type ServerProviderAuth } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
@@ -16,6 +18,9 @@ const GROK_OAUTH2_REFERRER_ENV = "GROK_OAUTH2_REFERRER";
 const T3_CODE_OAUTH_REFERRER = "t3code";
 const GROK_AUTH_METHOD_API_KEY = "xai.api_key";
 const GROK_AUTH_METHOD_CACHED_TOKEN = "cached_token";
+const GROK_API_KEY_AUTH_TYPE = "API key";
+const ACP_AUTH_REQUIRED_ERROR_CODE = -32000;
+const isAcpRequestError = Schema.is(EffectAcpErrors.AcpRequestError);
 const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 
 type GrokAcpRuntimeGrokSettings = Pick<GrokSettings, "binaryPath">;
@@ -49,6 +54,57 @@ function resolveGrokAuthMethodId(environment: NodeJS.ProcessEnv | undefined): st
   return environment?.[GROK_API_KEY_ENV]?.trim()
     ? GROK_AUTH_METHOD_API_KEY
     : GROK_AUTH_METHOD_CACHED_TOKEN;
+}
+
+function trimmedMetaString(
+  meta: EffectAcpSchema.AuthenticateResponse["_meta"],
+  key: string,
+): string | undefined {
+  if (meta === null || meta === undefined) {
+    return undefined;
+  }
+  const value = meta[key];
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Derives the account identity Grok reports from a successful `authenticate`.
+ * A success is proof of working credentials on its own, so the identity fields
+ * are best-effort: builds that answer with a bare `{}` still count as
+ * authenticated.
+ */
+export function grokAuthFromAcpAuthenticate(
+  response: EffectAcpSchema.AuthenticateResponse,
+  environment?: NodeJS.ProcessEnv,
+): ServerProviderAuth {
+  const email = trimmedMetaString(response._meta, "email");
+  if (email) {
+    return { status: "authenticated", email };
+  }
+  return resolveGrokAuthMethodId(environment) === GROK_AUTH_METHOD_API_KEY
+    ? { status: "authenticated", type: GROK_API_KEY_AUTH_TYPE }
+    : { status: "authenticated" };
+}
+
+/**
+ * Recognizes an ACP startup failure the user can fix by signing in, so the
+ * settings card can say so instead of blaming a generic startup error.
+ */
+export function grokAuthFailureFromAcpCause(
+  cause: Cause.Cause<EffectAcpErrors.AcpError>,
+): { readonly auth: ServerProviderAuth; readonly message: string } | undefined {
+  const failure = Cause.squash(cause);
+  if (!isAcpRequestError(failure) || failure.code !== ACP_AUTH_REQUIRED_ERROR_CODE) {
+    return undefined;
+  }
+  return {
+    auth: { status: "unauthenticated" },
+    message: "Grok CLI is installed but not authenticated. Run `grok` and sign in.",
+  };
 }
 
 export const makeGrokAcpRuntime = (

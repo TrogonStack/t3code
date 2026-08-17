@@ -20,7 +20,7 @@ import {
   providerUpdateNotificationKey,
   type ProviderUpdateToastView,
 } from "./ProviderUpdateLaunchNotification.logic";
-import { stackedThreadToast, toastManager } from "./ui/toast";
+import { hiddenToastActionProps, stackedThreadToast, toastManager } from "./ui/toast";
 import { useAtomCommand } from "../state/use-atom-command";
 
 const seenProviderUpdateNotificationKeys = new Set<string>();
@@ -68,6 +68,10 @@ function updateProviderUpdateToast(input: {
       title: input.view.title,
       description: input.view.description,
       timeout: 0,
+      // Base UI merges toast updates and omits `undefined` keys, so `undefined`
+      // would leave the prompt's Update button in place. Replace it with a
+      // defined empty action so the CTA cannot linger while the update runs.
+      actionProps: hiddenToastActionProps,
       data: {
         hideCopyButton: true,
         ...(input.view.dismissAfterVisibleMs !== undefined
