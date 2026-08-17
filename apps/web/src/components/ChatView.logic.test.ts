@@ -13,6 +13,7 @@ import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
+  buildBackgroundWorkBannerCopy,
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
@@ -305,6 +306,79 @@ describe("buildExpiredTerminalContextToastCopy", () => {
       title: "Expired terminal contexts omitted from message",
       description: "Re-add it if you want that terminal output included.",
     });
+  });
+});
+
+describe("buildBackgroundWorkBannerCopy", () => {
+  const watch = (label: string) => ({ kind: "watch" as const, label });
+  const agent = (label: string) => ({ kind: "agent" as const, label });
+
+  it("names the watch loops it can see", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({
+        liveness: "monitoring",
+        liveAgentCount: 0,
+        tasks: [watch("Watch CI on PR #18")],
+      }),
+    ).toEqual({
+      title: "1 watch loop running in the background",
+      description: "Watch CI on PR #18",
+    });
+  });
+
+  it("counts the work that does not fit on the line", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({
+        liveness: "monitoring",
+        liveAgentCount: 0,
+        tasks: [watch("Watch CI"), watch("Tail logs"), watch("Poll deploy")],
+      }),
+    ).toEqual({
+      title: "3 watch loops running in the background",
+      description: "Watch CI, Tail logs, and 1 more",
+    });
+  });
+
+  it("keeps the old copy when retention left no task detail", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({ liveness: "monitoring", liveAgentCount: 0, tasks: [] }),
+    ).toEqual({ title: "Monitoring in the background", description: null });
+    expect(
+      buildBackgroundWorkBannerCopy({ liveness: "working", liveAgentCount: 0, tasks: [] }),
+    ).toEqual({ title: "Background work running", description: null });
+  });
+
+  it("prefers the agent roster's count while agents are working", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({
+        liveness: "working",
+        liveAgentCount: 2,
+        tasks: [agent("Review the diff"), agent("Write tests")],
+      }),
+    ).toEqual({
+      title: "2 agents working in the background",
+      description: "Review the diff and Write tests",
+    });
+  });
+
+  it("falls back to the folded task count when the roster is empty", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({
+        liveness: "working",
+        liveAgentCount: 0,
+        tasks: [agent("Orphaned run")],
+      }),
+    ).toEqual({ title: "1 task running in the background", description: "Orphaned run" });
+  });
+
+  it("describes only the watch loops when monitoring", () => {
+    expect(
+      buildBackgroundWorkBannerCopy({
+        liveness: "monitoring",
+        liveAgentCount: 0,
+        tasks: [agent("Stale agent row"), watch("Watch CI")],
+      }).description,
+    ).toBe("Watch CI");
   });
 });
 

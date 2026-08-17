@@ -149,6 +149,72 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
   };
 }
 
+export const BACKGROUND_WORK_LABEL_LIMIT = 2;
+
+function pluralize(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * One line naming the live background work, listing what fits and counting the
+ * rest. The banner has a single line, and the popover carries the full list.
+ */
+export function formatBackgroundWorkLabels(
+  labels: ReadonlyArray<string>,
+  limit = BACKGROUND_WORK_LABEL_LIMIT,
+): string | null {
+  const shown = labels.slice(0, Math.max(limit, 1));
+  const hidden = labels.length - shown.length;
+  if (hidden > 0) {
+    return `${shown.join(", ")}, and ${hidden} more`;
+  }
+  if (shown.length > 1) {
+    return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)}`;
+  }
+  return shown[0] ?? null;
+}
+
+/**
+ * Banner copy for background work that outlived the turn. The server's
+ * liveness state is authoritative for working-vs-monitoring and for whether
+ * anything is live at all; the folded task list only adds detail and is empty
+ * whenever start rows aged out or the server restarted, so every branch reads
+ * without it.
+ */
+export function buildBackgroundWorkBannerCopy(input: {
+  liveness: "working" | "monitoring";
+  liveAgentCount: number;
+  tasks: ReadonlyArray<{ readonly kind: "watch" | "agent"; readonly label: string }>;
+}): { title: string; description: string | null } {
+  const watchTasks = input.tasks.filter((task) => task.kind === "watch");
+  const described =
+    input.liveness === "monitoring" && watchTasks.length > 0 ? watchTasks : input.tasks;
+  const description = formatBackgroundWorkLabels(described.map((task) => task.label));
+
+  if (input.liveness === "monitoring") {
+    return {
+      title:
+        watchTasks.length > 0
+          ? `${pluralize(watchTasks.length, "watch loop", "watch loops")} running in the background`
+          : "Monitoring in the background",
+      description,
+    };
+  }
+  if (input.liveAgentCount > 0) {
+    return {
+      title: `${pluralize(input.liveAgentCount, "agent", "agents")} working in the background`,
+      description,
+    };
+  }
+  return {
+    title:
+      input.tasks.length > 0
+        ? `${pluralize(input.tasks.length, "task", "tasks")} running in the background`
+        : "Background work running",
+    description,
+  };
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

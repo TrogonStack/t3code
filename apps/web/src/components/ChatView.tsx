@@ -156,6 +156,10 @@ import {
   deriveAgentPanelModel,
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import {
+  foldLiveBackgroundTasks,
+  type LiveBackgroundTask,
+} from "@t3tools/client-runtime/state/background-work";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -293,6 +297,7 @@ import {
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
+  buildBackgroundWorkBannerCopy,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
@@ -341,6 +346,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { BackgroundWorkDetailsPopover } from "./chat/BackgroundWorkDetailsPopover";
 import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 import {
   buildVersionMismatchDismissalKey,
@@ -358,6 +364,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_LIVE_BACKGROUND_TASKS: ReadonlyArray<LiveBackgroundTask> = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -4391,6 +4398,16 @@ function ChatViewContent(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
+  // The liveness state names a mode, not the work, so the banner also folds
+  // the thread's task rows for per-task detail. Gated on the liveness so a
+  // thread with nothing running never pays for the fold.
+  const liveBackgroundTasks = useMemo(
+    () =>
+      activeBackgroundLiveness === null
+        ? EMPTY_LIVE_BACKGROUND_TASKS
+        : foldLiveBackgroundTasks(threadActivities),
+    [activeBackgroundLiveness, threadActivities],
+  );
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
@@ -4430,7 +4447,11 @@ function ChatViewContent(props: ChatViewProps) {
       return null;
     }
     const working = activeBackgroundLiveness === "working";
-    const liveCount = agentPanelModel.liveCount;
+    const copy = buildBackgroundWorkBannerCopy({
+      liveness: working ? "working" : "monitoring",
+      liveAgentCount: agentPanelModel.liveCount,
+      tasks: liveBackgroundTasks,
+    });
     return {
       id: `background-liveness:${activeThread.id}`,
       variant: "default",
@@ -4440,20 +4461,33 @@ function ChatViewContent(props: ChatViewProps) {
           aria-hidden="true"
         />
       ),
-      title: working
-        ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working in the background`
-          : "Background work running"
-        : "Monitoring in the background",
+      title: copy.title,
+      // One line, always: a provider-written task title can run long and the
+      // banner must not grow to fit it. The popover has the full text.
+      ...(copy.description
+        ? { description: <span className="block truncate">{copy.description}</span> }
+        : {}),
       actions: (
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={isStoppingBackgroundWork}
-          onClick={() => void handleStopBackgroundWork()}
-        >
-          {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
-        </Button>
+        <>
+          {liveBackgroundTasks.length > 0 ? (
+            <BackgroundWorkDetailsPopover tasks={liveBackgroundTasks} />
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={isStoppingBackgroundWork}
+                  onClick={() => void handleStopBackgroundWork()}
+                />
+              }
+            >
+              {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
+            </TooltipTrigger>
+            <TooltipPopup side="top">Ends all background work in this thread at once</TooltipPopup>
+          </Tooltip>
+        </>
       ),
     };
   }, [
@@ -4462,6 +4496,7 @@ function ChatViewContent(props: ChatViewProps) {
     agentPanelModel.liveCount,
     handleStopBackgroundWork,
     isStoppingBackgroundWork,
+    liveBackgroundTasks,
   ]);
   // A woken thread announces itself in the open view, not just the sidebar
   // pill. Dismissing marks the wake as seen (same acknowledgment as the
