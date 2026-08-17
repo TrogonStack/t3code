@@ -20,8 +20,10 @@
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { migrationManifest } from "./Migrations.ts";
 import Migration0001 from "./Migrations/fork/001_ProjectionThreadParent.ts";
 
 export const FORK_MIGRATIONS_TABLE = "trogonstack_fork_migrations";
@@ -60,6 +62,93 @@ export const runForkMigrations = Effect.fn("runForkMigrations")(function* ({
     ? Effect.logDebug("Fork database schema is current")
     : Effect.log("Fork migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
+});
+
+export class SharedMigrationLedgerMismatchError extends Schema.TaggedErrorClass<SharedMigrationLedgerMismatchError>()(
+  "SharedMigrationLedgerMismatchError",
+  {
+    latestLedgerId: Schema.Number,
+    skipped: Schema.Array(
+      Schema.Struct({
+        id: Schema.Number,
+        expected: Schema.String,
+        recorded: Schema.NullOr(Schema.String),
+      }),
+    ),
+    unrecognized: Schema.Array(Schema.Struct({ id: Schema.Number, recorded: Schema.String })),
+  },
+) {
+  override get message(): string {
+    const skipped = this.skipped
+      .map(
+        ({ id, expected, recorded }) =>
+          `  ${id}: expected '${expected}', ledger has ${recorded === null ? "no row" : `'${recorded}'`}`,
+      )
+      .join("\n");
+    const unrecognized =
+      this.unrecognized.length === 0
+        ? ""
+        : `\nLedger ids this build does not know:\n${this.unrecognized
+            .map(({ id, recorded }) => `  ${id}: '${recorded}'`)
+            .join("\n")}`;
+
+    return [
+      `Shared migration ledger disagrees with this build's migration chain, so ${this.skipped.length} migration(s) would be skipped and their schema changes would be missing.`,
+      `The ledger's highest id is ${this.latestLedgerId}, and the migrator only runs ids above that.`,
+      `\nMigrations that would be skipped:\n${skipped}${unrecognized}`,
+      `\nThis database was migrated by a branch whose migration chain diverged from this one. Give this checkout its own T3 home (T3CODE_HOME or --home-dir), or reset/reseed this database. Do not renumber the ledger by hand.`,
+    ].join("\n");
+  }
+}
+
+/**
+ * Fail startup when the shared ledger cannot describe this build's chain.
+ *
+ * `Migrator` decides what to run purely by id (`currentId <= latestMigrationId`
+ * is skipped) and never compares names, so a ledger written by a branch with
+ * different numbering silently skips migrations and surfaces later as an
+ * unrelated "no such column" query failure. Sharing one T3 home across branches
+ * is normal here, so this turns that into an actionable startup error.
+ *
+ * Runs after `realignSharedMigrationLedger`, which repairs the one legacy
+ * divergence the fork itself shipped.
+ */
+export const verifySharedMigrationLedger = Effect.fn("verifySharedMigrationLedger")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  const tables = yield* sql<{ readonly name: string }>`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+    `;
+  if (tables.length === 0) {
+    return;
+  }
+
+  const rows = yield* sql<{ readonly migration_id: number; readonly name: string }>`
+      SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
+    `;
+  if (rows.length === 0) {
+    return;
+  }
+
+  const recordedById = new Map(rows.map((row) => [row.migration_id, row.name]));
+  const latestLedgerId = Math.max(...rows.map((row) => row.migration_id));
+
+  const skipped = migrationManifest
+    .filter(([id, name]) => id <= latestLedgerId && recordedById.get(id) !== name)
+    .map(([id, name]) => ({ id, expected: name, recorded: recordedById.get(id) ?? null }));
+
+  if (skipped.length === 0) {
+    return;
+  }
+
+  const expectedIds = new Set<number>(migrationManifest.map(([id]) => id));
+  const unrecognized = rows
+    .filter((row) => !expectedIds.has(row.migration_id))
+    .map((row) => ({ id: row.migration_id, recorded: row.name }));
+
+  return yield* Effect.fail(
+    new SharedMigrationLedgerMismatchError({ latestLedgerId, skipped, unrecognized }),
+  );
 });
 
 /**
