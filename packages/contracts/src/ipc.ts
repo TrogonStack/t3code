@@ -452,6 +452,16 @@ export interface PickedThemeFile {
   text: string;
 }
 
+/**
+ * Structural stand-in for the DOM `File`, which this package cannot name
+ * because it is built without DOM types. Only the object's identity matters to
+ * its one consumer, the desktop dropped-path resolver.
+ */
+export interface DroppedFileHandle {
+  readonly name: string;
+  readonly size: number;
+}
+
 export const PickedThemeFileSchema = Schema.Struct({
   name: Schema.String,
   size: Schema.Number,
@@ -1086,6 +1096,13 @@ export interface DesktopBridge {
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
+  /**
+   * Absolute path of a file or folder the user dropped onto the window. The web
+   * platform never exposes it, so this is the only way a dropped folder can
+   * become a project path. Optional: older desktop builds lack it, and browser
+   * clients have no equivalent at all.
+   */
+  getPathForDroppedFile?: (file: DroppedFileHandle) => string | null;
   /**
    * Multi-select JSON file picker that opens in the VS Code extensions
    * directory when one exists. Optional: older desktop builds lack it, and

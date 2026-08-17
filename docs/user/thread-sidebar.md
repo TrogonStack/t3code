@@ -12,6 +12,18 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
+## Add a project by dropping a folder
+
+In the desktop app, drag a folder from your file manager onto the sidebar. T3 Code opens **Add
+project** with that folder already filled in, so you confirm it with **Add** or Enter. An empty
+sidebar says so next to its **Add project** button.
+
+The folder is added to this device's environment, the one the desktop app runs itself. To add a
+folder that lives on another machine, use **Add project** and browse that environment instead.
+
+Browsers do not tell an app where a dropped folder lives on disk, so the sidebar in a browser tab
+is not a drop target. Use **Add project** there.
+
 ## Environment artwork
 
 Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in

@@ -398,7 +398,10 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     (mode: SearchOverlayMode) => dispatch({ _tag: "ToggleMode", mode }),
     [],
   );
-  const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
+  const openAddProject = useCallback(
+    (path?: string) => dispatch({ _tag: "OpenAddProject", ...(path ? { path } : {}) }),
+    [],
+  );
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -473,7 +476,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         if (detail.open === "new-thread-in") {
           openNewThreadIn();
         } else if (detail.open === "add-project") {
-          openAddProject();
+          openAddProject(detail.path);
         } else {
           setOpen(true);
         }
@@ -1151,9 +1154,13 @@ function OpenCommandPaletteDialog(props: {
     }
   }
 
+  /**
+   * `prefilledPath` opens the browser already pointed at a folder, so the user
+   * confirms that path instead of navigating to it.
+   */
   const startAddProjectBrowse = useCallback(
-    async (environmentId: EnvironmentId): Promise<void> => {
-      const initialQuery = getAddProjectInitialQueryForEnvironment(environmentId);
+    async (environmentId: EnvironmentId, prefilledPath?: string): Promise<void> => {
+      const initialQuery = prefilledPath ?? getAddProjectInitialQueryForEnvironment(environmentId);
       const initialBrowsePath = getBrowseDirectoryPath(initialQuery);
       const browseCwd = getBrowseCwdForEnvironment(environmentId);
       const view: CommandPaletteView = {
@@ -1392,13 +1399,42 @@ function OpenCommandPaletteDialog(props: {
     startAddProjectSourceSelection,
   ]);
 
+  /**
+   * A dropped folder always belongs to the device hosting this window, so it
+   * skips the environment and source pickers and goes straight to confirming
+   * the path against the primary environment.
+   */
+  const startAddProjectAtPath = useCallback(
+    (path: string): void => {
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === primaryEnvironmentId,
+      );
+      if (!primaryEnvironmentId || !canCreateProjectInEnvironment(environment?.connection.phase)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Environment unavailable",
+            description: `${environment?.label ?? "This device"} is not connected.`,
+          }),
+        );
+        return;
+      }
+      void startAddProjectBrowse(primaryEnvironmentId, path);
+    },
+    [environments, primaryEnvironmentId, startAddProjectBrowse],
+  );
+
   useLayoutEffect(() => {
     if (openIntent?.kind !== "add-project") {
       return;
     }
     clearOpenIntent();
+    if (openIntent.path) {
+      startAddProjectAtPath(openIntent.path);
+      return;
+    }
     openAddProjectFlow();
-  }, [clearOpenIntent, openAddProjectFlow, openIntent]);
+  }, [clearOpenIntent, openAddProjectFlow, openIntent, startAddProjectAtPath]);
 
   useLayoutEffect(() => {
     if (openIntent?.kind !== "new-thread-in" || projectThreadItems.length === 0) {

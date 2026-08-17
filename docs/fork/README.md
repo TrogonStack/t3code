@@ -32,3 +32,4 @@ Each entry uses these sections:
 | 0003 | [Native subagent threads for Claude orchestrators](./0003-native-subagent-threads.md)          | [#3](https://github.com/TrogonStack/t3code/pull/3)                                                         | active |
 | 0006 | [Fork schema on its own migration ledger](./0006-fork-migration-ledger.md)                     | [#13](https://github.com/TrogonStack/t3code/pull/13), [#16](https://github.com/TrogonStack/t3code/pull/16) | active |
 | 0007 | [API-key Codex installs are not reported as broken](./0007-codex-api-key-auth-is-supported.md) | [#15](https://github.com/TrogonStack/t3code/pull/15)                                                       | active |
+| 0008 | [Drop a folder on the sidebar to add a project](./0008-drop-a-folder-to-add-a-project.md)      | [#17](https://github.com/TrogonStack/t3code/pull/17)                                                       | active |

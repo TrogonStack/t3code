@@ -37,9 +37,10 @@ export function browseInputEndPaddingClass(input: {
  */
 export type SearchOverlayMode = "command" | "files" | "content";
 
-export interface CommandPaletteOpenIntent {
-  readonly kind: "add-project" | "new-thread-in";
-}
+/** An add-project `path` prefills the surface with a folder to confirm. */
+export type CommandPaletteOpenIntent =
+  | { readonly kind: "add-project"; readonly path?: string }
+  | { readonly kind: "new-thread-in" };
 
 export interface CommandPaletteUiState {
   readonly open: boolean;
@@ -50,7 +51,7 @@ export interface CommandPaletteUiState {
 export type CommandPaletteUiAction =
   | { readonly _tag: "SetOpen"; readonly open: boolean }
   | { readonly _tag: "ToggleMode"; readonly mode: SearchOverlayMode }
-  | { readonly _tag: "OpenAddProject" }
+  | { readonly _tag: "OpenAddProject"; readonly path?: string }
   | { readonly _tag: "OpenNewThreadIn" }
   | { readonly _tag: "ClearOpenIntent" };
 
@@ -70,7 +71,11 @@ export function reduceCommandPaletteUiState(
         ? { open: false, mode: "command", openIntent: null }
         : { open: true, mode: action.mode, openIntent: null };
     case "OpenAddProject":
-      return { open: true, mode: "command", openIntent: { kind: "add-project" } };
+      return {
+        open: true,
+        mode: "command",
+        openIntent: { kind: "add-project", ...(action.path ? { path: action.path } : {}) },
+      };
     case "OpenNewThreadIn":
       return { open: true, mode: "command", openIntent: { kind: "new-thread-in" } };
     case "ClearOpenIntent":
