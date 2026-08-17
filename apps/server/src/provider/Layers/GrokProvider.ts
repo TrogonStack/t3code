@@ -29,7 +29,12 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
-import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSupport.ts";
+import {
+  grokAuthFailureFromAcpCause,
+  grokAuthFromAcpAuthenticate,
+  makeGrokAcpRuntime,
+  resolveGrokAcpBaseModelId,
+} from "../acp/GrokAcpSupport.ts";
 
 const GROK_PRESENTATION = {
   displayName: "Grok",
@@ -123,7 +128,7 @@ function buildGrokDiscoveredModelsFromSessionModelState(
     .filter((model): model is ServerProviderModel => model !== undefined);
 }
 
-const discoverGrokModelsViaAcp = (
+const probeGrokViaAcp = (
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ) =>
@@ -137,7 +142,10 @@ const discoverGrokModelsViaAcp = (
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
     });
     const started = yield* acp.start();
-    return buildGrokDiscoveredModelsFromSessionModelState(started.sessionSetupResult.models);
+    return {
+      models: buildGrokDiscoveredModelsFromSessionModelState(started.sessionSetupResult.models),
+      auth: grokAuthFromAcpAuthenticate(started.authenticateResult, environment),
+    };
   }).pipe(Effect.scoped);
 
 const runGrokVersionCommand = (
@@ -251,7 +259,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     });
   }
 
-  const discoveryExit = yield* discoverGrokModelsViaAcp(grokSettings, environment).pipe(
+  const discoveryExit = yield* probeGrokViaAcp(grokSettings, environment).pipe(
     Effect.timeoutOption(GROK_ACP_MODEL_DISCOVERY_TIMEOUT_MS),
     Effect.exit,
   );
@@ -259,6 +267,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     yield* Effect.logWarning("Grok ACP model discovery failed", {
       errorTag: causeErrorTag(discoveryExit.cause),
     });
+    const authFailure = grokAuthFailureFromAcpCause(discoveryExit.cause);
     return buildServerProvider({
       presentation: GROK_PRESENTATION,
       enabled: grokSettings.enabled,
@@ -268,8 +277,10 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         installed: true,
         version,
         status: "error",
-        auth: { status: "unknown" },
-        message: "Grok CLI is installed but ACP startup failed. Check server logs for details.",
+        auth: authFailure?.auth ?? { status: "unknown" },
+        message:
+          authFailure?.message ??
+          "Grok CLI is installed but ACP startup failed. Check server logs for details.",
       },
     });
   }
@@ -291,10 +302,10 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       },
     });
   }
-  const discoveredModels = discoveryExit.value.value;
+  const probeResult = discoveryExit.value.value;
   const models =
-    discoveredModels.length > 0
-      ? grokModelsFromSettings(grokSettings.customModels, discoveredModels)
+    probeResult.models.length > 0
+      ? grokModelsFromSettings(grokSettings.customModels, probeResult.models)
       : fallbackModels;
 
   return buildServerProvider({
@@ -306,7 +317,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       installed: true,
       version,
       status: "ready",
-      auth: { status: "unknown" },
+      auth: probeResult.auth,
     },
   });
 });
