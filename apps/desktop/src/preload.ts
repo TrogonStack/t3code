@@ -1,11 +1,12 @@
 import type {
   DesktopBridge,
+  DroppedFileHandle,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
 
@@ -101,6 +102,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setWslDistro: (distro) => ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
   setWslOnly: (enabled) => ipcRenderer.invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+  getPathForDroppedFile: (file: DroppedFileHandle) => {
+    try {
+      // The bridge contract names a structural handle because contracts is
+      // built without DOM types; every caller passes a real dropped `File`.
+      const path = webUtils.getPathForFile(file as File);
+      return path.length > 0 ? path : null;
+    } catch {
+      // A file that no longer belongs to a live drop has no path to report.
+      return null;
+    }
+  },
   pickThemeFiles: () => ipcRenderer.invoke(IpcChannels.PICK_THEME_FILES_CHANNEL, undefined),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) =>

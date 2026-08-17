@@ -93,6 +93,19 @@ describe("reduceCommandPaletteUiState", () => {
     });
   });
 
+  it("carries a dropped folder path on the add project intent", () => {
+    expect(
+      reduceCommandPaletteUiState(closedState, {
+        _tag: "OpenAddProject",
+        path: "/repos/api",
+      }),
+    ).toEqual({
+      open: true,
+      mode: "command",
+      openIntent: { kind: "add-project", path: "/repos/api" },
+    });
+  });
+
   it("resets to command mode for dialog-driven opens and closes", () => {
     const filesOpen = reduceCommandPaletteUiState(closedState, {
       _tag: "ToggleMode",

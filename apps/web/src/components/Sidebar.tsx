@@ -178,6 +178,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { makeProjectFolderDropHandlers } from "./sidebar/projectFolderDrop";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -1796,6 +1797,40 @@ export default function Sidebar() {
     () => openCommandPalette({ open: "add-project" }),
     [],
   );
+  const [isProjectFolderDragActive, setIsProjectFolderDragActive] = useState(false);
+  // Only the desktop shell can turn a dropped folder into a path, so browser
+  // clients keep the platform's own drag behavior rather than lighting up a
+  // target that could never resolve one.
+  const canDropProjectFolders =
+    typeof window !== "undefined" && window.desktopBridge?.getPathForDroppedFile !== undefined;
+  useEffect(() => {
+    if (!isProjectFolderDragActive) return;
+    const clearProjectFolderDrag = () => setIsProjectFolderDragActive(false);
+    window.addEventListener("dragend", clearProjectFolderDrag);
+    return () => window.removeEventListener("dragend", clearProjectFolderDrag);
+  }, [isProjectFolderDragActive]);
+  const projectFolderDropHandlers = useMemo(
+    () =>
+      makeProjectFolderDropHandlers({
+        setDragActive: setIsProjectFolderDragActive,
+        resolveDroppedFolderPath: (file) =>
+          window.desktopBridge?.getPathForDroppedFile?.(file) ?? null,
+        addProjectAtPath: (path) => openCommandPalette({ open: "add-project", path }),
+        rejectDrop: (reason) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: reason === "no-folder" ? "Drop a folder" : "Could not read that folder",
+              description:
+                reason === "no-folder"
+                  ? "A project starts from a folder, not a file."
+                  : "Use Add project to pick it instead.",
+            }),
+          );
+        },
+      }),
+    [],
+  );
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
@@ -3382,7 +3417,14 @@ export default function Sidebar() {
     <>
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
-        className="gap-0"
+        // min-h-full keeps the folder drop target the full height of the list
+        // area, so an empty sidebar is still a target worth aiming at.
+        className={cn(
+          "min-h-full gap-0",
+          isProjectFolderDragActive &&
+            "rounded-lg bg-primary/[0.04] outline-2 outline-dashed -outline-offset-4 outline-primary/50",
+        )}
+        {...(canDropProjectFolders ? projectFolderDropHandlers : {})}
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
@@ -3921,6 +3963,7 @@ export default function Sidebar() {
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
                   </button>
+                  {canDropProjectFolders ? <span>or drop a folder here</span> : null}
                 </>
               ) : scopedProjectGroup ? (
                 `No threads in ${scopedProjectGroup.displayName} yet`
