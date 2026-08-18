@@ -407,7 +407,7 @@ describe("waitForPromptStreamStall", () => {
 
       const idleMillis = yield* Fiber.join(stall);
       expect(idleMillis).toBeGreaterThanOrEqual(Duration.toMillis(Duration.minutes(10)));
-    }).pipe(Effect.provide(TestClock.layer())),
+    }),
   );
 
   it.effect("stays quiet while a client request is still in flight", () =>
@@ -422,7 +422,7 @@ describe("waitForPromptStreamStall", () => {
 
       expect(stall.pollUnsafe()).toBeUndefined();
       yield* Fiber.interrupt(stall);
-    }).pipe(Effect.provide(TestClock.layer())),
+    }),
   );
 
   it.effect("stays quiet while the agent keeps streaming", () =>
@@ -440,7 +440,7 @@ describe("waitForPromptStreamStall", () => {
 
       expect(stall.pollUnsafe()).toBeUndefined();
       yield* Fiber.interrupt(stall);
-    }).pipe(Effect.provide(TestClock.layer())),
+    }),
   );
 
   it.effect("reports a stall once the last client request settles", () =>
@@ -459,6 +459,6 @@ describe("waitForPromptStreamStall", () => {
 
       const idleMillis = yield* Fiber.join(stall);
       expect(idleMillis).toBeGreaterThanOrEqual(Duration.toMillis(Duration.minutes(10)));
-    }).pipe(Effect.provide(TestClock.layer())),
+    }),
   );
 });

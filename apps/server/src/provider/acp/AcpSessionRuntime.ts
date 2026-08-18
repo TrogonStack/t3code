@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -332,9 +333,17 @@ export const make = (
       });
 
     /**
-     * Wraps a handler registration so serving the agent counts as liveness. Without
-     * this a long command would look identical to a dead stream.
+     * Holds an agent-initiated request open for as long as it runs, so time spent
+     * serving the agent never reads as a dead stream. The long ones wait on a
+     * human: permission prompts and extension questions such as
+     * `cursor/ask_question`.
      */
+    const countClientRequest = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      adjustInFlightClientRequests(1).pipe(
+        Effect.flatMap(() => effect),
+        Effect.ensuring(adjustInFlightClientRequests(-1)),
+      );
+
     const trackClientRequest =
       <Request, Response>(
         register: (
@@ -342,12 +351,7 @@ export const make = (
         ) => Effect.Effect<void>,
       ) =>
       (handler: (request: Request) => Effect.Effect<Response, EffectAcpErrors.AcpError>) =>
-        register((request) =>
-          adjustInFlightClientRequests(1).pipe(
-            Effect.flatMap(() => handler(request)),
-            Effect.ensuring(adjustInFlightClientRequests(-1)),
-          ),
-        );
+        register((request) => countClientRequest(handler(request)));
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -753,10 +757,34 @@ export const make = (
       handleTerminalRelease: trackClientRequest(acp.handleTerminalRelease),
       handleSessionUpdate: acp.handleSessionUpdate,
       handleElicitationComplete: acp.handleElicitationComplete,
-      handleUnknownExtRequest: acp.handleUnknownExtRequest,
-      handleUnknownExtNotification: acp.handleUnknownExtNotification,
-      handleExtRequest: acp.handleExtRequest,
-      handleExtNotification: acp.handleExtNotification,
+      handleUnknownExtRequest: (
+        handler: (
+          method: string,
+          params: unknown,
+        ) => Effect.Effect<unknown, EffectAcpErrors.AcpError>,
+      ) =>
+        acp.handleUnknownExtRequest((method, params) =>
+          countClientRequest(handler(method, params)),
+        ),
+      handleUnknownExtNotification: (
+        handler: (method: string, params: unknown) => Effect.Effect<void, EffectAcpErrors.AcpError>,
+      ) =>
+        acp.handleUnknownExtNotification((method, params) =>
+          touchPromptStreamActivity.pipe(Effect.flatMap(() => handler(method, params))),
+        ),
+      handleExtRequest: <A, I>(
+        method: string,
+        payload: Schema.Codec<A, I>,
+        handler: (payload: A) => Effect.Effect<unknown, EffectAcpErrors.AcpError>,
+      ) => acp.handleExtRequest(method, payload, (parsed) => countClientRequest(handler(parsed))),
+      handleExtNotification: <A, I>(
+        method: string,
+        payload: Schema.Codec<A, I>,
+        handler: (payload: A) => Effect.Effect<void, EffectAcpErrors.AcpError>,
+      ) =>
+        acp.handleExtNotification(method, payload, (parsed) =>
+          touchPromptStreamActivity.pipe(Effect.flatMap(() => handler(parsed))),
+        ),
       start: () => start,
       getEvents: () => Stream.fromQueue(eventQueue),
       drainEvents: Effect.gen(function* () {
