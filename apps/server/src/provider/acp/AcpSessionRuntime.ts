@@ -29,7 +29,9 @@ import {
   parseSessionModeState,
   parseSessionUpdateEvent,
   sessionUpdateIsReplay,
+  waitForPromptStreamStall,
   waitForSessionLoadReplayIdle,
+  type PromptStreamActivity,
   type SessionLoadGate,
   type AcpParsedSessionEvent,
   type AcpSessionModeState,
@@ -49,6 +51,10 @@ export type AcpSessionRuntimeEvent = AcpParsedSessionEvent | AcpSessionEventStre
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
+// Healthy turns stream something every few seconds. Ten minutes of total
+// silence, with nothing of ours outstanding, is a dead stream rather than a slow
+// one. The threshold is generous so long reasoning is never mistaken for it.
+const defaultPromptStallTimeout = Duration.minutes(10);
 
 export interface AcpSpawnInput {
   readonly command: string;
@@ -63,6 +69,7 @@ export interface AcpSessionRuntimeOptions {
   readonly resumeSessionId?: string;
   readonly sessionLoadTimeout?: Duration.Input;
   readonly sessionLoadReplayIdleGap?: Duration.Input;
+  readonly promptStallTimeout?: Duration.Input;
   readonly clientCapabilities?: EffectAcpSchema.InitializeRequest["clientCapabilities"];
   readonly clientInfo: {
     readonly name: string;
@@ -299,6 +306,48 @@ export const make = (
       Option.Option<Fiber.Fiber<EffectAcpSchema.PromptResponse, EffectAcpErrors.AcpError>>
     >(Option.none());
     const sessionLoadGateRef = yield* Ref.make<Option.Option<SessionLoadGate>>(Option.none());
+    const promptStreamActivityRef = yield* Ref.make<PromptStreamActivity>({
+      lastActivityAtMillis: yield* Clock.currentTimeMillis,
+      inFlightClientRequests: 0,
+    });
+    const promptStallTimeout = Duration.fromInputUnsafe(
+      options.promptStallTimeout ?? defaultPromptStallTimeout,
+    );
+
+    const touchPromptStreamActivity = Effect.gen(function* () {
+      const nowMillis = yield* Clock.currentTimeMillis;
+      yield* Ref.update(promptStreamActivityRef, (activity) => ({
+        ...activity,
+        lastActivityAtMillis: nowMillis,
+      }));
+    });
+
+    const adjustInFlightClientRequests = (delta: number) =>
+      Effect.gen(function* () {
+        const nowMillis = yield* Clock.currentTimeMillis;
+        yield* Ref.update(promptStreamActivityRef, (activity) => ({
+          lastActivityAtMillis: nowMillis,
+          inFlightClientRequests: Math.max(0, activity.inFlightClientRequests + delta),
+        }));
+      });
+
+    /**
+     * Wraps a handler registration so serving the agent counts as liveness. Without
+     * this a long command would look identical to a dead stream.
+     */
+    const trackClientRequest =
+      <Request, Response>(
+        register: (
+          handler: (request: Request) => Effect.Effect<Response, EffectAcpErrors.AcpError>,
+        ) => Effect.Effect<void>,
+      ) =>
+      (handler: (request: Request) => Effect.Effect<Response, EffectAcpErrors.AcpError>) =>
+        register((request) =>
+          adjustInFlightClientRequests(1).pipe(
+            Effect.flatMap(() => handler(request)),
+            Effect.ensuring(adjustInFlightClientRequests(-1)),
+          ),
+        );
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -371,6 +420,7 @@ export const make = (
 
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
+        yield* touchPromptStreamActivity;
         const gate = yield* Ref.get(sessionLoadGateRef);
         if (Option.isSome(gate) && gate.value.active) {
           const lastActivityAtMillis = yield* Clock.currentTimeMillis;
@@ -692,15 +742,15 @@ export const make = (
     });
 
     return {
-      handleRequestPermission: acp.handleRequestPermission,
-      handleElicitation: acp.handleElicitation,
-      handleReadTextFile: acp.handleReadTextFile,
-      handleWriteTextFile: acp.handleWriteTextFile,
-      handleCreateTerminal: acp.handleCreateTerminal,
-      handleTerminalOutput: acp.handleTerminalOutput,
-      handleTerminalWaitForExit: acp.handleTerminalWaitForExit,
-      handleTerminalKill: acp.handleTerminalKill,
-      handleTerminalRelease: acp.handleTerminalRelease,
+      handleRequestPermission: trackClientRequest(acp.handleRequestPermission),
+      handleElicitation: trackClientRequest(acp.handleElicitation),
+      handleReadTextFile: trackClientRequest(acp.handleReadTextFile),
+      handleWriteTextFile: trackClientRequest(acp.handleWriteTextFile),
+      handleCreateTerminal: trackClientRequest(acp.handleCreateTerminal),
+      handleTerminalOutput: trackClientRequest(acp.handleTerminalOutput),
+      handleTerminalWaitForExit: trackClientRequest(acp.handleTerminalWaitForExit),
+      handleTerminalKill: trackClientRequest(acp.handleTerminalKill),
+      handleTerminalRelease: trackClientRequest(acp.handleTerminalRelease),
       handleSessionUpdate: acp.handleSessionUpdate,
       handleElicitationComplete: acp.handleElicitationComplete,
       handleUnknownExtRequest: acp.handleUnknownExtRequest,
@@ -734,20 +784,49 @@ export const make = (
             const cancelledResponse = {
               stopReason: "cancelled",
             } satisfies EffectAcpSchema.PromptResponse;
+            yield* touchPromptStreamActivity;
             const promptRpcFiber = yield* runLoggedRequest(
               "session/prompt",
               requestPayload,
               acp.agent.prompt(requestPayload),
             ).pipe(Effect.forkIn(runtimeScope));
             yield* Ref.set(activePromptFiberRef, Option.some(promptRpcFiber));
-            return yield* Fiber.join(promptRpcFiber).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.succeed(cancelledResponse)
-                  : Effect.failCause(cause),
+            const stallFiber = yield* waitForPromptStreamStall({
+              activityRef: promptStreamActivityRef,
+              stallAfter: promptStallTimeout,
+            }).pipe(Effect.forkIn(runtimeScope));
+            return yield* Effect.raceFirst(
+              Fiber.join(promptRpcFiber).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.succeed(cancelledResponse)
+                    : Effect.failCause(cause),
+                ),
               ),
+              Fiber.join(stallFiber).pipe(
+                Effect.flatMap((idleMillis) =>
+                  Effect.gen(function* () {
+                    // The agent process normally outlives the wedged request, so
+                    // cancelling gives it a chance to drop the dead prompt and stay
+                    // usable for the next turn instead of being respawned.
+                    yield* acp.agent
+                      .cancel({ sessionId: started.sessionId })
+                      .pipe(Effect.ignore, Effect.forkIn(runtimeScope));
+                    return yield* new EffectAcpErrors.AcpTransportError({
+                      operation: "call-rpc",
+                      method: "session/prompt",
+                      detail: `session/prompt stalled: the agent sent nothing for ${Math.round(
+                        idleMillis / 1000,
+                      )}s with no client request outstanding`,
+                      cause: undefined,
+                    });
+                  }),
+                ),
+              ),
+            ).pipe(
               Effect.ensuring(
                 Effect.gen(function* () {
+                  yield* Fiber.interrupt(stallFiber).pipe(Effect.ignore);
                   yield* Fiber.interrupt(promptRpcFiber).pipe(Effect.ignore);
                   yield* Ref.set(activePromptFiberRef, Option.none());
                 }),

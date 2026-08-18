@@ -75,6 +75,25 @@ spills the whole accumulated text as one delta. The buffer also flushes at inter
 when a request opens (approval) or user input is requested, via
 `flushBufferedAssistantMessagesForTurn`.
 
+### Stalled prompt detection
+
+`session/prompt` is a long-lived request: ACP agents answer it only once the whole turn is done, and
+nothing in the protocol says how long that takes. An agent whose upstream connection dies mid-turn
+never answers and never errors, so [`AcpSessionRuntime`][acpruntime] races the RPC against a
+liveness watchdog and fails the turn instead of waiting forever.
+
+Liveness is inbound traffic plus outstanding work. Any `session/update` bumps the last-activity
+stamp, and every client-side handler the agent can call (`fs/read_text_file`, `terminal/create`,
+`terminal/wait_for_exit`, permission requests, and the rest) is counted while it runs. Silence alone
+is not a stall: an agent blocked on a twenty-minute `terminal/wait_for_exit` is waiting on us, and
+the in-flight count keeps the watchdog quiet. A stall needs both no traffic and nothing of ours
+outstanding, for `promptStallTimeout` (ten minutes by default).
+
+On a stall the runtime sends `session/cancel` so the agent can release the dead prompt and stay
+usable, then fails with an `AcpTransportError`. `ProviderCommandReactor` turns that into a thread
+session error with a `provider.turn.start.failed` activity and clears `activeTurnId`, so the working
+indicator stops and the reason is visible in the timeline.
+
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
@@ -88,5 +107,6 @@ when a request opens (approval) or user input is requested, via
 [contracts]: ../../packages/contracts/src/orchestration.ts
 [worker]: ../../packages/shared/src/DrainableWorker.ts
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
+[acpruntime]: ../../apps/server/src/provider/acp/AcpSessionRuntime.ts
 [cmd]: ../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
 [checkpoint]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts

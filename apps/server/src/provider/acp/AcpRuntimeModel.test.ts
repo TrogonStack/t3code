@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
 
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import {
@@ -10,7 +17,19 @@ import {
   parseSessionUpdateEvent,
   sessionUpdateIsReplay,
   syntheticLoadSessionResponseFromInitialize,
+  waitForPromptStreamStall,
+  type PromptStreamActivity,
 } from "./AcpRuntimeModel.ts";
+
+const makeActivityRef = (overrides?: Partial<PromptStreamActivity>) =>
+  Effect.gen(function* () {
+    const lastActivityAtMillis = yield* Clock.currentTimeMillis;
+    return yield* Ref.make<PromptStreamActivity>({
+      lastActivityAtMillis,
+      inFlightClientRequests: 0,
+      ...overrides,
+    });
+  });
 
 describe("AcpRuntimeModel", () => {
   it("parses session mode state from typed ACP session setup responses", () => {
@@ -374,4 +393,72 @@ describe("AcpRuntimeModel", () => {
       },
     });
   });
+});
+
+describe("waitForPromptStreamStall", () => {
+  it.effect("reports the idle duration once the agent goes silent", () =>
+    Effect.gen(function* () {
+      const activityRef = yield* makeActivityRef();
+      const stall = yield* Effect.forkChild(
+        waitForPromptStreamStall({ activityRef, stallAfter: Duration.minutes(10) }),
+      );
+
+      yield* TestClock.adjust(Duration.minutes(11));
+
+      const idleMillis = yield* Fiber.join(stall);
+      expect(idleMillis).toBeGreaterThanOrEqual(Duration.toMillis(Duration.minutes(10)));
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("stays quiet while a client request is still in flight", () =>
+    Effect.gen(function* () {
+      // A slow build behind terminal/wait_for_exit: the agent is waiting on us.
+      const activityRef = yield* makeActivityRef({ inFlightClientRequests: 1 });
+      const stall = yield* Effect.forkChild(
+        waitForPromptStreamStall({ activityRef, stallAfter: Duration.minutes(10) }),
+      );
+
+      yield* TestClock.adjust(Duration.minutes(45));
+
+      expect(stall.pollUnsafe()).toBeUndefined();
+      yield* Fiber.interrupt(stall);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("stays quiet while the agent keeps streaming", () =>
+    Effect.gen(function* () {
+      const activityRef = yield* makeActivityRef();
+      const stall = yield* Effect.forkChild(
+        waitForPromptStreamStall({ activityRef, stallAfter: Duration.minutes(10) }),
+      );
+
+      for (let tick = 0; tick < 6; tick += 1) {
+        yield* TestClock.adjust(Duration.minutes(9));
+        const lastActivityAtMillis = yield* Clock.currentTimeMillis;
+        yield* Ref.update(activityRef, (activity) => ({ ...activity, lastActivityAtMillis }));
+      }
+
+      expect(stall.pollUnsafe()).toBeUndefined();
+      yield* Fiber.interrupt(stall);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("reports a stall once the last client request settles", () =>
+    Effect.gen(function* () {
+      const activityRef = yield* makeActivityRef({ inFlightClientRequests: 1 });
+      const stall = yield* Effect.forkChild(
+        waitForPromptStreamStall({ activityRef, stallAfter: Duration.minutes(10) }),
+      );
+
+      yield* TestClock.adjust(Duration.minutes(30));
+      expect(stall.pollUnsafe()).toBeUndefined();
+
+      const lastActivityAtMillis = yield* Clock.currentTimeMillis;
+      yield* Ref.set(activityRef, { lastActivityAtMillis, inFlightClientRequests: 0 });
+      yield* TestClock.adjust(Duration.minutes(11));
+
+      const idleMillis = yield* Fiber.join(stall);
+      expect(idleMillis).toBeGreaterThanOrEqual(Duration.toMillis(Duration.minutes(10)));
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
 });
