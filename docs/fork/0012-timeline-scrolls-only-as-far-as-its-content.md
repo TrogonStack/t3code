@@ -1,6 +1,6 @@
 # 0012: The timeline scrolls only as far as its content
 
-- PR: [TrogonStack/t3code#NN](https://github.com/TrogonStack/t3code/pull/NN)
+- PR: [TrogonStack/t3code#21](https://github.com/TrogonStack/t3code/pull/21)
 - Status: active
 
 ## What you can do now
