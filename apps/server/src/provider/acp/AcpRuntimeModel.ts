@@ -487,6 +487,45 @@ export const waitForSessionLoadReplayIdle = (input: {
     }
   });
 
+/**
+ * Liveness of the agent->client half of a `session/prompt`. `lastActivityAtMillis`
+ * is bumped by any inbound traffic; `inFlightClientRequests` counts the agent's
+ * requests we are still serving.
+ */
+export interface PromptStreamActivity {
+  readonly lastActivityAtMillis: number;
+  readonly inFlightClientRequests: number;
+}
+
+/**
+ * Resolves with the observed idle duration once a prompt has gone silent for
+ * `stallAfter`. Used to bound `session/prompt`, which otherwise waits forever on
+ * an agent that stopped answering.
+ */
+export const waitForPromptStreamStall = (input: {
+  readonly activityRef: Ref.Ref<PromptStreamActivity>;
+  readonly stallAfter: Duration.Duration;
+}): Effect.Effect<number, never> =>
+  Effect.gen(function* () {
+    const pollInterval = Duration.seconds(1);
+    const stallAfterMillis = Duration.toMillis(input.stallAfter);
+    while (true) {
+      yield* Effect.sleep(pollInterval);
+      const activity = yield* Ref.get(input.activityRef);
+      // A request we have not answered yet means the agent is waiting on us, not
+      // the other way around. A slow build behind terminal/wait_for_exit is the
+      // common case, and it is not a stall.
+      if (activity.inFlightClientRequests > 0) {
+        continue;
+      }
+      const nowMillis = yield* Clock.currentTimeMillis;
+      const idleMillis = nowMillis - activity.lastActivityAtMillis;
+      if (idleMillis >= stallAfterMillis) {
+        return idleMillis;
+      }
+    }
+  });
+
 export function syntheticLoadSessionResponseFromInitialize(
   initializeResult: EffectAcpSchema.InitializeResponse,
 ): EffectAcpSchema.LoadSessionResponse {

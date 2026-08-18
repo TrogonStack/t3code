@@ -75,6 +75,31 @@ spills the whole accumulated text as one delta. The buffer also flushes at inter
 when a request opens (approval) or user input is requested, via
 `flushBufferedAssistantMessagesForTurn`.
 
+### Stalled prompt detection
+
+`session/prompt` is a long-lived request: ACP agents answer it only once the whole turn is done, and
+nothing in the protocol says how long that takes. An agent whose upstream connection dies mid-turn
+never answers and never errors, so [`AcpSessionRuntime`][acpruntime] races the RPC against a
+liveness watchdog and fails the turn instead of waiting forever.
+
+Liveness is traffic for this session plus outstanding work, and both halves are load-bearing.
+
+Scoping matters because one runtime projects one root session: a child session chattering on the
+same pipe says nothing about whether the root prompt is alive, so only updates that pass the
+root-session check refresh the stamp. Counting outstanding requests matters because silence is
+often our fault, not the agent's. Every request the agent makes of us is held open while it runs,
+including the extension requests, which is the case worth stating: `cursor/ask_question` and
+`x.ai/ask_user_question` park on a human, and a user who takes fifteen minutes to answer must not
+look like a dead agent. The same holds for a twenty-minute `terminal/wait_for_exit`.
+
+A stall therefore needs no root-session traffic _and_ nothing of ours outstanding, for
+`promptStallTimeout` (ten minutes by default).
+
+On a stall the runtime sends `session/cancel` so the agent can release the dead prompt and stay
+usable, then fails with an `AcpTransportError`. `ProviderCommandReactor` turns that into a thread
+session error with a `provider.turn.start.failed` activity and clears `activeTurnId`, so the working
+indicator stops and the reason is visible in the timeline.
+
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
@@ -88,5 +113,6 @@ when a request opens (approval) or user input is requested, via
 [contracts]: ../../packages/contracts/src/orchestration.ts
 [worker]: ../../packages/shared/src/DrainableWorker.ts
 [ingest]: ../../apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts
+[acpruntime]: ../../apps/server/src/provider/acp/AcpSessionRuntime.ts
 [cmd]: ../../apps/server/src/orchestration/Layers/ProviderCommandReactor.ts
 [checkpoint]: ../../apps/server/src/orchestration/Layers/CheckpointReactor.ts
