@@ -925,6 +925,366 @@ index 40e87cda8c9bc79a889e5542f29af429a24b24d4..2d556eecb0bafe2f54084c809f82144c
        onScroll: onScrollHandler,
        recycleItems,
        refreshControl: refreshControlElement ? stylePaddingTopState > 0 ? React2.cloneElement(refreshControlElement, {
+diff --git a/react-native.web.js b/react-native.web.js
+index 914d2dafaafa001c9ab6791a0a0581659295e333..fb0d4157bea1bd2314b98955d2daf3ae8847b121 100644
+--- a/react-native.web.js
++++ b/react-native.web.js
+@@ -6407,6 +6407,25 @@ function getScrollAdjustTarget(ctx, contentNode) {
+ function scrollAdjustBy(el, left, top) {
+   el.scrollBy({ behavior: "auto", left, top });
+ }
++var SCROLL_ADJUST_PADDING_TOLERANCE = 1e-4;
++function isScrollAdjustPaddingOurs(temporaryPadding) {
++  const current = temporaryPadding.node.style[temporaryPadding.prop];
++  if (current === temporaryPadding.value) {
++    return true;
++  }
++  const currentValue = Number.parseFloat(current);
++  if (!Number.isFinite(currentValue)) {
++    return false;
++  }
++  const writtenValue = Number.parseFloat(temporaryPadding.value);
++  const tolerance = Math.max(1, Math.abs(writtenValue) * SCROLL_ADJUST_PADDING_TOLERANCE);
++  return Math.abs(currentValue - writtenValue) <= tolerance;
++}
++function restoreScrollAdjustPadding(temporaryPadding) {
++  if (temporaryPadding && isScrollAdjustPaddingOurs(temporaryPadding)) {
++    temporaryPadding.node.style[temporaryPadding.prop] = temporaryPadding.baseline;
++  }
++}
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+   const lastScrollOffsetRef = React3__namespace.useRef(0);
+@@ -6438,15 +6457,24 @@ function ScrollAdjust() {
+           const nextScroll = currentScroll + scrollDelta;
+           const needsTemporaryPadding = scrollDelta > 0 && !ctx.state.adjustingFromInitialMount && totalSize < nextScroll + viewportSize;
+           if (needsTemporaryPadding) {
+-            const currentInlinePaddingEnd = contentNode.style[axis.paddingEndProp];
+             const previousTemporaryPadding = temporaryPaddingRef.current;
+-            const baselinePaddingEnd = (previousTemporaryPadding == null ? void 0 : previousTemporaryPadding.value) === currentInlinePaddingEnd ? previousTemporaryPadding.baseline : currentInlinePaddingEnd;
++            const isStackedInflation = previousTemporaryPadding !== void 0 && previousTemporaryPadding.node === contentNode && previousTemporaryPadding.prop === axis.paddingEndProp;
++            if (!isStackedInflation) {
++              restoreScrollAdjustPadding(previousTemporaryPadding);
++            }
++            const baselinePaddingEnd = isStackedInflation ? previousTemporaryPadding.baseline : contentNode.style[axis.paddingEndProp];
+             const pad = (nextScroll + viewportSize - totalSize) * 2;
+             const currentPaddingEnd = Number.parseFloat(
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
++            const temporaryPadding = {
++              baseline: baselinePaddingEnd,
++              node: contentNode,
++              prop: axis.paddingEndProp,
++              value: temporaryPaddingEnd
++            };
++            temporaryPaddingRef.current = temporaryPadding;
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6454,12 +6482,11 @@ function ScrollAdjust() {
+               cancelAnimationFrame(resetPaddingRafRef.current);
+             }
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+-              const temporaryPadding = temporaryPaddingRef.current;
+               resetPaddingRafRef.current = void 0;
+-              temporaryPaddingRef.current = void 0;
+-              if (contentNode.style[axis.paddingEndProp] === (temporaryPadding == null ? void 0 : temporaryPadding.value)) {
+-                contentNode.style[axis.paddingEndProp] = temporaryPadding.baseline;
++              if (temporaryPaddingRef.current === temporaryPadding) {
++                temporaryPaddingRef.current = void 0;
+               }
++              restoreScrollAdjustPadding(temporaryPadding);
+             });
+           } else {
+             scrollBy();
+@@ -6472,6 +6499,15 @@ function ScrollAdjust() {
+       lastScrollAdjustUserOffsetRef.current = scrollAdjustUserOffset || 0;
+     }
+   }, [ctx]);
++  React3__namespace.useEffect(() => () => {
++    if (resetPaddingRafRef.current !== void 0) {
++      cancelAnimationFrame(resetPaddingRafRef.current);
++      resetPaddingRafRef.current = void 0;
++    }
++    const temporaryPadding = temporaryPaddingRef.current;
++    temporaryPaddingRef.current = void 0;
++    restoreScrollAdjustPadding(temporaryPadding);
++  }, []);
+   useValueListener$("scrollAdjust", callback);
+   useValueListener$("scrollAdjustUserOffset", callback);
+   return null;
+diff --git a/react-native.web.mjs b/react-native.web.mjs
+index 95465f2ab89ce41a10553f58af83618f7310e83c..b27eecb6096b531f523df8204384ab58017cd04d 100644
+--- a/react-native.web.mjs
++++ b/react-native.web.mjs
+@@ -6386,6 +6386,25 @@ function getScrollAdjustTarget(ctx, contentNode) {
+ function scrollAdjustBy(el, left, top) {
+   el.scrollBy({ behavior: "auto", left, top });
+ }
++var SCROLL_ADJUST_PADDING_TOLERANCE = 1e-4;
++function isScrollAdjustPaddingOurs(temporaryPadding) {
++  const current = temporaryPadding.node.style[temporaryPadding.prop];
++  if (current === temporaryPadding.value) {
++    return true;
++  }
++  const currentValue = Number.parseFloat(current);
++  if (!Number.isFinite(currentValue)) {
++    return false;
++  }
++  const writtenValue = Number.parseFloat(temporaryPadding.value);
++  const tolerance = Math.max(1, Math.abs(writtenValue) * SCROLL_ADJUST_PADDING_TOLERANCE);
++  return Math.abs(currentValue - writtenValue) <= tolerance;
++}
++function restoreScrollAdjustPadding(temporaryPadding) {
++  if (temporaryPadding && isScrollAdjustPaddingOurs(temporaryPadding)) {
++    temporaryPadding.node.style[temporaryPadding.prop] = temporaryPadding.baseline;
++  }
++}
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+   const lastScrollOffsetRef = React3.useRef(0);
+@@ -6417,15 +6436,24 @@ function ScrollAdjust() {
+           const nextScroll = currentScroll + scrollDelta;
+           const needsTemporaryPadding = scrollDelta > 0 && !ctx.state.adjustingFromInitialMount && totalSize < nextScroll + viewportSize;
+           if (needsTemporaryPadding) {
+-            const currentInlinePaddingEnd = contentNode.style[axis.paddingEndProp];
+             const previousTemporaryPadding = temporaryPaddingRef.current;
+-            const baselinePaddingEnd = (previousTemporaryPadding == null ? void 0 : previousTemporaryPadding.value) === currentInlinePaddingEnd ? previousTemporaryPadding.baseline : currentInlinePaddingEnd;
++            const isStackedInflation = previousTemporaryPadding !== void 0 && previousTemporaryPadding.node === contentNode && previousTemporaryPadding.prop === axis.paddingEndProp;
++            if (!isStackedInflation) {
++              restoreScrollAdjustPadding(previousTemporaryPadding);
++            }
++            const baselinePaddingEnd = isStackedInflation ? previousTemporaryPadding.baseline : contentNode.style[axis.paddingEndProp];
+             const pad = (nextScroll + viewportSize - totalSize) * 2;
+             const currentPaddingEnd = Number.parseFloat(
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
++            const temporaryPadding = {
++              baseline: baselinePaddingEnd,
++              node: contentNode,
++              prop: axis.paddingEndProp,
++              value: temporaryPaddingEnd
++            };
++            temporaryPaddingRef.current = temporaryPadding;
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6433,12 +6461,11 @@ function ScrollAdjust() {
+               cancelAnimationFrame(resetPaddingRafRef.current);
+             }
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+-              const temporaryPadding = temporaryPaddingRef.current;
+               resetPaddingRafRef.current = void 0;
+-              temporaryPaddingRef.current = void 0;
+-              if (contentNode.style[axis.paddingEndProp] === (temporaryPadding == null ? void 0 : temporaryPadding.value)) {
+-                contentNode.style[axis.paddingEndProp] = temporaryPadding.baseline;
++              if (temporaryPaddingRef.current === temporaryPadding) {
++                temporaryPaddingRef.current = void 0;
+               }
++              restoreScrollAdjustPadding(temporaryPadding);
+             });
+           } else {
+             scrollBy();
+@@ -6451,6 +6478,15 @@ function ScrollAdjust() {
+       lastScrollAdjustUserOffsetRef.current = scrollAdjustUserOffset || 0;
+     }
+   }, [ctx]);
++  React3.useEffect(() => () => {
++    if (resetPaddingRafRef.current !== void 0) {
++      cancelAnimationFrame(resetPaddingRafRef.current);
++      resetPaddingRafRef.current = void 0;
++    }
++    const temporaryPadding = temporaryPaddingRef.current;
++    temporaryPaddingRef.current = void 0;
++    restoreScrollAdjustPadding(temporaryPadding);
++  }, []);
+   useValueListener$("scrollAdjust", callback);
+   useValueListener$("scrollAdjustUserOffset", callback);
+   return null;
+diff --git a/react.js b/react.js
+index 914d2dafaafa001c9ab6791a0a0581659295e333..fb0d4157bea1bd2314b98955d2daf3ae8847b121 100644
+--- a/react.js
++++ b/react.js
+@@ -6407,6 +6407,25 @@ function getScrollAdjustTarget(ctx, contentNode) {
+ function scrollAdjustBy(el, left, top) {
+   el.scrollBy({ behavior: "auto", left, top });
+ }
++var SCROLL_ADJUST_PADDING_TOLERANCE = 1e-4;
++function isScrollAdjustPaddingOurs(temporaryPadding) {
++  const current = temporaryPadding.node.style[temporaryPadding.prop];
++  if (current === temporaryPadding.value) {
++    return true;
++  }
++  const currentValue = Number.parseFloat(current);
++  if (!Number.isFinite(currentValue)) {
++    return false;
++  }
++  const writtenValue = Number.parseFloat(temporaryPadding.value);
++  const tolerance = Math.max(1, Math.abs(writtenValue) * SCROLL_ADJUST_PADDING_TOLERANCE);
++  return Math.abs(currentValue - writtenValue) <= tolerance;
++}
++function restoreScrollAdjustPadding(temporaryPadding) {
++  if (temporaryPadding && isScrollAdjustPaddingOurs(temporaryPadding)) {
++    temporaryPadding.node.style[temporaryPadding.prop] = temporaryPadding.baseline;
++  }
++}
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+   const lastScrollOffsetRef = React3__namespace.useRef(0);
+@@ -6438,15 +6457,24 @@ function ScrollAdjust() {
+           const nextScroll = currentScroll + scrollDelta;
+           const needsTemporaryPadding = scrollDelta > 0 && !ctx.state.adjustingFromInitialMount && totalSize < nextScroll + viewportSize;
+           if (needsTemporaryPadding) {
+-            const currentInlinePaddingEnd = contentNode.style[axis.paddingEndProp];
+             const previousTemporaryPadding = temporaryPaddingRef.current;
+-            const baselinePaddingEnd = (previousTemporaryPadding == null ? void 0 : previousTemporaryPadding.value) === currentInlinePaddingEnd ? previousTemporaryPadding.baseline : currentInlinePaddingEnd;
++            const isStackedInflation = previousTemporaryPadding !== void 0 && previousTemporaryPadding.node === contentNode && previousTemporaryPadding.prop === axis.paddingEndProp;
++            if (!isStackedInflation) {
++              restoreScrollAdjustPadding(previousTemporaryPadding);
++            }
++            const baselinePaddingEnd = isStackedInflation ? previousTemporaryPadding.baseline : contentNode.style[axis.paddingEndProp];
+             const pad = (nextScroll + viewportSize - totalSize) * 2;
+             const currentPaddingEnd = Number.parseFloat(
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
++            const temporaryPadding = {
++              baseline: baselinePaddingEnd,
++              node: contentNode,
++              prop: axis.paddingEndProp,
++              value: temporaryPaddingEnd
++            };
++            temporaryPaddingRef.current = temporaryPadding;
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6454,12 +6482,11 @@ function ScrollAdjust() {
+               cancelAnimationFrame(resetPaddingRafRef.current);
+             }
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+-              const temporaryPadding = temporaryPaddingRef.current;
+               resetPaddingRafRef.current = void 0;
+-              temporaryPaddingRef.current = void 0;
+-              if (contentNode.style[axis.paddingEndProp] === (temporaryPadding == null ? void 0 : temporaryPadding.value)) {
+-                contentNode.style[axis.paddingEndProp] = temporaryPadding.baseline;
++              if (temporaryPaddingRef.current === temporaryPadding) {
++                temporaryPaddingRef.current = void 0;
+               }
++              restoreScrollAdjustPadding(temporaryPadding);
+             });
+           } else {
+             scrollBy();
+@@ -6472,6 +6499,15 @@ function ScrollAdjust() {
+       lastScrollAdjustUserOffsetRef.current = scrollAdjustUserOffset || 0;
+     }
+   }, [ctx]);
++  React3__namespace.useEffect(() => () => {
++    if (resetPaddingRafRef.current !== void 0) {
++      cancelAnimationFrame(resetPaddingRafRef.current);
++      resetPaddingRafRef.current = void 0;
++    }
++    const temporaryPadding = temporaryPaddingRef.current;
++    temporaryPaddingRef.current = void 0;
++    restoreScrollAdjustPadding(temporaryPadding);
++  }, []);
+   useValueListener$("scrollAdjust", callback);
+   useValueListener$("scrollAdjustUserOffset", callback);
+   return null;
+diff --git a/react.mjs b/react.mjs
+index 95465f2ab89ce41a10553f58af83618f7310e83c..b27eecb6096b531f523df8204384ab58017cd04d 100644
+--- a/react.mjs
++++ b/react.mjs
+@@ -6386,6 +6386,25 @@ function getScrollAdjustTarget(ctx, contentNode) {
+ function scrollAdjustBy(el, left, top) {
+   el.scrollBy({ behavior: "auto", left, top });
+ }
++var SCROLL_ADJUST_PADDING_TOLERANCE = 1e-4;
++function isScrollAdjustPaddingOurs(temporaryPadding) {
++  const current = temporaryPadding.node.style[temporaryPadding.prop];
++  if (current === temporaryPadding.value) {
++    return true;
++  }
++  const currentValue = Number.parseFloat(current);
++  if (!Number.isFinite(currentValue)) {
++    return false;
++  }
++  const writtenValue = Number.parseFloat(temporaryPadding.value);
++  const tolerance = Math.max(1, Math.abs(writtenValue) * SCROLL_ADJUST_PADDING_TOLERANCE);
++  return Math.abs(currentValue - writtenValue) <= tolerance;
++}
++function restoreScrollAdjustPadding(temporaryPadding) {
++  if (temporaryPadding && isScrollAdjustPaddingOurs(temporaryPadding)) {
++    temporaryPadding.node.style[temporaryPadding.prop] = temporaryPadding.baseline;
++  }
++}
+ function ScrollAdjust() {
+   const ctx = useStateContext();
+   const lastScrollOffsetRef = React3.useRef(0);
+@@ -6417,15 +6436,24 @@ function ScrollAdjust() {
+           const nextScroll = currentScroll + scrollDelta;
+           const needsTemporaryPadding = scrollDelta > 0 && !ctx.state.adjustingFromInitialMount && totalSize < nextScroll + viewportSize;
+           if (needsTemporaryPadding) {
+-            const currentInlinePaddingEnd = contentNode.style[axis.paddingEndProp];
+             const previousTemporaryPadding = temporaryPaddingRef.current;
+-            const baselinePaddingEnd = (previousTemporaryPadding == null ? void 0 : previousTemporaryPadding.value) === currentInlinePaddingEnd ? previousTemporaryPadding.baseline : currentInlinePaddingEnd;
++            const isStackedInflation = previousTemporaryPadding !== void 0 && previousTemporaryPadding.node === contentNode && previousTemporaryPadding.prop === axis.paddingEndProp;
++            if (!isStackedInflation) {
++              restoreScrollAdjustPadding(previousTemporaryPadding);
++            }
++            const baselinePaddingEnd = isStackedInflation ? previousTemporaryPadding.baseline : contentNode.style[axis.paddingEndProp];
+             const pad = (nextScroll + viewportSize - totalSize) * 2;
+             const currentPaddingEnd = Number.parseFloat(
+               window.getComputedStyle(contentNode)[axis.paddingEndProp]
+             );
+             const temporaryPaddingEnd = `${(currentPaddingEnd || 0) + pad}px`;
+-            temporaryPaddingRef.current = { baseline: baselinePaddingEnd, value: temporaryPaddingEnd };
++            const temporaryPadding = {
++              baseline: baselinePaddingEnd,
++              node: contentNode,
++              prop: axis.paddingEndProp,
++              value: temporaryPaddingEnd
++            };
++            temporaryPaddingRef.current = temporaryPadding;
+             contentNode.style[axis.paddingEndProp] = temporaryPaddingEnd;
+             void contentNode.offsetHeight;
+             scrollBy();
+@@ -6433,12 +6461,11 @@ function ScrollAdjust() {
+               cancelAnimationFrame(resetPaddingRafRef.current);
+             }
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+-              const temporaryPadding = temporaryPaddingRef.current;
+               resetPaddingRafRef.current = void 0;
+-              temporaryPaddingRef.current = void 0;
+-              if (contentNode.style[axis.paddingEndProp] === (temporaryPadding == null ? void 0 : temporaryPadding.value)) {
+-                contentNode.style[axis.paddingEndProp] = temporaryPadding.baseline;
++              if (temporaryPaddingRef.current === temporaryPadding) {
++                temporaryPaddingRef.current = void 0;
+               }
++              restoreScrollAdjustPadding(temporaryPadding);
+             });
+           } else {
+             scrollBy();
+@@ -6451,6 +6478,15 @@ function ScrollAdjust() {
+       lastScrollAdjustUserOffsetRef.current = scrollAdjustUserOffset || 0;
+     }
+   }, [ctx]);
++  React3.useEffect(() => () => {
++    if (resetPaddingRafRef.current !== void 0) {
++      cancelAnimationFrame(resetPaddingRafRef.current);
++      resetPaddingRafRef.current = void 0;
++    }
++    const temporaryPadding = temporaryPaddingRef.current;
++    temporaryPaddingRef.current = void 0;
++    restoreScrollAdjustPadding(temporaryPadding);
++  }, []);
+   useValueListener$("scrollAdjust", callback);
+   useValueListener$("scrollAdjustUserOffset", callback);
+   return null;
 diff --git a/reanimated.d.ts b/reanimated.d.ts
 index e5043320700b12f34f4c0babbc341f85ca8135c1..2ce63830a28636b21937a0741fd0e613dae950fe 100644
 --- a/reanimated.d.ts
