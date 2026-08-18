@@ -22,6 +22,7 @@ const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION ===
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
+const emitChildUpdatesWhileHanging = process.env.T3_ACP_EMIT_CHILD_UPDATES_WHILE_HANGING === "1";
 const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
 const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
 const omitXAiPromptCompleteStopReason =
@@ -525,6 +526,24 @@ const program = Effect.gen(function* () {
       }
 
       if (hangPromptForever || (hangFirstPromptForever && promptCount === 1)) {
+        if (emitChildUpdatesWhileHanging) {
+          // A live child session on a dead root prompt: traffic on the pipe, but
+          // nothing that says this prompt is still going.
+          yield* Effect.forkChild(
+            Effect.gen(function* () {
+              while (true) {
+                yield* Effect.sleep("250 millis");
+                writeJsonRpcNotification("session/update", {
+                  sessionId: "mock-child-session-1",
+                  update: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "child still talking" },
+                  },
+                });
+              }
+            }),
+          );
+        }
         return yield* Effect.never;
       }
 

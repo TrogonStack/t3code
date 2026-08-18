@@ -82,13 +82,18 @@ nothing in the protocol says how long that takes. An agent whose upstream connec
 never answers and never errors, so [`AcpSessionRuntime`][acpruntime] races the RPC against a
 liveness watchdog and fails the turn instead of waiting forever.
 
-Liveness is inbound traffic plus outstanding work. Any inbound notification bumps the last-activity
-stamp, and every request the agent can make of us is counted while it runs. That includes the
-extension requests, which is the case worth stating: `cursor/ask_question` and
+Liveness is traffic for this session plus outstanding work, and both halves are load-bearing.
+
+Scoping matters because one runtime projects one root session: a child session chattering on the
+same pipe says nothing about whether the root prompt is alive, so only updates that pass the
+root-session check refresh the stamp. Counting outstanding requests matters because silence is
+often our fault, not the agent's. Every request the agent makes of us is held open while it runs,
+including the extension requests, which is the case worth stating: `cursor/ask_question` and
 `x.ai/ask_user_question` park on a human, and a user who takes fifteen minutes to answer must not
-look like a dead agent. The same holds for a twenty-minute `terminal/wait_for_exit`. Silence alone is
-never a stall, because in both cases the agent is waiting on us. A stall needs no traffic _and_
-nothing of ours outstanding, for `promptStallTimeout` (ten minutes by default).
+look like a dead agent. The same holds for a twenty-minute `terminal/wait_for_exit`.
+
+A stall therefore needs no root-session traffic _and_ nothing of ours outstanding, for
+`promptStallTimeout` (ten minutes by default).
 
 On a stall the runtime sends `session/cancel` so the agent can release the dead prompt and stay
 usable, then fails with an `AcpTransportError`. `ProviderCommandReactor` turns that into a thread

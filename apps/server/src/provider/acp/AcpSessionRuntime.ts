@@ -424,7 +424,6 @@ export const make = (
 
     yield* acp.handleSessionUpdate((notification) =>
       Effect.gen(function* () {
-        yield* touchPromptStreamActivity;
         const gate = yield* Ref.get(sessionLoadGateRef);
         if (Option.isSome(gate) && gate.value.active) {
           const lastActivityAtMillis = yield* Clock.currentTimeMillis;
@@ -449,6 +448,9 @@ export const make = (
         ) {
           return;
         }
+        // Only our own session counts as our liveness. A child session chattering
+        // on the same pipe says nothing about whether this prompt is still alive.
+        yield* touchPromptStreamActivity;
         yield* handleSessionUpdate({
           queue: eventQueue,
           modeStateRef,

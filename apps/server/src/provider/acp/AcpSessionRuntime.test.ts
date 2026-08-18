@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
@@ -65,6 +67,44 @@ describe("AcpSessionRuntime prompt stall detection", () => {
       expect(error._tag).toBe("AcpTransportError");
       expect(error).toMatchObject({ method: "session/prompt" });
       expect(String((error as { detail?: string }).detail)).toContain("stalled");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("does not accept a chattering child session as proof this prompt is alive", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime({
+        T3_ACP_HANG_PROMPT_FOREVER: "1",
+        T3_ACP_EMIT_CHILD_UPDATES_WHILE_HANGING: "1",
+      });
+      yield* runtime.start();
+
+      const error = yield* runtime
+        .prompt({ prompt: [{ type: "text", text: "hi" }] })
+        .pipe(Effect.flip);
+
+      expect(error._tag).toBe("AcpTransportError");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("cancels the wedged prompt so the agent can release it", () =>
+    Effect.gen(function* () {
+      const requestLogPath = NodePath.join(
+        yield* Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-acp-"))),
+        "requests.ndjson",
+      );
+      const runtime = yield* makeRuntime({
+        T3_ACP_HANG_PROMPT_FOREVER: "1",
+        T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+      });
+      yield* runtime.start();
+
+      yield* runtime.prompt({ prompt: [{ type: "text", text: "hi" }] }).pipe(Effect.flip);
+      // The notification is fired off as the prompt fails, so give the write a
+      // moment to land before reading the agent's view of what it received.
+      yield* Effect.sleep(Duration.millis(250));
+
+      const received = yield* Effect.sync(() => NodeFS.readFileSync(requestLogPath, "utf8"));
+      expect(received).toContain("session/cancel");
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });
