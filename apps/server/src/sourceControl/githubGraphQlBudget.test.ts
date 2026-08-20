@@ -186,4 +186,31 @@ describe("GitHub GraphQL budget", () => {
       expect(yield* budget.query("github.com", mutation)).toBe(mutation);
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
+
+  it.effect("charges a write for the batch it carries, since it cannot report its own cost", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      // Twenty points above the reserve, which is exactly what the mutation below spends.
+      yield* budget.observe("github.com", rateLimit(520));
+
+      yield* budget.query("github.com", "mutation { f0: markFileAsViewed { id } }", {
+        estimatedCost: 20,
+      });
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({ _tag: "SourceControlRateLimitPausedError" });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("lets a write through even with nothing left, rather than holding a press back", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(0));
+
+      const mutation = "mutation { f0: markFileAsViewed { id } }";
+      expect(yield* budget.query("github.com", mutation, { estimatedCost: 40 })).toBe(mutation);
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
 });
