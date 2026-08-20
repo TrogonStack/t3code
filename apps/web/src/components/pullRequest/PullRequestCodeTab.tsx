@@ -489,7 +489,7 @@ export function PullRequestCodeTab({
         // version moves. Ticking a file that is already folded changes no fold, so without this
         // the box on screen would keep saying the opposite of what the count says.
         const viewedMark = filesViewed.enabled
-          ? `${filesViewed.isViewed(path) ? "v" : ""}${filesViewed.isStale(path) ? "s" : ""}`
+          ? `e${filesViewed.isViewed(path) ? "v" : ""}${filesViewed.isStale(path) ? "s" : ""}`
           : "";
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
@@ -747,6 +747,15 @@ export function PullRequestCodeTab({
     [toggleFile],
   );
 
+  // Read through refs rather than closed over. The viewer memoizes each visible file's header
+  // portal on the callback below, so a fresh identity on every tick, and on every refresh of the
+  // host's answer, would rebuild every header on screen. Each item's version carries the same
+  // marks, which is what redraws the one file whose tick moved.
+  const filesViewedRef = useRef(filesViewed);
+  filesViewedRef.current = filesViewed;
+  const setFileViewedRef = useRef(setFileViewed);
+  setFileViewedRef.current = setFileViewed;
+
   const renderHeaderMetadata = useCallback(
     (item: CodeViewItem<ReviewAnnotationGroup>) => {
       if (item.type !== "diff") return null;
@@ -768,9 +777,10 @@ export function PullRequestCodeTab({
           className="font-mono text-[11px]"
         />
       );
-      if (!filesViewed.enabled) return stat;
-      const viewed = filesViewed.isViewed(path);
-      const stale = filesViewed.isStale(path);
+      const viewedFiles = filesViewedRef.current;
+      if (!viewedFiles.enabled) return stat;
+      const viewed = viewedFiles.isViewed(path);
+      const stale = viewedFiles.isStale(path);
       return (
         <span className="flex items-center gap-3">
           {stat}
@@ -784,7 +794,7 @@ export function PullRequestCodeTab({
           >
             <Checkbox
               checked={viewed}
-              onCheckedChange={(next) => setFileViewed(item.id, path, next === true)}
+              onCheckedChange={(next) => setFileViewedRef.current(item.id, path, next === true)}
             />
             {stale ? (
               <Tooltip>
@@ -802,7 +812,7 @@ export function PullRequestCodeTab({
         </span>
       );
     },
-    [filesViewed, omittedFileStats, setFileViewed],
+    [omittedFileStats],
   );
 
   const diffViewOptions = useMemo(
