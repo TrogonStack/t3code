@@ -535,6 +535,7 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
     return {
       gatedDriver,
       arm: Ref.set(armed, true),
+      disarm: Ref.set(armed, false),
       awaitEntered: Deferred.await(entered),
       release: Deferred.succeed(released, undefined),
     };
@@ -683,6 +684,35 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
       expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
         firstId,
       ]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  // Interruption is not exotic here: the request that asked for the refresh can
+  // go away while `op` is still waiting on a fingerprint.
+  it.live("keeps an interrupted rebuild retryable", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeCreateGate;
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [gate.gatedDriver],
+        configMap,
+      });
+      yield* gate.arm;
+
+      const rebuilding = yield* registry
+        .rebuildInstanceWhen(firstId, () => true)
+        .pipe(Effect.forkScoped);
+      yield* gate.awaitEntered;
+      yield* Fiber.interrupt(rebuilding);
+
+      // The instance is not live and its envelope only ever existed in the
+      // registry, so a refresh that cannot find it here has nowhere else to
+      // look and the user waits on a settings edit to get it back.
+      yield* gate.disarm;
+      expect(yield* registry.rebuildInstanceWhen(firstId, () => true)).toBe(true);
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toContain(
+        firstId,
+      );
+      expect(yield* registry.listUnavailable).toEqual([]);
     }).pipe(Effect.provide(testLayer)),
   );
 

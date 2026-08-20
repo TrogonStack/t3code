@@ -94,7 +94,9 @@ biometric prompt. Three things follow from that window being long:
 - **A rebuild that fails is retryable.** The registry keeps the config envelope of an instance it
   could not bring back, so the next refresh retries it, and a refresh with no explicit target
   covers the unavailable instances as well as the live ones. Without both halves, a vault that
-  happened to be locked would cost the user the instance until settings changed.
+  happened to be locked would cost the user the instance until settings changed. The envelope is
+  recorded before the build starts and the map writes around the build are uninterruptible, so a
+  refresh whose caller walked away mid-read is retryable on the same terms as one that failed.
 
 This hangs off the three refresh entry points (`refreshAll`, the kind-scoped `refresh`, and
 `refreshInstance`), all of which are reached only by a user action: the Settings refresh button, and

@@ -450,20 +450,35 @@ export const makeProviderInstanceRegistry = <R>(input: {
             return false;
           }
 
-          // Drop the instance before closing it. Building the replacement can
-          // wait on a person at a biometric prompt, and for that whole window
-          // the map would otherwise hand callers a bundle whose scope is gone.
+          // Everything except the build itself is bookkeeping over refs, and it
+          // is uninterruptible so the instance is never half-moved. Only the
+          // build is interruptible, because it is the part that can take
+          // minutes waiting on a secret store.
           //
-          // The last snapshot stands in for it meanwhile. Aggregators treat an
-          // id that is in neither list as gone and prune it, so leaving the id
-          // nowhere would blank the provider's card for as long as the secret
-          // store takes to answer, then bring it back.
-          if (live !== undefined) {
-            const parked = yield* live.instance.snapshot.getSnapshot;
-            yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
-            yield* Ref.update(unavailable, (previous) => new Map(previous).set(instanceId, parked));
-            yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
-          }
+          // Remembering the envelope comes first: an interrupt anywhere after
+          // this point still leaves the instance retryable on the next
+          // refresh, which is the only recovery path it has left.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* Ref.update(rebuildable, (previous) =>
+                new Map(previous).set(instanceId, entry),
+              );
+              if (live === undefined) {
+                return;
+              }
+              // Drop the instance before closing it, or the map hands callers
+              // a bundle whose scope is gone for the whole build. Its last
+              // snapshot stands in meanwhile: aggregators treat an id that is
+              // in neither list as gone and prune it, so leaving the id
+              // nowhere would blank the provider's card until the build lands.
+              const parked = yield* live.instance.snapshot.getSnapshot;
+              yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
+              yield* Ref.update(unavailable, (previous) =>
+                new Map(previous).set(instanceId, parked),
+              );
+              yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
+            }),
+          );
 
           const result = yield* buildEntry({
             driversById,
@@ -473,20 +488,23 @@ export const makeProviderInstanceRegistry = <R>(input: {
             entry,
           });
 
-          if (result.kind === "live") {
-            yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
-            yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
-            yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
-          } else {
-            // Keep the envelope so the next refresh is a real retry rather than
-            // a lookup that finds nothing.
-            yield* Ref.update(rebuildable, (previous) => new Map(previous).set(instanceId, entry));
-            yield* Ref.update(unavailable, (previous) =>
-              new Map(previous).set(instanceId, result.snapshot),
-            );
-          }
-
-          yield* PubSub.publish(changes, undefined);
+          // Uninterruptible as well: the replacement is already running by
+          // now, and an interrupt that dropped it on the floor would leave a
+          // provider process nothing can reach or stop.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (result.kind === "live") {
+                yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
+                yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
+                yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
+              } else {
+                yield* Ref.update(unavailable, (previous) =>
+                  new Map(previous).set(instanceId, result.snapshot),
+                );
+              }
+              yield* PubSub.publish(changes, undefined);
+            }),
+          );
           return true;
         }).pipe(Effect.provideContext(driverContext)),
       );
