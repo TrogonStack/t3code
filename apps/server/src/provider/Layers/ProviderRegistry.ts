@@ -37,11 +37,14 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
+import { ProviderSecretResolver } from "../Services/ProviderSecretResolver.ts";
+import { hasProviderSecretReference } from "../ProviderSecretReference.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
 import {
   hydrateCachedProvider,
@@ -210,6 +213,11 @@ export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const instanceRegistry = yield* ProviderInstanceRegistry;
+    const secretResolver = yield* ProviderSecretResolver;
+    // The layer's own scope. `syncLiveSources` forks per-instance
+    // subscription fibres into it; when a refresh drives that sync, the
+    // fibres have to land here rather than in the caller's request scope.
+    const layerScope = yield* Scope.Scope;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -462,6 +470,7 @@ export const ProviderRegistryLive = Layer.effect(
     });
 
     const refreshAll = Effect.fn("refreshAll")(function* () {
+      yield* reloadSecretBackedInstances();
       const sources = yield* getLiveSources;
       return yield* Effect.forEach(sources, (source) => refreshOneSource(source), {
         concurrency: "unbounded",
@@ -475,6 +484,7 @@ export const ProviderRegistryLive = Layer.effect(
       }
       // Kind-scoped refreshes target the default instance for that driver.
       const defaultInstanceId = defaultInstanceIdForDriver(provider);
+      yield* reloadSecretBackedInstances([defaultInstanceId]);
       const sources = yield* getLiveSources;
       const providerSource = sources.find(
         (candidate) => candidate.instanceId === defaultInstanceId,
@@ -488,6 +498,7 @@ export const ProviderRegistryLive = Layer.effect(
     const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
     ) {
+      yield* reloadSecretBackedInstances([instanceId]);
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
       if (!providerSource) {
@@ -629,6 +640,38 @@ export const ProviderRegistryLive = Layer.effect(
         });
       }),
     );
+    /**
+     * Re-read every credential that lives in an external secret store and
+     * rebuild the instances that consume one.
+     *
+     * A refresh is the user's way of saying "go look again", so it is also
+     * where a rotated secret should take effect. Dropping the cached value
+     * alone would change nothing: a driver resolves its environment once, at
+     * create time, and the provider process it spawns inherits that copy. The
+     * instance has to be rebuilt for the new value to reach the next process.
+     *
+     * Instances whose environment is all literals are left alone, so the
+     * common refresh stays a plain re-probe. Threads already running keep the
+     * process they were started with.
+     */
+    const reloadSecretBackedInstances = Effect.fn("reloadSecretBackedInstances")(function* (
+      instanceIds?: ReadonlyArray<ProviderInstanceId>,
+    ) {
+      yield* secretResolver.invalidate;
+      const targets = instanceIds ?? [...(yield* Ref.get(liveSubsRef)).keys()];
+      const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
+        instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
+          hasProviderSecretReference(entry.environment),
+        ),
+      );
+      if (rebuilt.some(Boolean)) {
+        // Adopt the replacement instances now rather than waiting on the
+        // registry's change tick, so the refresh that triggered the rebuild
+        // probes the new process instead of the one it just closed.
+        yield* syncLiveSources.pipe(Effect.provideService(Scope.Scope, layerScope));
+      }
+    });
+
     const syncLiveSourcesAndContinue = syncLiveSources.pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {

@@ -378,6 +378,49 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // `listInstances` immediately after this effect completes.
     yield* reconcile(input.configMap);
 
+    // Rebuild one instance from the config it already has. Unlike
+    // `reconcile`, which is driven by a settings diff, this is for inputs the
+    // envelope cannot show, see the shape docs. Order is preserved by
+    // rewriting the map in place rather than appending the replacement.
+    const rebuildInstanceWhen: ProviderInstanceRegistryShape["rebuildInstanceWhen"] = (
+      instanceId,
+      shouldRebuild,
+    ) =>
+      Effect.gen(function* () {
+        const previousEntries = yield* Ref.get(entries);
+        const live = previousEntries.get(instanceId);
+        if (live === undefined || !shouldRebuild(live.entry)) {
+          return false;
+        }
+
+        yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
+        const result = yield* buildEntry({
+          driversById,
+          parentScope,
+          instanceId,
+          rawInstanceId: instanceId,
+          entry: live.entry,
+        });
+
+        const nextEntries = new Map<ProviderInstanceId, LiveEntry>();
+        for (const [id, existing] of previousEntries) {
+          if (id !== instanceId) {
+            nextEntries.set(id, existing);
+          } else if (result.kind === "live") {
+            nextEntries.set(id, result.live);
+          }
+        }
+        yield* Ref.set(entries, nextEntries);
+        if (result.kind === "unavailable") {
+          yield* Ref.update(unavailable, (previous) =>
+            new Map(previous).set(instanceId, result.snapshot),
+          );
+        }
+
+        yield* PubSub.publish(changes, undefined);
+        return true;
+      }).pipe(Effect.provideContext(driverContext));
+
     const registry: ProviderInstanceRegistryShape = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
       listInstances: Ref.get(entries).pipe(
@@ -389,6 +432,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
       listUnavailable: Ref.get(unavailable).pipe(
         Effect.map((map) => Array.from(map.values()) as ReadonlyArray<ServerProvider>),
       ),
+      rebuildInstanceWhen,
       // Getters: each read constructs a fresh Stream / Effect descriptor
       // so multiple consumers don't share a single already-started
       // Channel or subscription. Matches the pattern `ProviderRegistry`

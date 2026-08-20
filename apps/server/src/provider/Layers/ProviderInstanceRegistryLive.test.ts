@@ -44,6 +44,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
+import { ProviderSecretResolverPassthroughLayer } from "../Services/ProviderSecretResolver.ts";
 import { CodexDriver } from "../Drivers/CodexDriver.ts";
 import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
@@ -148,6 +149,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   );
 
   it.live("boots two independent codex instances from a ProviderInstanceConfigMap", () =>
@@ -313,6 +315,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   );
 
   it.live("boots one instance of every shipped driver from a single config map", () =>
@@ -469,6 +472,94 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(openCodeSnapshot.continuation?.groupKey).toBe(
         `${openCodeDriverKind}:instance:${openCodeId}`,
       );
+    }).pipe(Effect.provide(testLayer)),
+  );
+});
+
+describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
+  const testLayer = ServerConfig.layerTest(process.cwd(), {
+    prefix: "provider-instance-registry-rebuild-test",
+  }).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(TestHttpClientLive),
+    Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
+  );
+
+  const codexDriverKind = ProviderDriverKind.make("codex");
+  const firstId = ProviderInstanceId.make("codex_first");
+  const secondId = ProviderInstanceId.make("codex_second");
+  const configMap: ProviderInstanceConfigMap = {
+    [firstId]: {
+      driver: codexDriverKind,
+      displayName: "Codex (first)",
+      enabled: false,
+      environment: [{ name: "OP_TOKEN", value: "op://Vault/Item/token", sensitive: true }],
+      config: makeCodexConfig({ homePath: "/home/julius/.codex_first" }),
+    },
+    [secondId]: {
+      driver: codexDriverKind,
+      displayName: "Codex (second)",
+      enabled: false,
+      config: makeCodexConfig({ homePath: "/home/julius/.codex_second" }),
+    },
+  };
+
+  it.live("replaces only the instance the predicate accepts, in place", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+      const before = yield* registry.listInstances;
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(
+        firstId,
+        (entry) => entry.environment !== undefined,
+      );
+
+      expect(rebuilt).toBe(true);
+      const after = yield* registry.listInstances;
+      // Order is settings-author order, not "rebuilt last".
+      expect(after.map((instance) => instance.instanceId)).toEqual([firstId, secondId]);
+      // The accepted instance is a genuinely new bundle; its neighbour is
+      // untouched, which is what keeps a refresh from restarting every
+      // provider on the machine.
+      expect(after[0]).not.toBe(before[0]);
+      expect(after[1]).toBe(before[1]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("leaves the instance alone when the predicate declines", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+      const before = yield* registry.listInstances;
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(secondId, () => false);
+
+      expect(rebuilt).toBe(false);
+      expect(yield* registry.listInstances).toEqual(before);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("treats an unknown instance id as a no-op", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(
+        ProviderInstanceId.make("codex_missing"),
+        () => true,
+      );
+
+      expect(rebuilt).toBe(false);
     }).pipe(Effect.provide(testLayer)),
   );
 });

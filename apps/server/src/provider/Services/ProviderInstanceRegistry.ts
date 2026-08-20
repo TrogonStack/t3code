@@ -17,7 +17,11 @@
  *
  * @module provider/Services/ProviderInstanceRegistry
  */
-import type { ProviderInstanceId, ServerProvider } from "@t3tools/contracts";
+import type {
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+  ServerProvider,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
@@ -46,6 +50,27 @@ export interface ProviderInstanceRegistryShape {
    * directly into `ProviderRegistry` output.
    */
   readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
+  /**
+   * Tear one instance down and build it again from the configuration it
+   * already has, but only when `shouldRebuild` accepts that configuration.
+   * Resolves to whether a rebuild happened.
+   *
+   * This exists for inputs a driver reads at create time that can change
+   * without the settings file changing - a credential held in an external
+   * secret store, say. `reconcile` cannot see those, because the config
+   * envelope it diffs is identical before and after. The predicate keeps the
+   * decision with the caller that understands the input, and keeps every
+   * other instance out of the blast radius.
+   *
+   * The rebuilt instance keeps its position in settings-author order, and an
+   * unknown id is a no-op rather than an error. Sessions already talking to
+   * the old instance keep the process they were given; only work started
+   * after the rebuild sees the new one.
+   */
+  readonly rebuildInstanceWhen: (
+    instanceId: ProviderInstanceId,
+    shouldRebuild: (entry: ProviderInstanceConfig) => boolean,
+  ) => Effect.Effect<boolean>;
   /**
    * Push notification stream emitted whenever the registry's contents
    * change — instance added, removed, or rebuilt. The payload is `void`
