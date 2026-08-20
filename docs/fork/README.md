@@ -45,3 +45,5 @@ Each entry uses these sections:
   active, [#21](https://github.com/TrogonStack/t3code/pull/21)
 - **0013** [Keep your place in a long review](./0013-keep-your-place-in-a-review.md)
   active, [#23](https://github.com/TrogonStack/t3code/pull/23)
+- **0014** [The base branch stays readable in the pull request header](./0014-base-branch-stays-readable.md)
+  active, [#24](https://github.com/TrogonStack/t3code/pull/24)

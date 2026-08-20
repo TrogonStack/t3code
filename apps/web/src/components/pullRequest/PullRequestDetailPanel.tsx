@@ -1510,7 +1510,7 @@ export function PullRequestDetailPanel({
                 </nav>
                 <span className="ml-auto inline-flex min-w-0 shrink items-center gap-1 font-mono text-[11px] text-muted-foreground">
                   <Tooltip>
-                    <TooltipTrigger render={<span className="truncate" />}>
+                    <TooltipTrigger render={<span className="max-w-32 shrink-0 truncate" />}>
                       {detail.baseBranch}
                     </TooltipTrigger>
                     <TooltipPopup side="top">{`${detail.baseBranch} ← ${detail.headBranch}`}</TooltipPopup>
@@ -1647,7 +1647,7 @@ export function PullRequestDetailPanel({
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <code className="min-w-0 max-w-48 shrink truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground">
+                        <code className="min-w-0 max-w-48 shrink-0 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground">
                           {detail.baseBranch}
                         </code>
                       }
@@ -1668,7 +1668,7 @@ export function PullRequestDetailPanel({
                       render={
                         <button
                           type="button"
-                          className="grid min-w-0 max-w-64 shrink cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                          className="grid min-w-0 shrink cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                           aria-label={
                             isBranchCopied ? "Branch name copied" : "Copy pull request branch"
                           }
