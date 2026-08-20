@@ -952,25 +952,14 @@ export const make = Effect.gen(function* () {
     readonly host: string;
     readonly query: string;
     readonly variables: Readonly<Record<string, string>>;
-    /** What this write is expected to spend, for a batch that carries more than one mutation. */
-    readonly estimatedCost?: number | undefined;
   }) =>
-    graphQlBudget
-      // A write is counted against the hourly budget but never held back by it, so the reserve
-      // that pauses reads is measured against what has really been spent rather than against
-      // reads alone. It cannot fail here: the budget only refuses reads.
-      .query(input.host, input.query, { estimatedCost: input.estimatedCost ?? 1 })
-      .pipe(
-        Effect.orElseSucceed(() => input.query),
-        Effect.flatMap((query) =>
-          github.execute({
-            cwd: input.cwd,
-            args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
-            stdin: encodeGraphQlRequestJson({ query, variables: input.variables }),
-          }),
-        ),
-        Effect.asVoid,
-      );
+    github
+      .execute({
+        cwd: input.cwd,
+        args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+        stdin: encodeGraphQlRequestJson({ query: input.query, variables: input.variables }),
+      })
+      .pipe(Effect.asVoid);
 
   /** A GraphQL read whose answer is decoded, reporting a failure against the read that made it. */
   const graphqlRead = <A>(input: {
@@ -1861,7 +1850,6 @@ export const make = Effect.gen(function* () {
             host: input.host,
             query: mutation.query,
             variables: { pullRequestId, ...mutation.variables },
-            estimatedCost: input.files.length,
           }),
         ),
       );
