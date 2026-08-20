@@ -2613,7 +2613,6 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   isExpandedToolGroupEntry: boolean;
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry } = props;
-  const activity = use(TimelineRowActivityCtx);
   const shared = use(TimelineRowCtx);
   const navigate = useNavigate();
   const threadShells = useThreadShells();
