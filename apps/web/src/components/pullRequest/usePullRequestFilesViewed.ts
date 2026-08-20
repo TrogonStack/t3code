@@ -10,6 +10,7 @@ import {
   countViewedFiles,
   isFileViewed,
   isStaleViewedState,
+  revertFileViewedOverlay,
   settleFileViewedOverlay,
   toFileViewedBatch,
   toFileViewedStates,
@@ -24,7 +25,6 @@ import {
 const FLUSH_DELAY_MS = 400;
 
 const NO_OVERLAY: FileViewedOverlay = new Map();
-const NO_PATHS: ReadonlySet<string> = new Set();
 
 export interface PullRequestFilesViewedView {
   /** Whether the host tracks this at all, which is what hides the whole control. */
@@ -35,6 +35,8 @@ export interface PullRequestFilesViewedView {
   readonly setViewed: (path: string, viewed: boolean) => void;
   /** How many of the files on screen are ticked off. */
   readonly viewedCount: number;
+  /** The host had more files than the read covered, so the count above may be short. */
+  readonly truncated: boolean;
 }
 
 /**
@@ -57,30 +59,28 @@ export function usePullRequestFilesViewed(options: {
   );
   const refresh = query.refresh;
   const states = useMemo(() => toFileViewedStates(query.data), [query.data]);
+  const truncated = query.data?.truncated === true;
   const [overlay, setOverlay] = useState<FileViewedOverlay>(NO_OVERLAY);
   const setFilesViewed = useAtomCommand(pullRequestEnvironment.setFilesViewed);
 
   // Presses waiting for the next flush, and the ones a request is already carrying. Both are
   // refs rather than state: nothing on screen reads them, and the flush must see the latest.
   const queued = useRef<Map<string, boolean>>(new Map());
-  const inFlight = useRef<ReadonlySet<string>>(NO_PATHS);
+  const inFlight = useRef<Map<string, boolean>>(new Map());
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const referenceKey = `${reference.projectId} ${reference.repository} ${reference.number}`;
-  // Everything held here is about one change request, so switching away drops it rather than
-  // letting a press meant for one land on another.
-  useEffect(() => {
-    queued.current = new Map();
-    inFlight.current = NO_PATHS;
-    setOverlay(NO_OVERLAY);
-  }, [referenceKey]);
+  // Everything held here belongs to one change request on one environment. The environment is
+  // part of that: two of them can hand out the same project id, and a press made against one
+  // must never be answered for by the other.
+  const scopeKey = `${environmentId} ${reference.projectId} ${reference.repository} ${reference.number}`;
+  const scope = useRef(scopeKey);
 
   useEffect(() => {
     setOverlay((current) =>
       settleFileViewedOverlay(
         current,
         states,
-        new Set([...queued.current.keys(), ...inFlight.current]),
+        new Set([...queued.current.keys(), ...inFlight.current.keys()]),
       ),
     );
   }, [states]);
@@ -90,17 +90,22 @@ export function usePullRequestFilesViewed(options: {
     const batch = toFileViewedBatch(queued.current);
     if (batch.length === 0) return;
     queued.current = new Map();
-    const sent = new Set(batch.map((file) => file.path));
-    inFlight.current = sent;
+    const sentFrom = scope.current;
+    for (const file of batch) inFlight.current.set(file.path, file.viewed);
     void setFilesViewed({ environmentId, input: { ...reference, files: batch } }).then((result) => {
-      inFlight.current = NO_PATHS;
+      // Only what this request carried, and only where a later press has not taken the path over.
+      for (const file of batch) {
+        if (inFlight.current.get(file.path) === file.viewed) inFlight.current.delete(file.path);
+      }
+      // The reader has moved to another change request, or another environment, and what is on
+      // screen now has nothing to do with this answer.
+      if (scope.current !== sentFrom) return;
       if (result._tag === "Failure") {
-        // The host never heard these, so the ticks go back to whatever it last said.
-        setOverlay((current) => {
-          const next = new Map(current);
-          for (const path of sent) next.delete(path);
-          return next;
-        });
+        // The host never heard these, so the ticks go back to whatever it last said, except on
+        // a path pressed again since, where the newer press is still waiting on its own request.
+        setOverlay((current) =>
+          revertFileViewedOverlay(current, batch, new Set(queued.current.keys())),
+        );
         toastManager.add({ type: "error", title: "Could not update viewed files" });
         return;
       }
@@ -113,15 +118,22 @@ export function usePullRequestFilesViewed(options: {
   const flushRef = useRef(flush);
   flushRef.current = flush;
 
-  // A tab closed mid-gather still records what was pressed.
-  useEffect(
-    () => () => {
-      if (flushTimer.current === null) return;
-      clearTimeout(flushTimer.current);
-      flushRef.current();
-    },
-    [],
-  );
+  // Leaving a change request, the environment it lives on, or the page itself records what was
+  // pressed and then drops the rest. The flush kept here is the one bound to the scope being
+  // left, which is what sends those last presses where they were meant to go.
+  useEffect(() => {
+    const flushScope = flushRef.current;
+    scope.current = scopeKey;
+    return () => {
+      if (flushTimer.current !== null) {
+        clearTimeout(flushTimer.current);
+        flushScope();
+      }
+      queued.current = new Map();
+      inFlight.current = new Map();
+      setOverlay(NO_OVERLAY);
+    };
+  }, [scopeKey]);
 
   const setViewed = useCallback((path: string, viewed: boolean) => {
     setOverlay((current) => new Map(current).set(path, viewed));
@@ -143,5 +155,10 @@ export function usePullRequestFilesViewed(options: {
     [overlay, paths, states],
   );
 
-  return { enabled, isViewed, isStale, setViewed, viewedCount };
+  // One identity per change of what it says: the viewer keys every file it draws off this, and a
+  // fresh object each render would redraw the whole diff.
+  return useMemo(
+    () => ({ enabled, isViewed, isStale, setViewed, viewedCount, truncated }),
+    [enabled, isStale, isViewed, setViewed, truncated, viewedCount],
+  );
 }

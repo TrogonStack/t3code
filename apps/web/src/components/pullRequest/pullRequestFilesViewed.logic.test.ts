@@ -4,6 +4,7 @@ import {
   countViewedFiles,
   isFileViewed,
   isStaleViewedState,
+  revertFileViewedOverlay,
   settleFileViewedOverlay,
   toFileViewedBatch,
   toFileViewedStates,
@@ -96,5 +97,36 @@ describe("toFileViewedBatch", () => {
       { path: "a.ts", viewed: false },
       { path: "b.ts", viewed: true },
     ]);
+  });
+});
+
+describe("revertFileViewedOverlay", () => {
+  const batch = [
+    { path: "a.ts", viewed: true },
+    { path: "b.ts", viewed: false },
+  ];
+
+  it("puts the checkbox back to the host's answer for everything the request carried", () => {
+    const overlay = new Map([
+      ["a.ts", true],
+      ["b.ts", false],
+    ]);
+    expect(revertFileViewedOverlay(overlay, batch, new Set()).size).toBe(0);
+  });
+
+  it("leaves a press the reader made after the request went out", () => {
+    // The second press is queued behind a request of its own, so the first one failing says
+    // nothing about it.
+    const overlay = new Map([
+      ["a.ts", false],
+      ["b.ts", false],
+    ]);
+    const reverted = revertFileViewedOverlay(overlay, batch, new Set(["a.ts"]));
+    expect([...reverted]).toEqual([["a.ts", false]]);
+  });
+
+  it("leaves a path the request never carried", () => {
+    const overlay = new Map([["c.ts", true]]);
+    expect(revertFileViewedOverlay(overlay, batch, new Set())).toBe(overlay);
   });
 });

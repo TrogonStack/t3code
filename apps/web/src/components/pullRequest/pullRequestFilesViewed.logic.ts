@@ -17,7 +17,7 @@ export function toFileViewedStates(
  * Whether a file counts as seen.
  *
  * `dismissed` is the host saying it has been pushed to since the reader cleared it, which reads
- * as unseen — the point of the tick is that the code behind it has been looked at, and it is not
+ * as unseen: the point of the tick is that the code behind it has been looked at, and it is not
  * the same code any more.
  */
 export function isViewedState(state: PullRequestFileViewedState | undefined): boolean {
@@ -70,6 +70,26 @@ export function settleFileViewedOverlay(
   for (const [path, pressed] of overlay) {
     if (unsettled.has(path)) continue;
     if (isViewedState(states.get(path)) === pressed) next.delete(path);
+  }
+  return next.size === overlay.size ? overlay : next;
+}
+
+/**
+ * The overlay with a failed request's presses taken back.
+ *
+ * Only the presses that request carried, and only where the checkbox still shows them: a path
+ * the reader has pressed again since is waiting on a request of its own, and putting that box
+ * back to the host's answer would take a press out from under the reader's hand.
+ */
+export function revertFileViewedOverlay(
+  overlay: FileViewedOverlay,
+  batch: ReadonlyArray<{ readonly path: string; readonly viewed: boolean }>,
+  superseded: ReadonlySet<string>,
+): FileViewedOverlay {
+  const next = new Map(overlay);
+  for (const { path, viewed } of batch) {
+    if (superseded.has(path)) continue;
+    if (next.get(path) === viewed) next.delete(path);
   }
   return next.size === overlay.size ? overlay : next;
 }
