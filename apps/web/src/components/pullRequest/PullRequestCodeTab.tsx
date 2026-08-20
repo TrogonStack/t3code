@@ -792,7 +792,10 @@ export function PullRequestCodeTab({
             className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground"
             onClick={(event) => event.stopPropagation()}
           >
+            {/* Named here rather than by the label, whose text turns into "Changed" once the
+                file has been pushed to. */}
             <Checkbox
+              aria-label="Viewed"
               checked={viewed}
               onCheckedChange={(next) => setFileViewedRef.current(item.id, path, next === true)}
             />
