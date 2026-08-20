@@ -77,6 +77,19 @@ secret-store policy in `ProviderRegistry` and keeps the instance registry ignora
 `reconcile` cannot do this job, because it diffs the config envelope and a rotated secret leaves
 that envelope byte-identical.
 
+A rebuild takes as long as the secret read does, and a locked vault can park it on a person at a
+biometric prompt. Three things follow from that window being long:
+
+- **The instance leaves the map before its scope closes.** Otherwise every lookup for the whole
+  window hands back a bundle whose scope is already gone.
+- **Rebuilds and `reconcile` take turns.** Both read the instance map, do slow work, then write it
+  back, so a settings change landing mid-rebuild would be overwritten by the map the rebuild read
+  before it. Reads stay outside the lock: `getInstance` and `listInstances` never wait on a
+  1Password prompt.
+- **A rebuild that fails is retryable.** The registry keeps the config envelope of an instance it
+  could not bring back, so the next refresh retries it. Without that, a vault that happened to be
+  locked would cost the user the instance until settings changed.
+
 This hangs off the three refresh entry points (`refreshAll`, the kind-scoped `refresh`, and
 `refreshInstance`), all of which are reached only by a user action: the Settings refresh button, and
 the post-update verification in `providerMaintenanceRunner`. The periodic provider health loop is
