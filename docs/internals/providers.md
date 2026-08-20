@@ -119,9 +119,11 @@ provider health cadence and needs no cache of its own.
 
 Four decisions carry the behavior:
 
-- Only a value carrying Anthropic's `sk-ant-` credential prefix is ever sent. A placeholder, or a
-  secret reference nothing resolved, earns a `401` that says nothing about the token, and acting on
-  it would blame the credential for a problem one layer up.
+- Only a value shaped like an Anthropic credential is ever sent: the `sk-ant-` prefix followed by
+  key material and nothing else. A placeholder, or a secret reference nothing resolved, earns a
+  `401` that says nothing about the token, and acting on it would blame the credential for a
+  problem one layer up. The tail is checked because a placeholder can wear the prefix
+  (`sk-ant-oat01-${MY_TOKEN}`), and rejecting a real token by mistake only costs an `unknown`.
 - Only an explicit `401` counts. Timeouts, transport errors, `403`, and every 5xx answer `unknown`,
   because a proxy or an outage must never sign a working install out of Settings.
 - The check only ever downgrades. It runs after the probe has already concluded the instance is

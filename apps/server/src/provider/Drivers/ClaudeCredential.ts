@@ -33,8 +33,15 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 export type ClaudeCredentialVerdict = "live" | "rejected" | "unknown";
 
 const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models?limit=1";
-/** Shared by Anthropic setup tokens (`sk-ant-oat01-`) and API keys (`sk-ant-api03-`). */
-const ANTHROPIC_CREDENTIAL_PREFIX = "sk-ant-";
+/**
+ * `sk-ant-` is shared by Anthropic setup tokens (`sk-ant-oat01-`) and API keys
+ * (`sk-ant-api03-`). The tail is spelled out because the prefix alone accepts
+ * `sk-ant-oat01-${MY_TOKEN}`, and a placeholder that happens to carry the
+ * prefix is still a placeholder. Anything outside the character set key
+ * material is written with is treated as not a credential, which costs at most
+ * an unknown verdict and never a wrong one.
+ */
+const ANTHROPIC_CREDENTIAL = /^sk-ant-[A-Za-z0-9._~+/=-]+$/;
 const ANTHROPIC_VERSION_HEADER = "2023-06-01";
 const VERIFY_TIMEOUT = Duration.seconds(10);
 
@@ -62,7 +69,7 @@ export function claudeOAuthTokenFromEnvironment(
 export const verifyClaudeOAuthToken = Effect.fn("verifyClaudeOAuthToken")(function* (
   token: string,
 ): Effect.fn.Return<ClaudeCredentialVerdict, never, HttpClient.HttpClient> {
-  if (!token.startsWith(ANTHROPIC_CREDENTIAL_PREFIX)) {
+  if (!ANTHROPIC_CREDENTIAL.test(token)) {
     return "unknown";
   }
   const client = yield* HttpClient.HttpClient;

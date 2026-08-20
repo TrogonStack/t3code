@@ -106,6 +106,22 @@ describe("verifyClaudeOAuthToken", () => {
     }),
   );
 
+  it.effect("never asks Anthropic about a placeholder wearing the credential prefix", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-${MY_TOKEN}").pipe(
+        Effect.provide(
+          httpClientLayer(() => {
+            requests += 1;
+            return new Response("no", { status: 401 });
+          }),
+        ),
+      );
+      assert.strictEqual(verdict, "unknown");
+      assert.strictEqual(requests, 0);
+    }),
+  );
+
   it.effect("reports a rejected token on 401", () =>
     Effect.gen(function* () {
       const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-stale").pipe(
