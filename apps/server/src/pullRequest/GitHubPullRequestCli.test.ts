@@ -2609,7 +2609,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const page = (index: number, hasNextPage: boolean) =>
         Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               data: {
                 repository: {
@@ -2696,9 +2695,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
   it.effect("clears and restores a burst of files in one request", () =>
     Effect.gen(function* () {
       mockedExecute
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         .mockReturnValueOnce(
           Effect.succeed(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             output(JSON.stringify({ data: { repository: { pullRequest: { id: "PR_1" } } } })),
           ),
         )
