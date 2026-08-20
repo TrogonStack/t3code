@@ -998,6 +998,80 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      // A rebuild that could not finish - a locked vault, a secret store that
+      // was not running - leaves the instance out of the live set. Refresh is
+      // the user saying "try again", so it has to reach the instances that
+      // need trying again, not just the ones that are already working.
+      it.effect("retries instances that are not live when nothing is targeted", () =>
+        Effect.gen(function* () {
+          const codexDriver = ProviderDriverKind.make("codex");
+          const codexInstanceId = ProviderInstanceId.make("codex");
+          const unavailableProvider = {
+            instanceId: codexInstanceId,
+            driver: codexDriver,
+            status: "error",
+            enabled: true,
+            installed: false,
+            auth: { status: "unknown" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: null,
+            models: [],
+            slashCommands: [],
+            skills: [],
+            message: "Driver 'codex' failed to create instance: secret store is locked",
+          } as const satisfies ServerProvider;
+
+          const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+          const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: Effect.succeed,
+            invalidate: Effect.void,
+          });
+          const instanceRegistryLayer = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: () => Effect.succeed(undefined),
+              listInstances: Effect.succeed([]),
+              listUnavailable: Effect.succeed([unavailableProvider]),
+              rebuildInstanceWhen: (instanceId, shouldRebuild) =>
+                shouldRebuild({
+                  driver: codexDriver,
+                  environment: [
+                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
+                  ],
+                })
+                  ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
+                      Effect.as(true),
+                    )
+                  : Effect.succeed(false),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistryLive.pipe(
+              Layer.provideMerge(instanceRegistryLayer),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-secret-retry-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(secretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.refresh();
+
+            assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
       it.effect("persists the merged snapshot when a live update has empty models", () =>
         Effect.gen(function* () {
           const cursorDriver = ProviderDriverKind.make("cursor");

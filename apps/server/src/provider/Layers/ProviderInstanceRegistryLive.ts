@@ -453,8 +453,15 @@ export const makeProviderInstanceRegistry = <R>(input: {
           // Drop the instance before closing it. Building the replacement can
           // wait on a person at a biometric prompt, and for that whole window
           // the map would otherwise hand callers a bundle whose scope is gone.
+          //
+          // The last snapshot stands in for it meanwhile. Aggregators treat an
+          // id that is in neither list as gone and prune it, so leaving the id
+          // nowhere would blank the provider's card for as long as the secret
+          // store takes to answer, then bring it back.
           if (live !== undefined) {
+            const parked = yield* live.instance.snapshot.getSnapshot;
             yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
+            yield* Ref.update(unavailable, (previous) => new Map(previous).set(instanceId, parked));
             yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
           }
 

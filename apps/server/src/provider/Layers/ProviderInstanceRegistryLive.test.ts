@@ -639,6 +639,12 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
       expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
         secondId,
       ]);
+      // Not routable, but not gone either: consumers prune ids they find in
+      // neither list, and the provider's card must not blink out of the UI for
+      // as long as a secret store takes to answer.
+      expect((yield* registry.listUnavailable).map((provider) => provider.instanceId)).toEqual([
+        firstId,
+      ]);
 
       yield* gate.release;
       expect(yield* Fiber.join(rebuilding)).toBe(true);
@@ -646,6 +652,7 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
         firstId,
         secondId,
       ]);
+      expect(yield* registry.listUnavailable).toEqual([]);
     }).pipe(Effect.provide(testLayer)),
   );
 

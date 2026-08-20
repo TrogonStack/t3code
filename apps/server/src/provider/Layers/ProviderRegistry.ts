@@ -658,7 +658,18 @@ export const ProviderRegistryLive = Layer.effect(
       instanceIds?: ReadonlyArray<ProviderInstanceId>,
     ) {
       yield* secretResolver.invalidate;
-      const targets = instanceIds ?? [...(yield* Ref.get(liveSubsRef)).keys()];
+      // Unavailable instances are targets too. An instance whose last rebuild
+      // failed because the vault was locked is not live, so live subscriptions
+      // alone would never reach it again, and a refresh is exactly the moment
+      // the user is saying the vault is open now.
+      const targets =
+        instanceIds ??
+        Array.from(
+          new Set([
+            ...(yield* Ref.get(liveSubsRef)).keys(),
+            ...(yield* instanceRegistry.listUnavailable).map(snapshotInstanceKey),
+          ]),
+        );
       const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
         instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
           hasProviderSecretReference(entry.environment),

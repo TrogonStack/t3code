@@ -81,14 +81,17 @@ A rebuild takes as long as the secret read does, and a locked vault can park it 
 biometric prompt. Three things follow from that window being long:
 
 - **The instance leaves the map before its scope closes.** Otherwise every lookup for the whole
-  window hands back a bundle whose scope is already gone.
+  window hands back a bundle whose scope is already gone. Its last snapshot stands in for it
+  meanwhile, because `ProviderRegistry` prunes ids it finds in neither list, and the card must not
+  blink out of Settings while 1Password waits on a fingerprint.
 - **Rebuilds and `reconcile` take turns.** Both read the instance map, do slow work, then write it
   back, so a settings change landing mid-rebuild would be overwritten by the map the rebuild read
   before it. Reads stay outside the lock: `getInstance` and `listInstances` never wait on a
   1Password prompt.
 - **A rebuild that fails is retryable.** The registry keeps the config envelope of an instance it
-  could not bring back, so the next refresh retries it. Without that, a vault that happened to be
-  locked would cost the user the instance until settings changed.
+  could not bring back, so the next refresh retries it, and a refresh with no explicit target
+  covers the unavailable instances as well as the live ones. Without both halves, a vault that
+  happened to be locked would cost the user the instance until settings changed.
 
 This hangs off the three refresh entry points (`refreshAll`, the kind-scoped `refresh`, and
 `refreshInstance`), all of which are reached only by a user action: the Settings refresh button, and
