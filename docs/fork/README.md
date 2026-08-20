@@ -49,3 +49,5 @@ Each entry uses these sections:
   active, [#26](https://github.com/TrogonStack/t3code/pull/26)
 - **0016** [Provider secrets can live in 1Password](./0016-provider-secrets-live-in-1password.md)
   active, [#27](https://github.com/TrogonStack/t3code/pull/27)
+- **0017** [A revoked Claude token reads as revoked](./0017-a-revoked-claude-token-reads-as-revoked.md)
+  active, [#28](https://github.com/TrogonStack/t3code/pull/28)

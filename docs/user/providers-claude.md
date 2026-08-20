@@ -215,3 +215,29 @@ If the preset needs different Claude files, give it a different `CLAUDE_CONFIG_D
 different API keys, base URLs, or router settings, use Environment variables.
 
 Do not put environment variable assignments in `Launch arguments`.
+
+## Settings Says Anthropic Rejected My Token
+
+You see this on a provider whose Environment variables set `CLAUDE_CODE_OAUTH_TOKEN`. It means
+T3 Code asked Anthropic about that token and Anthropic refused it, so the provider is marked not
+authenticated before you spend a message finding out.
+
+Setup tokens expire and can be revoked. Mint a fresh one and paste it back into the provider's
+Environment variables:
+
+```bash
+claude setup-token
+```
+
+Then use Refresh provider status in Settings to check it again.
+
+A value that is not an Anthropic credential never causes this message either. T3 Code only asks
+Anthropic about something that looks like one, so a placeholder or an unresolved reference leaves
+the provider's status alone rather than blaming a token that was never there.
+
+A network problem never causes this message. If T3 Code cannot reach Anthropic at all, the
+provider keeps whatever status it already had.
+
+This check only applies to providers that authenticate with `CLAUDE_CODE_OAUTH_TOKEN`. Providers
+signed in with `claude auth login`, an API key, a router, or a cloud backend such as Bedrock or
+Vertex are reported exactly as before.
