@@ -39,6 +39,72 @@ directory to route session and turn operations for a thread, so callers name a t
 Adding a driver means writing the driver plus adapter and adding it to `BUILT_IN_DRIVERS`. No
 orchestration, contract, or client change is required for the common case.
 
+## Secret references in provider environments
+
+A provider instance's `environment` is merged into the child process env by
+`mergeProviderInstanceEnvironment`, once per driver inside `create`. A value that starts with `op://`
+is not passed through: it is a secret reference, and [`ProviderSecretResolver`][secretresolver]
+swaps it for the value the 1Password CLI returns before the merge happens.
+
+The parsing half lives in [`ProviderSecretReference.ts`][secretref] and knows nothing about how a
+secret is fetched, so the registry can ask "does this instance read from a secret store?" without
+depending on the resolver. [`ProviderSecretResolverLive`][secretlive] is the half that shells out to
+`op read --no-newline`.
+
+Three decisions are load-bearing:
+
+- **A failed read unsets the variable.** It never substitutes an empty string, because an empty
+  `ANTHROPIC_API_KEY` reads to the provider as a configured-but-broken credential rather than an
+  absent one, and the status badge would go back to lying about it. Unsetting is stronger than
+  leaving the name out of the resolved list: the child environment starts from the server's own, so
+  a name left alone keeps whatever the server inherited under it, and the agent would quietly run
+  as a different account than the one the instance names.
+- **Reads are sequential.** `resolve` walks the environment with a plain loop instead of
+  `Effect.forEach` with concurrency, so an instance carrying four references produces one biometric
+  prompt rather than four simultaneous ones.
+- **Failures are cached alongside successes.** The `Cache` holds Exits, so a locked vault costs one
+  prompt per refresh cycle instead of one per thread start. Recovery is the refresh button, not a
+  timeout: the cache is built without a `timeToLive`.
+
+### Why a refresh has to rebuild the instance
+
+A driver resolves its environment once, at `create` time, and `makeManagedServerProvider` re-probes
+using that captured `processEnv`. Dropping the cached secret therefore changes nothing on its own,
+because the running instance still holds the value it was built with.
+
+So `ProviderRegistry.reloadSecretBackedInstances` invalidates the cache and then calls
+[`rebuildInstanceWhen`][instances] on each instance, passing `hasProviderSecretReference` as the
+predicate. The registry owns the child scopes and already stores each instance's config, so it can
+close and rebuild one entry in place; passing a predicate rather than exposing the entries keeps
+secret-store policy in `ProviderRegistry` and keeps the instance registry ignorant of 1Password.
+`reconcile` cannot do this job, because it diffs the config envelope and a rotated secret leaves
+that envelope byte-identical.
+
+A rebuild takes as long as the secret read does, and a locked vault can park it on a person at a
+biometric prompt. Three things follow from that window being long:
+
+- **The instance leaves the map before its scope closes.** Otherwise every lookup for the whole
+  window hands back a bundle whose scope is already gone. Its last snapshot stands in for it
+  meanwhile, because `ProviderRegistry` prunes ids it finds in neither list, and the card must not
+  blink out of Settings while 1Password waits on a fingerprint.
+- **Rebuilds and `reconcile` take turns.** Both read the instance map, do slow work, then write it
+  back, so a settings change landing mid-rebuild would be overwritten by the map the rebuild read
+  before it. Reads stay outside the lock: `getInstance` and `listInstances` never wait on a
+  1Password prompt.
+- **A rebuild that fails is retryable.** The registry keeps the config envelope of an instance it
+  could not bring back, so the next refresh retries it, and a refresh with no explicit target
+  covers the unavailable instances as well as the live ones. Without both halves, a vault that
+  happened to be locked would cost the user the instance until settings changed. The envelope is
+  recorded before the build starts and the map writes around the build are uninterruptible, so a
+  refresh whose caller walked away mid-read is retryable on the same terms as one that failed.
+
+This hangs off the three refresh entry points (`refreshAll`, the kind-scoped `refresh`, and
+`refreshInstance`), all of which are reached only by a user action: the Settings refresh button, and
+the post-update verification in `providerMaintenanceRunner`. The periodic provider health loop is
+not one of them. It lives inside `makeManagedServerProvider` and calls `refreshSnapshot` directly,
+which is what keeps a resolved secret alive between refreshes instead of re-reading it every few
+minutes.
+
 ## How provider work is requested
 
 Clients never call a provider directly. They dispatch orchestration commands over the RPC method
@@ -100,6 +166,9 @@ usable, then fails with an `AcpTransportError`. `ProviderCommandReactor` turns t
 session error with a `provider.turn.start.failed` activity and clears `activeTurnId`, so the working
 indicator stops and the reason is visible in the timeline.
 
+[secretref]: ../../apps/server/src/provider/ProviderSecretReference.ts
+[secretresolver]: ../../apps/server/src/provider/Services/ProviderSecretResolver.ts
+[secretlive]: ../../apps/server/src/provider/Layers/ProviderSecretResolverLive.ts
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts

@@ -50,6 +50,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { buildUnavailableProviderSnapshot } from "../unavailableProviderSnapshot.ts";
@@ -72,6 +73,40 @@ interface LiveEntry {
   readonly instance: ProviderInstance;
   readonly scope: Scope.Closeable;
   readonly entry: ProviderInstanceConfig;
+}
+
+function withoutKey<V>(
+  map: ReadonlyMap<ProviderInstanceId, V>,
+  instanceId: ProviderInstanceId,
+): ReadonlyMap<ProviderInstanceId, V> {
+  if (!map.has(instanceId)) {
+    return map;
+  }
+  const next = new Map(map);
+  next.delete(instanceId);
+  return next;
+}
+
+/**
+ * Reinstate a rebuilt instance where it used to sit. Map iteration order is
+ * settings-author order all the way out to the provider list, so appending a
+ * rebuilt instance would shuffle the UI every time a secret is refreshed.
+ *
+ * An instance that is not in `previousEntries` was never live to begin with
+ * (a rebuild that recovers a previously unavailable instance), so it has no
+ * position to return to and goes last until the next settings change.
+ */
+function withInstanceAt(
+  previousEntries: ReadonlyMap<ProviderInstanceId, LiveEntry>,
+  instanceId: ProviderInstanceId,
+  rebuilt: LiveEntry,
+): ReadonlyMap<ProviderInstanceId, LiveEntry> {
+  const next = new Map<ProviderInstanceId, LiveEntry>();
+  for (const [id, existing] of previousEntries) {
+    next.set(id, id === instanceId ? rebuilt : existing);
+  }
+  next.set(instanceId, rebuilt);
+  return next;
 }
 
 /**
@@ -369,14 +404,110 @@ export const makeProviderInstanceRegistry = <R>(input: {
     const changes = yield* PubSub.unbounded<void>();
     yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
+    // Config envelopes for instances a rebuild could not bring back. Without
+    // this a failed rebuild is a one-way door: the instance leaves `entries`,
+    // so the next refresh finds nothing live to rebuild and only a settings
+    // change can restore it.
+    const rebuildable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ProviderInstanceConfig>>(
+      new Map(),
+    );
+    // Both mutators read the map, do slow work, then write it back. A secret
+    // read can park on a person at a biometric prompt, which is more than long
+    // enough for a settings change to land in the middle, so they take turns.
+    // Reads stay outside: `getInstance` and `listInstances` never wait.
+    const mutations = yield* Semaphore.make(1);
+
     const state: RegistryState = { entries, unavailable, changes };
     const reconcileWithR = makeReconcile({ state, driversById, parentScope });
     const reconcile: ProviderInstanceRegistryMutatorShape["reconcile"] = (configMap) =>
-      reconcileWithR(configMap).pipe(Effect.provideContext(driverContext));
+      mutations.withPermits(1)(
+        reconcileWithR(configMap).pipe(
+          Effect.tap(() => Ref.set(rebuildable, new Map())),
+          Effect.provideContext(driverContext),
+        ),
+      );
 
     // Hydrate the initial configMap synchronously so callers can read
     // `listInstances` immediately after this effect completes.
     yield* reconcile(input.configMap);
+
+    // Rebuild one instance from the config it already has. Unlike
+    // `reconcile`, which is driven by a settings diff, this is for inputs the
+    // envelope cannot show, see the shape docs. Order is preserved by
+    // rewriting the map in place rather than appending the replacement.
+    const rebuildInstanceWhen: ProviderInstanceRegistryShape["rebuildInstanceWhen"] = (
+      instanceId,
+      shouldRebuild,
+    ) =>
+      mutations.withPermits(1)(
+        Effect.gen(function* () {
+          const previousEntries = yield* Ref.get(entries);
+          const live = previousEntries.get(instanceId);
+          // An instance a previous rebuild could not restore has no live entry
+          // to read the config from, so its envelope comes from `rebuildable`.
+          const entry = live?.entry ?? (yield* Ref.get(rebuildable)).get(instanceId);
+          if (entry === undefined || !shouldRebuild(entry)) {
+            return false;
+          }
+
+          // Everything except the build itself is bookkeeping over refs, and it
+          // is uninterruptible so the instance is never half-moved. Only the
+          // build is interruptible, because it is the part that can take
+          // minutes waiting on a secret store.
+          //
+          // Remembering the envelope comes first: an interrupt anywhere after
+          // this point still leaves the instance retryable on the next
+          // refresh, which is the only recovery path it has left.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              yield* Ref.update(rebuildable, (previous) =>
+                new Map(previous).set(instanceId, entry),
+              );
+              if (live === undefined) {
+                return;
+              }
+              // Drop the instance before closing it, or the map hands callers
+              // a bundle whose scope is gone for the whole build. Its last
+              // snapshot stands in meanwhile: aggregators treat an id that is
+              // in neither list as gone and prune it, so leaving the id
+              // nowhere would blank the provider's card until the build lands.
+              const parked = yield* live.instance.snapshot.getSnapshot;
+              yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
+              yield* Ref.update(unavailable, (previous) =>
+                new Map(previous).set(instanceId, parked),
+              );
+              yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
+            }),
+          );
+
+          const result = yield* buildEntry({
+            driversById,
+            parentScope,
+            instanceId,
+            rawInstanceId: instanceId,
+            entry,
+          });
+
+          // Uninterruptible as well: the replacement is already running by
+          // now, and an interrupt that dropped it on the floor would leave a
+          // provider process nothing can reach or stop.
+          yield* Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (result.kind === "live") {
+                yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
+                yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
+                yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
+              } else {
+                yield* Ref.update(unavailable, (previous) =>
+                  new Map(previous).set(instanceId, result.snapshot),
+                );
+              }
+              yield* PubSub.publish(changes, undefined);
+            }),
+          );
+          return true;
+        }).pipe(Effect.provideContext(driverContext)),
+      );
 
     const registry: ProviderInstanceRegistryShape = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
@@ -389,6 +520,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
       listUnavailable: Ref.get(unavailable).pipe(
         Effect.map((map) => Array.from(map.values()) as ReadonlyArray<ServerProvider>),
       ),
+      rebuildInstanceWhen,
       // Getters: each read constructs a fresh Stream / Effect descriptor
       // so multiple consumers don't share a single already-started
       // Channel or subscription. Matches the pattern `ProviderRegistry`

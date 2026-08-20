@@ -38,6 +38,10 @@ import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
 import {
+  ProviderSecretResolver,
+  ProviderSecretResolverPassthroughLayer,
+} from "../Services/ProviderSecretResolver.ts";
+import {
   haveProvidersChanged,
   mergeProviderSnapshot,
   ProviderRegistryLive,
@@ -868,6 +872,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
+              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
             },
@@ -883,12 +888,186 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 }),
               ),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
             ),
           ).pipe(Scope.provide(scope));
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
             assert.deepStrictEqual(yield* registry.getProviders, [initialProvider]);
             assert.strictEqual(yield* Ref.get(refreshCalls), 0);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      // Refresh is the only moment a rotated 1Password secret can reach a
+      // provider: the environment is resolved once, when the driver builds
+      // the instance, and the process it spawns keeps that copy. So refresh
+      // has to drop the cached secret AND rebuild the instances that read
+      // one - a re-probe of the existing process would report the old
+      // credential right back.
+      it.effect("drops cached secrets and rebuilds the instances that read them", () =>
+        Effect.gen(function* () {
+          const codexDriver = ProviderDriverKind.make("codex");
+          const codexInstanceId = ProviderInstanceId.make("codex");
+          const initialProvider = {
+            instanceId: codexInstanceId,
+            driver: codexDriver,
+            status: "warning",
+            enabled: true,
+            installed: false,
+            auth: { status: "unknown" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: null,
+            models: [],
+            slashCommands: [],
+            skills: [],
+          } as const satisfies ServerProvider;
+          const instance = {
+            instanceId: codexInstanceId,
+            driverKind: codexDriver,
+            continuationIdentity: {
+              driverKind: codexDriver,
+              continuationKey: "codex:instance:codex",
+            },
+            displayName: undefined,
+            enabled: true,
+            snapshot: {
+              maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                provider: codexDriver,
+                packageName: null,
+              }),
+              getSnapshot: Effect.succeed(initialProvider),
+              refresh: Effect.succeed(initialProvider),
+              streamChanges: Stream.empty,
+            },
+            adapter: {} as ProviderInstance["adapter"],
+            textGeneration: {} as ProviderInstance["textGeneration"],
+          } satisfies ProviderInstance;
+
+          const invalidations = yield* Ref.make(0);
+          const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+          const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            invalidate: Ref.update(invalidations, (count) => count + 1),
+          });
+          const instanceRegistryLayer = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: (instanceId) =>
+                Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
+              listInstances: Effect.succeed([instance]),
+              listUnavailable: Effect.succeed([]),
+              rebuildInstanceWhen: (instanceId, shouldRebuild) =>
+                shouldRebuild({
+                  driver: codexDriver,
+                  environment: [
+                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
+                  ],
+                })
+                  ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
+                      Effect.as(true),
+                    )
+                  : Effect.succeed(false),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistryLive.pipe(
+              Layer.provideMerge(instanceRegistryLayer),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-secret-refresh-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(secretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.refreshInstance(codexInstanceId);
+
+            assert.strictEqual(yield* Ref.get(invalidations), 1);
+            assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      // A rebuild that could not finish - a locked vault, a secret store that
+      // was not running - leaves the instance out of the live set. Refresh is
+      // the user saying "try again", so it has to reach the instances that
+      // need trying again, not just the ones that are already working.
+      it.effect("retries instances that are not live when nothing is targeted", () =>
+        Effect.gen(function* () {
+          const codexDriver = ProviderDriverKind.make("codex");
+          const codexInstanceId = ProviderInstanceId.make("codex");
+          const unavailableProvider = {
+            instanceId: codexInstanceId,
+            driver: codexDriver,
+            status: "error",
+            enabled: true,
+            installed: false,
+            auth: { status: "unknown" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: null,
+            models: [],
+            slashCommands: [],
+            skills: [],
+            message: "Driver 'codex' failed to create instance: secret store is locked",
+          } as const satisfies ServerProvider;
+
+          const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+          const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            invalidate: Effect.void,
+          });
+          const instanceRegistryLayer = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: () => Effect.succeed(undefined),
+              listInstances: Effect.succeed([]),
+              listUnavailable: Effect.succeed([unavailableProvider]),
+              rebuildInstanceWhen: (instanceId, shouldRebuild) =>
+                shouldRebuild({
+                  driver: codexDriver,
+                  environment: [
+                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
+                  ],
+                })
+                  ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
+                      Effect.as(true),
+                    )
+                  : Effect.succeed(false),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistryLive.pipe(
+              Layer.provideMerge(instanceRegistryLayer),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-secret-retry-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(secretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.refresh();
+
+            assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
@@ -957,6 +1136,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 Effect.succeed(instanceId === cursorInstanceId ? instance : undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
+              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                 PubSub.subscribe(pubsub),
@@ -975,6 +1155,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -1086,6 +1267,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   Effect.succeed(instanceId === openCodeInstanceId ? instance : undefined),
                 listInstances: Effect.succeed([instance]),
                 listUnavailable: Effect.succeed([]),
+                rebuildInstanceWhen: () => Effect.succeed(false),
                 streamChanges: Stream.empty,
                 subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                   PubSub.subscribe(pubsub),
@@ -1103,6 +1285,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   }),
                 ),
                 Layer.provideMerge(NodeServices.layer),
+                Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
               ),
             ).pipe(Scope.provide(scope));
 
@@ -1193,6 +1376,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
+              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                 PubSub.subscribe(pubsub),
@@ -1211,6 +1395,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -1303,6 +1488,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 return yield* Ref.get(instancesRef);
               }),
               listUnavailable: Effect.succeed([]),
+              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.fromPubSub(changes),
               subscribeChanges: PubSub.subscribe(changes),
             },
@@ -1319,6 +1505,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
               Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
             ),
           ).pipe(Scope.provide(scope));
 
@@ -1428,6 +1615,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             // genuinely spawn a subprocess. The missing-binary ENOENT is
             // what exercises the same failure mode as a misconfigured
             // production `binaryPath`.
+            Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
           );
           const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
             Scope.provide(scope),
@@ -1523,6 +1711,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             ),
             Layer.provideMerge(NodeServices.layer),
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+            Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
           );
           const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
             Scope.provide(scope),
@@ -1639,6 +1828,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
             Layer.provideMerge(NodeServices.layer),
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+            Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
           );
           const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
             Scope.provide(scope),
@@ -1723,6 +1913,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   throw new Error(`Unexpected args: ${command} ${joined}`);
                 }),
               ),
+              Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
             );
             const runtimeServices = yield* Layer.build(
               Layer.mergeAll(

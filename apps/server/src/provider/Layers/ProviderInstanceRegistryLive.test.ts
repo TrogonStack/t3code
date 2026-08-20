@@ -31,19 +31,25 @@ import {
   type GrokSettings,
   type OpenCodeSettings,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
+import { ProviderDriverError } from "../Errors.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
+import { ProviderSecretResolverPassthroughLayer } from "../Services/ProviderSecretResolver.ts";
 import { CodexDriver } from "../Drivers/CodexDriver.ts";
 import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
@@ -148,6 +154,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   );
 
   it.live("boots two independent codex instances from a ProviderInstanceConfigMap", () =>
@@ -313,6 +320,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   );
 
   it.live("boots one instance of every shipped driver from a single config map", () =>
@@ -469,6 +477,273 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(openCodeSnapshot.continuation?.groupKey).toBe(
         `${openCodeDriverKind}:instance:${openCodeId}`,
       );
+    }).pipe(Effect.provide(testLayer)),
+  );
+});
+
+describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
+  const testLayer = ServerConfig.layerTest(process.cwd(), {
+    prefix: "provider-instance-registry-rebuild-test",
+  }).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(TestHttpClientLive),
+    Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+    Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
+  );
+
+  const codexDriverKind = ProviderDriverKind.make("codex");
+  const firstId = ProviderInstanceId.make("codex_first");
+  const secondId = ProviderInstanceId.make("codex_second");
+  const firstEntry: ProviderInstanceConfig = {
+    driver: codexDriverKind,
+    displayName: "Codex (first)",
+    enabled: false,
+    environment: [{ name: "OP_TOKEN", value: "op://Vault/Item/token", sensitive: true }],
+    config: makeCodexConfig({ homePath: "/home/julius/.codex_first" }),
+  };
+  const secondEntry: ProviderInstanceConfig = {
+    driver: codexDriverKind,
+    displayName: "Codex (second)",
+    enabled: false,
+    config: makeCodexConfig({ homePath: "/home/julius/.codex_second" }),
+  };
+  const configMap: ProviderInstanceConfigMap = { [firstId]: firstEntry, [secondId]: secondEntry };
+
+  /**
+   * A codex driver whose `create` parks until the test opens the gate, so a
+   * rebuild can be held exactly where a real one waits: inside the driver,
+   * with the old instance already gone. Arming is explicit so the registry's
+   * initial hydration runs unblocked.
+   */
+  const makeCreateGate = Effect.gen(function* () {
+    const armed = yield* Ref.make(false);
+    const entered = yield* Deferred.make<void>();
+    const released = yield* Deferred.make<void>();
+    const gatedDriver: typeof CodexDriver = {
+      ...CodexDriver,
+      create: (input) =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(armed)) {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(released);
+          }
+          return yield* CodexDriver.create(input);
+        }),
+    };
+    return {
+      gatedDriver,
+      arm: Ref.set(armed, true),
+      disarm: Ref.set(armed, false),
+      awaitEntered: Deferred.await(entered),
+      release: Deferred.succeed(released, undefined),
+    };
+  });
+
+  /** A codex driver that fails `create` while the returned ref says so. */
+  const makeFailingCreate = Effect.gen(function* () {
+    const failing = yield* Ref.make(false);
+    const failingDriver: typeof CodexDriver = {
+      ...CodexDriver,
+      create: (input) =>
+        Effect.gen(function* () {
+          if (yield* Ref.get(failing)) {
+            return yield* Effect.fail(
+              new ProviderDriverError({
+                driver: codexDriverKind,
+                instanceId: input.instanceId,
+                detail: "secret store is locked",
+              }),
+            );
+          }
+          return yield* CodexDriver.create(input);
+        }),
+    };
+    return { failingDriver, setFailing: (value: boolean) => Ref.set(failing, value) };
+  });
+
+  it.live("replaces only the instance the predicate accepts, in place", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+      const before = yield* registry.listInstances;
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(
+        firstId,
+        (entry) => entry.environment !== undefined,
+      );
+
+      expect(rebuilt).toBe(true);
+      const after = yield* registry.listInstances;
+      // Order is settings-author order, not "rebuilt last".
+      expect(after.map((instance) => instance.instanceId)).toEqual([firstId, secondId]);
+      // The accepted instance is a genuinely new bundle; its neighbour is
+      // untouched, which is what keeps a refresh from restarting every
+      // provider on the machine.
+      expect(after[0]).not.toBe(before[0]);
+      expect(after[1]).toBe(before[1]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("leaves the instance alone when the predicate declines", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+      const before = yield* registry.listInstances;
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(secondId, () => false);
+
+      expect(rebuilt).toBe(false);
+      expect(yield* registry.listInstances).toEqual(before);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("treats an unknown instance id as a no-op", () =>
+    Effect.gen(function* () {
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+      });
+
+      const rebuilt = yield* registry.rebuildInstanceWhen(
+        ProviderInstanceId.make("codex_missing"),
+        () => true,
+      );
+
+      expect(rebuilt).toBe(false);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("never serves the instance it is in the middle of replacing", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeCreateGate;
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [gate.gatedDriver],
+        configMap,
+      });
+      yield* gate.arm;
+
+      const rebuilding = yield* registry
+        .rebuildInstanceWhen(firstId, () => true)
+        .pipe(Effect.forkScoped);
+      yield* gate.awaitEntered;
+
+      // The window this covers is a real one: resolving a secret can park on
+      // a person at a biometric prompt. Handing out the old bundle here means
+      // handing out a closed scope.
+      expect(yield* registry.getInstance(firstId)).toBeUndefined();
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
+        secondId,
+      ]);
+      // Not routable, but not gone either: consumers prune ids they find in
+      // neither list, and the provider's card must not blink out of the UI for
+      // as long as a secret store takes to answer.
+      expect((yield* registry.listUnavailable).map((provider) => provider.instanceId)).toEqual([
+        firstId,
+      ]);
+
+      yield* gate.release;
+      expect(yield* Fiber.join(rebuilding)).toBe(true);
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
+        firstId,
+        secondId,
+      ]);
+      expect(yield* registry.listUnavailable).toEqual([]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("does not undo a settings change that lands during a rebuild", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeCreateGate;
+      const { registry, mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [gate.gatedDriver],
+        configMap,
+      });
+      yield* gate.arm;
+
+      const rebuilding = yield* registry
+        .rebuildInstanceWhen(firstId, () => true)
+        .pipe(Effect.forkScoped);
+      yield* gate.awaitEntered;
+      const reconciling = yield* mutator
+        .reconcile({ [firstId]: firstEntry })
+        .pipe(Effect.forkScoped);
+
+      yield* gate.release;
+      expect(yield* Fiber.join(rebuilding)).toBe(true);
+      yield* Fiber.join(reconciling);
+
+      // The removal sticks. A rebuild that wrote back the map it read before
+      // the removal would put the deleted instance back, pointing at a scope
+      // reconcile already closed.
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
+        firstId,
+      ]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  // Interruption is not exotic here: the request that asked for the refresh can
+  // go away while `op` is still waiting on a fingerprint.
+  it.live("keeps an interrupted rebuild retryable", () =>
+    Effect.gen(function* () {
+      const gate = yield* makeCreateGate;
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [gate.gatedDriver],
+        configMap,
+      });
+      yield* gate.arm;
+
+      const rebuilding = yield* registry
+        .rebuildInstanceWhen(firstId, () => true)
+        .pipe(Effect.forkScoped);
+      yield* gate.awaitEntered;
+      yield* Fiber.interrupt(rebuilding);
+
+      // The instance is not live and its envelope only ever existed in the
+      // registry, so a refresh that cannot find it here has nowhere else to
+      // look and the user waits on a settings edit to get it back.
+      yield* gate.disarm;
+      expect(yield* registry.rebuildInstanceWhen(firstId, () => true)).toBe(true);
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toContain(
+        firstId,
+      );
+      expect(yield* registry.listUnavailable).toEqual([]);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("retries an instance a previous rebuild could not bring back", () =>
+    Effect.gen(function* () {
+      const driver = yield* makeFailingCreate;
+      const { registry } = yield* makeProviderInstanceRegistry({
+        drivers: [driver.failingDriver],
+        configMap,
+      });
+
+      yield* driver.setFailing(true);
+      expect(yield* registry.rebuildInstanceWhen(firstId, () => true)).toBe(true);
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
+        secondId,
+      ]);
+      expect((yield* registry.listUnavailable).map((provider) => provider.instanceId)).toEqual([
+        firstId,
+      ]);
+
+      // The next refresh is a retry, not a lookup that finds nothing: a locked
+      // vault must not cost the user their instance until settings change.
+      yield* driver.setFailing(false);
+      expect(yield* registry.rebuildInstanceWhen(firstId, () => true)).toBe(true);
+      expect(yield* registry.listUnavailable).toEqual([]);
+      // Recovered last, where it already sat while unavailable; the next
+      // settings change restores settings-author order.
+      expect((yield* registry.listInstances).map((instance) => instance.instanceId)).toEqual([
+        secondId,
+        firstId,
+      ]);
     }).pipe(Effect.provide(testLayer)),
   );
 });
