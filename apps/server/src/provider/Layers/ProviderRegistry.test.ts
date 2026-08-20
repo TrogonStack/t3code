@@ -2051,13 +2051,46 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
               apiProvider: "firstParty",
             }),
-            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "stale-token" },
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-stale" },
           ).pipe(
             Effect.provide(claudeCredentialHttpLayer(() => new Response("no", { status: 401 }))),
           );
           assert.strictEqual(status.status, "error");
           assert.strictEqual(status.auth.status, "unauthenticated");
           assert.include(status.message ?? "", "CLAUDE_CODE_OAUTH_TOKEN");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("leaves the instance alone when the token is an unresolved reference", () =>
+        Effect.gen(function* () {
+          // Nothing resolved the reference into a credential, so Anthropic has
+          // no opinion worth asking for and the token is not what is wrong.
+          let requests = 0;
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+              apiProvider: "firstParty",
+            }),
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "op://Vault/item/credential" },
+          ).pipe(
+            Effect.provide(
+              claudeCredentialHttpLayer(() => {
+                requests += 1;
+                return new Response("no", { status: 401 });
+              }),
+            ),
+          );
+          assert.strictEqual(requests, 0);
+          assert.strictEqual(status.auth.status, "authenticated");
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {
@@ -2077,7 +2110,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
               apiProvider: "firstParty",
             }),
-            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "good-token" },
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-good" },
           ).pipe(Effect.provide(claudeCredentialHttpLayer(() => Response.json({ data: [] }))));
           assert.strictEqual(status.status, "ready");
           assert.strictEqual(status.auth.status, "authenticated");
@@ -2103,7 +2136,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
                 apiProvider: "firstParty",
               }),
-              { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "good-token" },
+              { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-good" },
             ).pipe(
               Effect.provide(
                 claudeCredentialHttpLayer(() => new Response("down", { status: 503 })),
@@ -2128,7 +2161,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const status = yield* checkClaudeProviderStatus(
             defaultClaudeSettings,
             claudeCapabilities({ tokenSource: "claude.ai", apiProvider: "firstParty" }),
-            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "ignored-by-the-cli" },
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-ignored-by-the-cli" },
           ).pipe(
             Effect.provide(
               claudeCredentialHttpLayer(() => {

@@ -72,9 +72,43 @@ describe("verifyClaudeOAuthToken", () => {
     }),
   );
 
+  it.effect("never asks Anthropic about an unresolved secret reference", () =>
+    Effect.gen(function* () {
+      // Nothing resolved this into a credential, so a 401 would be Anthropic
+      // answering a question about a string that was never a token.
+      let requests = 0;
+      const verdict = yield* verifyClaudeOAuthToken("op://Vault/item/credential").pipe(
+        Effect.provide(
+          httpClientLayer(() => {
+            requests += 1;
+            return new Response("no", { status: 401 });
+          }),
+        ),
+      );
+      assert.strictEqual(verdict, "unknown");
+      assert.strictEqual(requests, 0);
+    }),
+  );
+
+  it.effect("never asks Anthropic about a value that is not a credential", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+      const verdict = yield* verifyClaudeOAuthToken("${MY_TOKEN}").pipe(
+        Effect.provide(
+          httpClientLayer(() => {
+            requests += 1;
+            return new Response("no", { status: 401 });
+          }),
+        ),
+      );
+      assert.strictEqual(verdict, "unknown");
+      assert.strictEqual(requests, 0);
+    }),
+  );
+
   it.effect("reports a rejected token on 401", () =>
     Effect.gen(function* () {
-      const verdict = yield* verifyClaudeOAuthToken("stale").pipe(
+      const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-stale").pipe(
         Effect.provide(httpClientLayer(() => new Response("unauthorized", { status: 401 }))),
       );
       assert.strictEqual(verdict, "rejected");
@@ -83,7 +117,7 @@ describe("verifyClaudeOAuthToken", () => {
 
   it.effect("stays unknown when the account merely lacks scope", () =>
     Effect.gen(function* () {
-      const verdict = yield* verifyClaudeOAuthToken("scoped-out").pipe(
+      const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-scoped-out").pipe(
         Effect.provide(httpClientLayer(() => new Response("forbidden", { status: 403 }))),
       );
       assert.strictEqual(verdict, "unknown");
@@ -92,7 +126,7 @@ describe("verifyClaudeOAuthToken", () => {
 
   it.effect("stays unknown when Anthropic is down", () =>
     Effect.gen(function* () {
-      const verdict = yield* verifyClaudeOAuthToken("fine").pipe(
+      const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-fine").pipe(
         Effect.provide(httpClientLayer(() => new Response("boom", { status: 503 }))),
       );
       assert.strictEqual(verdict, "unknown");
@@ -101,7 +135,7 @@ describe("verifyClaudeOAuthToken", () => {
 
   it.effect("stays unknown when the request never leaves the machine", () =>
     Effect.gen(function* () {
-      const verdict = yield* verifyClaudeOAuthToken("fine").pipe(
+      const verdict = yield* verifyClaudeOAuthToken("sk-ant-oat01-fine").pipe(
         Effect.provide(transportFailureLayer),
       );
       assert.strictEqual(verdict, "unknown");

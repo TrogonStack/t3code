@@ -231,6 +231,10 @@ claude setup-token
 
 Then use Refresh provider status in Settings to check it again.
 
+A value that is not an Anthropic credential never causes this message either. T3 Code only asks
+Anthropic about something that looks like one, so a placeholder or an unresolved reference leaves
+the provider's status alone rather than blaming a token that was never there.
+
 A network problem never causes this message. If T3 Code cannot reach Anthropic at all, the
 provider keeps whatever status it already had.
 

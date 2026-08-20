@@ -9,6 +9,9 @@
   If Anthropic has stopped accepting that token, Settings says so and tells you
   to mint a new one, instead of reporting the instance as authenticated until
   the first message you send it fails.
+- Keep the status you had when the value is not a credential at all. A
+  placeholder, or a reference to a secret store that nothing resolved, leaves
+  the instance as it was instead of blaming a token that was never there.
 - Keep the status you had when the network is the problem. An outage, a proxy,
   or a captive portal leaves the instance exactly as it was, so a bad connection
   never looks like a revoked credential.

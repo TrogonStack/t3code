@@ -11,6 +11,11 @@
  * accepts the token, costs no message quota, and answers the only question
  * worth asking: does Anthropic still accept this credential.
  *
+ * Only a value that looks like an Anthropic credential is ever sent. Anything
+ * else is a question for someone other than Anthropic, and a `401` earned by an
+ * unresolved secret reference or a placeholder would blame the token for a
+ * problem that is not the token's.
+ *
  * @module provider/Drivers/ClaudeCredential
  */
 import * as Duration from "effect/Duration";
@@ -28,6 +33,8 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 export type ClaudeCredentialVerdict = "live" | "rejected" | "unknown";
 
 const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models?limit=1";
+/** Shared by Anthropic setup tokens (`sk-ant-oat01-`) and API keys (`sk-ant-api03-`). */
+const ANTHROPIC_CREDENTIAL_PREFIX = "sk-ant-";
 const ANTHROPIC_VERSION_HEADER = "2023-06-01";
 const VERIFY_TIMEOUT = Duration.seconds(10);
 
@@ -48,12 +55,16 @@ export function claudeOAuthTokenFromEnvironment(
 /**
  * Ask Anthropic whether it still accepts `token`.
  *
- * Never fails: transport errors, timeouts, and every non-401 status collapse to
- * `unknown` so the caller can leave the existing status alone.
+ * Never fails: a value that is not an Anthropic credential, transport errors,
+ * timeouts, and every non-401 status all collapse to `unknown` so the caller
+ * can leave the existing status alone.
  */
 export const verifyClaudeOAuthToken = Effect.fn("verifyClaudeOAuthToken")(function* (
   token: string,
 ): Effect.fn.Return<ClaudeCredentialVerdict, never, HttpClient.HttpClient> {
+  if (!token.startsWith(ANTHROPIC_CREDENTIAL_PREFIX)) {
+    return "unknown";
+  }
   const client = yield* HttpClient.HttpClient;
   const request = HttpClientRequest.get(ANTHROPIC_MODELS_URL).pipe(
     HttpClientRequest.setHeader("authorization", `Bearer ${token}`),

@@ -117,8 +117,11 @@ because it is the cheapest first-party endpoint that accepts the token and costs
 The status check runs it from the same path that already spawns the probe, so it inherits the
 provider health cadence and needs no cache of its own.
 
-Three decisions carry the behavior:
+Four decisions carry the behavior:
 
+- Only a value carrying Anthropic's `sk-ant-` credential prefix is ever sent. A placeholder, or a
+  secret reference nothing resolved, earns a `401` that says nothing about the token, and acting on
+  it would blame the credential for a problem one layer up.
 - Only an explicit `401` counts. Timeouts, transport errors, `403`, and every 5xx answer `unknown`,
   because a proxy or an outage must never sign a working install out of Settings.
 - The check only ever downgrades. It runs after the probe has already concluded the instance is
