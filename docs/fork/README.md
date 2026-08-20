@@ -43,3 +43,5 @@ Each entry uses these sections:
   active, [#20](https://github.com/TrogonStack/t3code/pull/20)
 - **0012** [The timeline scrolls only as far as its content](./0012-timeline-scrolls-only-as-far-as-its-content.md)
   active, [#21](https://github.com/TrogonStack/t3code/pull/21)
+- **0013** [Keep your place in a long review](./0013-keep-your-place-in-a-review.md)
+  active, [#23](https://github.com/TrogonStack/t3code/pull/23)
