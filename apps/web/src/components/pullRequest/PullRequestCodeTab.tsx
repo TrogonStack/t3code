@@ -58,6 +58,7 @@ import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   DropdownMenu,
@@ -73,9 +74,11 @@ import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import {
   isFileDiffCollapsed,
   isLineInFileDiff,
+  toggleFileDiffFoldForViewed,
   type DiffFoldOverride,
 } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
+import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
 import {
   nextPendingReviewCommentId,
   pullRequestReviewKey,
@@ -396,6 +399,17 @@ export function PullRequestCodeTab({
       ),
     [parsedSlices],
   );
+  const filePaths = useMemo(() => files.map((file) => resolveFileDiffPath(file)), [files]);
+  // Offered under a commit scope as well as from the whole change, because reading a change one
+  // commit at a time is what the scope is for. The tick itself stays the host's: it is kept
+  // against the change request, so clearing a file here clears it everywhere.
+  const filesViewed = usePullRequestFilesViewed({
+    environmentId,
+    reference,
+    enabled: detail.capabilities.viewedFiles === true,
+    paths: filePaths,
+  });
+  const { setViewed } = filesViewed;
   const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
   // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
   // not structure and so dropped. Neither says anything about there being more to fetch.
@@ -587,6 +601,19 @@ export function PullRequestCodeTab({
     [],
   );
 
+  // The tick and the fold are one gesture: clearing a file puts it away, un-clearing brings it
+  // back. Folding is still held as the reader's difference from the toolbar's default rather
+  // than derived from what has been ticked, so folding everything ticks nothing off.
+  const setFileViewed = useCallback(
+    (fileKey: string, path: string, viewed: boolean) => {
+      setViewed(path, viewed);
+      setToggledFiles((current) =>
+        toggleFileDiffFoldForViewed(fileKey, viewed, foldOverride, current),
+      );
+    },
+    [foldOverride, setViewed],
+  );
+
   const toggleAllFiles = () => {
     // Held as an override of the default rather than as the file keys on screen: a diff that is
     // still paging would otherwise bring its next slice in folded, moments after the reader
@@ -722,19 +749,51 @@ export function PullRequestCodeTab({
         additions += hunk.additionLines;
         deletions += hunk.deletionLines;
       }
+      const path = resolveFileDiffPath(item.fileDiff);
       if (additions === 0 && deletions === 0) {
-        const withheld = omittedFileStats.get(resolveFileDiffPath(item.fileDiff));
+        const withheld = omittedFileStats.get(path);
         if (withheld) ({ additions, deletions } = withheld);
       }
-      return (
+      const stat = (
         <PullRequestDiffStat
           additions={additions}
           deletions={deletions}
           className="font-mono text-[11px]"
         />
       );
+      if (!filesViewed.enabled) return stat;
+      const viewed = filesViewed.isViewed(path);
+      const stale = filesViewed.isStale(path);
+      return (
+        <span className="flex items-center gap-3">
+          {stat}
+          {/* The header itself folds the file, so the tick has to keep its press to itself. */}
+          <label
+            className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Checkbox
+              checked={viewed}
+              className="size-3.5"
+              onCheckedChange={(next) => setFileViewed(item.id, path, next === true)}
+            />
+            {stale ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="text-amber-600 dark:text-amber-500" />}>
+                  Changed
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  This file has been pushed to since you marked it viewed.
+                </TooltipPopup>
+              </Tooltip>
+            ) : (
+              "Viewed"
+            )}
+          </label>
+        </span>
+      );
     },
-    [omittedFileStats],
+    [filesViewed, omittedFileStats, setFileViewed],
   );
 
   const diffViewOptions = useMemo(
@@ -1058,6 +1117,11 @@ export function PullRequestCodeTab({
             {files.length} {files.length === 1 ? "file" : "files"}
             {nextCursor === null ? "" : "+"}
           </span>
+          {filesViewed.enabled && files.length > 0 ? (
+            <span className="shrink-0 tabular-nums">
+              {filesViewed.viewedCount} / {files.length} viewed
+            </span>
+          ) : null}
           {withheldContent ? (
             <Tooltip>
               <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
