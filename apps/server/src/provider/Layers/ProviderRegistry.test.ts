@@ -1769,6 +1769,95 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }),
       );
 
+      it.effect("reads every boot instance's secret before building any of them", () =>
+        Effect.gen(function* () {
+          const claudeReference = "op://Vault/claude/token";
+          const codexReference = "op://Vault/codex/token";
+          // `streamChanges` carries later writes only, so the watcher never
+          // sees this snapshot. Boot is the run where nothing is cached yet
+          // and therefore the one that pays the most prompts without priming.
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  codex: { enabled: false },
+                  claudeAgent: { enabled: false },
+                  cursor: { enabled: false },
+                  grok: { enabled: false },
+                  opencode: { enabled: false },
+                },
+                providerInstances: {
+                  claude_secret: {
+                    driver: "claudeAgent",
+                    displayName: "Claude Secret",
+                    enabled: false,
+                    environment: [
+                      { name: "CLAUDE_CODE_OAUTH_TOKEN", value: claudeReference, sensitive: true },
+                    ],
+                  },
+                  codex_secret: {
+                    driver: "codex",
+                    displayName: "Codex Secret",
+                    enabled: false,
+                    environment: [{ name: "TOKEN", value: codexReference, sensitive: true }],
+                  },
+                } as unknown as ContractServerSettings["providerInstances"],
+              }),
+            ),
+          );
+
+          const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+          const recordingSecretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: (environment) =>
+              Ref.update(calls, (previous) => [...previous, "resolve"]).pipe(
+                Effect.as({ variables: environment, unresolved: [] }),
+              ),
+            prime: (references) =>
+              Ref.update(calls, (previous) => [
+                ...previous,
+                `prime:${Array.from(references).join(",")}`,
+              ]).pipe(Effect.asVoid),
+            invalidate: Effect.void,
+          });
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          yield* Layer.build(
+            ProviderInstanceRegistryHydrationLive.pipe(
+              Layer.provideMerge(
+                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+              ),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-boot-prime-",
+                }),
+              ),
+              Layer.provideMerge(TestHttpClientLive),
+              Layer.provideMerge(
+                Layer.succeed(
+                  ProviderEventLoggers.ProviderEventLoggers,
+                  ProviderEventLoggers.NoOpProviderEventLoggers,
+                ),
+              ),
+              Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+              Layer.provideMerge(recordingSecretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          // Both references in one call, and that call ahead of the first
+          // instance that would have read one on its own.
+          const recorded = yield* Ref.get(calls);
+          assert.strictEqual(
+            recorded[0],
+            `prime:${claudeReference},${codexReference}`,
+            `Expected boot to prime both references first; instead saw: ${recorded.join(" | ")}`,
+          );
+          assert.strictEqual(recorded.filter((entry) => entry.startsWith("prime")).length, 1);
+        }),
+      );
+
       // Guards the second half of the reported bug: changing
       // `providers.codex.binaryPath` in settings must tear down the live
       // instance and rebuild it so a fresh probe runs with the new binary.
