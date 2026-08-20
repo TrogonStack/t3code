@@ -53,8 +53,10 @@ import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
+import { collectProviderSecretReferences } from "../ProviderSecretReference.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
+import { ProviderSecretResolver } from "../Services/ProviderSecretResolver.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
 
 /**
@@ -118,16 +120,27 @@ const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
+    const secretResolver = yield* ProviderSecretResolver;
     yield* serverSettings.streamChanges.pipe(
-      Stream.runForEach((next) =>
-        mutator
-          .reconcile(deriveProviderInstanceConfigMap(next))
+      Stream.runForEach((next) => {
+        const configMap = deriveProviderInstanceConfigMap(next);
+        // Every instance about to be built resolves its own environment, and
+        // the secret store charges an unlock per read. Resolving the whole
+        // settings file's references first turns a fleet's worth of prompts
+        // into one, which matters most at boot when nothing is cached yet.
+        return secretResolver
+          .prime(
+            collectProviderSecretReferences(
+              Object.values(configMap).map((entry) => entry.environment),
+            ),
+          )
+          .pipe(Effect.andThen(mutator.reconcile(configMap)))
           .pipe(
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
             ),
-          ),
-      ),
+          );
+      }),
       Effect.forkScoped,
     );
   }),

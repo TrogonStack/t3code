@@ -59,8 +59,9 @@ Each reference is read one time and held in memory for the life of the server. S
 sending a message, and the background provider status check all reuse the value that was already
 read, so a locked vault prompts you once rather than every few minutes.
 
-Providers with more than one reference are read one after another, so a single unlock covers all of
-them.
+One unlock covers every reference T3 Code needs, across every provider. Starting the server and
+refreshing provider status both read the whole set in a single request to 1Password, so five
+providers backed by references cost the same one approval that one provider does.
 
 ## I Rotated The Secret, How Do I Pick Up The New One
 

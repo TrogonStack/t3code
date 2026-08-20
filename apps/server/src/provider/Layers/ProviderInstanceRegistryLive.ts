@@ -38,6 +38,7 @@ import {
   ProviderInstanceId,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
+  type ProviderInstanceEnvironment,
   type ProviderDriverKind,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -520,6 +521,18 @@ export const makeProviderInstanceRegistry = <R>(input: {
       listUnavailable: Ref.get(unavailable).pipe(
         Effect.map((map) => Array.from(map.values()) as ReadonlyArray<ServerProvider>),
       ),
+      listEnvironments: Effect.gen(function* () {
+        const environments = new Map<ProviderInstanceId, ProviderInstanceEnvironment | undefined>();
+        for (const [instanceId, entry] of yield* Ref.get(rebuildable)) {
+          environments.set(instanceId, entry.environment);
+        }
+        // Live entries are written second so an instance that is both live and
+        // pending a retry reports the configuration it is actually running.
+        for (const [instanceId, live] of yield* Ref.get(entries)) {
+          environments.set(instanceId, live.entry.environment);
+        }
+        return environments;
+      }),
       rebuildInstanceWhen,
       // Getters: each read constructs a fresh Stream / Effect descriptor
       // so multiple consumers don't share a single already-started

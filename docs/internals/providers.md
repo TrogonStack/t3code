@@ -59,9 +59,19 @@ Three decisions are load-bearing:
   leaving the name out of the resolved list: the child environment starts from the server's own, so
   a name left alone keeps whatever the server inherited under it, and the agent would quietly run
   as a different account than the one the instance names.
-- **Reads are sequential.** `resolve` walks the environment with a plain loop instead of
-  `Effect.forEach` with concurrency, so an instance carrying four references produces one biometric
-  prompt rather than four simultaneous ones.
+- **Reads are batched across instances, and sequential within one.** The store charges an unlock per
+  `op` invocation, not per secret, and every instance resolves its own environment inside `create`,
+  so a fleet would otherwise cost one prompt per provider. `prime` reads the whole set in a single
+  `op inject` before the builds start, called from the settings watcher (which covers boot) and from
+  `reloadSecretBackedInstances` (which covers the refresh button). Whatever `prime` misses,
+  `resolve` still walks with a plain loop rather than `Effect.forEach` with concurrency, so it
+  produces one prompt rather than several simultaneous ones.
+- **Priming can only ever help.** It is best effort and never fails: `op inject` resolves the whole
+  template or fails it, so one bad reference would take the batch down with it. A batch that does
+  not come back leaves the cache exactly as cold as it found it and `resolve` falls back to reading
+  one reference at a time, which is both where the per-variable failure isolation lives and how the
+  user learns which reference is the broken one. A separator is generated per call because a secret
+  can contain anything, newlines included.
 - **Failures are cached alongside successes.** The `Cache` holds Exits, so a locked vault costs one
   prompt per refresh cycle instead of one per thread start. Recovery is the refresh button, not a
   timeout: the cache is built without a `timeToLive`.

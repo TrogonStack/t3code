@@ -37,6 +37,21 @@ export interface ProviderSecretResolverShape {
     environment: ProviderInstanceEnvironment | undefined,
   ) => Effect.Effect<ResolvedProviderInstanceEnvironment>;
   /**
+   * Resolve `references` ahead of the callers that will ask for them, in as
+   * few reads as the secret store allows.
+   *
+   * Unlocking is charged per invocation of the store's CLI, not per secret, so
+   * a caller about to build ten instances that each resolve their own
+   * environment would otherwise cost ten authorizations. Priming turns that
+   * into one.
+   *
+   * Purely an optimization, and deliberately best effort: it never fails, and
+   * a batch that does not come back leaves the cache exactly as cold as it
+   * found it, so `resolve` falls back to reading one reference at a time with
+   * the same per-variable failure isolation it has always had.
+   */
+  readonly prime: (references: ReadonlyArray<string>) => Effect.Effect<void>;
+  /**
    * Drop every cached secret. The next `resolve` re-reads from the store.
    * Callers that need the new value to reach a running provider must also
    * rebuild the instance: a provider process keeps the environment it was
@@ -58,6 +73,7 @@ export class ProviderSecretResolver extends Context.Service<
  */
 export const passthroughProviderSecretResolver: ProviderSecretResolverShape = {
   resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+  prime: () => Effect.void,
   invalidate: Effect.void,
 };
 
