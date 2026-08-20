@@ -390,7 +390,7 @@ export const PullRequestCapabilities = Schema.Struct({
    * every server before this field was.
    *
    * True on GitHub alone so far. The others expose no equivalent, and a checkbox whose mark is
-   * forgotten the moment the tab closes is worse than no checkbox — it looks like the one beside
+   * forgotten the moment the tab closes is worse than no checkbox: it looks like the one beside
    * it and keeps none of its promises.
    */
   viewedFiles: Schema.optional(Schema.Boolean),
@@ -814,7 +814,7 @@ export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileConten
  * Where one file of a change request stands with the person reading it.
  *
  * `dismissed` is the state that earns this its own read: the file was cleared, and has since been
- * pushed to. It is not `viewed` — the reader has not seen what is there now — and it is not
+ * pushed to. It is not `viewed`, since the reader has not seen what is there now, and it is not
  * `unviewed` either, because saying so would lose the one thing worth telling them, which is that
  * this file and not the other forty is the one that moved.
  */

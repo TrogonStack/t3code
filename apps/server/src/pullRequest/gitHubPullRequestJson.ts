@@ -2244,10 +2244,10 @@ export function decodePullRequestFilesJson(
 /**
  * Which files of a pull request the signed-in account has cleared.
  *
- * GraphQL only — the REST files endpoint the patch is read from carries no viewed state at all,
- * so this is a second read rather than a wider version of the first. One page of a hundred files
- * costs a single point of the hourly budget, which is why it can ride the diff's own refresh
- * without being noticed.
+ * GraphQL only, since the REST files endpoint the patch is read from carries no viewed state at
+ * all, so this is a second read rather than a wider version of the first. One page of a hundred
+ * files costs a single point of the hourly budget, which is why it can ride the diff's own
+ * refresh without being noticed.
  */
 export const PULL_REQUEST_FILES_VIEWED_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -2335,8 +2335,8 @@ export function decodePullRequestFilesViewedJson(
  * One document that clears and restores as many files as the reader ticked, rather than one
  * request each.
  *
- * GitHub has no bulk form of either mutation — `markFileAsViewed` and `unmarkFileAsViewed` take a
- * single path — so the batching is done with aliases. Top-level mutation fields run in the order
+ * GitHub has no bulk form of either mutation, and `markFileAsViewed` and `unmarkFileAsViewed`
+ * take a single path, so the batching is done with aliases. Top-level mutation fields run in the order
  * they are written, so the last word about a path is the one that sticks, and the whole burst
  * costs one HTTP round trip and one subprocess instead of one of each per press.
  *

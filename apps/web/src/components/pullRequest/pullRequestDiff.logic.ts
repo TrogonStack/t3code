@@ -47,7 +47,7 @@ export function isFileDiffCollapsed(
  * The reader's fold choices after a file was ticked off, or put back.
  *
  * Clearing a file puts it away and un-clearing brings it back, so the tick moves the fold as if
- * the reader had pressed the chevron themselves — which keeps folding a difference from what the
+ * the reader had pressed the chevron themselves, which keeps folding a difference from what the
  * toolbar last asked, and so keeps "collapse all" from ticking anything off.
  */
 export function toggleFileDiffFoldForViewed(
