@@ -48,4 +48,4 @@ Each entry uses these sections:
 - **0015** [A logged-out Claude install reads as logged out](./0015-a-logged-out-claude-install-reads-as-logged-out.md)
   active, [#26](https://github.com/TrogonStack/t3code/pull/26)
 - **0016** [Provider secrets can live in 1Password](./0016-provider-secrets-live-in-1password.md)
-  active
+  active, [#27](https://github.com/TrogonStack/t3code/pull/27)

@@ -1,6 +1,6 @@
 # 0016: Provider secrets can live in 1Password
 
-- PR: pending
+- PR: [TrogonStack/t3code#27](https://github.com/TrogonStack/t3code/pull/27)
 - Status: active
 
 ## What you can do now
