@@ -774,8 +774,11 @@ export function PullRequestCodeTab({
       return (
         <span className="flex items-center gap-3">
           {stat}
-          {/* The header itself folds the file, so the tick has to keep its press to itself. */}
+          {/* The header itself folds the file, so the tick has to keep its press to itself. The
+              attribute is what the header's capture listener looks for: pressing the word next to
+              the box is pressing the box, and the fold that follows is the tick's to make. */}
           <label
+            data-viewed-toggle=""
             className="flex cursor-pointer select-none items-center gap-1.5 text-[11px] text-muted-foreground"
             onClick={(event) => event.stopPropagation()}
           >
@@ -1411,6 +1414,10 @@ export function PullRequestCodeTab({
               if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
                 return;
               }
+              // A label answers for the control it names, and this listener runs before that
+              // control hears anything, so stopping the press here is the only way to keep the
+              // header from folding a file the tick is about to fold the other way.
+              if (node.hasAttribute("data-viewed-toggle")) return;
               if (node.hasAttribute("data-diffs-header")) {
                 const filePath = node.querySelector("[data-title]")?.textContent?.trim();
                 if (filePath === undefined || filePath === "") return;

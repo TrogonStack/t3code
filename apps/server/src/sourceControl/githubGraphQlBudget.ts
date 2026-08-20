@@ -15,12 +15,6 @@ interface GraphQlBudgetSnapshot {
   readonly limit: number;
   readonly remaining: number;
   readonly resetAtMs: number;
-  /**
-   * Points taken off `remaining` for writes the host has not answered for yet. A mutation cannot
-   * ask what it cost, so this is a guess, and while a guess is standing the host's own number is
-   * allowed to raise `remaining` again instead of being read as an out-of-order answer.
-   */
-  readonly estimatedSpend: number;
 }
 
 export class GitHubGraphQlBudget extends Context.Service<
@@ -29,14 +23,7 @@ export class GitHubGraphQlBudget extends Context.Service<
     readonly query: (
       host: string,
       document: string,
-      options?: {
-        readonly allowReserve?: boolean | undefined;
-        /**
-         * What a write is expected to spend, for the debit above. Ignored for a read, which
-         * reports its own cost. Defaults to one point, which is a mutation's floor.
-         */
-        readonly estimatedCost?: number | undefined;
-      },
+      options?: { readonly allowReserve: boolean },
     ) => Effect.Effect<string, SourceControlRateLimit.SourceControlRateLimitPausedError>;
     readonly observe: (host: string, raw: string) => Effect.Effect<void>;
   }
@@ -72,9 +59,7 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
       return null;
     }
     const resetAtMs = Date.parse(resetAt);
-    return Number.isFinite(resetAtMs)
-      ? { cost, limit, remaining, resetAtMs, estimatedSpend: 0 }
-      : null;
+    return Number.isFinite(resetAtMs) ? { cost, limit, remaining, resetAtMs } : null;
   } catch {
     return null;
   }
@@ -97,29 +82,8 @@ export const make = Effect.gen(function* () {
 
   const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
     function* (host, document, options) {
+      if (!isReadOperation(document)) return document;
       const now = yield* Clock.currentTimeMillis;
-      // A write spends the same hourly points a read does, and `rateLimit` is a field of Query
-      // alone, so a mutation cannot report its own cost and is debited from the held snapshot
-      // instead. Never paused, only counted: a mutation is somebody pressing something, and
-      // holding it back to protect a read nobody has asked for yet is the wrong trade. The
-      // estimate only has to last until the next read, whose answer replaces the snapshot with
-      // the host's own number.
-      if (!isReadOperation(document)) {
-        yield* Ref.update(snapshots, (current) => {
-          const key = hostKey(host);
-          const snapshot = current.get(key);
-          if (snapshot === undefined || snapshot.resetAtMs <= now) return current;
-          const spend = Math.max(1, options?.estimatedCost ?? 1);
-          const next = new Map(current);
-          next.set(key, {
-            ...snapshot,
-            remaining: Math.max(0, snapshot.remaining - spend),
-            estimatedSpend: snapshot.estimatedSpend + spend,
-          });
-          return next;
-        });
-        return document;
-      }
       const retryAt = yield* Ref.modify(snapshots, (current) => {
         const key = hostKey(host);
         const snapshot = current.get(key);
@@ -158,16 +122,10 @@ export const make = Effect.gen(function* () {
       const previous = current.get(key);
       // Concurrent reads can finish out of order. Quota only falls within one reset window, and
       // an answer from an older window must not replace the current one.
-      //
-      // Unless a write's guess is standing: that number was never the host's, and an estimate
-      // pitched too high would otherwise pause every read until the window reset, with the one
-      // answer that could correct it thrown away for looking stale.
       if (
         previous !== undefined &&
         (snapshot.resetAtMs < previous.resetAtMs ||
-          (snapshot.resetAtMs === previous.resetAtMs &&
-            previous.estimatedSpend === 0 &&
-            snapshot.remaining >= previous.remaining))
+          (snapshot.resetAtMs === previous.resetAtMs && snapshot.remaining >= previous.remaining))
       ) {
         return current;
       }
