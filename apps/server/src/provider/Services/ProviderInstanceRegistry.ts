@@ -19,6 +19,7 @@
  */
 import type {
   ProviderInstanceConfig,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ServerProvider,
 } from "@t3tools/contracts";
@@ -50,6 +51,19 @@ export interface ProviderInstanceRegistryShape {
    * directly into `ProviderRegistry` output.
    */
   readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
+  /**
+   * The configured environment of every instance the registry could rebuild,
+   * keyed by id. Covers the live instances and the ones whose last build
+   * failed, which is exactly the set `rebuildInstanceWhen` can act on.
+   *
+   * Exists so a caller that is about to rebuild several instances can inspect
+   * what they are configured with first. `ProviderRegistry` uses it to resolve
+   * every external secret in one go instead of once per rebuild; the registry
+   * itself stays ignorant of what any particular value means.
+   */
+  readonly listEnvironments: Effect.Effect<
+    ReadonlyMap<ProviderInstanceId, ProviderInstanceEnvironment | undefined>
+  >;
   /**
    * Tear one instance down and build it again from the configuration it
    * already has, but only when `shouldRebuild` accepts that configuration.

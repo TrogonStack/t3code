@@ -44,3 +44,27 @@ export function hasProviderSecretReference(
     environment?.some((variable) => providerSecretReference(variable.value) !== undefined) ?? false
   );
 }
+
+/**
+ * Every distinct secret reference across a set of environments, in the order
+ * they were first seen.
+ *
+ * Resolution is per reference but unlocking is per `op` invocation, so the
+ * caller that is about to build many instances wants the whole list up front:
+ * one call covering every reference costs one authorization, where one call
+ * per instance costs one each.
+ */
+export function collectProviderSecretReferences(
+  environments: Iterable<ProviderInstanceEnvironment | undefined>,
+): ReadonlyArray<string> {
+  const references = new Set<string>();
+  for (const environment of environments) {
+    for (const variable of environment ?? []) {
+      const reference = providerSecretReference(variable.value);
+      if (reference !== undefined) {
+        references.add(reference);
+      }
+    }
+  }
+  return Array.from(references);
+}

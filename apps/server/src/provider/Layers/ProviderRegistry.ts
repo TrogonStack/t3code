@@ -44,7 +44,10 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderSecretResolver } from "../Services/ProviderSecretResolver.ts";
-import { hasProviderSecretReference } from "../ProviderSecretReference.ts";
+import {
+  collectProviderSecretReferences,
+  hasProviderSecretReference,
+} from "../ProviderSecretReference.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
 import {
   hydrateCachedProvider,
@@ -670,6 +673,14 @@ export const ProviderRegistryLive = Layer.effect(
             ...(yield* instanceRegistry.listUnavailable).map(snapshotInstanceKey),
           ]),
         );
+      // Resolve every reference the rebuilds are about to need, in one read.
+      // Each rebuild resolves its own environment, and the secret store
+      // charges an unlock per read rather than per secret, so without this a
+      // fleet of five instances is five authorizations for one refresh.
+      const environments = yield* instanceRegistry.listEnvironments;
+      yield* secretResolver.prime(
+        collectProviderSecretReferences(targets.map((instanceId) => environments.get(instanceId))),
+      );
       const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
         instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
           hasProviderSecretReference(entry.environment),

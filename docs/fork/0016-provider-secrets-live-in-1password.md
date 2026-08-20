@@ -12,8 +12,10 @@
   never written to the settings file or to T3 Code's secret store.
 - Unlock your vault once instead of all day. Each reference is read a single
   time and held in memory for the life of the server, so starting a thread,
-  sending a message, and the background status check all reuse it. A provider
-  carrying several references still asks once.
+  sending a message, and the background status check all reuse it. One approval
+  covers every reference across every provider, so a machine running five
+  providers on references costs the same single unlock that one provider does,
+  both at startup and on a refresh.
 - Rotate a secret and pick it up without restarting anything. Refreshing
   provider status in Settings goes back to 1Password and rebuilds only the
   providers that read from it. Threads already running keep working.

@@ -2,7 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { hasProviderSecretReference, providerSecretReference } from "./ProviderSecretReference.ts";
+import {
+  collectProviderSecretReferences,
+  hasProviderSecretReference,
+  providerSecretReference,
+} from "./ProviderSecretReference.ts";
 
 const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
 
@@ -54,5 +58,39 @@ describe("hasProviderSecretReference", () => {
         ]),
       ),
     ).toBe(false);
+  });
+});
+
+describe("collectProviderSecretReferences", () => {
+  it("returns each distinct reference once, in first-seen order", () => {
+    const shared = "op://Private/shared/credential";
+    const environments = [
+      decodeEnvironment([
+        { name: "CLAUDE_CODE_OAUTH_TOKEN", value: shared, sensitive: true },
+        { name: "HOME", value: "/home/u" },
+      ]),
+      undefined,
+      decodeEnvironment([
+        { name: "CODEX_TOKEN", value: "op://Private/codex/credential", sensitive: true },
+        // The same item behind two providers is one read, not two.
+        { name: "OTHER_TOKEN", value: shared, sensitive: true },
+      ]),
+    ];
+
+    expect(Array.from(collectProviderSecretReferences(environments))).toEqual([
+      shared,
+      "op://Private/codex/credential",
+    ]);
+  });
+
+  it("is empty when nothing reads from a secret store", () => {
+    expect(
+      Array.from(
+        collectProviderSecretReferences([
+          decodeEnvironment([{ name: "HOME", value: "/home/u" }]),
+          undefined,
+        ]),
+      ),
+    ).toEqual([]);
   });
 });

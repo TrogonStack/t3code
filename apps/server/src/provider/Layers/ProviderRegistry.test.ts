@@ -881,6 +881,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               listUnavailable: Effect.succeed([]),
               rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
             },
           );
@@ -955,6 +956,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
             resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            prime: () => Effect.void,
             invalidate: Ref.update(invalidations, (count) => count + 1),
           });
           const instanceRegistryLayer = Layer.succeed(
@@ -976,6 +978,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                     )
                   : Effect.succeed(false),
               streamChanges: Stream.empty,
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
             },
           );
@@ -1031,6 +1034,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
             resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            prime: () => Effect.void,
             invalidate: Effect.void,
           });
           const instanceRegistryLayer = Layer.succeed(
@@ -1051,6 +1055,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                     )
                   : Effect.succeed(false),
               streamChanges: Stream.empty,
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
             },
           );
@@ -1075,6 +1080,101 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             yield* registry.refresh();
 
             assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      it.effect("reads every instance's secret in one go before rebuilding any of them", () =>
+        Effect.gen(function* () {
+          const codexDriver = ProviderDriverKind.make("codex");
+          const claudeInstanceId = ProviderInstanceId.make("claude");
+          const codexInstanceId = ProviderInstanceId.make("codex");
+          const claudeReference = "op://Vault/claude/token";
+          const codexReference = "op://Vault/codex/token";
+          const unavailableProvider = (instanceId: ProviderInstanceId) =>
+            ({
+              instanceId,
+              driver: codexDriver,
+              status: "error",
+              enabled: true,
+              installed: false,
+              auth: { status: "unknown" },
+              checkedAt: "2026-06-10T00:00:00.000Z",
+              version: null,
+              models: [],
+              slashCommands: [],
+              skills: [],
+              message: "Driver 'codex' failed to create instance: secret store is locked",
+            }) as const satisfies ServerProvider;
+
+          const primed = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+          const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+          const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            prime: (references) =>
+              Ref.update(primed, (previous) => [...previous, references]).pipe(Effect.asVoid),
+            invalidate: Effect.void,
+          });
+          const environmentFor = (reference: string) => [
+            { name: "TOKEN", value: reference, sensitive: true },
+          ];
+          const instanceRegistryLayer = Layer.succeed(
+            ProviderInstanceRegistry.ProviderInstanceRegistry,
+            {
+              getInstance: () => Effect.succeed(undefined),
+              listInstances: Effect.succeed([]),
+              listUnavailable: Effect.succeed([
+                unavailableProvider(claudeInstanceId),
+                unavailableProvider(codexInstanceId),
+              ]),
+              listEnvironments: Effect.succeed(
+                new Map([
+                  [claudeInstanceId, environmentFor(claudeReference)],
+                  [codexInstanceId, environmentFor(codexReference)],
+                ]),
+              ),
+              rebuildInstanceWhen: (instanceId, shouldRebuild) =>
+                shouldRebuild({
+                  driver: codexDriver,
+                  environment: environmentFor(
+                    instanceId === claudeInstanceId ? claudeReference : codexReference,
+                  ),
+                })
+                  ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
+                      Effect.as(true),
+                    )
+                  : Effect.succeed(false),
+              streamChanges: Stream.empty,
+              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+            },
+          );
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const runtimeServices = yield* Layer.build(
+            ProviderRegistryLive.pipe(
+              Layer.provideMerge(instanceRegistryLayer),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-secret-prime-",
+                }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(secretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            yield* registry.refresh();
+
+            // One call carrying both references. Priming per instance would be
+            // one unlock prompt per provider, which is the thing this exists to
+            // avoid, so the count matters as much as the contents.
+            const calls = yield* Ref.get(primed);
+            assert.strictEqual(calls.length, 1);
+            assert.deepStrictEqual(Array.from(calls[0] ?? []), [claudeReference, codexReference]);
+            assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [claudeInstanceId, codexInstanceId]);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );
@@ -1145,6 +1245,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               listUnavailable: Effect.succeed([]),
               rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                 PubSub.subscribe(pubsub),
               ),
@@ -1276,6 +1377,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 listUnavailable: Effect.succeed([]),
                 rebuildInstanceWhen: () => Effect.succeed(false),
                 streamChanges: Stream.empty,
+                listEnvironments: Effect.succeed(new Map()),
                 subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                   PubSub.subscribe(pubsub),
                 ),
@@ -1385,6 +1487,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               listUnavailable: Effect.succeed([]),
               rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                 PubSub.subscribe(pubsub),
               ),
@@ -1497,6 +1600,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               listUnavailable: Effect.succeed([]),
               rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.fromPubSub(changes),
+              listEnvironments: Effect.succeed(new Map()),
               subscribeChanges: PubSub.subscribe(changes),
             },
           );
@@ -1662,6 +1766,95 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               "Codex CLI (`codex`) is not installed or not on PATH.",
             );
           }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      it.effect("reads every boot instance's secret before building any of them", () =>
+        Effect.gen(function* () {
+          const claudeReference = "op://Vault/claude/token";
+          const codexReference = "op://Vault/codex/token";
+          // `streamChanges` carries later writes only, so the watcher never
+          // sees this snapshot. Boot is the run where nothing is cached yet
+          // and therefore the one that pays the most prompts without priming.
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  codex: { enabled: false },
+                  claudeAgent: { enabled: false },
+                  cursor: { enabled: false },
+                  grok: { enabled: false },
+                  opencode: { enabled: false },
+                },
+                providerInstances: {
+                  claude_secret: {
+                    driver: "claudeAgent",
+                    displayName: "Claude Secret",
+                    enabled: false,
+                    environment: [
+                      { name: "CLAUDE_CODE_OAUTH_TOKEN", value: claudeReference, sensitive: true },
+                    ],
+                  },
+                  codex_secret: {
+                    driver: "codex",
+                    displayName: "Codex Secret",
+                    enabled: false,
+                    environment: [{ name: "TOKEN", value: codexReference, sensitive: true }],
+                  },
+                } as unknown as ContractServerSettings["providerInstances"],
+              }),
+            ),
+          );
+
+          const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+          const recordingSecretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+            resolve: (environment) =>
+              Ref.update(calls, (previous) => [...previous, "resolve"]).pipe(
+                Effect.as({ variables: environment, unresolved: [] }),
+              ),
+            prime: (references) =>
+              Ref.update(calls, (previous) => [
+                ...previous,
+                `prime:${Array.from(references).join(",")}`,
+              ]).pipe(Effect.asVoid),
+            invalidate: Effect.void,
+          });
+
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          yield* Layer.build(
+            ProviderInstanceRegistryHydrationLive.pipe(
+              Layer.provideMerge(
+                Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+              ),
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), {
+                  prefix: "t3-provider-registry-boot-prime-",
+                }),
+              ),
+              Layer.provideMerge(TestHttpClientLive),
+              Layer.provideMerge(
+                Layer.succeed(
+                  ProviderEventLoggers.ProviderEventLoggers,
+                  ProviderEventLoggers.NoOpProviderEventLoggers,
+                ),
+              ),
+              Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+              Layer.provideMerge(NodeServices.layer),
+              Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+              Layer.provideMerge(recordingSecretResolverLayer),
+            ),
+          ).pipe(Scope.provide(scope));
+
+          // Both references in one call, and that call ahead of the first
+          // instance that would have read one on its own.
+          const recorded = yield* Ref.get(calls);
+          assert.strictEqual(
+            recorded[0],
+            `prime:${claudeReference},${codexReference}`,
+            `Expected boot to prime both references first; instead saw: ${recorded.join(" | ")}`,
+          );
+          assert.strictEqual(recorded.filter((entry) => entry.startsWith("prime")).length, 1);
         }),
       );
 

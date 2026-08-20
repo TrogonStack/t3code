@@ -29,7 +29,9 @@
  * ----------
  * On layer build we:
  *   1. Read the current `ServerSettings` once and use it to seed the
- *      registry's initial state via `ProviderInstanceRegistryMutableLayer`.
+ *      registry's initial state via `ProviderInstanceRegistryMutableLayer`,
+ *      priming that snapshot's secret references first so the whole boot
+ *      fleet costs one unlock rather than one per instance.
  *   2. Fork a daemon fiber (lifetime tied to the layer's scope) that
  *      subscribes to `ServerSettingsService.streamChanges` and calls
  *      `ProviderInstanceRegistryMutator.reconcile` on every emission.
@@ -53,8 +55,13 @@ import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
+import { collectProviderSecretReferences } from "../ProviderSecretReference.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
+import {
+  ProviderSecretResolver,
+  type ProviderSecretResolverShape,
+} from "../Services/ProviderSecretResolver.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
 
 /**
@@ -104,6 +111,20 @@ export const deriveProviderInstanceConfigMap = (
 };
 
 /**
+ * Read every secret the config map's instances are about to need, before any
+ * of them is built. Each instance resolves its own environment, and the secret
+ * store charges an unlock per read rather than per secret, so without this a
+ * fleet of five reference-backed providers is five authorizations.
+ */
+const primeConfigMapSecrets = (
+  secretResolver: ProviderSecretResolverShape,
+  configMap: ProviderInstanceConfigMap,
+) =>
+  secretResolver.prime(
+    collectProviderSecretReferences(Object.values(configMap).map((entry) => entry.environment)),
+  );
+
+/**
  * Layer that consumes `ProviderInstanceRegistryMutator` and forks a
  * settings-watcher fiber. The fiber's lifetime is tied to the enclosing
  * layer scope (process lifetime in production), so it is interrupted on
@@ -118,16 +139,18 @@ const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
+    const secretResolver = yield* ProviderSecretResolver;
     yield* serverSettings.streamChanges.pipe(
-      Stream.runForEach((next) =>
-        mutator
-          .reconcile(deriveProviderInstanceConfigMap(next))
+      Stream.runForEach((next) => {
+        const configMap = deriveProviderInstanceConfigMap(next);
+        return primeConfigMapSecrets(secretResolver, configMap)
+          .pipe(Effect.andThen(mutator.reconcile(configMap)))
           .pipe(
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
             ),
-          ),
-      ),
+          );
+      }),
       Effect.forkScoped,
     );
   }),
@@ -156,6 +179,7 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
+    const secretResolver = yield* ProviderSecretResolver;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -163,6 +187,10 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
       initialSettings === undefined
         ? ({} as ProviderInstanceConfigMap)
         : deriveProviderInstanceConfigMap(initialSettings);
+
+    // The watcher only sees later writes, so this snapshot is the whole boot
+    // fleet and the one place where nothing is cached yet.
+    yield* primeConfigMapSecrets(secretResolver, initialConfigMap);
 
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
