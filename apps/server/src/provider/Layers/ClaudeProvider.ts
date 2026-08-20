@@ -584,6 +584,12 @@ function apiProviderAuthMetadata(
  * found no token at all, and is the one shape that disproves authentication.
  * Everything else either names a credential or, on a third-party backend, omits
  * these fields by design because auth lives with AWS or gcloud instead.
+ *
+ * Silence is deliberately not disproof. Profile-authenticated installs report no
+ * token source, and a CLI too old to send an account payload reports nothing at
+ * all; treating either as logged out would sign working setups out of Settings.
+ * `apiKeySource` is only ever set when a key was actually found, so it has no
+ * "no key" sentinel to confuse with one.
  */
 export function claudeAuthStatus(
   capabilities: Pick<
