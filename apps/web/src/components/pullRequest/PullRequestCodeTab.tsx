@@ -485,6 +485,12 @@ export function PullRequestCodeTab({
         }
 
         const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
+        // The header carries the reader's own tick, and the viewer redraws a file only when its
+        // version moves. Ticking a file that is already folded changes no fold, so without this
+        // the box on screen would keep saying the opposite of what the count says.
+        const viewedMark = filesViewed.enabled
+          ? `${filesViewed.isViewed(path) ? "v" : ""}${filesViewed.isStale(path) ? "s" : ""}`
+          : "";
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -500,7 +506,7 @@ export function PullRequestCodeTab({
           // The viewer re-renders an item only when its version changes, so everything the
           // annotations show has to be part of it.
           version: fnv1a32(
-            `${collapsed ? "1" : "0"}:${annotations
+            `${collapsed ? "1" : "0"}:${viewedMark}:${annotations
               .map(
                 ({ side, lineNumber, metadata }) =>
                   `${side}:${lineNumber}:${metadata.draft ? "d" : ""}:${metadata.pending
@@ -534,6 +540,7 @@ export function PullRequestCodeTab({
       detail.reviewThreads,
       draft,
       files,
+      filesViewed,
       foldOverride,
       pendingComments,
       placedThreadIds,
@@ -774,7 +781,6 @@ export function PullRequestCodeTab({
           >
             <Checkbox
               checked={viewed}
-              className="size-3.5"
               onCheckedChange={(next) => setFileViewed(item.id, path, next === true)}
             />
             {stale ? (
@@ -1118,8 +1124,22 @@ export function PullRequestCodeTab({
             {nextCursor === null ? "" : "+"}
           </span>
           {filesViewed.enabled && files.length > 0 ? (
-            <span className="shrink-0 tabular-nums">
+            <span className="flex shrink-0 items-center gap-1 tabular-nums">
               {filesViewed.viewedCount} / {files.length} viewed
+              {filesViewed.truncated ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+                    <TriangleAlertIcon
+                      aria-label="This count covers only part of the change"
+                      className="size-3.5 text-amber-600 dark:text-amber-500"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">
+                    This change has more files than the host will report ticks for in one read, so
+                    the count is short and some boxes below start empty.
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
             </span>
           ) : null}
           {withheldContent ? (
