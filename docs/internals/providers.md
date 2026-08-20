@@ -105,6 +105,32 @@ not one of them. It lives inside `makeManagedServerProvider` and calls `refreshS
 which is what keeps a resolved secret alive between refreshes instead of re-reading it every few
 minutes.
 
+## Claude credential liveness
+
+The Claude capability probe reports which credential the CLI _found_, which is a different question
+from whether Anthropic still honours it. A revoked or expired setup token still reports
+`tokenSource: "CLAUDE_CODE_OAUTH_TOKEN"`, so Settings kept showing a green badge until the first
+turn failed.
+
+[`ClaudeCredential.ts`][claudecred] closes that gap with one authenticated `GET /v1/models`, chosen
+because it is the cheapest first-party endpoint that accepts the token and costs no message quota.
+The status check runs it from the same path that already spawns the probe, so it inherits the
+provider health cadence and needs no cache of its own.
+
+Three decisions carry the behavior:
+
+- Only an explicit `401` counts. Timeouts, transport errors, `403`, and every 5xx answer `unknown`,
+  because a proxy or an outage must never sign a working install out of Settings.
+- The check only ever downgrades. It runs after the probe has already concluded the instance is
+  authenticated, so it can turn a green badge red but never the reverse.
+- It is gated on the CLI reporting that it took its token from the environment. An install that
+  authenticates through a keychain login, an API key, a router, or a cloud backend is never judged
+  by a variable it ignores, even when that variable happens to be set.
+
+Note that Bearer authentication with a Claude Code OAuth token is not part of Anthropic's public API
+surface. It is verified working, not contractually stable, which is the other reason every
+unexpected answer is treated as `unknown`.
+
 ## How provider work is requested
 
 Clients never call a provider directly. They dispatch orchestration commands over the RPC method
@@ -172,6 +198,7 @@ indicator stops and the reason is visible in the timeline.
 [drivers]: ../../apps/server/src/provider/builtInDrivers.ts
 [codex]: ../../apps/server/src/provider/Drivers/CodexDriver.ts
 [claude]: ../../apps/server/src/provider/Drivers/ClaudeDriver.ts
+[claudecred]: ../../apps/server/src/provider/Drivers/ClaudeCredential.ts
 [cursor]: ../../apps/server/src/provider/Drivers/CursorDriver.ts
 [grok]: ../../apps/server/src/provider/Drivers/GrokDriver.ts
 [opencode]: ../../apps/server/src/provider/Drivers/OpenCodeDriver.ts

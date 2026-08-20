@@ -78,6 +78,13 @@ const TestHttpClientLive = Layer.succeed(
   ),
 );
 
+function claudeCredentialHttpLayer(respond: () => Response) {
+  return Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, respond()))),
+  );
+}
+
 const BackgroundPolicyAlwaysRunLayer = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
   removeRpcClient: () => Effect.void,
@@ -2023,6 +2030,115 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(status.status, "error");
           assert.strictEqual(status.auth.status, "unauthenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("signs out an instance whose OAuth token Anthropic rejects", () =>
+        Effect.gen(function* () {
+          // The probe only proves the CLI found a token; Anthropic is the one
+          // that knows whether it still works.
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+              apiProvider: "firstParty",
+            }),
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "stale-token" },
+          ).pipe(
+            Effect.provide(claudeCredentialHttpLayer(() => new Response("no", { status: 401 }))),
+          );
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.auth.status, "unauthenticated");
+          assert.include(status.message ?? "", "CLAUDE_CODE_OAUTH_TOKEN");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("stays authenticated while Anthropic still accepts the OAuth token", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({
+              tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+              apiProvider: "firstParty",
+            }),
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "good-token" },
+          ).pipe(Effect.provide(claudeCredentialHttpLayer(() => Response.json({ data: [] }))));
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.status, "authenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect(
+        "keeps a working instance authenticated when the check cannot reach Anthropic",
+        () =>
+          Effect.gen(function* () {
+            // An outage or a captive network must never read as a revoked token.
+            const status = yield* checkClaudeProviderStatus(
+              defaultClaudeSettings,
+              claudeCapabilities({
+                tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+                apiProvider: "firstParty",
+              }),
+              { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "good-token" },
+            ).pipe(
+              Effect.provide(
+                claudeCredentialHttpLayer(() => new Response("down", { status: 503 })),
+              ),
+            );
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.auth.status, "authenticated");
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          ),
+      );
+
+      it.effect("asks Anthropic nothing when the CLI authenticates some other way", () =>
+        Effect.gen(function* () {
+          let requests = 0;
+          const status = yield* checkClaudeProviderStatus(
+            defaultClaudeSettings,
+            claudeCapabilities({ tokenSource: "claude.ai", apiProvider: "firstParty" }),
+            { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "ignored-by-the-cli" },
+          ).pipe(
+            Effect.provide(
+              claudeCredentialHttpLayer(() => {
+                requests += 1;
+                return new Response("no", { status: 401 });
+              }),
+            ),
+          );
+          assert.strictEqual(requests, 0);
+          assert.strictEqual(status.auth.status, "authenticated");
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {

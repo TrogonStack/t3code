@@ -11,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
+import { HttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   createModelCapabilities,
@@ -39,6 +40,10 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
+import {
+  claudeOAuthTokenFromEnvironment,
+  verifyClaudeOAuthToken,
+} from "../Drivers/ClaudeCredential.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
@@ -608,6 +613,31 @@ export function claudeAuthStatus(
     : "unauthenticated";
 }
 
+/** `tokenSource` the SDK reports when the CLI took its token from the environment. */
+const CLAUDE_OAUTH_TOKEN_SOURCE = "CLAUDE_CODE_OAUTH_TOKEN";
+
+/**
+ * Whether Anthropic has stopped accepting the token this instance was given.
+ *
+ * Gated on the CLI having actually chosen the environment token, so an install
+ * that authenticates some other way is never judged by a variable it ignores.
+ * Anything short of an outright rejection answers `false`: an offline machine
+ * should show a stale status, not a wrong one.
+ */
+const isConfiguredClaudeTokenRejected = Effect.fn("isConfiguredClaudeTokenRejected")(function* (
+  tokenSource: string | undefined,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<boolean, never, HttpClient.HttpClient> {
+  if (tokenSource !== CLAUDE_OAUTH_TOKEN_SOURCE) {
+    return false;
+  }
+  const token = claudeOAuthTokenFromEnvironment(environment);
+  if (!token) {
+    return false;
+  }
+  return (yield* verifyClaudeOAuthToken(token)) === "rejected";
+});
+
 // ── SDK capability probe ────────────────────────────────────────────
 
 // Amazon Bedrock initializes far slower than first-party auth: the SDK boots the
@@ -850,7 +880,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -997,6 +1030,25 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: parsedVersion,
         status: "error",
         auth: { status: "unauthenticated" },
+      },
+    });
+  }
+
+  if (yield* isConfiguredClaudeTokenRejected(capabilities.tokenSource, resolvedEnvironment)) {
+    return buildServerProvider({
+      presentation: CLAUDE_PRESENTATION,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models,
+      slashCommands: dedupedSlashCommands,
+      skills,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "error",
+        auth: { status: "unauthenticated" },
+        message:
+          "Anthropic rejected this instance's CLAUDE_CODE_OAUTH_TOKEN. Generate a fresh token with `claude setup-token`.",
       },
     });
   }
