@@ -77,18 +77,20 @@ export function settleFileViewedOverlay(
 /**
  * The overlay with a failed request's presses taken back.
  *
- * Only the presses that request carried, and only where the checkbox still shows them: a path
- * the reader has pressed again since is waiting on a request of its own, and putting that box
- * back to the host's answer would take a press out from under the reader's hand.
+ * `owned` are the paths that request still answers for, which is what keeps a failure from
+ * reaching past its own presses: a path pressed again since belongs to a later request or to the
+ * next flush, and putting that box back to the host's answer would take a press out from under
+ * the reader's hand. Even among those, a press is only taken back where the checkbox still shows
+ * it.
  */
 export function revertFileViewedOverlay(
   overlay: FileViewedOverlay,
   batch: ReadonlyArray<{ readonly path: string; readonly viewed: boolean }>,
-  superseded: ReadonlySet<string>,
+  owned: ReadonlySet<string>,
 ): FileViewedOverlay {
   const next = new Map(overlay);
   for (const { path, viewed } of batch) {
-    if (superseded.has(path)) continue;
+    if (!owned.has(path)) continue;
     if (next.get(path) === viewed) next.delete(path);
   }
   return next.size === overlay.size ? overlay : next;

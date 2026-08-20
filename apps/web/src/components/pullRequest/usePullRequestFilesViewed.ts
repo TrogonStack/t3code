@@ -63,10 +63,14 @@ export function usePullRequestFilesViewed(options: {
   const [overlay, setOverlay] = useState<FileViewedOverlay>(NO_OVERLAY);
   const setFilesViewed = useAtomCommand(pullRequestEnvironment.setFilesViewed);
 
-  // Presses waiting for the next flush, and the ones a request is already carrying. Both are
-  // refs rather than state: nothing on screen reads them, and the flush must see the latest.
+  // Presses waiting for the next flush, and, for every path a request is already carrying, which
+  // request that is. Requests overlap and run in the order they were made, so a path pressed
+  // again while an earlier one is still out belongs to the later request from that moment on, and
+  // the earlier one stops answering for it. Both are refs rather than state: nothing on screen
+  // reads them, and the flush must see the latest.
   const queued = useRef<Map<string, boolean>>(new Map());
-  const inFlight = useRef<Map<string, boolean>>(new Map());
+  const sentBy = useRef<Map<string, number>>(new Map());
+  const requests = useRef(0);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Everything held here belongs to one change request on one environment. The environment is
@@ -80,7 +84,7 @@ export function usePullRequestFilesViewed(options: {
       settleFileViewedOverlay(
         current,
         states,
-        new Set([...queued.current.keys(), ...inFlight.current.keys()]),
+        new Set([...queued.current.keys(), ...sentBy.current.keys()]),
       ),
     );
   }, [states]);
@@ -91,21 +95,22 @@ export function usePullRequestFilesViewed(options: {
     if (batch.length === 0) return;
     queued.current = new Map();
     const sentFrom = scope.current;
-    for (const file of batch) inFlight.current.set(file.path, file.viewed);
+    const request = ++requests.current;
+    for (const file of batch) sentBy.current.set(file.path, request);
     void setFilesViewed({ environmentId, input: { ...reference, files: batch } }).then((result) => {
-      // Only what this request carried, and only where a later press has not taken the path over.
-      for (const file of batch) {
-        if (inFlight.current.get(file.path) === file.viewed) inFlight.current.delete(file.path);
-      }
+      const mine = batch
+        .map((file) => file.path)
+        .filter((path) => sentBy.current.get(path) === request);
+      for (const path of mine) sentBy.current.delete(path);
       // The reader has moved to another change request, or another environment, and what is on
       // screen now has nothing to do with this answer.
       if (scope.current !== sentFrom) return;
       if (result._tag === "Failure") {
-        // The host never heard these, so the ticks go back to whatever it last said, except on
-        // a path pressed again since, where the newer press is still waiting on its own request.
-        setOverlay((current) =>
-          revertFileViewedOverlay(current, batch, new Set(queued.current.keys())),
-        );
+        // The host never heard these, so the ticks go back to whatever it last said. Only the
+        // paths this request still answers for: one pressed again since is waiting on a request
+        // of its own, or on the next flush, and that press is the one on screen.
+        const owned = new Set(mine.filter((path) => !queued.current.has(path)));
+        setOverlay((current) => revertFileViewedOverlay(current, batch, owned));
         toastManager.add({ type: "error", title: "Could not update viewed files" });
         return;
       }
@@ -130,7 +135,7 @@ export function usePullRequestFilesViewed(options: {
         flushScope();
       }
       queued.current = new Map();
-      inFlight.current = new Map();
+      sentBy.current = new Map();
       setOverlay(NO_OVERLAY);
     };
   }, [scopeKey]);

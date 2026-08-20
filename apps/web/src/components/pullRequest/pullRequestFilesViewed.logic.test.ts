@@ -105,28 +105,36 @@ describe("revertFileViewedOverlay", () => {
     { path: "a.ts", viewed: true },
     { path: "b.ts", viewed: false },
   ];
+  const both = new Set(["a.ts", "b.ts"]);
 
-  it("puts the checkbox back to the host's answer for everything the request carried", () => {
+  it("puts the checkbox back to the host's answer for everything the request answers for", () => {
     const overlay = new Map([
       ["a.ts", true],
       ["b.ts", false],
     ]);
-    expect(revertFileViewedOverlay(overlay, batch, new Set()).size).toBe(0);
+    expect(revertFileViewedOverlay(overlay, batch, both).size).toBe(0);
   });
 
   it("leaves a press the reader made after the request went out", () => {
-    // The second press is queued behind a request of its own, so the first one failing says
-    // nothing about it.
+    // The second press is waiting on a flush of its own, so the first one failing says nothing
+    // about it.
     const overlay = new Map([
       ["a.ts", false],
       ["b.ts", false],
     ]);
-    const reverted = revertFileViewedOverlay(overlay, batch, new Set(["a.ts"]));
+    const reverted = revertFileViewedOverlay(overlay, batch, new Set(["b.ts"]));
     expect([...reverted]).toEqual([["a.ts", false]]);
+  });
+
+  it("leaves a path a later request took over, even pressed the same way", () => {
+    // Both requests carry `a.ts` as viewed, so the value cannot tell them apart. The later one
+    // owns the path now and is the one that answers for it.
+    const overlay = new Map([["a.ts", true]]);
+    expect(revertFileViewedOverlay(overlay, batch, new Set(["b.ts"]))).toBe(overlay);
   });
 
   it("leaves a path the request never carried", () => {
     const overlay = new Map([["c.ts", true]]);
-    expect(revertFileViewedOverlay(overlay, batch, new Set())).toBe(overlay);
+    expect(revertFileViewedOverlay(overlay, batch, both)).toBe(overlay);
   });
 });
