@@ -53,9 +53,12 @@ depending on the resolver. [`ProviderSecretResolverLive`][secretlive] is the hal
 
 Three decisions are load-bearing:
 
-- **A failed read drops the variable.** It never substitutes an empty string, because an empty
+- **A failed read unsets the variable.** It never substitutes an empty string, because an empty
   `ANTHROPIC_API_KEY` reads to the provider as a configured-but-broken credential rather than an
-  absent one, and the status badge would go back to lying about it.
+  absent one, and the status badge would go back to lying about it. Unsetting is stronger than
+  leaving the name out of the resolved list: the child environment starts from the server's own, so
+  a name left alone keeps whatever the server inherited under it, and the agent would quietly run
+  as a different account than the one the instance names.
 - **Reads are sequential.** `resolve` walks the environment with a plain loop instead of
   `Effect.forEach` with concurrency, so an instance carrying four references produces one biometric
   prompt rather than four simultaneous ones.

@@ -102,9 +102,10 @@ export const ProviderSecretResolverLive: Layer.Layer<
     const resolve: ProviderSecretResolverShape["resolve"] = (environment) =>
       Effect.gen(function* () {
         if (!hasProviderSecretReference(environment)) {
-          return environment;
+          return { variables: environment, unresolved: [] };
         }
         const resolved: Array<ProviderInstanceEnvironmentVariable> = [];
+        const unresolved: Array<string> = [];
         for (const variable of environment ?? []) {
           const reference = providerSecretReference(variable.value);
           if (reference === undefined) {
@@ -113,11 +114,12 @@ export const ProviderSecretResolverLive: Layer.Layer<
           }
           const secret = yield* Cache.get(cache, reference);
           if (secret === undefined) {
+            unresolved.push(variable.name);
             continue;
           }
           resolved.push({ ...variable, value: secret });
         }
-        return resolved as ProviderInstanceEnvironment;
+        return { variables: resolved as ProviderInstanceEnvironment, unresolved };
       });
 
     return { resolve, invalidate: Cache.invalidateAll(cache) };

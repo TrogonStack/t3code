@@ -58,7 +58,7 @@ describe("ProviderSecretResolverLive", () => {
 
       const resolved = yield* resolver.resolve(environment);
 
-      assert.deepStrictEqual(resolved, environment);
+      assert.deepStrictEqual(resolved, { variables: environment, unresolved: [] });
       assert.strictEqual(spawner.invocations.length, 0);
     }).pipe(Effect.provide(ProviderSecretResolverLive.pipe(Layer.provide(spawner.layer))));
   });
@@ -76,7 +76,7 @@ describe("ProviderSecretResolverLive", () => {
       );
 
       assert.deepStrictEqual(
-        resolved?.map((variable) => [variable.name, variable.value]),
+        resolved.variables?.map((variable) => [variable.name, variable.value]),
         [
           ["CLAUDE_SECURESTORAGE_CONFIG_DIR", "/home/u/.claude/work"],
           ["CLAUDE_CODE_OAUTH_TOKEN", "sk-live-token"],
@@ -126,9 +126,13 @@ describe("ProviderSecretResolverLive", () => {
       );
 
       assert.deepStrictEqual(
-        resolved?.map((variable) => variable.name),
+        resolved.variables?.map((variable) => variable.name),
         ["CLAUDE_SECURESTORAGE_CONFIG_DIR"],
       );
+      // Naming it is what gets it unset in the child environment. Merely
+      // leaving it out would hand the provider whatever the server itself was
+      // started with under that name.
+      assert.deepStrictEqual(resolved.unresolved, ["CLAUDE_CODE_OAUTH_TOKEN"]);
     }).pipe(Effect.provide(ProviderSecretResolverLive.pipe(Layer.provide(spawner.layer))));
   });
 

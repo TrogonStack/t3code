@@ -947,7 +947,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const invalidations = yield* Ref.make(0);
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: Effect.succeed,
+            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
             invalidate: Ref.update(invalidations, (count) => count + 1),
           });
           const instanceRegistryLayer = Layer.succeed(
@@ -1023,7 +1023,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: Effect.succeed,
+            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
             invalidate: Effect.void,
           });
           const instanceRegistryLayer = Layer.succeed(

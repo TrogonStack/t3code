@@ -17,6 +17,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import type { ResolvedProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+
 export interface ProviderSecretResolverShape {
   /**
    * Replace every secret reference in the environment with its value.
@@ -24,14 +26,16 @@ export interface ProviderSecretResolverShape {
    * references is returned as-is.
    *
    * Never fails. A reference that cannot be read (1Password locked, `op` not
-   * installed, item deleted) drops its variable from the result rather than
-   * substituting an empty string, so the provider reports the honest
+   * installed, item deleted) is reported as unresolved rather than
+   * substituted with an empty string, so the provider reports the honest
    * "unauthenticated" instead of failing later with a credential that looks
-   * present and is not.
+   * present and is not. `mergeProviderInstanceEnvironment` unsets those names,
+   * which is what keeps the provider off a same-named credential the server
+   * happens to have inherited.
    */
   readonly resolve: (
     environment: ProviderInstanceEnvironment | undefined,
-  ) => Effect.Effect<ProviderInstanceEnvironment | undefined>;
+  ) => Effect.Effect<ResolvedProviderInstanceEnvironment>;
   /**
    * Drop every cached secret. The next `resolve` re-reads from the store.
    * Callers that need the new value to reach a running provider must also
@@ -53,7 +57,7 @@ export class ProviderSecretResolver extends Context.Service<
  * value, and the provider reports whatever the CLI makes of it.
  */
 export const passthroughProviderSecretResolver: ProviderSecretResolverShape = {
-  resolve: Effect.succeed,
+  resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
   invalidate: Effect.void,
 };
 
