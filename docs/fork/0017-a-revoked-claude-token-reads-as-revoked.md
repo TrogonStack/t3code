@@ -1,6 +1,6 @@
 # 0017: A revoked Claude token reads as revoked
 
-- PR: [TrogonStack/t3code#PR](https://github.com/TrogonStack/t3code/pull/PR)
+- PR: [TrogonStack/t3code#28](https://github.com/TrogonStack/t3code/pull/28)
 - Status: active
 
 ## What you can do now
