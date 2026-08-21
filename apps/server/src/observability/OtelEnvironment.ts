@@ -18,7 +18,6 @@
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 /** The wire formats this server can produce. `grpc` is not one of them. */
 export type OtlpProtocol = "http/json" | "http/protobuf";
@@ -63,16 +62,47 @@ export interface OtelEnvironment {
   readonly declined: string | undefined;
 }
 
-const StringRecord = Config.Record(Schema.String, Schema.String);
-
 const optionalString = (name: string) =>
   Config.string(name).pipe(Config.option, Config.map(Option.getOrUndefined));
 
 const optionalInt = (name: string) =>
   Config.int(name).pipe(Config.option, Config.map(Option.getOrUndefined));
 
+/**
+ * Headers and resource attributes are a W3C Baggage string: comma separated
+ * pairs, optional whitespace around each one, and percent encoded values.
+ *
+ * Splitting on every `=` rather than the first one truncates exactly the
+ * credentials people put here, since base64 basic auth ends in `=` padding,
+ * and leaving the encoding in place sends a literal `%20` as part of a bearer
+ * token. Both fail as an authentication error against the collector, which
+ * reads like a bad token rather than a parsing bug.
+ */
+const parseBaggage = (raw: string): Readonly<Record<string, string>> => {
+  const entries: Record<string, string> = {};
+  for (const member of raw.split(",")) {
+    const separator = member.indexOf("=");
+    if (separator === -1) {
+      continue;
+    }
+    const key = member.slice(0, separator).trim();
+    if (key === "") {
+      continue;
+    }
+    const value = member.slice(separator + 1).trim();
+    try {
+      entries[key] = decodeURIComponent(value);
+    } catch {
+      entries[key] = value;
+    }
+  }
+  return entries;
+};
+
 const optionalRecord = (name: string) =>
-  Config.schema(StringRecord, name).pipe(Config.option, Config.map(Option.getOrUndefined));
+  optionalString(name).pipe(
+    Effect.map((raw) => (raw === undefined ? undefined : parseBaggage(raw))),
+  );
 
 /**
  * `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` is a full URL and is used as given.

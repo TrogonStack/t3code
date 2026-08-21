@@ -223,6 +223,69 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("decodes a header the way the specification encodes it", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20abc123, x-scope=team%2Fplatform",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces?.headers, {
+        Authorization: "Bearer abc123",
+        "x-scope": "team/platform",
+      });
+    }),
+  );
+
+  it.effect("keeps a credential that contains its own separator", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Basic YWJjOmRlZg==",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces?.headers, { Authorization: "Basic YWJjOmRlZg==" });
+    }),
+  );
+
+  it.effect("decodes resource attributes too", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=platform%20eng, deployment.environment=prod" }),
+      );
+      assert.deepStrictEqual(resolved.resource.attributes, {
+        team: "platform eng",
+        "deployment.environment": "prod",
+      });
+    }),
+  );
+
+  it.effect("survives a value that is not valid percent encoding", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz,x-other=100%25",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces?.headers, {
+        "x-token": "100%zz",
+        "x-other": "100%",
+      });
+    }),
+  );
+
+  it.effect("appends the signal path after a base that already has one", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com/otel" }),
+      );
+      assert.strictEqual(resolved.traces?.url, "https://collector.example.com/otel/v1/traces");
+    }),
+  );
+
   it.effect("ignores a temporality this exporter cannot produce", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(

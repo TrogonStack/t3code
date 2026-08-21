@@ -226,8 +226,37 @@ specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never ment
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
 exporting nothing. The refusal is logged at startup and both signals stay off.
 
-Anything not listed is ignored, including the log signal, sampler variables, and propagator
-variables.
+Header and resource-attribute values are percent decoded, so
+`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space and a base64 credential keeps
+its `=` padding.
+
+#### Known Gaps
+
+Not everything in the specification is implemented. These are the ones worth knowing about:
+
+- **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this
+  server has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
+  harder to read than exporting nothing. The refusal is logged at startup and both signals stay off.
+- **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
+  `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
+  `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
+  proxy in front of it.
+- **Timeouts flush at shutdown.** The specification's `OTEL_EXPORTER_OTLP_TIMEOUT` is a per-request
+  deadline. The exporter here has no per-request knob, so the value bounds the final flush instead.
+- **Interval and batch defaults are T3 Code's, not the specification's.** Leaving
+  `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, or `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` unset
+  keeps this server's own defaults rather than the specification's 5s, 60s, and 512. Set them
+  explicitly if you need the specification's numbers.
+- **Browser traces are always JSON.** The proxy that forwards traces from the client posts
+  OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP, so a
+  collector accepts either.
+- **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
+  the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
+  spelling.
+
+Everything else not listed above is ignored, including the log signal, `OTEL_BSP_MAX_QUEUE_SIZE`,
+`OTEL_BSP_EXPORT_TIMEOUT`, sampler variables, propagator variables, and the attribute and span
+limit variables.
 
 ## How To Use Traces And Metrics To Debug The Server
 
