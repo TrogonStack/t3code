@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - asserts against the fake op CLI script this test writes to disk.
 import { describe, it, assert } from "@effect/vitest";
 import { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
