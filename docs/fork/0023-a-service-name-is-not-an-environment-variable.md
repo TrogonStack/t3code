@@ -1,6 +1,6 @@
 # 0023: A service name is not an environment variable
 
-- PR: [TrogonStack/t3code#35](https://github.com/TrogonStack/t3code/pull/35)
+- PR: [TrogonStack/t3code#36](https://github.com/TrogonStack/t3code/pull/36)
 - Status: active
 
 ## What you can do now

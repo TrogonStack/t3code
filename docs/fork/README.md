@@ -62,4 +62,4 @@ Each entry uses these sections:
 - **0022** [The desktop app reports its own work](./0022-the-desktop-app-reports-its-own-work.md)
   active, [#35](https://github.com/TrogonStack/t3code/pull/35)
 - **0023** [A service name is not an environment variable](./0023-a-service-name-is-not-an-environment-variable.md)
-  active, [#35](https://github.com/TrogonStack/t3code/pull/35)
+  active, [#36](https://github.com/TrogonStack/t3code/pull/36)
