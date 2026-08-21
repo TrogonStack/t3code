@@ -187,7 +187,7 @@ it, T3 Code joins in without being told twice. Nothing above is required:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-export OTEL_SERVICE_NAME=t3-local
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment=lab
 ```
 
 The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces`, metrics to
@@ -202,11 +202,27 @@ T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you w
 The desktop app is two processes, and each is its own OpenTelemetry producer:
 
 - **The server**, under service name `t3-server`.
-- **The Electron main process**, under service name `desktop`. It owns app startup, window and menu
-  work, backend supervision, and updates, none of which the server can see. It reads the same
+- **The Electron main process**, under service name `t3-desktop`. It owns app startup, window and
+  menu work, backend supervision, and updates, none of which the server can see. It reads the same
   sources in the same order as the server, so a machine that points one of them at a collector
-  points both. `OTEL_SERVICE_NAME` renames it; `service.runtime` stays `desktop` no matter what
-  `OTEL_RESOURCE_ATTRIBUTES` says, so the two processes cannot be confused for each other.
+  points both.
+
+The web client reports as `t3-web`, so the three service names are `t3-server`, `t3-desktop`, and
+`t3-web`.
+
+**Service names are static and the environment cannot change them.** `OTEL_SERVICE_NAME` and a
+`service.name` inside `OTEL_RESOURCE_ATTRIBUTES` are both refused, with a warning naming the one you
+set. This is a deliberate departure from what most OpenTelemetry SDKs do, and the reason is that a
+service name is not a preference: renaming one process merges two services in every dashboard built
+on them, and a shell profile that names the app it was written for should not be able to do that to
+T3 Code. Use `OTEL_RESOURCE_ATTRIBUTES` to tell instances apart, which is what it is for:
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=laptop-01,deployment.environment=lab
+```
+
+`T3CODE_OTLP_SERVICE_NAME` still renames the server, because it is T3 Code's own variable and nobody
+sets it across a fleet by accident. There is no equivalent for the main process.
 
 On macOS, ambient variables reach the desktop app only when it is launched from a shell. Opening it
 from the Dock, Finder, or Spotlight inherits `launchd`'s environment instead, which is why the
@@ -245,7 +261,8 @@ Settings.
 | `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_HEADERS`     | Export headers, per signal overriding the shared ones                        |
 | `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL`   | `http/protobuf` (default) or `http/json`                                     |
 | `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`                                                | A list; the signal is exported when it contains `otlp`, which is the default |
-| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`              | Resource identity attached to every span, metric, and log record             |
+| `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`                                   | Resource identity attached to every span, metric, and log record             |
+| `OTEL_SERVICE_NAME`                                                                  | Refused with a warning; service names are static                             |
 | `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_BLRP_SCHEDULE_DELAY` | Export interval, one per signal                                              |
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`                  | Spans per batch, log records per batch                                       |
 | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` or `delta`                                                      |
@@ -292,6 +309,10 @@ Not everything in the specification is implemented. These are the ones worth kno
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.
+- **`service.name` cannot be set from the environment.** See Which Processes Export above.
+  `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES=service.name=...` are both refused with a
+  warning, and the `service.name` key is dropped rather than passed through so the exporter never
+  receives two of them.
 
 Everything else not listed above is ignored, including `OTEL_BSP_MAX_QUEUE_SIZE`,
 `OTEL_BLRP_MAX_QUEUE_SIZE`, `OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`, sampler
@@ -309,8 +330,9 @@ and both are logged once at startup:
 - **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
   T3 Code does not speak rather than a value it failed to parse.
 
-An empty value means the same thing as an unset one, so `OTEL_SERVICE_NAME=` reads as if the
-variable were not there at all. `OTEL_SDK_DISABLED` follows the specification's one rule for
+An empty value means the same thing as an unset one, so `OTEL_SERVICE_VERSION=` reads as if the
+variable were not there at all. An empty `OTEL_SERVICE_NAME` is not an attempt to rename anything,
+so it is not warned about either. `OTEL_SDK_DISABLED` follows the specification's one rule for
 booleans: the case-insensitive string `true` is the only value that switches export off, and
 anything else, including `yes` and `1`, leaves it on.
 
@@ -686,7 +708,7 @@ OTLP export:
 - `T3CODE_OTLP_LOGS_URL`: OTLP log endpoint
 - `T3CODE_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
 - `T3CODE_OTLP_SERVICE_NAME`: server service name, default `t3-server`. The Electron main process
-  does not read it; rename that one with `OTEL_SERVICE_NAME`.
+  does not read it and is always `t3-desktop`.
 
 If the OTLP URLs are unset, local tracing still works and metrics stay in-process only.
 

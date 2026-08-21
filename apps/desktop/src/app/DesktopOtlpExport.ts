@@ -56,12 +56,12 @@ export interface DesktopOtlpExportInput {
   readonly named: DesktopNamedOtlpEndpoints;
   /** `T3CODE_OTLP_EXPORT_INTERVAL_MS`, which deliberately covers every signal. */
   readonly namedExportIntervalMs: number | undefined;
-  /** Used when nothing named a service, so existing dashboards keep working. */
-  readonly defaultServiceName: string;
+  /** What this process calls itself. The environment cannot rename it. */
+  readonly serviceName: string;
   /**
-   * What this process is, as opposed to what the machine calls the service.
-   * Applied last so an ambient `OTEL_RESOURCE_ATTRIBUTES` cannot make the main
-   * process claim to be the server.
+   * What this process is. Applied last so an ambient
+   * `OTEL_RESOURCE_ATTRIBUTES` cannot make the main process claim to be the
+   * server.
    */
   readonly runtimeAttributes: Readonly<Record<string, string>>;
 }
@@ -106,7 +106,7 @@ const resolveSignal = (
 export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): DesktopOtlpExport => {
   const { otel, named } = input;
   const resource: DesktopOtlpResource = {
-    serviceName: otel.resource.serviceName ?? input.defaultServiceName,
+    serviceName: input.serviceName,
     serviceVersion: otel.resource.serviceVersion,
     attributes: { ...otel.resource.attributes, ...input.runtimeAttributes },
   };

@@ -12,10 +12,10 @@
 - Send the credentials your collector requires. `OTEL_EXPORTER_OTLP_HEADERS`
   reaches the exporter, including the proxy that forwards browser traces, so an
   authenticated endpoint stops rejecting the whole stream.
-- Get one service identity across your fleet. `OTEL_SERVICE_NAME`,
-  `OTEL_SERVICE_VERSION`, and `OTEL_RESOURCE_ATTRIBUTES` are attached to every
-  span and metric, so T3 Code sits in the same dashboards as everything else
-  rather than under a name only it uses.
+- Tell your instances apart. `OTEL_SERVICE_VERSION` and
+  `OTEL_RESOURCE_ATTRIBUTES` are attached to every span and metric, so T3 Code
+  sits in the same dashboards as everything else. Service names themselves are
+  static, and `OTEL_SERVICE_NAME` is refused with a warning; see 0023.
 - Turn export off from the environment. `OTEL_SDK_DISABLED=true` stops every
   export, including one configured in Settings, which is the one switch a
   shared machine needs.

@@ -10,18 +10,19 @@
   and metrics under the service name `desktop`, alongside the server work they
   cause.
 - Configure it the way you configure everything else. The Electron main process
-  reads the same `OTEL_*` variables as the server, in the same order, so a
-  machine that points one of them at a collector points both. It had a trace
-  exporter before, and only its own `T3CODE_OTLP_TRACES_URL` could reach it,
-  which almost nobody sets.
+  reads the same `OTEL_*` endpoint variables as the server, in the same order,
+  so a machine that points one of them at a collector points both. It had a
+  trace exporter before, and only its own `T3CODE_OTLP_TRACES_URL` could reach
+  it, which almost nobody sets.
 - Get logs and metrics from it, not only traces. A crash loop before the server
   is even up used to leave nothing behind but a local file on the machine it
   happened on.
 - Turn it off the same way. `OTEL_SDK_DISABLED=true` stops both processes.
-- Tell the two apart without trusting the environment. `service.runtime` on the
-  main process is always `desktop`, so an ambient
+- Tell the two apart without trusting the environment. The main process reports
+  as `t3-desktop`, joining `t3-server` and `t3-web`, and `service.runtime` on it
+  is always `desktop`, so an ambient
   `OTEL_RESOURCE_ATTRIBUTES=service.runtime=t3-server` cannot make it file its
-  work under the server's name.
+  work under the server's name. See 0023 for why names are static.
 
 ## Why
 

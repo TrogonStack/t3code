@@ -39,8 +39,8 @@ const DESKTOP_LOG_FILE_MAX_BYTES = 10 * 1024 * 1024;
 const DESKTOP_LOG_FILE_MAX_FILES = 10;
 const DESKTOP_BACKEND_CHILD_LOG_FIBER_ID = "#backend-child";
 const DESKTOP_TRACE_BATCH_WINDOW_MS = 1_000;
-/** What the main process calls itself when nothing named the service. */
-const DESKTOP_SERVICE_NAME = "desktop";
+/** What the main process calls itself, in the family with `t3-server` and `t3-web`. */
+const DESKTOP_SERVICE_NAME = "t3-desktop";
 const DESKTOP_BACKEND_OUTPUT_BUFFER_MAX_BYTES = 1024 * 1024;
 const DESKTOP_BACKEND_OUTPUT_BUFFER_MAX_CHUNKS = 256;
 
@@ -372,7 +372,7 @@ const resolveOtlpExport = Effect.gen(function* () {
       logs: Option.getOrUndefined(environment.otlpLogsUrl) ?? persisted.otlpLogsUrl,
     },
     namedExportIntervalMs: Option.getOrUndefined(environment.otlpExportIntervalMs),
-    defaultServiceName: DESKTOP_SERVICE_NAME,
+    serviceName: DESKTOP_SERVICE_NAME,
     runtimeAttributes: {
       "service.runtime": "desktop",
       "service.mode": environment.isDevelopment ? "development" : "packaged",

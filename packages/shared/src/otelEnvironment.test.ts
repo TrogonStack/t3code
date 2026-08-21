@@ -130,18 +130,17 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("reads the service identity and the leftover resource attributes", () =>
+  it.effect("reads the service version and the leftover resource attributes", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
-          OTEL_RESOURCE_ATTRIBUTES: "org.name=Example,service.name=from-attributes,deployment=prod",
+          OTEL_RESOURCE_ATTRIBUTES: "org.name=Example,deployment=prod",
           OTEL_SERVICE_VERSION: "1.2.3",
         }),
       );
-      assert.strictEqual(resolved.resource.serviceName, "from-attributes");
       assert.strictEqual(resolved.resource.serviceVersion, "1.2.3");
-      // service.name and service.version become the named fields, so leaving
-      // them in the attribute bag too would send each one twice.
+      // service.version becomes a named field, so leaving it in the attribute
+      // bag too would send it twice.
       assert.deepStrictEqual(resolved.resource.attributes, {
         "org.name": "Example",
         deployment: "prod",
@@ -149,7 +148,30 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("lets OTEL_SERVICE_NAME win over the resource attribute", () =>
+  it.effect("refuses to rename the service, and says so", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_SERVICE_NAME: "some-other-app" }),
+      );
+      assert.deepStrictEqual(resolved.resource.attributes, {});
+      assert.lengthOf(resolved.warnings, 1);
+      assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
+    }),
+  );
+
+  it.effect("drops a service.name hidden in the resource attributes", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app,host.name=lab-01" }),
+      );
+      // Dropped rather than passed through, or the exporter would receive a
+      // second service.name beside the one the process chose.
+      assert.deepStrictEqual(resolved.resource.attributes, { "host.name": "lab-01" });
+      assert.include(resolved.warnings[0] ?? "", "service.name was ignored");
+    }),
+  );
+
+  it.effect("names OTEL_SERVICE_NAME rather than the attribute when both are set", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
@@ -157,7 +179,8 @@ describe("OtelEnvironment", () => {
           OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes",
         }),
       );
-      assert.strictEqual(resolved.resource.serviceName, "explicit");
+      assert.lengthOf(resolved.warnings, 1);
+      assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
     }),
   );
 
@@ -468,7 +491,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "",
         }),
       );
-      assert.strictEqual(resolved.resource.serviceName, undefined);
+      // An empty rename is not a rename, so it is not worth a warning either.
+      assert.deepStrictEqual(resolved.warnings, []);
       assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
     }),
   );
@@ -545,11 +569,11 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "  https://collector.example.com/  ",
-          OTEL_SERVICE_NAME: "  t3  ",
+          OTEL_SERVICE_VERSION: "  1.2.3  ",
         }),
       );
       assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
-      assert.strictEqual(resolved.resource.serviceName, "t3");
+      assert.strictEqual(resolved.resource.serviceVersion, "1.2.3");
     }),
   );
 

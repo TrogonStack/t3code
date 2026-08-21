@@ -421,8 +421,7 @@ export const resolveServerConfig = (
         env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
       otlpLogsExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.logs.settings?.exportIntervalMs ?? 10_000,
-      otlpServiceName:
-        named(env.otlpServiceName) ?? otelEnvironment.resource.serviceName ?? "t3-server",
+      otlpServiceName: named(env.otlpServiceName) ?? "t3-server",
       otelEnvironment,
       mode,
       port,

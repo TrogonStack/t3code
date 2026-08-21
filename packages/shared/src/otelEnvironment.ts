@@ -71,8 +71,15 @@ export interface OtlpSignal {
   readonly declined: string | undefined;
 }
 
+/**
+ * What the environment may contribute to the resource. `service.name` is
+ * deliberately absent: each T3 Code process names itself and nothing here can
+ * rename it, so a fleet-wide `OTEL_SERVICE_NAME` cannot quietly merge two
+ * processes into one service or file T3 Code under some other app's name. An
+ * attempt to set it is reported through `warnings` rather than ignored in
+ * silence.
+ */
 export interface OtlpResourceSettings {
-  readonly serviceName: string | undefined;
   readonly serviceVersion: string | undefined;
   readonly attributes: Readonly<Record<string, string>>;
 }
@@ -412,13 +419,28 @@ const resolveResource = Effect.gen(function* () {
     "service.version": attributeVersion,
     ...rest
   } = parsed.value ?? {};
+  // Named here only to say it was refused. Dropping it without a word is the
+  // failure this variable is prone to: the name never changes, the dashboards
+  // stay empty, and nothing in the log connects the two.
+  const declinedName =
+    (yield* optionalString("OTEL_SERVICE_NAME")) === undefined
+      ? attributeName === undefined
+        ? undefined
+        : "OTEL_RESOURCE_ATTRIBUTES=service.name"
+      : "OTEL_SERVICE_NAME";
   return {
     value: {
-      serviceName: (yield* optionalString("OTEL_SERVICE_NAME")) ?? attributeName,
       serviceVersion: (yield* optionalString("OTEL_SERVICE_VERSION")) ?? attributeVersion,
       attributes: rest,
     },
-    warnings: parsed.warnings,
+    warnings: [
+      ...parsed.warnings,
+      ...(declinedName === undefined
+        ? []
+        : [
+            `${declinedName} was ignored; every T3 Code process names itself, so use OTEL_RESOURCE_ATTRIBUTES to tell instances apart instead`,
+          ]),
+    ],
   } satisfies Parsed<OtlpResourceSettings>;
 });
 
@@ -486,7 +508,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         traces: { settings: undefined, declined: UNREADABLE },
         metrics: { settings: undefined, declined: UNREADABLE },
         logs: { settings: undefined, declined: UNREADABLE },
-        resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
+        resource: { serviceVersion: undefined, attributes: {} },
       }),
     ),
   ),
@@ -502,5 +524,5 @@ export const none: OtelEnvironment = {
   traces: noSignal,
   metrics: noSignal,
   logs: noSignal,
-  resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
+  resource: { serviceVersion: undefined, attributes: {} },
 };
