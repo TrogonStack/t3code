@@ -211,21 +211,44 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("takes the batch and timeout knobs the exporter can act on", () =>
+  it.effect("takes the batch knobs the exporter can act on", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
           OTEL_BSP_SCHEDULE_DELAY: "2500",
           OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "128",
-          OTEL_EXPORTER_OTLP_TIMEOUT: "7000",
           OTEL_METRIC_EXPORT_INTERVAL: "15000",
         }),
       );
       assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 2500);
       assert.strictEqual(resolved.traces.settings?.maxBatchSize, 128);
-      assert.strictEqual(resolved.traces.settings?.shutdownTimeoutMs, 7000);
       assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 15000);
+    }),
+  );
+
+  it.effect("leaves the request timeouts alone rather than spending them on shutdown", () =>
+    Effect.gen(function* () {
+      // These name a per-request deadline and the exporter has no such knob.
+      // Bounding the final flush with them instead would hold a restart open
+      // for as long as the collector was allowed to be slow.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_TIMEOUT: "600000",
+          OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: "600000",
+          OTEL_METRIC_EXPORT_TIMEOUT: "600000",
+        }),
+      );
+      assert.deepStrictEqual(Object.keys(resolved.traces.settings ?? {}).sort(), [
+        "exportIntervalMs",
+        "headers",
+        "maxBatchSize",
+        "protocol",
+        "temporality",
+        "url",
+      ]);
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 
@@ -242,17 +265,16 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("lets the metric signal name its own timeout and temporality", () =>
+  it.effect("lets the metric signal name its own aggregation", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_METRIC_EXPORT_TIMEOUT: "9000",
           OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
         }),
       );
-      assert.strictEqual(resolved.metrics.settings?.shutdownTimeoutMs, 9000);
       assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
+      assert.strictEqual(resolved.traces.settings?.temporality, undefined);
     }),
   );
 
@@ -438,6 +460,70 @@ describe("OtelEnvironment", () => {
       );
       assert.strictEqual(resolved.resource.serviceName, undefined);
       assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
+    }),
+  );
+
+  it.effect("falls back to the generic headers when the signal's own list is junk", () =>
+    Effect.gen(function* () {
+      // A list with no pair in it is malformed, not a request for no headers.
+      // Reading it as an answer would shadow the generic variable and send an
+      // unauthenticated stream to a collector that was told how to authorize.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_TRACES_HEADERS: "junk",
+          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20abc123",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces.settings?.headers, {
+        Authorization: "Bearer abc123",
+      });
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_TRACES_HEADERS")),
+      );
+    }),
+  );
+
+  it.effect("names a shared variable once even though both signals read it", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz",
+        }),
+      );
+      assert.strictEqual(
+        resolved.warnings.filter((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS"))
+          .length,
+        1,
+      );
+    }),
+  );
+
+  it.effect("does not blame gRPC for a signal that was never going to export", () =>
+    Effect.gen(function* () {
+      // Nothing named an endpoint, so the protocol is beside the point and
+      // reporting it would send someone looking for a collector problem.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" }),
+      );
+      assert.strictEqual(resolved.traces.declined, undefined);
+      assert.strictEqual(resolved.metrics.declined, undefined);
+    }),
+  );
+
+  it.effect("stays quiet about the protocol once the SDK is off", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
+        }),
+      );
+      assert.isTrue(resolved.disabled);
+      assert.strictEqual(resolved.traces.declined, undefined);
+      assert.strictEqual(resolved.metrics.declined, undefined);
     }),
   );
 

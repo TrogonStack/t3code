@@ -24,6 +24,12 @@ export const ObservabilityLive = Layer.unwrap(
       yield* Effect.logWarning(warning);
     }
 
+    if (otel.disabled) {
+      yield* Effect.logWarning(
+        "OTEL_SDK_DISABLED is set, so no telemetry is exported; this overrides T3CODE_OTLP_* and Settings too",
+      );
+    }
+
     // One variable can decline both signals, and saying so twice reads like
     // two separate problems.
     const declined = new Set(
@@ -98,11 +104,6 @@ export const ObservabilityLive = Layer.unwrap(
                 ...(otel.traces.settings?.maxBatchSize === undefined
                   ? {}
                   : { maxBatchSize: otel.traces.settings.maxBatchSize }),
-                ...(otel.traces.settings?.shutdownTimeoutMs === undefined
-                  ? {}
-                  : {
-                      shutdownTimeout: `${otel.traces.settings.shutdownTimeoutMs} millis` as const,
-                    }),
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -134,9 +135,6 @@ export const ObservabilityLive = Layer.unwrap(
             ...(otel.metrics.settings?.headers === undefined
               ? {}
               : { headers: otel.metrics.settings.headers }),
-            ...(otel.metrics.settings?.shutdownTimeoutMs === undefined
-              ? {}
-              : { shutdownTimeout: `${otel.metrics.settings.shutdownTimeoutMs} millis` as const }),
             ...(otel.metrics.settings?.temporality === undefined
               ? {}
               : { temporality: otel.metrics.settings.temporality }),

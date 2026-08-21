@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { assert, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -491,13 +492,17 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  const resolveWithEnv = (env: Record<string, string>) =>
-    resolveServerConfig(
+  // Resolving a config reads the settings file and creates the trace
+  // directory, so a shared home would let one case see another's writes and
+  // would race when these run in parallel.
+  const resolveWithEnv = (env: Record<string, string>) => {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-otel-config-"));
+    return resolveServerConfig(
       {
         mode: Option.some("web"),
         port: Option.some(4888),
         host: Option.none(),
-        baseDir: Option.some("/tmp/t3-otel-home"),
+        baseDir: Option.some(baseDir),
         cwd: Option.none(),
         devUrl: Option.none(),
         noBrowser: Option.none(),
@@ -512,7 +517,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       Effect.provide(
         Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
       ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(baseDir, { recursive: true, force: true });
+        }),
+      ),
     );
+  };
 
   it.effect("exports to the endpoint the rest of the machine already uses", () =>
     Effect.gen(function* () {

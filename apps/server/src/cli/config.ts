@@ -386,9 +386,10 @@ export const resolveServerConfig = (
       otlpMetricsUrl: otelEnvironment.disabled
         ? undefined
         : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
-      // Each signal gets its own, because the environment names them
-      // separately and a signal that took its endpoint elsewhere must not
-      // inherit the other one's schedule.
+      // T3 Code has one interval variable and it deliberately covers both
+      // signals. The per-signal part is the fallback under it: the environment
+      // names a trace delay and a metric interval separately, so a signal that
+      // took its endpoint elsewhere must not inherit the other one's.
       otlpExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
       otlpMetricsExportIntervalMs:

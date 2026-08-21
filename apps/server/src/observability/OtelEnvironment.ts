@@ -42,7 +42,6 @@ export interface OtlpSignalSettings {
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly exportIntervalMs: number | undefined;
   readonly maxBatchSize: number | undefined;
-  readonly shutdownTimeoutMs: number | undefined;
   /** Metrics only. Traces have no aggregation to prefer. */
   readonly temporality: MetricsTemporality | undefined;
 }
@@ -156,7 +155,11 @@ const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined
       return undefined;
     }
   }
-  return entries;
+  // A value that produced no pair at all is a malformed list, not a request
+  // for no headers. Returning `{}` here would count as a supplied value and
+  // silently shadow the generic variable the signal should have fallen back
+  // to.
+  return Object.keys(entries).length === 0 ? undefined : entries;
 };
 
 interface Parsed<A> {
@@ -178,7 +181,10 @@ const optionalRecord = (name: string) =>
       }
       const parsed = parseBaggage(raw);
       return parsed === undefined
-        ? { value: undefined, warnings: [`${name} is not valid percent encoding and was ignored`] }
+        ? {
+            value: undefined,
+            warnings: [`${name} is not a valid list of key=value pairs and was ignored`],
+          }
         : { value: parsed, warnings: [] };
     }),
   );
@@ -243,10 +249,6 @@ const signalSettings = (
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
     const headers = specific.value ?? generic.value;
-    const timeoutMs =
-      (yield* readInt(`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`, numbers)) ??
-      (yield* readInt("OTEL_EXPORTER_OTLP_TIMEOUT", numbers)) ??
-      (signal === "METRICS" ? yield* readInt("OTEL_METRIC_EXPORT_TIMEOUT", numbers) : undefined);
     const exportIntervalMs =
       signal === "TRACES"
         ? ((yield* readInt("OTEL_BSP_SCHEDULE_DELAY", numbers)) ?? SPEC_DEFAULT_SCHEDULE_DELAY_MS)
@@ -263,7 +265,6 @@ const signalSettings = (
             ? ((yield* readInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", numbers)) ??
               SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE)
             : undefined,
-        shutdownTimeoutMs: timeoutMs,
         temporality: signal === "METRICS" ? temporality : undefined,
       },
       warnings: [...specific.warnings, ...generic.warnings, ...numbers],
@@ -394,20 +395,29 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
   return {
     disabled,
+    // Both signals read the generic `OTEL_EXPORTER_OTLP_*` variables, so one
+    // bad value arrives here twice and would be logged twice.
     warnings: [
-      ...protocolDecision.warnings,
-      ...resource.warnings,
-      ...temporality.warnings,
-      ...traces.warnings,
-      ...metrics.warnings,
+      ...new Set([
+        ...protocolDecision.warnings,
+        ...resource.warnings,
+        ...temporality.warnings,
+        ...traces.warnings,
+        ...metrics.warnings,
+      ]),
     ],
+    // `value` is set only for a signal that resolved an endpoint and asked for
+    // OTLP, so it is also the test for whether a decline is worth reporting. A
+    // signal nothing pointed anywhere, one switched off by name, and every
+    // signal once the SDK is disabled were never going to export, and saying
+    // gRPC is why would name the wrong cause.
     traces: {
       settings: protocolDecision.traces.declined === undefined ? traces.value : undefined,
-      declined: protocolDecision.traces.declined,
+      declined: traces.value === undefined ? undefined : protocolDecision.traces.declined,
     },
     metrics: {
       settings: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
-      declined: protocolDecision.metrics.declined,
+      declined: metrics.value === undefined ? undefined : protocolDecision.metrics.declined,
     },
     resource: resource.value,
   };

@@ -214,19 +214,18 @@ Settings.
 
 #### What Is Read
 
-| Variable                                                                                                  | Effect                                                                       |
-| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `OTEL_SDK_DISABLED`                                                                                       | Stops all export                                                             |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                             | Base URL for both signals                                                    |
-| `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT`                                                            | Full URL for one signal                                                      |
-| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_HEADERS`                               | Export headers, per signal overriding the shared ones                        |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`                                       | `http/protobuf` (default) or `http/json`                                     |
-| `OTEL_{TRACES,METRICS}_EXPORTER`                                                                          | A list; the signal is exported when it contains `otlp`, which is the default |
-| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`                                   | Resource identity attached to every span and metric                          |
-| `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_TIMEOUT`, `OTEL_METRIC_EXPORT_TIMEOUT` | Shutdown flush timeout                                                       |
-| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`                                                  | Export interval                                                              |
-| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`                                                                          | Spans per batch                                                              |
-| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                                       | `cumulative` or `delta`                                                      |
+| Variable                                                                      | Effect                                                                       |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `OTEL_SDK_DISABLED`                                                           | Stops all export                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                 | Base URL for both signals                                                    |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT`                                | Full URL for one signal                                                      |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_HEADERS`   | Export headers, per signal overriding the shared ones                        |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_PROTOCOL` | `http/protobuf` (default) or `http/json`                                     |
+| `OTEL_{TRACES,METRICS}_EXPORTER`                                              | A list; the signal is exported when it contains `otlp`, which is the default |
+| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`       | Resource identity attached to every span and metric                          |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`                      | Export interval                                                              |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`                                              | Spans per batch                                                              |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                           | `cumulative` or `delta`                                                      |
 
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
 specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
@@ -252,8 +251,11 @@ Not everything in the specification is implemented. These are the ones worth kno
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
   proxy in front of it.
-- **Timeouts flush at shutdown.** The specification's `OTEL_EXPORTER_OTLP_TIMEOUT` is a per-request
-  deadline. The exporter here has no per-request knob, so the value bounds the final flush instead.
+- **No export timeouts.** `OTEL_EXPORTER_OTLP_TIMEOUT`,
+  `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_TIMEOUT`, and `OTEL_METRIC_EXPORT_TIMEOUT` are per-request
+  deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
+  shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
+  the server open on every restart.
 - **Browser traces are always JSON.** The proxy that forwards traces from the client posts
   OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP and most
   collectors accept either, so this only matters against one that takes protobuf and nothing else.
