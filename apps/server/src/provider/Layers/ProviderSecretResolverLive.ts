@@ -29,8 +29,8 @@ import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -72,18 +72,31 @@ const SECRET_CACHE_CAPACITY = 64;
  * it. The caller treats that as "not primed" and reads one at a time, which is
  * both the per-variable failure isolation and the way the user finds out which
  * reference is the broken one.
+ *
+ * The template goes to `op` through a scoped temp file rather than stdin.
+ * `op` only reads piped input from a named pipe, and a child spawned from Node
+ * is handed a socket pair, so a piped template is never seen and the batch
+ * fails with "expected data on stdin but none found" every single time. The
+ * file holds only `op://` references, which already sit in settings in plain
+ * text; the secrets themselves come back on stdout and never touch disk.
  */
 const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   references: ReadonlyArray<string>,
 ) {
+  const fileSystem = yield* FileSystem.FileSystem;
   const separator = `__t3-secret-${NodeCrypto.randomUUID()}__`;
   const template = references.map((reference) => `{{ ${reference} }}`).join(separator);
-  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, ["inject"]);
+  const templatePath = yield* fileSystem.makeTempFileScoped({ prefix: "t3code-op-inject-" });
+  yield* fileSystem.writeFileString(templatePath, template);
+  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
+    "inject",
+    "-i",
+    templatePath,
+  ]);
   const result = yield* spawnAndCollect(
     ONE_PASSWORD_BINARY,
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       shell: spawnCommand.shell,
-      stdin: Stream.make(new TextEncoder().encode(template)),
     }),
   );
   if (result.code !== 0) {
@@ -137,14 +150,16 @@ const readSecret = Effect.fn("readSecret")(function* (reference: string) {
 export const ProviderSecretResolverLive: Layer.Layer<
   ProviderSecretResolver,
   never,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > = Layer.effect(
   ProviderSecretResolver,
   Effect.gen(function* () {
-    // The service tag declares `prime` as `Effect<void>`, so the spawner it
-    // needs is captured here rather than asked of the caller, the same way
-    // the cache's own lookup captures it.
-    const spawnerContext = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
+    // The service tag declares `prime` as `Effect<void>`, so the spawner and
+    // the filesystem it needs are captured here rather than asked of the
+    // caller, the same way the cache's own lookup captures the spawner.
+    const primeContext = yield* Effect.context<
+      ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
+    >();
 
     const cache = yield* Cache.make({
       capacity: SECRET_CACHE_CAPACITY,
@@ -201,6 +216,7 @@ export const ProviderSecretResolverLive: Layer.Layer<
           return;
         }
         const values = yield* readSecretsTogether(wanted).pipe(
+          Effect.scoped,
           Effect.timeoutOption(SECRET_READ_TIMEOUT),
           Effect.map(Option.getOrUndefined),
           Effect.catch((error) =>
@@ -220,7 +236,7 @@ export const ProviderSecretResolverLive: Layer.Layer<
             discard: true,
           },
         );
-      }).pipe(Effect.provideContext(spawnerContext));
+      }).pipe(Effect.provideContext(primeContext));
 
     return { resolve, prime, invalidate: Cache.invalidateAll(cache) };
   }),
