@@ -23,6 +23,7 @@ const PersistedServerObservabilitySettingsDocument = Schema.Struct({
   observability: Schema.Struct({
     otlpTracesUrl: Schema.String,
     otlpMetricsUrl: Schema.String,
+    otlpLogsUrl: Schema.String,
   }),
 });
 
@@ -374,6 +375,7 @@ describe("DesktopBackendConfiguration", () => {
             observability: {
               otlpTracesUrl: " http://127.0.0.1:4318/v1/traces ",
               otlpMetricsUrl: " http://127.0.0.1:4318/v1/metrics ",
+              otlpLogsUrl: " http://127.0.0.1:4318/v1/logs ",
             },
           }),
         );
@@ -381,6 +383,7 @@ describe("DesktopBackendConfiguration", () => {
         const config = yield* configuration.resolvePrimary;
         assert.equal(config.bootstrap.otlpTracesUrl, "http://127.0.0.1:4318/v1/traces");
         assert.equal(config.bootstrap.otlpMetricsUrl, "http://127.0.0.1:4318/v1/metrics");
+        assert.equal(config.bootstrap.otlpLogsUrl, "http://127.0.0.1:4318/v1/logs");
       }),
     ),
   );
@@ -393,6 +396,7 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.isUndefined(config.bootstrap.otlpTracesUrl);
         assert.isUndefined(config.bootstrap.otlpMetricsUrl);
+        assert.isUndefined(config.bootstrap.otlpLogsUrl);
       }),
     ),
   );
@@ -443,6 +447,7 @@ describe("DesktopBackendConfiguration", () => {
 
       assert.isUndefined(config.bootstrap.otlpTracesUrl);
       assert.isUndefined(config.bootstrap.otlpMetricsUrl);
+      assert.isUndefined(config.bootstrap.otlpLogsUrl);
 
       const error = messages
         .flatMap((message) => (Array.isArray(message) ? message : [message]))

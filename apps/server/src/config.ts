@@ -65,8 +65,10 @@ export class ServerConfig extends Context.Service<
     readonly traceMaxFiles: number;
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
+    readonly otlpLogsUrl: string | undefined;
     readonly otlpExportIntervalMs: number;
     readonly otlpMetricsExportIntervalMs: number;
+    readonly otlpLogsExportIntervalMs: number;
     readonly otlpServiceName: string;
     /**
      * What the standard `OTEL_*` variables asked for. The endpoints above are
@@ -105,6 +107,23 @@ export class ServerConfig extends Context.Service<
 export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config);
 
 export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerConfig, make(config));
+
+/**
+ * The OTLP resource every exported signal is tagged with. Traces, metrics, and
+ * logs read it from here so no two of them can disagree about which process
+ * produced them.
+ */
+export const otlpResource = (config: ServerConfig["Service"]) => ({
+  serviceName: config.otlpServiceName,
+  ...(config.otelEnvironment.resource.serviceVersion === undefined
+    ? {}
+    : { serviceVersion: config.otelEnvironment.resource.serviceVersion }),
+  attributes: {
+    ...config.otelEnvironment.resource.attributes,
+    "service.runtime": "t3-server",
+    "service.mode": config.mode,
+  },
+});
 
 export const deriveServerPaths = Effect.fn(function* (
   baseDir: ServerConfig["Service"]["baseDir"],
@@ -186,8 +205,10 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     traceMaxFiles: 10,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
+    otlpLogsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpMetricsExportIntervalMs: 10_000,
+    otlpLogsExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,

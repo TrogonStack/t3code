@@ -55,3 +55,5 @@ Each entry uses these sections:
   active, [#31](https://github.com/TrogonStack/t3code/pull/31)
 - **0019** [The checks badge answers the keyboard](./0019-the-checks-badge-answers-the-keyboard.md)
   active, [#32](https://github.com/TrogonStack/t3code/pull/32)
+- **0020** [Server logs reach your collector](./0020-server-logs-reach-your-collector.md)
+  active, [#33](https://github.com/TrogonStack/t3code/pull/33)

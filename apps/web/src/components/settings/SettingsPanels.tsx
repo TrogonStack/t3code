@@ -1801,6 +1801,8 @@ export function GeneralSettingsPanel() {
     otlpTracesUrl: observability?.otlpTracesUrl,
     otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
     otlpMetricsUrl: observability?.otlpMetricsUrl,
+    otlpLogsEnabled: observability?.otlpLogsEnabled ?? false,
+    otlpLogsUrl: observability?.otlpLogsUrl,
   });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);

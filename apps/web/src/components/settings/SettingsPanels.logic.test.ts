@@ -161,8 +161,23 @@ describe("formatDiagnosticsDescription", () => {
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpMetricsEnabled: true,
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+        otlpLogsEnabled: false,
       }),
     ).toBe("Local trace file. Exporting OTEL to http://localhost:4318/v1/{traces,metrics}.");
+  });
+
+  it("collapses all three signals when one collector answers them", () => {
+    expect(
+      formatDiagnosticsDescription({
+        localTracingEnabled: true,
+        otlpTracesEnabled: true,
+        otlpTracesUrl: "http://localhost:4318/v1/traces",
+        otlpMetricsEnabled: true,
+        otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+        otlpLogsEnabled: true,
+        otlpLogsUrl: "http://localhost:4318/v1/logs",
+      }),
+    ).toBe("Local trace file. Exporting OTEL to http://localhost:4318/v1/{traces,metrics,logs}.");
   });
 
   it("keeps separate trace and metric URLs when their base paths differ", () => {
@@ -173,10 +188,39 @@ describe("formatDiagnosticsDescription", () => {
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpMetricsEnabled: true,
         otlpMetricsUrl: "http://localhost:9000/v1/metrics",
+        otlpLogsEnabled: false,
       }),
     ).toBe(
       "Local trace file. Exporting OTEL traces to http://localhost:4318/v1/traces and metrics to http://localhost:9000/v1/metrics.",
     );
+  });
+
+  it("spells out all three signals when one of them went somewhere else", () => {
+    expect(
+      formatDiagnosticsDescription({
+        localTracingEnabled: true,
+        otlpTracesEnabled: true,
+        otlpTracesUrl: "http://localhost:4318/v1/traces",
+        otlpMetricsEnabled: true,
+        otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+        otlpLogsEnabled: true,
+        otlpLogsUrl: "http://localhost:9000/v1/logs",
+      }),
+    ).toBe(
+      "Local trace file. Exporting OTEL traces to http://localhost:4318/v1/traces, metrics to http://localhost:4318/v1/metrics, and logs to http://localhost:9000/v1/logs.",
+    );
+  });
+
+  it("names the one enabled signal rather than collapsing it", () => {
+    expect(
+      formatDiagnosticsDescription({
+        localTracingEnabled: false,
+        otlpTracesEnabled: false,
+        otlpMetricsEnabled: false,
+        otlpLogsEnabled: true,
+        otlpLogsUrl: "http://localhost:4318/v1/logs",
+      }),
+    ).toBe("Terminal logs only. Exporting OTEL logs to http://localhost:4318/v1/logs.");
   });
 
   it("omits OTEL text when no exporter is enabled", () => {
@@ -185,6 +229,7 @@ describe("formatDiagnosticsDescription", () => {
         localTracingEnabled: true,
         otlpTracesEnabled: false,
         otlpMetricsEnabled: false,
+        otlpLogsEnabled: false,
       }),
     ).toBe("Local trace file.");
   });

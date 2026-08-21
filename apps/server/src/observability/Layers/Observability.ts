@@ -30,10 +30,12 @@ export const ObservabilityLive = Layer.unwrap(
       );
     }
 
-    // One variable can decline both signals, and saying so twice reads like
-    // two separate problems.
+    // One variable can decline every signal, and saying so three times reads
+    // like three separate problems.
     const declined = new Set(
-      [otel.traces.declined, otel.metrics.declined].filter((reason) => reason !== undefined),
+      [otel.traces.declined, otel.metrics.declined, otel.logs.declined].filter(
+        (reason) => reason !== undefined,
+      ),
     );
     for (const reason of declined) {
       yield* Effect.logWarning(reason);
@@ -57,17 +59,7 @@ export const ObservabilityLive = Layer.unwrap(
       );
     }
 
-    const otlpResource = {
-      serviceName: config.otlpServiceName,
-      ...(otel.resource.serviceVersion === undefined
-        ? {}
-        : { serviceVersion: otel.resource.serviceVersion }),
-      attributes: {
-        ...otel.resource.attributes,
-        "service.runtime": "t3-server",
-        "service.mode": config.mode,
-      },
-    };
+    const otlpResource = ServerConfig.otlpResource(config);
 
     const traceReferencesLayer = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),

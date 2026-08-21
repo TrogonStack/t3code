@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ServerConfig,
+  ServerObservability,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
@@ -12,6 +13,7 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
+const decodeServerObservability = Schema.decodeUnknownSync(ServerObservability);
 
 const baseProviderSnapshot = {
   instanceId: "codex",
@@ -130,6 +132,19 @@ describe("server config forward compatibility", () => {
     expect(parsed.issues).toEqual([
       { kind: "keybindings.invalid-entry", message: "Bad entry", index: 2 },
     ]);
+  });
+
+  it("reads a server from before the log signal as exporting no logs", () => {
+    const parsed = decodeServerObservability({
+      logsDirectoryPath: "/tmp/t3/logs",
+      localTracingEnabled: true,
+      otlpTracesUrl: "https://collector.example.com/v1/traces",
+      otlpTracesEnabled: true,
+      otlpMetricsEnabled: false,
+    });
+
+    expect(parsed.otlpLogsEnabled).toBe(false);
+    expect(parsed.otlpLogsUrl).toBeUndefined();
   });
 
   it("drops editor ids this build does not know", () => {
