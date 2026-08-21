@@ -18,6 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
+import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
@@ -50,6 +51,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
   } as const;
 
@@ -485,6 +487,70 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+    }),
+  );
+
+  const resolveWithEnv = (env: Record<string, string>) =>
+    resolveServerConfig(
+      {
+        mode: Option.some("web"),
+        port: Option.some(4888),
+        host: Option.none(),
+        baseDir: Option.some("/tmp/t3-otel-home"),
+        cwd: Option.none(),
+        devUrl: Option.none(),
+        noBrowser: Option.none(),
+        bootstrapFd: Option.none(),
+        autoBootstrapProjectFromCwd: Option.none(),
+        logWebSocketEvents: Option.none(),
+        tailscaleServeEnabled: Option.none(),
+        tailscaleServePort: Option.none(),
+      },
+      Option.none(),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
+      ),
+    );
+
+  it.effect("exports to the endpoint the rest of the machine already uses", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3");
+    }),
+  );
+
+  it.effect("keeps T3 Code's own names as the explicit answer", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+        T3CODE_OTLP_SERVICE_NAME: "t3-local",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3-local");
+    }),
+  );
+
+  it.effect("exports nothing at all once the SDK is switched off", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_SDK_DISABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otlpTracesUrl).toBeUndefined();
+      expect(resolved.otlpMetricsUrl).toBeUndefined();
     }),
   );
 

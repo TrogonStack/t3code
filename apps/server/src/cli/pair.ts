@@ -54,6 +54,7 @@ import {
   resolveHeadlessConnectionString,
 } from "../startupAccess.ts";
 import { baseDirFlag, DurationFromString } from "./config.ts";
+import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
 const PAIR_PROBE_TIMEOUT = Duration.millis(2_500);
@@ -332,6 +333,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    otelEnvironment: OtelEnvironment.none,
     mode: "web",
     port: state.port,
     host: state.host,

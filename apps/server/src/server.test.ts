@@ -181,6 +181,7 @@ import {
   type TransferBudgetRun,
   transferBudgetViolations,
 } from "../integration/TransferBudgetReport.integration.ts";
+import * as OtelEnvironment from "./observability/OtelEnvironment.ts";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");
@@ -443,6 +444,7 @@ const buildAppUnderTest = (options?: {
       otlpMetricsUrl: undefined,
       otlpExportIntervalMs: 10_000,
       otlpServiceName: "t3-server",
+      otelEnvironment: OtelEnvironment.none,
       mode: "desktop",
       port: 0,
       host: "127.0.0.1",

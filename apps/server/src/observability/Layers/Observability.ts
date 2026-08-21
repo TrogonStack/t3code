@@ -14,12 +14,34 @@ import * as ResourceAttribution from "../../resourceTelemetry/ResourceAttributio
 import { ServerLoggerLive } from "../../serverLogger.ts";
 import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 
-const otlpSerializationLayer = OtlpSerialization.layerJson;
-
 export const ObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const attribution = yield* ResourceAttribution.ResourceAttribution;
+    const otel = config.otelEnvironment;
+
+    if (otel.declined !== undefined) {
+      yield* Effect.logWarning(otel.declined);
+    }
+
+    const configuredThroughOtelEnvironment =
+      otel.traces !== undefined || otel.metrics !== undefined;
+    const protocol =
+      otel.protocol ?? (configuredThroughOtelEnvironment ? "http/protobuf" : "http/json");
+    const otlpSerializationLayer =
+      protocol === "http/protobuf" ? OtlpSerialization.layerProtobuf : OtlpSerialization.layerJson;
+
+    const otlpResource = {
+      serviceName: config.otlpServiceName,
+      ...(otel.resource.serviceVersion === undefined
+        ? {}
+        : { serviceVersion: otel.resource.serviceVersion }),
+      attributes: {
+        ...otel.resource.attributes,
+        "service.runtime": "t3-server",
+        "service.mode": config.mode,
+      },
+    };
 
     const traceReferencesLayer = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),
@@ -49,13 +71,14 @@ export const ObservabilityLive = Layer.unwrap(
             : yield* OtlpTracer.make({
                 url: config.otlpTracesUrl,
                 exportInterval: `${config.otlpExportIntervalMs} millis`,
-                resource: {
-                  serviceName: config.otlpServiceName,
-                  attributes: {
-                    "service.runtime": "t3-server",
-                    "service.mode": config.mode,
-                  },
-                },
+                resource: otlpResource,
+                ...(otel.traces?.headers === undefined ? {} : { headers: otel.traces.headers }),
+                ...(otel.traces?.maxBatchSize === undefined
+                  ? {}
+                  : { maxBatchSize: otel.traces.maxBatchSize }),
+                ...(otel.traces?.shutdownTimeoutMs === undefined
+                  ? {}
+                  : { shutdownTimeout: `${otel.traces.shutdownTimeoutMs} millis` as const }),
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -79,14 +102,15 @@ export const ObservabilityLive = Layer.unwrap(
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${config.otlpExportIntervalMs} millis`,
-            resource: {
-              serviceName: config.otlpServiceName,
-              attributes: {
-                "service.runtime": "t3-server",
-                "service.mode": config.mode,
-              },
-            },
+            exportInterval: `${otel.metrics?.exportIntervalMs ?? config.otlpExportIntervalMs} millis`,
+            resource: otlpResource,
+            ...(otel.metrics?.headers === undefined ? {} : { headers: otel.metrics.headers }),
+            ...(otel.metrics?.shutdownTimeoutMs === undefined
+              ? {}
+              : { shutdownTimeout: `${otel.metrics.shutdownTimeoutMs} millis` as const }),
+            ...(otel.metricsTemporality === undefined
+              ? {}
+              : { temporality: otel.metricsTemporality }),
           }).pipe(Layer.provideMerge(otlpSerializationLayer));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);

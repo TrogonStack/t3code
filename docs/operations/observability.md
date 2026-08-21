@@ -173,6 +173,62 @@ Do not rely on launching from Finder, Spotlight, the dock, or the Start menu aft
 
 The backend reads observability config at process start. If you change OTLP env vars, stop the app completely and start it again.
 
+### Option 3: The Standard `OTEL_*` Variables
+
+If your machine already exports the OpenTelemetry environment variables for everything else running on
+it, T3 Code joins in without being told twice. Nothing above is required:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_SERVICE_NAME=t3-local
+```
+
+The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces` and metrics to
+`<endpoint>/v1/metrics`, exactly as the specification says. Set
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` when a signal needs a
+full URL of its own.
+
+Ambient `OTEL_*` variables turn export on by themselves. A work collector in your shell profile means
+T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want.
+
+#### Precedence
+
+For each setting, the first one that is present wins:
+
+1. `T3CODE_OTLP_*`
+2. the desktop bootstrap envelope
+3. Settings, under `observability`
+4. `OTEL_*`
+
+`OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured through
+Settings.
+
+#### What Is Read
+
+| Variable                                                                                                  | Effect                                                                       |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `OTEL_SDK_DISABLED`                                                                                       | Stops all export                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                             | Base URL for both signals                                                    |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT`                                                            | Full URL for one signal                                                      |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_HEADERS`                               | Export headers, per signal overriding the shared ones                        |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`                                       | `http/protobuf` (default) or `http/json`                                     |
+| `OTEL_{TRACES,METRICS}_EXPORTER`                                                                          | A list; the signal is exported when it contains `otlp`, which is the default |
+| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`                                   | Resource identity attached to every span and metric                          |
+| `OTEL_EXPORTER_OTLP_TIMEOUT`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_TIMEOUT`, `OTEL_METRIC_EXPORT_TIMEOUT` | Shutdown flush timeout                                                       |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`                                                  | Export interval                                                              |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`                                                                          | Spans per batch                                                              |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                                       | `cumulative` or `delta`                                                      |
+
+The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
+specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
+
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this server has no gRPC
+transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
+exporting nothing. The refusal is logged at startup and both signals stay off.
+
+Anything not listed is ignored, including the log signal, sampler variables, and propagator
+variables.
+
 ## How To Use Traces And Metrics To Debug The Server
 
 ### Start With The Local Trace File
