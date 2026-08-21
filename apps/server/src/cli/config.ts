@@ -1,4 +1,5 @@
 import * as NetService from "@t3tools/shared/Net";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -16,7 +17,6 @@ import { Argument, Flag } from "effect/unstable/cli";
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
-import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
 
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),

@@ -181,7 +181,7 @@ import {
   type TransferBudgetRun,
   transferBudgetViolations,
 } from "../integration/TransferBudgetReport.integration.ts";
-import * as OtelEnvironment from "./observability/OtelEnvironment.ts";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 const defaultProjectId = ProjectId.make("project-default");
 const defaultThreadId = ThreadId.make("thread-default");

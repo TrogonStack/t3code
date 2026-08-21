@@ -45,9 +45,12 @@ export const DesktopConfig = Config.all({
   desktopLanHostOverride: trimmedString("T3CODE_DESKTOP_LAN_HOST"),
   desktopHttpsEndpointUrls: commaSeparatedStrings("T3CODE_DESKTOP_HTTPS_ENDPOINTS"),
   otlpTracesUrl: trimmedString("T3CODE_OTLP_TRACES_URL"),
-  otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
-    Config.withDefault(10_000),
-  ),
+  otlpMetricsUrl: trimmedString("T3CODE_OTLP_METRICS_URL"),
+  otlpLogsUrl: trimmedString("T3CODE_OTLP_LOGS_URL"),
+  // Left as an Option rather than defaulted here: an unset variable is what
+  // lets each signal fall back to the interval the OpenTelemetry environment
+  // asked for, which the specification defines per signal.
+  otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(Config.option),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),

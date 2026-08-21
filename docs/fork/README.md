@@ -59,3 +59,5 @@ Each entry uses these sections:
   active, [#33](https://github.com/TrogonStack/t3code/pull/33)
 - **0021** [A trace includes the client that started it](./0021-a-trace-includes-the-client-that-started-it.md)
   active, [#34](https://github.com/TrogonStack/t3code/pull/34)
+- **0022** [The desktop app reports its own work](./0022-the-desktop-app-reports-its-own-work.md)
+  active, [#35](https://github.com/TrogonStack/t3code/pull/35)

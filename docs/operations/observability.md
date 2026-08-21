@@ -197,6 +197,23 @@ Set `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` when a signal needs a fu
 Ambient `OTEL_*` variables turn export on by themselves. A work collector in your shell profile means
 T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want.
 
+#### Which Processes Export
+
+The desktop app is two processes, and each is its own OpenTelemetry producer:
+
+- **The server**, under service name `t3-server`.
+- **The Electron main process**, under service name `desktop`. It owns app startup, window and menu
+  work, backend supervision, and updates, none of which the server can see. It reads the same
+  sources in the same order as the server, so a machine that points one of them at a collector
+  points both. `OTEL_SERVICE_NAME` renames it; `service.runtime` stays `desktop` no matter what
+  `OTEL_RESOURCE_ATTRIBUTES` says, so the two processes cannot be confused for each other.
+
+On macOS, ambient variables reach the desktop app only when it is launched from a shell. Opening it
+from the Dock, Finder, or Spotlight inherits `launchd`'s environment instead, which is why the
+instrumented walkthrough above launches from the same shell that exported the variables. Settings
+and `T3CODE_OTLP_*` are not affected, and the server the desktop app spawns inherits whatever the
+main process was given.
+
 #### Precedence
 
 For each signal, the first source that names its endpoint wins:
@@ -236,7 +253,7 @@ Settings.
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
 specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
 
-`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this server has no gRPC
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because T3 Code has no gRPC
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
 exporting nothing. The refusal is logged at startup and turns off only the signal that named gRPC,
 and only when that signal had no other endpoint to go to.
@@ -249,8 +266,8 @@ its `=` padding.
 
 Not everything in the specification is implemented. These are the ones worth knowing about:
 
-- **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this
-  server has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
+- **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because T3 Code
+  has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
   harder to read than exporting nothing. The refusal is logged at startup and turns off only the
   signal that named gRPC, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc` leaves traces exporting.
 - **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
@@ -282,7 +299,7 @@ variables, propagator variables, and the attribute and span limit variables.
 
 #### When A Value Cannot Be Used
 
-A variable this server cannot act on never stops it from starting. Two things can happen instead,
+A variable T3 Code cannot act on never stops it from starting. Two things can happen instead,
 and both are logged once at startup:
 
 - **A warning, then the default.** A misspelled protocol, an unavailable temporality, a timeout or
@@ -290,7 +307,7 @@ and both are logged once at startup:
   reported and ignored, and everything else keeps exporting. One bad value never costs you the
   other variables.
 - **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
-  this server does not speak rather than a value it failed to parse.
+  T3 Code does not speak rather than a value it failed to parse.
 
 An empty value means the same thing as an unset one, so `OTEL_SERVICE_NAME=` reads as if the
 variable were not there at all. `OTEL_SDK_DISABLED` follows the specification's one rule for
@@ -645,6 +662,12 @@ It provides:
 - optional OTLP metrics exporter
 - Effect trace-level and timing refs
 
+The Electron main process assembles its own in
+`apps/desktop/src/app/DesktopObservability.ts`, with the same pieces plus an optional OTLP log
+exporter, and resolves its endpoints in `apps/desktop/src/app/DesktopOtlpExport.ts`. Both processes
+read the `OTEL_*` variables through `packages/shared/src/otelEnvironment.ts`, so neither can disagree
+with the other about what a variable means.
+
 ### Env Vars
 
 Local trace file:
@@ -660,8 +683,10 @@ OTLP export:
 
 - `T3CODE_OTLP_TRACES_URL`: OTLP trace endpoint
 - `T3CODE_OTLP_METRICS_URL`: OTLP metric endpoint
+- `T3CODE_OTLP_LOGS_URL`: OTLP log endpoint
 - `T3CODE_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
-- `T3CODE_OTLP_SERVICE_NAME`: service name, default `t3-server`
+- `T3CODE_OTLP_SERVICE_NAME`: server service name, default `t3-server`. The Electron main process
+  does not read it; rename that one with `OTEL_SERVICE_NAME`.
 
 If the OTLP URLs are unset, local tracing still works and metrics stay in-process only.
 

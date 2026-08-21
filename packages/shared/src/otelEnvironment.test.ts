@@ -3,7 +3,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as OtelEnvironment from "./OtelEnvironment.ts";
+import * as OtelEnvironment from "./otelEnvironment.ts";
 
 const withEnv = (env: Record<string, string>) =>
   Effect.provide(Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));

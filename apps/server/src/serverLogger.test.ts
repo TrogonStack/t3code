@@ -6,7 +6,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import * as ServerConfig from "./config.ts";
-import * as OtelEnvironment from "./observability/OtelEnvironment.ts";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { ServerLoggerLive } from "./serverLogger.ts";
 
 interface ExportedRequest {
