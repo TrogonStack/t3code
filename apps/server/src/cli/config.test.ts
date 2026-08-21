@@ -541,6 +541,24 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("leaves a T3 Code endpoint alone when the environment names another", () =>
+    Effect.gen(function* () {
+      // An ambient endpoint that lost the URL must not keep configuring the
+      // export around it: its wire format, headers, and batching belong to the
+      // endpoint it named, not to this one.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otelEnvironment.traces).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics?.url).toBe(
+        "https://collector.example.com/v1/metrics",
+      );
+      expect(resolved.otlpExportIntervalMs).toBe(10_000);
+    }),
+  );
+
   it.effect("exports nothing at all once the SDK is switched off", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveWithEnv({

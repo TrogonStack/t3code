@@ -215,7 +215,8 @@ const signalSettings = (signal: "TRACES" | "METRICS") =>
 
 interface ProtocolDecision {
   readonly protocol: OtlpProtocol | undefined;
-  readonly declined: string | undefined;
+  readonly declinedTraces: string | undefined;
+  readonly declinedMetrics: string | undefined;
   readonly warnings: ReadonlyArray<string>;
 }
 
@@ -226,12 +227,13 @@ interface ProtocolDecision {
  * `grpc` is the one value that turns export off rather than falling back. It
  * is a real protocol this server does not speak, its endpoint has no
  * `/v1/traces` path, and it expects a framing nothing here produces, so
- * posting to it is worse than exporting nothing. A value that is not a
- * protocol at all is a typo, and the specification is explicit that those get
- * a warning and the default.
+ * posting to it is worse than exporting nothing. It turns off only the signal
+ * that named it, since a metric endpoint speaking gRPC says nothing about
+ * where traces go. A value that is not a protocol at all is a typo, and the
+ * specification is explicit that those get a warning and the default.
  *
- * One serializer covers both signals, so a per-signal protocol that disagrees
- * with the trace protocol cannot be honored and says so.
+ * One serializer covers both signals, so two HTTP protocols that disagree
+ * cannot both be honored and the mismatch says so.
  */
 const resolveProtocol = Effect.gen(function* () {
   const warnings: Array<string> = [];
@@ -242,31 +244,36 @@ const resolveProtocol = Effect.gen(function* () {
     }
     const value = raw.trim().toLowerCase();
     if (value === "http/json" || value === "http/protobuf" || value === "grpc") {
-      return value;
+      return { value, name } as const;
     }
     warnings.push(`${name}=${raw} is not a known OTLP protocol and was ignored`);
     return undefined;
   };
 
-  const traces =
-    (yield* read("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ??
-    (yield* read("OTEL_EXPORTER_OTLP_PROTOCOL"));
-  const metrics = yield* read("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
-  if (metrics !== undefined && traces !== undefined && metrics !== traces) {
+  const generic = yield* read("OTEL_EXPORTER_OTLP_PROTOCOL");
+  const traces = (yield* read("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ?? generic;
+  const metrics = (yield* read("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL")) ?? generic;
+
+  const decline = (named: typeof generic) =>
+    named?.value === "grpc"
+      ? `${named.name}=grpc is not supported; this server exports OTLP over HTTP only, so this signal is not exported`
+      : undefined;
+
+  const overHttp = [traces, metrics].flatMap((named) =>
+    named === undefined || named.value === "grpc" ? [] : [named.value],
+  );
+  if (overHttp.length === 2 && overHttp[0] !== overHttp[1]) {
     warnings.push(
-      `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=${metrics} cannot differ from the trace protocol here; ${traces} is used for both`,
+      `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=${overHttp[1]} cannot differ from the trace protocol here; ${overHttp[0]} is used for both`,
     );
   }
-  const chosen = traces ?? metrics;
-  if (chosen === "grpc") {
-    return {
-      protocol: undefined,
-      declined:
-        "OTEL_EXPORTER_OTLP_PROTOCOL=grpc is not supported; this server exports OTLP over HTTP only, so nothing is exported",
-      warnings,
-    } satisfies ProtocolDecision;
-  }
-  return { protocol: chosen, declined: undefined, warnings } satisfies ProtocolDecision;
+
+  return {
+    protocol: overHttp[0],
+    declinedTraces: decline(traces),
+    declinedMetrics: decline(metrics),
+    warnings,
+  } satisfies ProtocolDecision;
 });
 
 /**
@@ -328,7 +335,9 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const metrics = disabled
     ? { value: undefined, warning: undefined }
     : yield* signalSettings("METRICS");
-  const exportable = !disabled && protocolDecision.declined === undefined;
+  const declined = [protocolDecision.declinedTraces, protocolDecision.declinedMetrics].filter(
+    (reason) => reason !== undefined,
+  );
   return {
     disabled,
     warnings: [
@@ -338,12 +347,12 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       traces.warning,
       metrics.warning,
     ].filter((warning) => warning !== undefined),
-    traces: exportable ? traces.value : undefined,
-    metrics: exportable ? metrics.value : undefined,
+    traces: protocolDecision.declinedTraces === undefined ? traces.value : undefined,
+    metrics: protocolDecision.declinedMetrics === undefined ? metrics.value : undefined,
     metricsTemporality: temporality.value,
     resource: resource.value,
     protocol: protocolDecision.protocol,
-    declined: protocolDecision.declined,
+    declined: declined.length === 0 ? undefined : [...new Set(declined)].join(" "),
   };
 }).pipe(
   Effect.catchCause((cause) =>

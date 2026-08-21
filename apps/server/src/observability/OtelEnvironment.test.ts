@@ -170,6 +170,22 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("declines only the signal that asked for grpc", () =>
+    Effect.gen(function* () {
+      // A metric endpoint that speaks gRPC says nothing about where traces go,
+      // and turning traces off over it loses telemetry nobody asked to lose.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "grpc",
+        }),
+      );
+      assert.isDefined(resolved.traces);
+      assert.strictEqual(resolved.metrics, undefined);
+      assert.include(resolved.declined ?? "", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
+    }),
+  );
+
   it.effect("leaves the protocol unstated unless something states it", () =>
     Effect.gen(function* () {
       const fallback = yield* OtelEnvironment.load.pipe(withEnv({}));

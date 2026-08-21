@@ -225,7 +225,7 @@ export const resolveServerConfig = (
     const path = yield* Path.Path;
     const fs = yield* FileSystem.FileSystem;
     const env = yield* EnvServerConfig;
-    const otelEnvironment = yield* OtelEnvironment.load;
+    const otel = yield* OtelEnvironment.load;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
       port: flags.port ?? Option.none(),
@@ -355,6 +355,22 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // A signal whose endpoint came from somewhere else is not this route's to
+    // configure. Leaving its settings in place would let an ambient
+    // OTEL_EXPORTER_OTLP_ENDPOINT change the wire format, headers, and batching
+    // of an export that a T3CODE_OTLP_* name or Settings already answered.
+    const namedTracesUrl =
+      env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl;
+    const namedMetricsUrl =
+      env.otlpMetricsUrl ??
+      bootstrap?.otlpMetricsUrl ??
+      persistedObservabilitySettings.otlpMetricsUrl;
+    const otelEnvironment = {
+      ...otel,
+      traces: namedTracesUrl === undefined ? otel.traces : undefined,
+      metrics: namedMetricsUrl === undefined ? otel.metrics : undefined,
+    } satisfies OtelEnvironment.OtelEnvironment;
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -364,16 +380,10 @@ export const resolveServerConfig = (
       traceMaxFiles: env.traceMaxFiles,
       otlpTracesUrl: otelEnvironment.disabled
         ? undefined
-        : (env.otlpTracesUrl ??
-          bootstrap?.otlpTracesUrl ??
-          persistedObservabilitySettings.otlpTracesUrl ??
-          otelEnvironment.traces?.url),
+        : (namedTracesUrl ?? otelEnvironment.traces?.url),
       otlpMetricsUrl: otelEnvironment.disabled
         ? undefined
-        : (env.otlpMetricsUrl ??
-          bootstrap?.otlpMetricsUrl ??
-          persistedObservabilitySettings.otlpMetricsUrl ??
-          otelEnvironment.metrics?.url),
+        : (namedMetricsUrl ?? otelEnvironment.metrics?.url),
       otlpExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.traces?.exportIntervalMs ?? 10_000,
       otlpServiceName: env.otlpServiceName ?? otelEnvironment.resource.serviceName ?? "t3-server",

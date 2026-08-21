@@ -236,7 +236,8 @@ Not everything in the specification is implemented. These are the ones worth kno
 
 - **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this
   server has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
-  harder to read than exporting nothing. The refusal is logged at startup and both signals stay off.
+  harder to read than exporting nothing. The refusal is logged at startup and turns off only the
+  signal that named gRPC, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc` leaves traces exporting.
 - **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
@@ -247,8 +248,10 @@ Not everything in the specification is implemented. These are the ones worth kno
   cannot differ from the trace protocol. Setting the two to different values logs a warning and uses
   the trace protocol for both.
 - **Browser traces are always JSON.** The proxy that forwards traces from the client posts
-  OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP, so a
-  collector accepts either.
+  OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP and most
+  collectors accept either, so this only matters against one that takes protobuf and nothing else.
+  When the server exporter resolves to `http/protobuf`, a startup warning names the split rather
+  than letting the browser half disappear while the server half looks healthy.
 - **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
   accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
@@ -272,6 +275,11 @@ and both are logged once at startup:
 A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
 whole rather than partly. A half-parsed credential reaches the collector as the same authentication
 error a wrong one would, which reads like a bad token instead of a bad variable.
+
+These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
+name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
+an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
+batching of an export it did not point anywhere.
 
 Once these variables are the ones configuring the exporter, the specification's own defaults apply:
 `OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, and `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` 512. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.

@@ -35,6 +35,16 @@ export const ObservabilityLive = Layer.unwrap(
     const otlpSerializationLayer =
       protocol === "http/protobuf" ? OtlpSerialization.layerProtobuf : OtlpSerialization.layerJson;
 
+    // The proxy that forwards spans from the client encodes JSON and nothing
+    // else, so a protobuf server exporter means the two halves of a trace
+    // arrive in different encodings. Most collectors take either, and the ones
+    // that do not drop the browser half while the server half looks healthy.
+    if (protocol === "http/protobuf" && config.otlpTracesUrl !== undefined) {
+      yield* Effect.logWarning(
+        "Server telemetry uses http/protobuf, but browser traces are forwarded as OTLP/HTTP JSON; a collector that accepts only protobuf will drop them",
+      );
+    }
+
     const otlpResource = {
       serviceName: config.otlpServiceName,
       ...(otel.resource.serviceVersion === undefined
