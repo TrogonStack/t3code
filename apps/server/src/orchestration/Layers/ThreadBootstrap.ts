@@ -142,9 +142,9 @@ const makeThreadBootstrap = Effect.gen(function* () {
                   threadId: command.threadId,
                 }),
               ),
-              Effect.ignoreCause({ log: true }),
+              Effect.as(true),
             )
-          : Effect.void;
+          : Effect.succeed(false);
 
       const recordSetupScriptLaunchFailure = (input: {
         readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -332,7 +332,25 @@ const makeThreadBootstrap = Effect.gen(function* () {
           // Interruptions roll back too; a created-but-never-started thread
           // must not outlive its bootstrap.
           return Effect.uninterruptible(cleanupCreatedThread()).pipe(
-            Effect.flatMap(() => Effect.fail(dispatchError)),
+            Effect.matchCauseEffect({
+              onFailure: (cleanupCause) =>
+                Effect.logWarning("bootstrap thread cleanup failed", {
+                  threadId: command.threadId,
+                  detail: Cause.pretty(cleanupCause),
+                }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+              onSuccess: (threadDeleted) =>
+                Effect.fail(
+                  threadDeleted
+                    ? new OrchestrationDispatchCommandError({
+                        message: dispatchError.message,
+                        ...(dispatchError.cause !== undefined
+                          ? { cause: dispatchError.cause }
+                          : {}),
+                        bootstrapThreadDisposition: "deleted",
+                      })
+                    : dispatchError,
+                ),
+            }),
           );
         }),
       );
