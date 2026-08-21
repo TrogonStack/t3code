@@ -109,13 +109,14 @@ export function PullRequestChecksPopover({
   return (
     <Popover>
       {/* A listing row is itself a button, so the trigger renders as a span: a nested button is
-          not valid inside one. The click is stopped here so opening the checks does not also
+          not valid inside one. `nativeButton={false}` is what tells Base UI the span is the
+          button, so it supplies the role, the tab stop, and the keyboard activation a real one
+          would have given for free. The click is stopped here so opening the checks does not also
           select the row it sits on. */}
       <PopoverTrigger
+        nativeButton={false}
         render={
           <span
-            role="button"
-            tabIndex={0}
             aria-label={`Checks: ${presentation.label}`}
             className={cn("inline-flex shrink-0 cursor-pointer items-center", className)}
           />
