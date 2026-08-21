@@ -24,15 +24,20 @@ export const ObservabilityLive = Layer.unwrap(
       yield* Effect.logWarning(warning);
     }
 
-    if (otel.declined !== undefined) {
-      yield* Effect.logWarning(otel.declined);
+    // One variable can decline both signals, and saying so twice reads like
+    // two separate problems.
+    const declined = new Set(
+      [otel.traces.declined, otel.metrics.declined].filter((reason) => reason !== undefined),
+    );
+    for (const reason of declined) {
+      yield* Effect.logWarning(reason);
     }
 
     // Each signal builds its own serializer, so the wire format travels with
     // the settings of the endpoint that asked for it. A signal these variables
     // did not supply keeps the JSON T3 Code has always sent.
-    const serializationFor = (signal: typeof otel.traces) =>
-      signal?.protocol === "http/protobuf"
+    const serializationFor = (settings: typeof otel.traces.settings) =>
+      settings?.protocol === "http/protobuf"
         ? OtlpSerialization.layerProtobuf
         : OtlpSerialization.layerJson;
 
@@ -40,7 +45,7 @@ export const ObservabilityLive = Layer.unwrap(
     // else, so a protobuf trace exporter means the two halves of a trace
     // arrive in different encodings. Most collectors take either, and the ones
     // that do not drop the browser half while the server half looks healthy.
-    if (otel.traces?.protocol === "http/protobuf" && config.otlpTracesUrl !== undefined) {
+    if (otel.traces.settings?.protocol === "http/protobuf" && config.otlpTracesUrl !== undefined) {
       yield* Effect.logWarning(
         "Server telemetry uses http/protobuf, but browser traces are forwarded as OTLP/HTTP JSON; a collector that accepts only protobuf will drop them",
       );
@@ -87,13 +92,17 @@ export const ObservabilityLive = Layer.unwrap(
                 url: config.otlpTracesUrl,
                 exportInterval: `${config.otlpExportIntervalMs} millis`,
                 resource: otlpResource,
-                ...(otel.traces?.headers === undefined ? {} : { headers: otel.traces.headers }),
-                ...(otel.traces?.maxBatchSize === undefined
+                ...(otel.traces.settings?.headers === undefined
                   ? {}
-                  : { maxBatchSize: otel.traces.maxBatchSize }),
-                ...(otel.traces?.shutdownTimeoutMs === undefined
+                  : { headers: otel.traces.settings.headers }),
+                ...(otel.traces.settings?.maxBatchSize === undefined
                   ? {}
-                  : { shutdownTimeout: `${otel.traces.shutdownTimeoutMs} millis` as const }),
+                  : { maxBatchSize: otel.traces.settings.maxBatchSize }),
+                ...(otel.traces.settings?.shutdownTimeoutMs === undefined
+                  ? {}
+                  : {
+                      shutdownTimeout: `${otel.traces.settings.shutdownTimeoutMs} millis` as const,
+                    }),
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -112,7 +121,7 @@ export const ObservabilityLive = Layer.unwrap(
       }),
     ).pipe(
       Layer.provide(OtlpExporter.layerFlusher),
-      Layer.provideMerge(serializationFor(otel.traces)),
+      Layer.provideMerge(serializationFor(otel.traces.settings)),
     );
 
     const metricsLayer =
@@ -120,16 +129,18 @@ export const ObservabilityLive = Layer.unwrap(
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${otel.metrics?.exportIntervalMs ?? config.otlpExportIntervalMs} millis`,
+            exportInterval: `${config.otlpMetricsExportIntervalMs} millis`,
             resource: otlpResource,
-            ...(otel.metrics?.headers === undefined ? {} : { headers: otel.metrics.headers }),
-            ...(otel.metrics?.shutdownTimeoutMs === undefined
+            ...(otel.metrics.settings?.headers === undefined
               ? {}
-              : { shutdownTimeout: `${otel.metrics.shutdownTimeoutMs} millis` as const }),
-            ...(otel.metricsTemporality === undefined
+              : { headers: otel.metrics.settings.headers }),
+            ...(otel.metrics.settings?.shutdownTimeoutMs === undefined
               ? {}
-              : { temporality: otel.metricsTemporality }),
-          }).pipe(Layer.provideMerge(serializationFor(otel.metrics)));
+              : { shutdownTimeout: `${otel.metrics.settings.shutdownTimeoutMs} millis` as const }),
+            ...(otel.metrics.settings?.temporality === undefined
+              ? {}
+              : { temporality: otel.metrics.settings.temporality }),
+          }).pipe(Layer.provideMerge(serializationFor(otel.metrics.settings)));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),

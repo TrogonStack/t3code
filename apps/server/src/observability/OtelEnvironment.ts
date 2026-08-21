@@ -43,6 +43,24 @@ export interface OtlpSignalSettings {
   readonly exportIntervalMs: number | undefined;
   readonly maxBatchSize: number | undefined;
   readonly shutdownTimeoutMs: number | undefined;
+  /** Metrics only. Traces have no aggregation to prefer. */
+  readonly temporality: MetricsTemporality | undefined;
+}
+
+/**
+ * One signal's whole answer from these variables: how to export it, or why it
+ * is not exported from here. Everything a signal decides lives under it, so a
+ * caller whose endpoint came from somewhere else drops this one value and
+ * leaves nothing behind that could reach an export it did not configure.
+ */
+export interface OtlpSignal {
+  readonly settings: OtlpSignalSettings | undefined;
+  /**
+   * Why a configured endpoint is not being used, if it is not. Carried rather
+   * than logged here so the caller can report it once, at startup, where a
+   * user is looking.
+   */
+  readonly declined: string | undefined;
 }
 
 export interface OtlpResourceSettings {
@@ -61,16 +79,9 @@ export interface OtelEnvironment {
    * caller reports them once, at startup, where someone is looking.
    */
   readonly warnings: ReadonlyArray<string>;
-  readonly traces: OtlpSignalSettings | undefined;
-  readonly metrics: OtlpSignalSettings | undefined;
-  readonly metricsTemporality: MetricsTemporality | undefined;
+  readonly traces: OtlpSignal;
+  readonly metrics: OtlpSignal;
   readonly resource: OtlpResourceSettings;
-  /**
-   * Why a configured endpoint is not being used, if it is not. Carried rather
-   * than logged here so the caller can report it once, at startup, where a
-   * user is looking.
-   */
-  readonly declined: string | undefined;
 }
 
 const optionalString = (name: string) =>
@@ -180,7 +191,11 @@ const SPEC_DEFAULT_SCHEDULE_DELAY_MS = 5_000;
 const SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
 const SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
 
-const signalSettings = (signal: "TRACES" | "METRICS", protocol: OtlpProtocol) =>
+const signalSettings = (
+  signal: "TRACES" | "METRICS",
+  protocol: OtlpProtocol,
+  temporality: MetricsTemporality | undefined,
+) =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
     if (url === undefined || !(yield* signalWantsOtlp(signal))) {
@@ -210,6 +225,7 @@ const signalSettings = (signal: "TRACES" | "METRICS", protocol: OtlpProtocol) =>
               SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE)
             : undefined,
         shutdownTimeoutMs: timeoutMs,
+        temporality: signal === "METRICS" ? temporality : undefined,
       },
       warning: specific.warning ?? generic.warning,
     } satisfies Parsed<OtlpSignalSettings>;
@@ -317,10 +333,13 @@ const resolveResource = Effect.gen(function* () {
   } satisfies Parsed<OtlpResourceSettings>;
 });
 
+const UNREADABLE = "the OpenTelemetry environment could not be read";
+
 /**
  * Read the environment. Never fails: a variable this server cannot honor
- * leaves the corresponding setting unset and is reported through `declined`,
- * because an unparseable telemetry knob is not a reason to refuse to start.
+ * leaves the corresponding setting unset and is reported through the signal's
+ * `declined`, because an unparseable telemetry knob is not a reason to refuse
+ * to start.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const disabled = yield* Config.boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false));
@@ -329,13 +348,10 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const temporality = yield* resolveMetricsTemporality;
   const traces = disabled
     ? { value: undefined, warning: undefined }
-    : yield* signalSettings("TRACES", protocolDecision.traces.protocol);
+    : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
   const metrics = disabled
     ? { value: undefined, warning: undefined }
-    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol);
-  const declined = [protocolDecision.traces.declined, protocolDecision.metrics.declined].filter(
-    (reason) => reason !== undefined,
-  );
+    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
   return {
     disabled,
     warnings: [
@@ -345,11 +361,15 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       traces.warning,
       metrics.warning,
     ].filter((warning) => warning !== undefined),
-    traces: protocolDecision.traces.declined === undefined ? traces.value : undefined,
-    metrics: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
-    metricsTemporality: temporality.value,
+    traces: {
+      settings: protocolDecision.traces.declined === undefined ? traces.value : undefined,
+      declined: protocolDecision.traces.declined,
+    },
+    metrics: {
+      settings: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
+      declined: protocolDecision.metrics.declined,
+    },
     resource: resource.value,
-    declined: declined.length === 0 ? undefined : [...new Set(declined)].join(" "),
   };
 }).pipe(
   Effect.catchCause((cause) =>
@@ -357,23 +377,22 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       Effect.as({
         disabled: false,
         warnings: [],
-        traces: undefined,
-        metrics: undefined,
-        metricsTemporality: undefined,
+        traces: { settings: undefined, declined: UNREADABLE },
+        metrics: { settings: undefined, declined: UNREADABLE },
         resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
-        declined: "the OpenTelemetry environment could not be read",
       }),
     ),
   ),
 );
 
+/** A signal these variables said nothing usable about. */
+export const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {
   disabled: false,
   warnings: [],
-  traces: undefined,
-  metrics: undefined,
-  metricsTemporality: undefined,
+  traces: noSignal,
+  metrics: noSignal,
   resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
-  declined: undefined,
 };

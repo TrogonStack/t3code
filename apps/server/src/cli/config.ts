@@ -356,9 +356,11 @@ export const resolveServerConfig = (
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
     // A signal whose endpoint came from somewhere else is not this route's to
-    // configure. Leaving its settings in place would let an ambient
-    // OTEL_EXPORTER_OTLP_ENDPOINT change the wire format, headers, and batching
-    // of an export that a T3CODE_OTLP_* name or Settings already answered.
+    // configure. Dropping the whole signal, rather than the endpoint alone,
+    // is what stops an ambient OTEL_EXPORTER_OTLP_ENDPOINT from changing the
+    // wire format, headers, batching, or aggregation of an export that a
+    // T3CODE_OTLP_* name or Settings already answered, and stops startup from
+    // reporting that signal as declined while it is exporting.
     const namedTracesUrl =
       env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl;
     const namedMetricsUrl =
@@ -367,8 +369,8 @@ export const resolveServerConfig = (
       persistedObservabilitySettings.otlpMetricsUrl;
     const otelEnvironment = {
       ...otel,
-      traces: namedTracesUrl === undefined ? otel.traces : undefined,
-      metrics: namedMetricsUrl === undefined ? otel.metrics : undefined,
+      traces: namedTracesUrl === undefined ? otel.traces : OtelEnvironment.noSignal,
+      metrics: namedMetricsUrl === undefined ? otel.metrics : OtelEnvironment.noSignal,
     } satisfies OtelEnvironment.OtelEnvironment;
 
     const config: ServerConfig.ServerConfig["Service"] = {
@@ -380,12 +382,17 @@ export const resolveServerConfig = (
       traceMaxFiles: env.traceMaxFiles,
       otlpTracesUrl: otelEnvironment.disabled
         ? undefined
-        : (namedTracesUrl ?? otelEnvironment.traces?.url),
+        : (namedTracesUrl ?? otelEnvironment.traces.settings?.url),
       otlpMetricsUrl: otelEnvironment.disabled
         ? undefined
-        : (namedMetricsUrl ?? otelEnvironment.metrics?.url),
+        : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
+      // Each signal gets its own, because the environment names them
+      // separately and a signal that took its endpoint elsewhere must not
+      // inherit the other one's schedule.
       otlpExportIntervalMs:
-        env.otlpExportIntervalMs ?? otelEnvironment.traces?.exportIntervalMs ?? 10_000,
+        env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
+      otlpMetricsExportIntervalMs:
+        env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
       otlpServiceName: env.otlpServiceName ?? otelEnvironment.resource.serviceName ?? "t3-server",
       otelEnvironment,
       mode,

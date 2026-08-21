@@ -66,6 +66,7 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpExportIntervalMs: number;
+    readonly otlpMetricsExportIntervalMs: number;
     readonly otlpServiceName: string;
     /**
      * What the standard `OTEL_*` variables asked for. The endpoints above are
@@ -186,6 +187,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
+    otlpMetricsExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,

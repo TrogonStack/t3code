@@ -50,6 +50,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
+    otlpMetricsExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
@@ -551,11 +552,55 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
       });
 
-      expect(resolved.otelEnvironment.traces).toBeUndefined();
-      expect(resolved.otelEnvironment.metrics?.url).toBe(
+      expect(resolved.otelEnvironment.traces.settings).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics.settings?.url).toBe(
         "https://collector.example.com/v1/metrics",
       );
       expect(resolved.otlpExportIntervalMs).toBe(10_000);
+    }),
+  );
+
+  it.effect("keeps an ambient aggregation off a T3 Code metric endpoint", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
+        T3CODE_OTLP_METRICS_URL: "http://localhost:4318/v1/metrics",
+      });
+
+      expect(resolved.otelEnvironment.metrics.settings).toBeUndefined();
+      expect(resolved.otelEnvironment.traces.settings?.temporality).toBeUndefined();
+    }),
+  );
+
+  it.effect("keeps one signal's schedule off the other one", () =>
+    Effect.gen(function* () {
+      // Traces take the specification's five second batch delay from the
+      // ambient endpoint. Metrics went somewhere else and keep T3 Code's own
+      // interval rather than inheriting a number meant for spans.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_METRICS_URL: "http://localhost:4318/v1/metrics",
+      });
+
+      expect(resolved.otlpExportIntervalMs).toBe(5_000);
+      expect(resolved.otlpMetricsExportIntervalMs).toBe(10_000);
+    }),
+  );
+
+  it.effect("does not report a signal as declined while it is exporting", () =>
+    Effect.gen(function* () {
+      // grpc turns off the export these variables asked for, and says nothing
+      // about a signal whose endpoint came from a T3 Code name.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+      expect(resolved.otelEnvironment.traces.declined).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics.declined).toContain("grpc");
     }),
   );
 

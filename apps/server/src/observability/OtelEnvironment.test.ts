@@ -12,8 +12,8 @@ describe("OtelEnvironment", () => {
   it.effect("stays off when nothing is configured", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(withEnv({}));
-      assert.strictEqual(resolved.traces, undefined);
-      assert.strictEqual(resolved.metrics, undefined);
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.strictEqual(resolved.metrics.settings, undefined);
       assert.strictEqual(resolved.disabled, false);
     }),
   );
@@ -23,8 +23,11 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
       );
-      assert.strictEqual(resolved.traces?.url, "https://collector.example.com/v1/traces");
-      assert.strictEqual(resolved.metrics?.url, "https://collector.example.com/v1/metrics");
+      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
+      assert.strictEqual(
+        resolved.metrics.settings?.url,
+        "https://collector.example.com/v1/metrics",
+      );
     }),
   );
 
@@ -33,7 +36,7 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com/" }),
       );
-      assert.strictEqual(resolved.traces?.url, "https://collector.example.com/v1/traces");
+      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
     }),
   );
 
@@ -47,8 +50,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://traces.example.com/ingest",
         }),
       );
-      assert.strictEqual(resolved.traces?.url, "https://traces.example.com/ingest");
-      assert.strictEqual(resolved.metrics?.url, "https://generic.example.com/v1/metrics");
+      assert.strictEqual(resolved.traces.settings?.url, "https://traces.example.com/ingest");
+      assert.strictEqual(resolved.metrics.settings?.url, "https://generic.example.com/v1/metrics");
     }),
   );
 
@@ -62,7 +65,7 @@ describe("OtelEnvironment", () => {
           OTEL_METRICS_EXPORTER: "otlp",
         }),
       );
-      assert.isDefined(resolved.traces);
+      assert.isDefined(resolved.traces.settings);
     }),
   );
 
@@ -74,8 +77,8 @@ describe("OtelEnvironment", () => {
           OTEL_TRACES_EXPORTER: "none",
         }),
       );
-      assert.strictEqual(resolved.traces, undefined);
-      assert.isDefined(resolved.metrics);
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.isDefined(resolved.metrics.settings);
     }),
   );
 
@@ -87,7 +90,7 @@ describe("OtelEnvironment", () => {
           OTEL_TRACES_EXPORTER: "console, otlp",
         }),
       );
-      assert.isDefined(resolved.traces);
+      assert.isDefined(resolved.traces.settings);
     }),
   );
 
@@ -100,8 +103,8 @@ describe("OtelEnvironment", () => {
         }),
       );
       assert.strictEqual(resolved.disabled, true);
-      assert.strictEqual(resolved.traces, undefined);
-      assert.strictEqual(resolved.metrics, undefined);
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.strictEqual(resolved.metrics.settings, undefined);
     }),
   );
 
@@ -117,8 +120,8 @@ describe("OtelEnvironment", () => {
       // The per-signal header set replaces the generic one rather than
       // merging with it, which is what the spec says and what a collector
       // with two different keys depends on.
-      assert.deepStrictEqual(resolved.traces?.headers, { "api-key": "traces-only" });
-      assert.deepStrictEqual(resolved.metrics?.headers, {
+      assert.deepStrictEqual(resolved.traces.settings?.headers, { "api-key": "traces-only" });
+      assert.deepStrictEqual(resolved.metrics.settings?.headers, {
         "api-key": "abc123",
         "x-tenant": "acme",
       });
@@ -164,9 +167,9 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
         }),
       );
-      assert.strictEqual(resolved.traces, undefined);
-      assert.strictEqual(resolved.metrics, undefined);
-      assert.include(resolved.declined ?? "", "grpc");
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.include(resolved.traces.declined ?? "", "grpc");
     }),
   );
 
@@ -180,9 +183,9 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "grpc",
         }),
       );
-      assert.isDefined(resolved.traces);
-      assert.strictEqual(resolved.metrics, undefined);
-      assert.include(resolved.declined ?? "", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
+      assert.isDefined(resolved.traces.settings);
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.include(resolved.metrics.declined ?? "", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
     }),
   );
 
@@ -191,8 +194,8 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
       );
-      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
-      assert.strictEqual(resolved.metrics?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.metrics.settings?.protocol, "http/protobuf");
     }),
   );
 
@@ -203,8 +206,8 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" }),
       );
-      assert.strictEqual(resolved.traces, undefined);
-      assert.strictEqual(resolved.metrics, undefined);
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.strictEqual(resolved.metrics.settings, undefined);
     }),
   );
 
@@ -219,10 +222,10 @@ describe("OtelEnvironment", () => {
           OTEL_METRIC_EXPORT_INTERVAL: "15000",
         }),
       );
-      assert.strictEqual(resolved.traces?.exportIntervalMs, 2500);
-      assert.strictEqual(resolved.traces?.maxBatchSize, 128);
-      assert.strictEqual(resolved.traces?.shutdownTimeoutMs, 7000);
-      assert.strictEqual(resolved.metrics?.exportIntervalMs, 15000);
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 2500);
+      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 128);
+      assert.strictEqual(resolved.traces.settings?.shutdownTimeoutMs, 7000);
+      assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 15000);
     }),
   );
 
@@ -233,9 +236,9 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
       );
-      assert.strictEqual(resolved.traces?.exportIntervalMs, 5000);
-      assert.strictEqual(resolved.traces?.maxBatchSize, 512);
-      assert.strictEqual(resolved.metrics?.exportIntervalMs, 60000);
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 5000);
+      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
+      assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 60000);
     }),
   );
 
@@ -248,8 +251,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
         }),
       );
-      assert.strictEqual(resolved.metrics?.shutdownTimeoutMs, 9000);
-      assert.strictEqual(resolved.metricsTemporality, "delta");
+      assert.strictEqual(resolved.metrics.settings?.shutdownTimeoutMs, 9000);
+      assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
     }),
   );
 
@@ -261,7 +264,7 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20abc123, x-scope=team%2Fplatform",
         }),
       );
-      assert.deepStrictEqual(resolved.traces?.headers, {
+      assert.deepStrictEqual(resolved.traces.settings?.headers, {
         Authorization: "Bearer abc123",
         "x-scope": "team/platform",
       });
@@ -276,7 +279,9 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Basic YWJjOmRlZg==",
         }),
       );
-      assert.deepStrictEqual(resolved.traces?.headers, { Authorization: "Basic YWJjOmRlZg==" });
+      assert.deepStrictEqual(resolved.traces.settings?.headers, {
+        Authorization: "Basic YWJjOmRlZg==",
+      });
     }),
   );
 
@@ -303,7 +308,7 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz,x-other=100%25",
         }),
       );
-      assert.strictEqual(resolved.traces?.headers, undefined);
+      assert.strictEqual(resolved.traces.settings?.headers, undefined);
       assert.isTrue(
         resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
       );
@@ -327,7 +332,10 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com/otel" }),
       );
-      assert.strictEqual(resolved.traces?.url, "https://collector.example.com/otel/v1/traces");
+      assert.strictEqual(
+        resolved.traces.settings?.url,
+        "https://collector.example.com/otel/v1/traces",
+      );
     }),
   );
 
@@ -339,8 +347,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
         }),
       );
-      assert.strictEqual(resolved.metricsTemporality, undefined);
-      assert.isDefined(resolved.metrics);
+      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
+      assert.isDefined(resolved.metrics.settings);
       assert.isTrue(resolved.warnings.some((warning) => warning.includes("lowmemory")));
     }),
   );
@@ -356,8 +364,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_PROTOCOL: "htp/json",
         }),
       );
-      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
-      assert.strictEqual(resolved.declined, undefined);
+      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.traces.declined, undefined);
       assert.isTrue(resolved.warnings.some((warning) => warning.includes("htp/json")));
     }),
   );
@@ -373,8 +381,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
         }),
       );
-      assert.strictEqual(resolved.traces?.protocol, "http/json");
-      assert.strictEqual(resolved.metrics?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.traces.settings?.protocol, "http/json");
+      assert.strictEqual(resolved.metrics.settings?.protocol, "http/protobuf");
       assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
@@ -387,8 +395,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json",
         }),
       );
-      assert.strictEqual(resolved.metrics?.protocol, "http/json");
-      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.metrics.settings?.protocol, "http/json");
+      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
       assert.deepStrictEqual(resolved.warnings, []);
     }),
   );

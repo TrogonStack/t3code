@@ -193,12 +193,21 @@ T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you w
 
 #### Precedence
 
-For each setting, the first one that is present wins:
+For each signal, the first source that names its endpoint wins:
 
 1. `T3CODE_OTLP_*`
 2. the desktop bootstrap envelope
 3. Settings, under `observability`
 4. `OTEL_*`
+
+Whichever source wins takes the whole signal, not just the URL. Traces sent to a
+`T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
+interval even when `OTEL_*` variables are set, because those variables describe the collector they
+named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS` is the exception, and applies to both
+signals wherever they go.
+
+The two signals are resolved separately, so traces can come from one source and metrics from
+another.
 
 `OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured through
 Settings.
@@ -224,7 +233,8 @@ specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never ment
 
 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this server has no gRPC
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
-exporting nothing. The refusal is logged at startup and both signals stay off.
+exporting nothing. The refusal is logged at startup and turns off only the signal that named gRPC,
+and only when that signal had no other endpoint to go to.
 
 Header and resource-attribute values are percent decoded, so
 `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space and a base64 credential keeps
