@@ -6,6 +6,7 @@
  *
  * @module ServerConfig
  */
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,8 +14,6 @@ import * as Layer from "effect/Layer";
 import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-
-import * as OtelEnvironment from "./observability/OtelEnvironment.ts";
 
 export const DEFAULT_PORT = 3773;
 

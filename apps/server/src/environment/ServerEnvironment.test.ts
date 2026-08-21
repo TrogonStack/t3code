@@ -15,7 +15,7 @@ import {
 } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
-import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 const isServerEnvironmentIdPersistenceError = Schema.is(
   ServerEnvironment.ServerEnvironmentIdPersistenceError,

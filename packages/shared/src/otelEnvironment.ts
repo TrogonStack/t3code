@@ -1,5 +1,5 @@
 /**
- * OtelEnvironment: the OpenTelemetry environment variables, read the way the
+ * otelEnvironment: the OpenTelemetry environment variables, read the way the
  * specification says to read them.
  *
  * T3 Code has always had its own `T3CODE_OTLP_*` names, which stay the
@@ -8,7 +8,10 @@
  * other service on it and expects one more process to join in without being
  * told twice.
  *
- * Only the variables this server can act on are read. The exporter speaks
+ * Read by every T3 Code process that exports telemetry, so the server and the
+ * desktop app cannot disagree about what a variable means.
+ *
+ * Only the variables T3 Code can act on are read. The exporter speaks
  * OTLP over HTTP, so `grpc` is declined loudly rather than answered with a
  * body the endpoint cannot parse.
  *
@@ -16,20 +19,20 @@
  * warning followed by the default, never a refusal to start and never a
  * silently different behavior.
  *
- * @module observability/OtelEnvironment
+ * @module otelEnvironment
  */
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 /**
- * The signals this server exports. Each one is configured independently, and
+ * The signals T3 Code exports. Each one is configured independently, and
  * the specification spells every variable name with the signal in it, so the
  * name is the thing the readers below are parameterized by.
  */
 export type OtlpSignalName = "TRACES" | "METRICS" | "LOGS";
 
-/** The wire formats this server can produce. `grpc` is not one of them. */
+/** The wire formats T3 Code can produce. `grpc` is not one of them. */
 export type OtlpProtocol = "http/json" | "http/protobuf";
 
 /** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`. */
@@ -327,7 +330,7 @@ interface ProtocolDecision {
  * OpenTelemetry keeps the wire format T3 Code has always used.
  *
  * `grpc` is the one value that turns export off rather than falling back. It
- * is a real protocol this server does not speak, its endpoint has no
+ * is a real protocol T3 Code does not speak, its endpoint has no
  * `/v1/traces` path, and it expects a framing nothing here produces, so
  * posting to it is worse than exporting nothing. It turns off only the signal
  * that named it, since a metric endpoint speaking gRPC says nothing about
@@ -363,7 +366,7 @@ const resolveProtocol = Effect.gen(function* () {
       : named.value === "grpc"
         ? {
             protocol: SPEC_DEFAULT_PROTOCOL,
-            declined: `${named.name}=grpc is not supported; this server exports OTLP over HTTP only, so this signal is not exported`,
+            declined: `${named.name}=grpc is not supported; T3 Code exports OTLP over HTTP only, so this signal is not exported`,
           }
         : { protocol: named.value, declined: undefined };
 
@@ -422,7 +425,7 @@ const resolveResource = Effect.gen(function* () {
 const UNREADABLE = "the OpenTelemetry environment could not be read";
 
 /**
- * Read the environment. Never fails: a variable this server cannot honor
+ * Read the environment. Never fails: a variable T3 Code cannot honor
  * leaves the corresponding setting unset and is reported through the signal's
  * `declined`, because an unparseable telemetry knob is not a reason to refuse
  * to start.

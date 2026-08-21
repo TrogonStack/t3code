@@ -19,7 +19,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
