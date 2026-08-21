@@ -51,3 +51,5 @@ Each entry uses these sections:
   active, [#27](https://github.com/TrogonStack/t3code/pull/27)
 - **0017** [A revoked Claude token reads as revoked](./0017-a-revoked-claude-token-reads-as-revoked.md)
   active, [#28](https://github.com/TrogonStack/t3code/pull/28)
+- **0018** [The standard OTEL variables are honored](./0018-the-standard-otel-variables-are-honored.md)
+  active, [#31](https://github.com/TrogonStack/t3code/pull/31)

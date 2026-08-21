@@ -16,6 +16,7 @@ import { Argument, Flag } from "effect/unstable/cli";
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
 
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -95,9 +96,13 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
-    Config.withDefault(10_000),
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
-  otlpServiceName: Config.string("T3CODE_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
+  otlpServiceName: Config.string("T3CODE_OTLP_SERVICE_NAME").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   mode: Config.schema(ServerConfig.RuntimeMode, "T3CODE_MODE").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -196,6 +201,17 @@ const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
+/**
+ * Reads a source that names an OTLP destination, treating a blank one as
+ * nobody having named it. An empty variable is set in the environment but is
+ * not an answer, and taking it as one both publishes an endpoint that cannot
+ * be reached and suppresses the ambient variable that could have been.
+ */
+const named = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+};
+
 const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
   const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
@@ -220,6 +236,7 @@ export const resolveServerConfig = (
     const path = yield* Path.Path;
     const fs = yield* FileSystem.FileSystem;
     const env = yield* EnvServerConfig;
+    const otel = yield* OtelEnvironment.load;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
       port: flags.port ?? Option.none(),
@@ -349,6 +366,26 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // A signal whose endpoint came from somewhere else is not this route's to
+    // configure. Dropping the whole signal, rather than the endpoint alone,
+    // is what stops an ambient OTEL_EXPORTER_OTLP_ENDPOINT from changing the
+    // wire format, headers, batching, or aggregation of an export that a
+    // T3CODE_OTLP_* name or Settings already answered, and stops startup from
+    // reporting that signal as declined while it is exporting.
+    const namedTracesUrl = named(
+      env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl,
+    );
+    const namedMetricsUrl = named(
+      env.otlpMetricsUrl ??
+        bootstrap?.otlpMetricsUrl ??
+        persistedObservabilitySettings.otlpMetricsUrl,
+    );
+    const otelEnvironment = {
+      ...otel,
+      traces: namedTracesUrl === undefined ? otel.traces : OtelEnvironment.noSignal,
+      metrics: namedMetricsUrl === undefined ? otel.metrics : OtelEnvironment.noSignal,
+    } satisfies OtelEnvironment.OtelEnvironment;
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -356,16 +393,23 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl:
-        env.otlpTracesUrl ??
-        bootstrap?.otlpTracesUrl ??
-        persistedObservabilitySettings.otlpTracesUrl,
-      otlpMetricsUrl:
-        env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
-      otlpExportIntervalMs: env.otlpExportIntervalMs,
-      otlpServiceName: env.otlpServiceName,
+      otlpTracesUrl: otelEnvironment.disabled
+        ? undefined
+        : (namedTracesUrl ?? otelEnvironment.traces.settings?.url),
+      otlpMetricsUrl: otelEnvironment.disabled
+        ? undefined
+        : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
+      // T3 Code has one interval variable and it deliberately covers both
+      // signals. The per-signal part is the fallback under it: the environment
+      // names a trace delay and a metric interval separately, so a signal that
+      // took its endpoint elsewhere must not inherit the other one's.
+      otlpExportIntervalMs:
+        env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
+      otlpMetricsExportIntervalMs:
+        env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
+      otlpServiceName:
+        named(env.otlpServiceName) ?? otelEnvironment.resource.serviceName ?? "t3-server",
+      otelEnvironment,
       mode,
       port,
       cwd,

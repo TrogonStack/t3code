@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { assert, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
@@ -18,6 +19,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
+import * as OtelEnvironment from "../observability/OtelEnvironment.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
@@ -49,7 +51,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
+    otlpMetricsExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
   } as const;
 
@@ -485,6 +489,161 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+    }),
+  );
+
+  // Resolving a config reads the settings file and creates the trace
+  // directory, so a shared home would let one case see another's writes and
+  // would race when these run in parallel.
+  const resolveWithEnv = (env: Record<string, string>) => {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-otel-config-"));
+    return resolveServerConfig(
+      {
+        mode: Option.some("web"),
+        port: Option.some(4888),
+        host: Option.none(),
+        baseDir: Option.some(baseDir),
+        cwd: Option.none(),
+        devUrl: Option.none(),
+        noBrowser: Option.none(),
+        bootstrapFd: Option.none(),
+        autoBootstrapProjectFromCwd: Option.none(),
+        logWebSocketEvents: Option.none(),
+        tailscaleServeEnabled: Option.none(),
+        tailscaleServePort: Option.none(),
+      },
+      Option.none(),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          NodeFS.rmSync(baseDir, { recursive: true, force: true });
+        }),
+      ),
+    );
+  };
+
+  it.effect("exports to the endpoint the rest of the machine already uses", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3");
+    }),
+  );
+
+  it.effect("does not let an empty T3 Code name stand in for an answer", () =>
+    Effect.gen(function* () {
+      // An empty variable is set without saying anything. Reading it as an
+      // answer would publish an endpoint nothing can reach and would suppress
+      // the ambient one that could have been used instead.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+        T3CODE_OTLP_TRACES_URL: "",
+        T3CODE_OTLP_METRICS_URL: "   ",
+        T3CODE_OTLP_SERVICE_NAME: "",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3");
+    }),
+  );
+
+  it.effect("keeps T3 Code's own names as the explicit answer", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+        T3CODE_OTLP_SERVICE_NAME: "t3-local",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3-local");
+    }),
+  );
+
+  it.effect("leaves a T3 Code endpoint alone when the environment names another", () =>
+    Effect.gen(function* () {
+      // An ambient endpoint that lost the URL must not keep configuring the
+      // export around it: its wire format, headers, and batching belong to the
+      // endpoint it named, not to this one.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otelEnvironment.traces.settings).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics.settings?.url).toBe(
+        "https://collector.example.com/v1/metrics",
+      );
+      expect(resolved.otlpExportIntervalMs).toBe(10_000);
+    }),
+  );
+
+  it.effect("keeps an ambient aggregation off a T3 Code metric endpoint", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
+        T3CODE_OTLP_METRICS_URL: "http://localhost:4318/v1/metrics",
+      });
+
+      expect(resolved.otelEnvironment.metrics.settings).toBeUndefined();
+      expect(resolved.otelEnvironment.traces.settings?.temporality).toBeUndefined();
+    }),
+  );
+
+  it.effect("keeps one signal's schedule off the other one", () =>
+    Effect.gen(function* () {
+      // Traces take the specification's five second batch delay from the
+      // ambient endpoint. Metrics went somewhere else and keep T3 Code's own
+      // interval rather than inheriting a number meant for spans.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_METRICS_URL: "http://localhost:4318/v1/metrics",
+      });
+
+      expect(resolved.otlpExportIntervalMs).toBe(5_000);
+      expect(resolved.otlpMetricsExportIntervalMs).toBe(10_000);
+    }),
+  );
+
+  it.effect("does not report a signal as declined while it is exporting", () =>
+    Effect.gen(function* () {
+      // grpc turns off the export these variables asked for, and says nothing
+      // about a signal whose endpoint came from a T3 Code name.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+      expect(resolved.otelEnvironment.traces.declined).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics.declined).toContain("grpc");
+    }),
+  );
+
+  it.effect("exports nothing at all once the SDK is switched off", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        OTEL_SDK_DISABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otlpTracesUrl).toBeUndefined();
+      expect(resolved.otlpMetricsUrl).toBeUndefined();
     }),
   );
 

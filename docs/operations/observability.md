@@ -173,6 +173,138 @@ Do not rely on launching from Finder, Spotlight, the dock, or the Start menu aft
 
 The backend reads observability config at process start. If you change OTLP env vars, stop the app completely and start it again.
 
+### Option 3: The Standard `OTEL_*` Variables
+
+If your machine already exports the OpenTelemetry environment variables for everything else running on
+it, T3 Code joins in without being told twice. Nothing above is required:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_SERVICE_NAME=t3-local
+```
+
+The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces` and metrics to
+`<endpoint>/v1/metrics`, exactly as the specification says. Set
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` when a signal needs a
+full URL of its own.
+
+Ambient `OTEL_*` variables turn export on by themselves. A work collector in your shell profile means
+T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want.
+
+#### Precedence
+
+For each signal, the first source that names its endpoint wins:
+
+1. `T3CODE_OTLP_*`
+2. the desktop bootstrap envelope
+3. Settings, under `observability`
+4. `OTEL_*`
+
+Whichever source wins takes the whole signal, not just the URL. Traces sent to a
+`T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
+interval even when `OTEL_*` variables are set, because those variables describe the collector they
+named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS` is the exception, and applies to both
+signals wherever they go.
+
+The two signals are resolved separately, so traces can come from one source and metrics from
+another.
+
+`OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured through
+Settings.
+
+#### What Is Read
+
+| Variable                                                                      | Effect                                                                       |
+| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `OTEL_SDK_DISABLED`                                                           | Stops all export                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                 | Base URL for both signals                                                    |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT`                                | Full URL for one signal                                                      |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_HEADERS`   | Export headers, per signal overriding the shared ones                        |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_PROTOCOL` | `http/protobuf` (default) or `http/json`                                     |
+| `OTEL_{TRACES,METRICS}_EXPORTER`                                              | A list; the signal is exported when it contains `otlp`, which is the default |
+| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`       | Resource identity attached to every span and metric                          |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`                      | Export interval                                                              |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`                                              | Spans per batch                                                              |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                           | `cumulative` or `delta`                                                      |
+
+The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
+specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
+
+`OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this server has no gRPC
+transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
+exporting nothing. The refusal is logged at startup and turns off only the signal that named gRPC,
+and only when that signal had no other endpoint to go to.
+
+Header and resource-attribute values are percent decoded, so
+`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space and a base64 credential keeps
+its `=` padding.
+
+#### Known Gaps
+
+Not everything in the specification is implemented. These are the ones worth knowing about:
+
+- **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because this
+  server has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
+  harder to read than exporting nothing. The refusal is logged at startup and turns off only the
+  signal that named gRPC, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc` leaves traces exporting.
+- **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
+  `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
+  `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
+  proxy in front of it.
+- **No export timeouts.** `OTEL_EXPORTER_OTLP_TIMEOUT`,
+  `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_TIMEOUT`, and `OTEL_METRIC_EXPORT_TIMEOUT` are per-request
+  deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
+  shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
+  the server open on every restart.
+- **Browser traces are always JSON.** The proxy that forwards traces from the client posts
+  OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP and most
+  collectors accept either, so this only matters against one that takes protobuf and nothing else.
+  When the trace exporter resolves to `http/protobuf`, a startup warning names the split rather
+  than letting the browser half disappear while the server half looks healthy.
+- **No protocol name of T3 Code's own.** `OTEL_EXPORTER_OTLP_PROTOCOL` describes the endpoint these
+  variables named. A `T3CODE_OTLP_*` endpoint always uses `http/json`, which is what it has always
+  used.
+- **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
+  accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
+- **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
+  the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
+  spelling.
+
+Everything else not listed above is ignored, including the log signal, `OTEL_BSP_MAX_QUEUE_SIZE`,
+`OTEL_BSP_EXPORT_TIMEOUT`, sampler variables, propagator variables, and the attribute and span
+limit variables.
+
+#### When A Value Cannot Be Used
+
+A variable this server cannot act on never stops it from starting. Two things can happen instead,
+and both are logged once at startup:
+
+- **A warning, then the default.** A misspelled protocol, an unavailable temporality, a timeout or
+  batch size that is not a whole number, or a pair list that is not valid percent encoding is
+  reported and ignored, and everything else keeps exporting. One bad value never costs you the
+  other variables.
+- **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
+  this server does not speak rather than a value it failed to parse.
+
+An empty value means the same thing as an unset one, so `OTEL_SERVICE_NAME=` reads as if the
+variable were not there at all. `OTEL_SDK_DISABLED` follows the specification's one rule for
+booleans: the case-insensitive string `true` is the only value that switches export off, and
+anything else, including `yes` and `1`, leaves it on.
+
+A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
+whole rather than partly. A half-parsed credential reaches the collector as the same authentication
+error a wrong one would, which reads like a bad token instead of a bad variable.
+
+These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
+name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
+an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
+batching of an export it did not point anywhere. Traces and metrics are answered separately
+throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces as
+they were.
+
+Once these variables are the ones configuring the exporter, the specification's own defaults apply:
+`OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, and `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` 512. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.
+
 ## How To Use Traces And Metrics To Debug The Server
 
 ### Start With The Local Trace File
