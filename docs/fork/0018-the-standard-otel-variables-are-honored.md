@@ -23,9 +23,10 @@
   envelope, and Settings all still win over the environment, and a setup that
   never mentioned OpenTelemetry keeps the wire format it always used.
 - Find out when a variable did not take. A misspelled protocol, a temporality
-  this exporter cannot produce, or a header list that is not valid percent
-  encoding is named in the startup log and then ignored, instead of silently
-  changing nothing or quietly turning export off.
+  this exporter cannot produce, a batch size that is not a number, or a header
+  list that is not valid percent encoding is named in the startup log and then
+  ignored, instead of silently changing nothing or quietly turning export off.
+  One bad value costs you that value and nothing else.
 
 ## Why
 

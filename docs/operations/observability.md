@@ -277,10 +277,17 @@ limit variables.
 A variable this server cannot act on never stops it from starting. Two things can happen instead,
 and both are logged once at startup:
 
-- **A warning, then the default.** A misspelled protocol, an unavailable temporality, or a pair list
-  that is not valid percent encoding is reported and ignored, and everything else keeps exporting.
+- **A warning, then the default.** A misspelled protocol, an unavailable temporality, a timeout or
+  batch size that is not a whole number, or a pair list that is not valid percent encoding is
+  reported and ignored, and everything else keeps exporting. One bad value never costs you the
+  other variables.
 - **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
   this server does not speak rather than a value it failed to parse.
+
+An empty value means the same thing as an unset one, so `OTEL_SERVICE_NAME=` reads as if the
+variable were not there at all. `OTEL_SDK_DISABLED` follows the specification's one rule for
+booleans: the case-insensitive string `true` is the only value that switches export off, and
+anything else, including `yes` and `1`, leaves it on.
 
 A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
 whole rather than partly. A half-parsed credential reaches the collector as the same authentication

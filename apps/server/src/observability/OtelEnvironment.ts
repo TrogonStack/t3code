@@ -84,11 +84,49 @@ export interface OtelEnvironment {
   readonly resource: OtlpResourceSettings;
 }
 
+/**
+ * An empty value means the same thing as an unset one. The specification says
+ * so, and it is how a machine clears a variable it inherited without being
+ * able to unset it.
+ */
 const optionalString = (name: string) =>
-  Config.string(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+  Config.string(name).pipe(
+    Config.option,
+    Config.map((value) => {
+      const raw = Option.getOrUndefined(value);
+      return raw === undefined || raw.trim() === "" ? undefined : raw;
+    }),
+  );
 
-const optionalInt = (name: string) =>
-  Config.int(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+/**
+ * The specification defines exactly one true value: the case-insensitive
+ * string `true`. Everything else is false, including values that read as
+ * affirmative elsewhere, because implementations are told not to extend the
+ * list.
+ */
+const specBoolean = (name: string) =>
+  optionalString(name).pipe(Effect.map((raw) => raw?.trim().toLowerCase() === "true"));
+
+/**
+ * A number that is not a number is warned about and dropped, which is what the
+ * specification asks for anywhere a value is unrecognized. Letting the read
+ * fail instead would take every other variable down with it and turn one typo
+ * into no telemetry at all.
+ */
+const readInt = (name: string, warnings: Array<string>) =>
+  optionalString(name).pipe(
+    Effect.map((raw) => {
+      if (raw === undefined) {
+        return undefined;
+      }
+      const value = Number(raw.trim());
+      if (!Number.isSafeInteger(value) || value < 0) {
+        warnings.push(`${name}=${raw} is not a whole number and was ignored`);
+        return undefined;
+      }
+      return value;
+    }),
+  );
 
 /**
  * Headers and resource attributes are a W3C Baggage string: comma separated
@@ -123,7 +161,7 @@ const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined
 
 interface Parsed<A> {
   readonly value: A | undefined;
-  readonly warning: string | undefined;
+  readonly warnings: ReadonlyArray<string>;
 }
 
 /**
@@ -136,12 +174,12 @@ const optionalRecord = (name: string) =>
   optionalString(name).pipe(
     Effect.map((raw) => {
       if (raw === undefined) {
-        return { value: undefined, warning: undefined };
+        return { value: undefined, warnings: [] };
       }
       const parsed = parseBaggage(raw);
       return parsed === undefined
-        ? { value: undefined, warning: `${name} is not valid percent encoding and was ignored` }
-        : { value: parsed, warning: undefined };
+        ? { value: undefined, warnings: [`${name} is not valid percent encoding and was ignored`] }
+        : { value: parsed, warnings: [] };
     }),
   );
 
@@ -199,19 +237,20 @@ const signalSettings = (
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
     if (url === undefined || !(yield* signalWantsOtlp(signal))) {
-      return { value: undefined, warning: undefined };
+      return { value: undefined, warnings: [] };
     }
+    const numbers: Array<string> = [];
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
     const headers = specific.value ?? generic.value;
     const timeoutMs =
-      (yield* optionalInt(`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`)) ??
-      (yield* optionalInt("OTEL_EXPORTER_OTLP_TIMEOUT")) ??
-      (signal === "METRICS" ? yield* optionalInt("OTEL_METRIC_EXPORT_TIMEOUT") : undefined);
+      (yield* readInt(`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`, numbers)) ??
+      (yield* readInt("OTEL_EXPORTER_OTLP_TIMEOUT", numbers)) ??
+      (signal === "METRICS" ? yield* readInt("OTEL_METRIC_EXPORT_TIMEOUT", numbers) : undefined);
     const exportIntervalMs =
       signal === "TRACES"
-        ? ((yield* optionalInt("OTEL_BSP_SCHEDULE_DELAY")) ?? SPEC_DEFAULT_SCHEDULE_DELAY_MS)
-        : ((yield* optionalInt("OTEL_METRIC_EXPORT_INTERVAL")) ??
+        ? ((yield* readInt("OTEL_BSP_SCHEDULE_DELAY", numbers)) ?? SPEC_DEFAULT_SCHEDULE_DELAY_MS)
+        : ((yield* readInt("OTEL_METRIC_EXPORT_INTERVAL", numbers)) ??
           SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS);
     return {
       value: {
@@ -221,13 +260,13 @@ const signalSettings = (
         exportIntervalMs,
         maxBatchSize:
           signal === "TRACES"
-            ? ((yield* optionalInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE")) ??
+            ? ((yield* readInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", numbers)) ??
               SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE)
             : undefined,
         shutdownTimeoutMs: timeoutMs,
         temporality: signal === "METRICS" ? temporality : undefined,
       },
-      warning: specific.warning ?? generic.warning,
+      warnings: [...specific.warnings, ...generic.warnings, ...numbers],
     } satisfies Parsed<OtlpSignalSettings>;
   });
 
@@ -300,18 +339,19 @@ const resolveMetricsTemporality = optionalString(
 ).pipe(
   Effect.map((raw): Parsed<MetricsTemporality> => {
     if (raw === undefined) {
-      return { value: undefined, warning: undefined };
+      return { value: undefined, warnings: [] };
     }
     const preference = raw.trim().toLowerCase();
     if (preference === "delta" || preference === "cumulative") {
-      return { value: preference, warning: undefined };
+      return { value: preference, warnings: [] };
     }
     return {
       value: undefined,
-      warning:
+      warnings: [
         preference === "lowmemory"
           ? "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory is not supported here; cumulative is used"
           : `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored`,
+      ],
     };
   }),
 );
@@ -329,7 +369,7 @@ const resolveResource = Effect.gen(function* () {
       serviceVersion: (yield* optionalString("OTEL_SERVICE_VERSION")) ?? attributeVersion,
       attributes: rest,
     },
-    warning: parsed.warning,
+    warnings: parsed.warnings,
   } satisfies Parsed<OtlpResourceSettings>;
 });
 
@@ -342,25 +382,25 @@ const UNREADABLE = "the OpenTelemetry environment could not be read";
  * to start.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
-  const disabled = yield* Config.boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false));
+  const disabled = yield* specBoolean("OTEL_SDK_DISABLED");
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
   const traces = disabled
-    ? { value: undefined, warning: undefined }
+    ? { value: undefined, warnings: [] }
     : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
   const metrics = disabled
-    ? { value: undefined, warning: undefined }
+    ? { value: undefined, warnings: [] }
     : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
   return {
     disabled,
     warnings: [
       ...protocolDecision.warnings,
-      resource.warning,
-      temporality.warning,
-      traces.warning,
-      metrics.warning,
-    ].filter((warning) => warning !== undefined),
+      ...resource.warnings,
+      ...temporality.warnings,
+      ...traces.warnings,
+      ...metrics.warnings,
+    ],
     traces: {
       settings: protocolDecision.traces.declined === undefined ? traces.value : undefined,
       declined: protocolDecision.traces.declined,

@@ -387,6 +387,60 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("keeps exporting when a number is not a number", () =>
+    Effect.gen(function* () {
+      // A typo on one knob must not take the rest of the telemetry with it.
+      // Before this, the read failed outright and nothing was exported.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_SCHEDULE_DELAY: "abc",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 5000);
+      assert.strictEqual(
+        resolved.metrics.settings?.url,
+        "https://collector.example.com/v1/metrics",
+      );
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_BSP_SCHEDULE_DELAY")),
+      );
+    }),
+  );
+
+  it.effect("reads a boolean the way the specification defines one", () =>
+    Effect.gen(function* () {
+      // Case insensitive `true` and nothing else. `yes` is affirmative in
+      // other config systems and false here, which the specification is
+      // explicit about.
+      const upper = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_SDK_DISABLED: "True" }));
+      assert.isTrue(upper.disabled);
+
+      const affirmative = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_SDK_DISABLED: "yes",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.isFalse(affirmative.disabled);
+      assert.isDefined(affirmative.traces.settings);
+    }),
+  );
+
+  it.effect("treats an empty value as an unset one", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_SERVICE_NAME: "",
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "",
+        }),
+      );
+      assert.strictEqual(resolved.resource.serviceName, undefined);
+      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
+    }),
+  );
+
   it.effect("reads the metric protocol when it is the only one named", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
