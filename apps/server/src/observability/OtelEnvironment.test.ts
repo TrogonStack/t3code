@@ -527,6 +527,22 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("does not carry a padded variable into the URL it builds", () =>
+    Effect.gen(function* () {
+      // A shell profile that lined up its exports did not mean the padding to
+      // become part of the endpoint, and the appended signal path would put it
+      // in the middle of the URL where nothing would report it.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "  https://collector.example.com/  ",
+          OTEL_SERVICE_NAME: "  t3  ",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
+      assert.strictEqual(resolved.resource.serviceName, "t3");
+    }),
+  );
+
   it.effect("reads the metric protocol when it is the only one named", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(

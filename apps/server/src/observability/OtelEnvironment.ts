@@ -86,14 +86,16 @@ export interface OtelEnvironment {
 /**
  * An empty value means the same thing as an unset one. The specification says
  * so, and it is how a machine clears a variable it inherited without being
- * able to unset it.
+ * able to unset it. Surrounding whitespace is dropped for the same reason a
+ * blank value is: a shell profile that padded a line did not mean the padding
+ * to become part of an endpoint or a service name.
  */
 const optionalString = (name: string) =>
   Config.string(name).pipe(
     Config.option,
     Config.map((value) => {
-      const raw = Option.getOrUndefined(value);
-      return raw === undefined || raw.trim() === "" ? undefined : raw;
+      const raw = Option.getOrUndefined(value)?.trim();
+      return raw === undefined || raw === "" ? undefined : raw;
     }),
   );
 
@@ -104,7 +106,7 @@ const optionalString = (name: string) =>
  * list.
  */
 const specBoolean = (name: string) =>
-  optionalString(name).pipe(Effect.map((raw) => raw?.trim().toLowerCase() === "true"));
+  optionalString(name).pipe(Effect.map((raw) => raw?.toLowerCase() === "true"));
 
 /**
  * A number that is not a number is warned about and dropped, which is what the
@@ -118,7 +120,7 @@ const readInt = (name: string, warnings: Array<string>) =>
       if (raw === undefined) {
         return undefined;
       }
-      const value = Number(raw.trim());
+      const value = Number(raw);
       if (!Number.isSafeInteger(value) || value < 0) {
         warnings.push(`${name}=${raw} is not a whole number and was ignored`);
         return undefined;
