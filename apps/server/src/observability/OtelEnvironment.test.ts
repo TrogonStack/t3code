@@ -199,13 +199,16 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("leaves the intervals unset so T3 Code's own defaults still apply", () =>
+  it.effect("falls back to the specification's own batching defaults", () =>
     Effect.gen(function* () {
+      // Once this route is the one configuring the exporter, the numbers that
+      // apply are the specification's, not the ones T3 Code picked for itself.
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
       );
-      assert.strictEqual(resolved.traces?.exportIntervalMs, undefined);
-      assert.strictEqual(resolved.metrics?.exportIntervalMs, undefined);
+      assert.strictEqual(resolved.traces?.exportIntervalMs, 5000);
+      assert.strictEqual(resolved.traces?.maxBatchSize, 512);
+      assert.strictEqual(resolved.metrics?.exportIntervalMs, 60000);
     }),
   );
 
@@ -262,18 +265,33 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("survives a value that is not valid percent encoding", () =>
+  it.effect("discards a pair list that is not valid percent encoding", () =>
     Effect.gen(function* () {
+      // Half a header set is worse than none: the collector answers a partial
+      // credential with the same 401 it gives a wrong one, and nothing says
+      // the variable was the problem.
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
           OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz,x-other=100%25",
         }),
       );
-      assert.deepStrictEqual(resolved.traces?.headers, {
-        "x-token": "100%zz",
-        "x-other": "100%",
-      });
+      assert.strictEqual(resolved.traces?.headers, undefined);
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
+      );
+    }),
+  );
+
+  it.effect("discards resource attributes that do not decode", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=100%zz,deployment=prod" }),
+      );
+      assert.deepStrictEqual(resolved.resource.attributes, {});
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_RESOURCE_ATTRIBUTES")),
+      );
     }),
   );
 
@@ -286,7 +304,7 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("ignores a temporality this exporter cannot produce", () =>
+  it.effect("warns about a temporality this exporter cannot produce", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
@@ -295,6 +313,59 @@ describe("OtelEnvironment", () => {
         }),
       );
       assert.strictEqual(resolved.metricsTemporality, undefined);
+      assert.isDefined(resolved.metrics);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("lowmemory")));
+    }),
+  );
+
+  it.effect("warns about a misspelled protocol and keeps exporting", () =>
+    Effect.gen(function* () {
+      // The specification is explicit here: a value the implementation does
+      // not recognize gets a warning and is ignored. Switching export off over
+      // a typo loses the telemetry the typo was not about.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_PROTOCOL: "htp/json",
+        }),
+      );
+      assert.isDefined(resolved.traces);
+      assert.strictEqual(resolved.protocol, undefined);
+      assert.strictEqual(resolved.declined, undefined);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("htp/json")));
+    }),
+  );
+
+  it.effect("warns when the two signals ask for different wire formats", () =>
+    Effect.gen(function* () {
+      // One serializer covers both signals here, so the metric protocol cannot
+      // be honored separately and saying nothing would look like it was.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
+        }),
+      );
+      assert.strictEqual(resolved.protocol, "http/json");
+      assert.isTrue(
+        resolved.warnings.some((warning) =>
+          warning.includes("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"),
+        ),
+      );
+    }),
+  );
+
+  it.effect("reads the metric protocol when it is the only one named", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json",
+        }),
+      );
+      assert.strictEqual(resolved.protocol, "http/json");
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 });

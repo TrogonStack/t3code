@@ -22,6 +22,10 @@
 - Keep whatever you have. The `T3CODE_OTLP_*` names, the desktop bootstrap
   envelope, and Settings all still win over the environment, and a setup that
   never mentioned OpenTelemetry keeps the wire format it always used.
+- Find out when a variable did not take. A misspelled protocol, a temporality
+  this exporter cannot produce, or a header list that is not valid percent
+  encoding is named in the startup log and then ignored, instead of silently
+  changing nothing or quietly turning export off.
 
 ## Why
 

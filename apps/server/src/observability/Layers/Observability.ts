@@ -20,6 +20,10 @@ export const ObservabilityLive = Layer.unwrap(
     const attribution = yield* ResourceAttribution.ResourceAttribution;
     const otel = config.otelEnvironment;
 
+    for (const warning of otel.warnings) {
+      yield* Effect.logWarning(warning);
+    }
+
     if (otel.declined !== undefined) {
       yield* Effect.logWarning(otel.declined);
     }

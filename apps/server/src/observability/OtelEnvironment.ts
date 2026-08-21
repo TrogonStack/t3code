@@ -13,6 +13,10 @@
  * body the endpoint cannot parse, and the log signal has no exporter here at
  * all.
  *
+ * Everything else the specification requires of an unusable value is a
+ * warning followed by the default, never a refusal to start and never a
+ * silently different behavior.
+ *
  * @module observability/OtelEnvironment
  */
 import * as Config from "effect/Config";
@@ -43,6 +47,13 @@ export interface OtlpResourceSettings {
 export interface OtelEnvironment {
   /** `OTEL_SDK_DISABLED`. When set, nothing is exported by any route. */
   readonly disabled: boolean;
+  /**
+   * Settings that were named but could not be used, each already phrased for a
+   * human. The specification requires a warning for a value the implementation
+   * does not recognize, and these are collected rather than logged here so the
+   * caller reports them once, at startup, where someone is looking.
+   */
+  readonly warnings: ReadonlyArray<string>;
   readonly traces: OtlpSignalSettings | undefined;
   readonly metrics: OtlpSignalSettings | undefined;
   readonly metricsTemporality: MetricsTemporality | undefined;
@@ -78,7 +89,7 @@ const optionalInt = (name: string) =>
  * token. Both fail as an authentication error against the collector, which
  * reads like a bad token rather than a parsing bug.
  */
-const parseBaggage = (raw: string): Readonly<Record<string, string>> => {
+const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined => {
   const entries: Record<string, string> = {};
   for (const member of raw.split(",")) {
     const separator = member.indexOf("=");
@@ -93,15 +104,34 @@ const parseBaggage = (raw: string): Readonly<Record<string, string>> => {
     try {
       entries[key] = decodeURIComponent(value);
     } catch {
-      entries[key] = value;
+      return undefined;
     }
   }
   return entries;
 };
 
+interface Parsed<A> {
+  readonly value: A | undefined;
+  readonly warning: string | undefined;
+}
+
+/**
+ * A pair list that fails to decode discards the whole variable, which is what
+ * the resource specification asks for and the safer answer for headers too: a
+ * half-parsed credential reaches the collector as an authentication error,
+ * while nothing plus a warning says where to look.
+ */
 const optionalRecord = (name: string) =>
   optionalString(name).pipe(
-    Effect.map((raw) => (raw === undefined ? undefined : parseBaggage(raw))),
+    Effect.map((raw) => {
+      if (raw === undefined) {
+        return { value: undefined, warning: undefined };
+      }
+      const parsed = parseBaggage(raw);
+      return parsed === undefined
+        ? { value: undefined, warning: `${name} is not valid percent encoding and was ignored` }
+        : { value: parsed, warning: undefined };
+    }),
   );
 
 /**
@@ -140,83 +170,146 @@ const signalWantsOtlp = (signal: "TRACES" | "METRICS") =>
     }),
   );
 
+/**
+ * The specification's own defaults, which apply once this route is the one
+ * configuring the exporter. A `T3CODE_OTLP_*` setup never reaches here and
+ * keeps the numbers T3 Code has always used.
+ */
+const SPEC_DEFAULT_SCHEDULE_DELAY_MS = 5_000;
+const SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
+const SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
+
 const signalSettings = (signal: "TRACES" | "METRICS") =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
     if (url === undefined || !(yield* signalWantsOtlp(signal))) {
-      return undefined;
+      return { value: undefined, warning: undefined };
     }
-    const headers =
-      (yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`)) ??
-      (yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS"));
+    const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
+    const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
+    const headers = specific.value ?? generic.value;
     const timeoutMs =
       (yield* optionalInt(`OTEL_EXPORTER_OTLP_${signal}_TIMEOUT`)) ??
       (yield* optionalInt("OTEL_EXPORTER_OTLP_TIMEOUT")) ??
       (signal === "METRICS" ? yield* optionalInt("OTEL_METRIC_EXPORT_TIMEOUT") : undefined);
     const exportIntervalMs =
       signal === "TRACES"
-        ? yield* optionalInt("OTEL_BSP_SCHEDULE_DELAY")
-        : yield* optionalInt("OTEL_METRIC_EXPORT_INTERVAL");
+        ? ((yield* optionalInt("OTEL_BSP_SCHEDULE_DELAY")) ?? SPEC_DEFAULT_SCHEDULE_DELAY_MS)
+        : ((yield* optionalInt("OTEL_METRIC_EXPORT_INTERVAL")) ??
+          SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS);
     return {
-      url,
-      headers,
-      exportIntervalMs,
-      maxBatchSize:
-        signal === "TRACES" ? yield* optionalInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE") : undefined,
-      shutdownTimeoutMs: timeoutMs,
-    } satisfies OtlpSignalSettings;
+      value: {
+        url,
+        headers,
+        exportIntervalMs,
+        maxBatchSize:
+          signal === "TRACES"
+            ? ((yield* optionalInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE")) ??
+              SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE)
+            : undefined,
+        shutdownTimeoutMs: timeoutMs,
+      },
+      warning: specific.warning ?? generic.warning,
+    } satisfies Parsed<OtlpSignalSettings>;
   });
 
 interface ProtocolDecision {
   readonly protocol: OtlpProtocol | undefined;
   readonly declined: string | undefined;
+  readonly warnings: ReadonlyArray<string>;
 }
 
 /**
  * Left unset when nothing named a protocol, so a machine that never mentioned
- * OpenTelemetry keeps the wire format T3 Code has always used. `grpc` is the
- * one value that cannot be quietly downgraded: its endpoint has no
- * `/v1/traces` path and expects a framing this server does not produce, so
- * posting anything there is worse than exporting nothing.
+ * OpenTelemetry keeps the wire format T3 Code has always used.
+ *
+ * `grpc` is the one value that turns export off rather than falling back. It
+ * is a real protocol this server does not speak, its endpoint has no
+ * `/v1/traces` path, and it expects a framing nothing here produces, so
+ * posting to it is worse than exporting nothing. A value that is not a
+ * protocol at all is a typo, and the specification is explicit that those get
+ * a warning and the default.
+ *
+ * One serializer covers both signals, so a per-signal protocol that disagrees
+ * with the trace protocol cannot be honored and says so.
  */
 const resolveProtocol = Effect.gen(function* () {
-  const raw =
-    (yield* optionalString("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ??
-    (yield* optionalString("OTEL_EXPORTER_OTLP_PROTOCOL"));
-  if (raw === undefined) {
-    return { protocol: undefined, declined: undefined } satisfies ProtocolDecision;
+  const warnings: Array<string> = [];
+  const read = function* (name: string) {
+    const raw = yield* optionalString(name);
+    if (raw === undefined) {
+      return undefined;
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "http/json" || value === "http/protobuf" || value === "grpc") {
+      return value;
+    }
+    warnings.push(`${name}=${raw} is not a known OTLP protocol and was ignored`);
+    return undefined;
+  };
+
+  const traces =
+    (yield* read("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ??
+    (yield* read("OTEL_EXPORTER_OTLP_PROTOCOL"));
+  const metrics = yield* read("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
+  if (metrics !== undefined && traces !== undefined && metrics !== traces) {
+    warnings.push(
+      `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=${metrics} cannot differ from the trace protocol here; ${traces} is used for both`,
+    );
   }
-  const value = raw.trim().toLowerCase();
-  if (value === "http/json" || value === "http/protobuf") {
-    return { protocol: value, declined: undefined } satisfies ProtocolDecision;
+  const chosen = traces ?? metrics;
+  if (chosen === "grpc") {
+    return {
+      protocol: undefined,
+      declined:
+        "OTEL_EXPORTER_OTLP_PROTOCOL=grpc is not supported; this server exports OTLP over HTTP only, so nothing is exported",
+      warnings,
+    } satisfies ProtocolDecision;
   }
-  return {
-    protocol: undefined,
-    declined: `OTEL_EXPORTER_OTLP_PROTOCOL=${value} is not supported; this server exports OTLP over HTTP only`,
-  } satisfies ProtocolDecision;
+  return { protocol: chosen, declined: undefined, warnings } satisfies ProtocolDecision;
 });
 
+/**
+ * `lowmemory` is a real preference in the specification that this exporter
+ * cannot produce, so it warns and falls back to the default rather than
+ * pretending it applied.
+ */
 const resolveMetricsTemporality = optionalString(
   "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
 ).pipe(
-  Effect.map((value): MetricsTemporality | undefined => {
-    const preference = value?.trim().toLowerCase();
-    return preference === "delta" || preference === "cumulative" ? preference : undefined;
+  Effect.map((raw): Parsed<MetricsTemporality> => {
+    if (raw === undefined) {
+      return { value: undefined, warning: undefined };
+    }
+    const preference = raw.trim().toLowerCase();
+    if (preference === "delta" || preference === "cumulative") {
+      return { value: preference, warning: undefined };
+    }
+    return {
+      value: undefined,
+      warning:
+        preference === "lowmemory"
+          ? "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory is not supported here; cumulative is used"
+          : `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored`,
+    };
   }),
 );
 
 const resolveResource = Effect.gen(function* () {
-  const attributes = (yield* optionalRecord("OTEL_RESOURCE_ATTRIBUTES")) ?? {};
+  const parsed = yield* optionalRecord("OTEL_RESOURCE_ATTRIBUTES");
   const {
     "service.name": attributeName,
     "service.version": attributeVersion,
     ...rest
-  } = attributes;
+  } = parsed.value ?? {};
   return {
-    serviceName: (yield* optionalString("OTEL_SERVICE_NAME")) ?? attributeName,
-    serviceVersion: (yield* optionalString("OTEL_SERVICE_VERSION")) ?? attributeVersion,
-    attributes: rest,
-  } satisfies OtlpResourceSettings;
+    value: {
+      serviceName: (yield* optionalString("OTEL_SERVICE_NAME")) ?? attributeName,
+      serviceVersion: (yield* optionalString("OTEL_SERVICE_VERSION")) ?? attributeVersion,
+      attributes: rest,
+    },
+    warning: parsed.warning,
+  } satisfies Parsed<OtlpResourceSettings>;
 });
 
 /**
@@ -226,34 +319,38 @@ const resolveResource = Effect.gen(function* () {
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const disabled = yield* Config.boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false));
-  const { protocol, declined } = yield* resolveProtocol;
+  const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
-  if (disabled) {
-    return {
-      disabled,
-      traces: undefined,
-      metrics: undefined,
-      metricsTemporality: undefined,
-      resource,
-      protocol,
-      declined,
-    };
-  }
-  const unsupportedProtocol = declined !== undefined;
+  const temporality = yield* resolveMetricsTemporality;
+  const traces = disabled
+    ? { value: undefined, warning: undefined }
+    : yield* signalSettings("TRACES");
+  const metrics = disabled
+    ? { value: undefined, warning: undefined }
+    : yield* signalSettings("METRICS");
+  const exportable = !disabled && protocolDecision.declined === undefined;
   return {
     disabled,
-    traces: unsupportedProtocol ? undefined : yield* signalSettings("TRACES"),
-    metrics: unsupportedProtocol ? undefined : yield* signalSettings("METRICS"),
-    metricsTemporality: yield* resolveMetricsTemporality,
-    resource,
-    protocol,
-    declined,
+    warnings: [
+      ...protocolDecision.warnings,
+      resource.warning,
+      temporality.warning,
+      traces.warning,
+      metrics.warning,
+    ].filter((warning) => warning !== undefined),
+    traces: exportable ? traces.value : undefined,
+    metrics: exportable ? metrics.value : undefined,
+    metricsTemporality: temporality.value,
+    resource: resource.value,
+    protocol: protocolDecision.protocol,
+    declined: protocolDecision.declined,
   };
 }).pipe(
   Effect.catchCause((cause) =>
     Effect.logWarning("Could not read the OpenTelemetry environment", cause).pipe(
       Effect.as({
         disabled: false,
+        warnings: [],
         traces: undefined,
         metrics: undefined,
         metricsTemporality: undefined,
@@ -268,6 +365,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {
   disabled: false,
+  warnings: [],
   traces: undefined,
   metrics: undefined,
   metricsTemporality: undefined,

@@ -243,13 +243,14 @@ Not everything in the specification is implemented. These are the ones worth kno
   proxy in front of it.
 - **Timeouts flush at shutdown.** The specification's `OTEL_EXPORTER_OTLP_TIMEOUT` is a per-request
   deadline. The exporter here has no per-request knob, so the value bounds the final flush instead.
-- **Interval and batch defaults are T3 Code's, not the specification's.** Leaving
-  `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, or `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` unset
-  keeps this server's own defaults rather than the specification's 5s, 60s, and 512. Set them
-  explicitly if you need the specification's numbers.
+- **One wire format covers both signals.** `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` is read, but it
+  cannot differ from the trace protocol. Setting the two to different values logs a warning and uses
+  the trace protocol for both.
 - **Browser traces are always JSON.** The proxy that forwards traces from the client posts
   OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP, so a
   collector accepts either.
+- **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
+  accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.
@@ -257,6 +258,23 @@ Not everything in the specification is implemented. These are the ones worth kno
 Everything else not listed above is ignored, including the log signal, `OTEL_BSP_MAX_QUEUE_SIZE`,
 `OTEL_BSP_EXPORT_TIMEOUT`, sampler variables, propagator variables, and the attribute and span
 limit variables.
+
+#### When A Value Cannot Be Used
+
+A variable this server cannot act on never stops it from starting. Two things can happen instead,
+and both are logged once at startup:
+
+- **A warning, then the default.** A misspelled protocol, an unavailable temporality, or a pair list
+  that is not valid percent encoding is reported and ignored, and everything else keeps exporting.
+- **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
+  this server does not speak rather than a value it failed to parse.
+
+A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
+whole rather than partly. A half-parsed credential reaches the collector as the same authentication
+error a wrong one would, which reads like a bad token instead of a bad variable.
+
+Once these variables are the ones configuring the exporter, the specification's own defaults apply:
+`OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, and `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` 512. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.
 
 ## How To Use Traces And Metrics To Debug The Server
 
