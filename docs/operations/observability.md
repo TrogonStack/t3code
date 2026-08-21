@@ -6,7 +6,7 @@ T3 Code has one server-side observability model:
 
 - pretty logs go to stdout for humans
 - completed spans go to a local NDJSON trace file
-- traces and metrics can also be exported over OTLP to a real backend like Grafana LGTM
+- traces, metrics, and logs can also be exported over OTLP to a real backend like Grafana LGTM
 
 The local trace file is the persisted source of truth for normal local launches. Those launches do not
 write a separate server log file, but SSH-managed launches also persist the remote process's
@@ -16,14 +16,18 @@ stdout/stderr at `~/.t3/ssh-launch/<state>/server.log`.
 
 ### Logs
 
-Logs are human-facing:
+Every log the server writes goes to stdout for humans:
 
 - destination: stdout
 - format: `Logger.consolePretty()`
 - normal local persistence: none
 - SSH-managed launch persistence: `~/.t3/ssh-launch/<state>/server.log`
 
-If you want a log message to show up in the trace file, emit it inside an active span with `Effect.log...`. `Logger.tracerLogger` will attach it as a span event.
+When OTLP logs are configured the same records are also exported as OTLP log records, batched and
+carrying the trace and span id of whatever was running, so a log line in the backend links back to
+the span that produced it.
+
+If you want a log message to show up in the local trace file, emit it inside an active span with `Effect.log...`. `Logger.tracerLogger` will attach it as a span event.
 
 ### Traces
 
@@ -68,7 +72,7 @@ Provider event NDJSON files still exist for provider runtime streams. Those are 
 There are two useful modes:
 
 - local-only: stdout + local `server.trace.ndjson`
-- full local observability: stdout + local trace file + OTLP export to Grafana/Tempo/Prometheus
+- full local observability: stdout + local trace file + OTLP export to Grafana/Tempo/Prometheus/Loki
 
 The local trace file is always on. OTLP export is opt-in.
 
@@ -115,6 +119,7 @@ Default Grafana login:
 ```bash
 export T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces
 export T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics
+export T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs
 export T3CODE_OTLP_SERVICE_NAME=t3-local
 ```
 
@@ -154,6 +159,7 @@ macOS app bundle example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
+T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs \
 T3CODE_OTLP_SERVICE_NAME=t3-desktop \
 "/Applications/T3 Code.app/Contents/MacOS/T3 Code"
 ```
@@ -163,6 +169,7 @@ Direct binary example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
+T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs \
 T3CODE_OTLP_SERVICE_NAME=t3-desktop \
 ./path/to/your/desktop-app-binary
 ```
@@ -183,10 +190,9 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_SERVICE_NAME=t3-local
 ```
 
-The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces` and metrics to
-`<endpoint>/v1/metrics`, exactly as the specification says. Set
-`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` when a signal needs a
-full URL of its own.
+The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces`, metrics to
+`<endpoint>/v1/metrics`, and log records to `<endpoint>/v1/logs`, exactly as the specification says.
+Set `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` when a signal needs a full URL of its own.
 
 Ambient `OTEL_*` variables turn export on by themselves. A work collector in your shell profile means
 T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want.
@@ -203,29 +209,29 @@ For each signal, the first source that names its endpoint wins:
 Whichever source wins takes the whole signal, not just the URL. Traces sent to a
 `T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
 interval even when `OTEL_*` variables are set, because those variables describe the collector they
-named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS` is the exception, and applies to both
-signals wherever they go.
+named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS` is the exception, and applies to every
+signal wherever it goes.
 
-The two signals are resolved separately, so traces can come from one source and metrics from
-another.
+The three signals are resolved separately, so traces can come from one source and metrics or logs
+from another.
 
 `OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured through
 Settings.
 
 #### What Is Read
 
-| Variable                                                                      | Effect                                                                       |
-| ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `OTEL_SDK_DISABLED`                                                           | Stops all export                                                             |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                 | Base URL for both signals                                                    |
-| `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_ENDPOINT`                                | Full URL for one signal                                                      |
-| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_HEADERS`   | Export headers, per signal overriding the shared ones                        |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_PROTOCOL` | `http/protobuf` (default) or `http/json`                                     |
-| `OTEL_{TRACES,METRICS}_EXPORTER`                                              | A list; the signal is exported when it contains `otlp`, which is the default |
-| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`       | Resource identity attached to every span and metric                          |
-| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`                      | Export interval                                                              |
-| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`                                              | Spans per batch                                                              |
-| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                           | `cumulative` or `delta`                                                      |
+| Variable                                                                             | Effect                                                                       |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `OTEL_SDK_DISABLED`                                                                  | Stops all export                                                             |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                        | Base URL for every signal                                                    |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`                                  | Full URL for one signal                                                      |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_HEADERS`     | Export headers, per signal overriding the shared ones                        |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL`   | `http/protobuf` (default) or `http/json`                                     |
+| `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`                                                | A list; the signal is exported when it contains `otlp`, which is the default |
+| `OTEL_SERVICE_NAME`, `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`              | Resource identity attached to every span, metric, and log record             |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_BLRP_SCHEDULE_DELAY` | Export interval, one per signal                                              |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`                  | Spans per batch, log records per batch                                       |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` or `delta`                                                      |
 
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
 specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
@@ -252,7 +258,7 @@ Not everything in the specification is implemented. These are the ones worth kno
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
   proxy in front of it.
 - **No export timeouts.** `OTEL_EXPORTER_OTLP_TIMEOUT`,
-  `OTEL_EXPORTER_OTLP_{TRACES,METRICS}_TIMEOUT`, and `OTEL_METRIC_EXPORT_TIMEOUT` are per-request
+  `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_TIMEOUT`, and `OTEL_METRIC_EXPORT_TIMEOUT` are per-request
   deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
   shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
   the server open on every restart.
@@ -270,9 +276,9 @@ Not everything in the specification is implemented. These are the ones worth kno
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.
 
-Everything else not listed above is ignored, including the log signal, `OTEL_BSP_MAX_QUEUE_SIZE`,
-`OTEL_BSP_EXPORT_TIMEOUT`, sampler variables, propagator variables, and the attribute and span
-limit variables.
+Everything else not listed above is ignored, including `OTEL_BSP_MAX_QUEUE_SIZE`,
+`OTEL_BLRP_MAX_QUEUE_SIZE`, `OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`, sampler
+variables, propagator variables, and the attribute and span limit variables.
 
 #### When A Value Cannot Be Used
 
@@ -298,12 +304,14 @@ error a wrong one would, which reads like a bad token instead of a bad variable.
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
 name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
 an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
-batching of an export it did not point anywhere. Traces and metrics are answered separately
-throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces as
-they were.
+batching of an export it did not point anywhere. Traces, metrics, and logs are answered separately
+throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces and
+logs as they were.
 
 Once these variables are the ones configuring the exporter, the specification's own defaults apply:
-`OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, and `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` 512. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.
+`OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, `OTEL_BLRP_SCHEDULE_DELAY` 1s, and
+`OTEL_BSP_MAX_EXPORT_BATCH_SIZE` and `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` 512 each. A `T3CODE_OTLP_*`
+setup keeps the numbers T3 Code has always used.
 
 ## How To Use Traces And Metrics To Debug The Server
 

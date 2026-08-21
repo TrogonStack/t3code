@@ -67,11 +67,13 @@ export class DesktopBackendConfiguration extends Context.Service<
 interface BackendObservabilitySettings {
   readonly otlpTracesUrl: Option.Option<string>;
   readonly otlpMetricsUrl: Option.Option<string>;
+  readonly otlpLogsUrl: Option.Option<string>;
 }
 
 const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
   otlpTracesUrl: Option.none(),
   otlpMetricsUrl: Option.none(),
+  otlpLogsUrl: Option.none(),
 };
 
 const DESKTOP_BACKEND_ENV_NAMES = [
@@ -202,6 +204,7 @@ const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
   return {
     otlpTracesUrl: Option.fromNullishOr(parsed.otlpTracesUrl),
     otlpMetricsUrl: Option.fromNullishOr(parsed.otlpMetricsUrl),
+    otlpLogsUrl: Option.fromNullishOr(parsed.otlpLogsUrl),
   };
 });
 
@@ -360,6 +363,10 @@ const buildObservabilityFragment = (observabilitySettings: BackendObservabilityS
   ...Option.match(observabilitySettings.otlpMetricsUrl, {
     onNone: () => ({}),
     onSome: (otlpMetricsUrl) => ({ otlpMetricsUrl }),
+  }),
+  ...Option.match(observabilitySettings.otlpLogsUrl, {
+    onNone: () => ({}),
+    onSome: (otlpLogsUrl) => ({ otlpLogsUrl }),
   }),
 });
 

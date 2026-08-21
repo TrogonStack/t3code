@@ -14,6 +14,7 @@ describe("OtelEnvironment", () => {
       const resolved = yield* OtelEnvironment.load.pipe(withEnv({}));
       assert.strictEqual(resolved.traces.settings, undefined);
       assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.strictEqual(resolved.logs.settings, undefined);
       assert.strictEqual(resolved.disabled, false);
     }),
   );
@@ -28,6 +29,7 @@ describe("OtelEnvironment", () => {
         resolved.metrics.settings?.url,
         "https://collector.example.com/v1/metrics",
       );
+      assert.strictEqual(resolved.logs.settings?.url, "https://collector.example.com/v1/logs");
     }),
   );
 
@@ -196,6 +198,7 @@ describe("OtelEnvironment", () => {
       );
       assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
       assert.strictEqual(resolved.metrics.settings?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.logs.settings?.protocol, "http/protobuf");
     }),
   );
 
@@ -219,11 +222,15 @@ describe("OtelEnvironment", () => {
           OTEL_BSP_SCHEDULE_DELAY: "2500",
           OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "128",
           OTEL_METRIC_EXPORT_INTERVAL: "15000",
+          OTEL_BLRP_SCHEDULE_DELAY: "3500",
+          OTEL_BLRP_MAX_EXPORT_BATCH_SIZE: "64",
         }),
       );
       assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 2500);
       assert.strictEqual(resolved.traces.settings?.maxBatchSize, 128);
       assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 15000);
+      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 3500);
+      assert.strictEqual(resolved.logs.settings?.maxBatchSize, 64);
     }),
   );
 
@@ -262,6 +269,8 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 5000);
       assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
       assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 60000);
+      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
+      assert.strictEqual(resolved.logs.settings?.maxBatchSize, 512);
     }),
   );
 
@@ -275,6 +284,7 @@ describe("OtelEnvironment", () => {
       );
       assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
       assert.strictEqual(resolved.traces.settings?.temporality, undefined);
+      assert.strictEqual(resolved.logs.settings?.temporality, undefined);
     }),
   );
 
@@ -554,6 +564,97 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(resolved.metrics.settings?.protocol, "http/json");
       assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
       assert.deepStrictEqual(resolved.warnings, []);
+    }),
+  );
+
+  it.effect("takes a log endpoint exactly as written", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://generic.example.com",
+          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://logs.example.com/ingest",
+        }),
+      );
+      assert.strictEqual(resolved.logs.settings?.url, "https://logs.example.com/ingest");
+      assert.strictEqual(resolved.traces.settings?.url, "https://generic.example.com/v1/traces");
+    }),
+  );
+
+  it.effect("honors the log signal turned off by name", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "none",
+        }),
+      );
+      assert.strictEqual(resolved.logs.settings, undefined);
+      assert.isDefined(resolved.traces.settings);
+      assert.isDefined(resolved.metrics.settings);
+    }),
+  );
+
+  it.effect("lets the log signal name its own wire format and headers", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+          OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
+          OTEL_EXPORTER_OTLP_LOGS_HEADERS: "x-scope=logs%2Fonly",
+          OTEL_EXPORTER_OTLP_HEADERS: "x-scope=everything",
+        }),
+      );
+      assert.strictEqual(resolved.logs.settings?.protocol, "http/json");
+      assert.deepStrictEqual(resolved.logs.settings?.headers, { "x-scope": "logs/only" });
+      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
+      assert.deepStrictEqual(resolved.traces.settings?.headers, { "x-scope": "everything" });
+      assert.deepStrictEqual(resolved.warnings, []);
+    }),
+  );
+
+  it.effect("declines only the log signal that asked for grpc", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "grpc",
+        }),
+      );
+      assert.strictEqual(resolved.logs.settings, undefined);
+      assert.include(resolved.logs.declined ?? "", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL");
+      assert.isDefined(resolved.traces.settings);
+      assert.isDefined(resolved.metrics.settings);
+    }),
+  );
+
+  it.effect("exports no log records once the SDK is disabled", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://logs.example.com/ingest",
+        }),
+      );
+      assert.isTrue(resolved.disabled);
+      assert.strictEqual(resolved.logs.settings, undefined);
+      assert.strictEqual(resolved.logs.declined, undefined);
+    }),
+  );
+
+  it.effect("keeps a log record delay separate from the span one", () =>
+    Effect.gen(function* () {
+      // The two are different variables with different defaults, and reading
+      // one for the other would export log records five times slower than the
+      // specification says to.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_SCHEDULE_DELAY: "9000",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 9000);
+      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
     }),
   );
 });

@@ -95,6 +95,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  otlpLogsUrl: Config.string("T3CODE_OTLP_LOGS_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -216,7 +220,7 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
   const fs = yield* FileSystem.FileSystem;
   const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
   if (!exists) {
-    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined };
+    return { otlpTracesUrl: undefined, otlpMetricsUrl: undefined, otlpLogsUrl: undefined };
   }
 
   const raw = yield* fs.readFileString(settingsPath).pipe(Effect.orElseSucceed(() => ""));
@@ -380,10 +384,14 @@ export const resolveServerConfig = (
         bootstrap?.otlpMetricsUrl ??
         persistedObservabilitySettings.otlpMetricsUrl,
     );
+    const namedLogsUrl = named(
+      env.otlpLogsUrl ?? bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
+    );
     const otelEnvironment = {
       ...otel,
       traces: namedTracesUrl === undefined ? otel.traces : OtelEnvironment.noSignal,
       metrics: namedMetricsUrl === undefined ? otel.metrics : OtelEnvironment.noSignal,
+      logs: namedLogsUrl === undefined ? otel.logs : OtelEnvironment.noSignal,
     } satisfies OtelEnvironment.OtelEnvironment;
 
     const config: ServerConfig.ServerConfig["Service"] = {
@@ -399,14 +407,20 @@ export const resolveServerConfig = (
       otlpMetricsUrl: otelEnvironment.disabled
         ? undefined
         : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
-      // T3 Code has one interval variable and it deliberately covers both
-      // signals. The per-signal part is the fallback under it: the environment
-      // names a trace delay and a metric interval separately, so a signal that
-      // took its endpoint elsewhere must not inherit the other one's.
+      otlpLogsUrl: otelEnvironment.disabled
+        ? undefined
+        : (namedLogsUrl ?? otelEnvironment.logs.settings?.url),
+      // T3 Code has one interval variable and it deliberately covers every
+      // signal. The per-signal part is the fallback under it: the environment
+      // names a span delay, a metric interval, and a log record delay
+      // separately, so a signal that took its endpoint elsewhere must not
+      // inherit another one's.
       otlpExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
       otlpMetricsExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
+      otlpLogsExportIntervalMs:
+        env.otlpExportIntervalMs ?? otelEnvironment.logs.settings?.exportIntervalMs ?? 10_000,
       otlpServiceName:
         named(env.otlpServiceName) ?? otelEnvironment.resource.serviceName ?? "t3-server",
       otelEnvironment,

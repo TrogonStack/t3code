@@ -10,8 +10,7 @@
  *
  * Only the variables this server can act on are read. The exporter speaks
  * OTLP over HTTP, so `grpc` is declined loudly rather than answered with a
- * body the endpoint cannot parse, and the log signal has no exporter here at
- * all.
+ * body the endpoint cannot parse.
  *
  * Everything else the specification requires of an unusable value is a
  * warning followed by the default, never a refusal to start and never a
@@ -22,6 +21,13 @@
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+
+/**
+ * The signals this server exports. Each one is configured independently, and
+ * the specification spells every variable name with the signal in it, so the
+ * name is the thing the readers below are parameterized by.
+ */
+export type OtlpSignalName = "TRACES" | "METRICS" | "LOGS";
 
 /** The wire formats this server can produce. `grpc` is not one of them. */
 export type OtlpProtocol = "http/json" | "http/protobuf";
@@ -42,7 +48,7 @@ export interface OtlpSignalSettings {
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly exportIntervalMs: number | undefined;
   readonly maxBatchSize: number | undefined;
-  /** Metrics only. Traces have no aggregation to prefer. */
+  /** Metrics only. Spans and log records have no aggregation to prefer. */
   readonly temporality: MetricsTemporality | undefined;
 }
 
@@ -80,6 +86,7 @@ export interface OtelEnvironment {
   readonly warnings: ReadonlyArray<string>;
   readonly traces: OtlpSignal;
   readonly metrics: OtlpSignal;
+  readonly logs: OtlpSignal;
   readonly resource: OtlpResourceSettings;
 }
 
@@ -196,7 +203,7 @@ const optionalRecord = (name: string) =>
  * The generic `OTEL_EXPORTER_OTLP_ENDPOINT` is a base, and the spec has each
  * signal append its own path to it.
  */
-const signalEndpoint = (signal: "TRACES" | "METRICS") =>
+const signalEndpoint = (signal: OtlpSignalName) =>
   Effect.gen(function* () {
     const specific = yield* optionalString(`OTEL_EXPORTER_OTLP_${signal}_ENDPOINT`);
     if (specific !== undefined) {
@@ -214,7 +221,7 @@ const signalEndpoint = (signal: "TRACES" | "METRICS") =>
  * `OTEL_<SIGNAL>_EXPORTER` is a list, and `otlp` is its default. A value that
  * names other exporters and not `otlp` is a deliberate "not this one".
  */
-const signalWantsOtlp = (signal: "TRACES" | "METRICS") =>
+const signalWantsOtlp = (signal: OtlpSignalName) =>
   optionalString(`OTEL_${signal}_EXPORTER`).pipe(
     Effect.map((value) => {
       if (value === undefined) {
@@ -233,12 +240,42 @@ const signalWantsOtlp = (signal: "TRACES" | "METRICS") =>
  * keeps the numbers T3 Code has always used.
  */
 const SPEC_DEFAULT_PROTOCOL = "http/protobuf" as const;
-const SPEC_DEFAULT_SCHEDULE_DELAY_MS = 5_000;
 const SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
-const SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
+
+/**
+ * How often each signal drains, and how much it drains at once. The
+ * specification gives every signal its own variables and its own defaults:
+ * spans batch on `OTEL_BSP_*` every 5s, log records batch on `OTEL_BLRP_*`
+ * every 1s, and metrics have no batch size because a collection cycle already
+ * bounds itself.
+ */
+const SIGNAL_BATCHING = {
+  TRACES: {
+    scheduleDelay: "OTEL_BSP_SCHEDULE_DELAY",
+    defaultScheduleDelayMs: 5_000,
+    maxExportBatchSize: "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+  },
+  METRICS: {
+    scheduleDelay: "OTEL_METRIC_EXPORT_INTERVAL",
+    defaultScheduleDelayMs: 60_000,
+    maxExportBatchSize: undefined,
+  },
+  LOGS: {
+    scheduleDelay: "OTEL_BLRP_SCHEDULE_DELAY",
+    defaultScheduleDelayMs: 1_000,
+    maxExportBatchSize: "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE",
+  },
+} as const satisfies Record<
+  OtlpSignalName,
+  {
+    readonly scheduleDelay: string;
+    readonly defaultScheduleDelayMs: number;
+    readonly maxExportBatchSize: string | undefined;
+  }
+>;
 
 const signalSettings = (
-  signal: "TRACES" | "METRICS",
+  signal: OtlpSignalName,
   protocol: OtlpProtocol,
   temporality: MetricsTemporality | undefined,
 ) =>
@@ -251,22 +288,21 @@ const signalSettings = (
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
     const headers = specific.value ?? generic.value;
+    const batching = SIGNAL_BATCHING[signal];
     const exportIntervalMs =
-      signal === "TRACES"
-        ? ((yield* readInt("OTEL_BSP_SCHEDULE_DELAY", numbers)) ?? SPEC_DEFAULT_SCHEDULE_DELAY_MS)
-        : ((yield* readInt("OTEL_METRIC_EXPORT_INTERVAL", numbers)) ??
-          SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS);
+      (yield* readInt(batching.scheduleDelay, numbers)) ?? batching.defaultScheduleDelayMs;
+    const maxBatchSize =
+      batching.maxExportBatchSize === undefined
+        ? undefined
+        : ((yield* readInt(batching.maxExportBatchSize, numbers)) ??
+          SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE);
     return {
       value: {
         url,
         protocol,
         headers,
         exportIntervalMs,
-        maxBatchSize:
-          signal === "TRACES"
-            ? ((yield* readInt("OTEL_BSP_MAX_EXPORT_BATCH_SIZE", numbers)) ??
-              SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE)
-            : undefined,
+        maxBatchSize,
         temporality: signal === "METRICS" ? temporality : undefined,
       },
       warnings: [...specific.warnings, ...generic.warnings, ...numbers],
@@ -282,6 +318,7 @@ interface SignalProtocol {
 interface ProtocolDecision {
   readonly traces: SignalProtocol;
   readonly metrics: SignalProtocol;
+  readonly logs: SignalProtocol;
   readonly warnings: ReadonlyArray<string>;
 }
 
@@ -297,7 +334,7 @@ interface ProtocolDecision {
  * where traces go. A value that is not a protocol at all is a typo, and the
  * specification is explicit that those get a warning and the default.
  *
- * Each signal builds its own serializer, so the two are answered separately
+ * Each signal builds its own serializer, so all three are answered separately
  * and are free to disagree.
  */
 const resolveProtocol = Effect.gen(function* () {
@@ -318,6 +355,7 @@ const resolveProtocol = Effect.gen(function* () {
   const generic = yield* read("OTEL_EXPORTER_OTLP_PROTOCOL");
   const traces = (yield* read("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ?? generic;
   const metrics = (yield* read("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL")) ?? generic;
+  const logs = (yield* read("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")) ?? generic;
 
   const decide = (named: typeof generic): SignalProtocol =>
     named === undefined
@@ -329,7 +367,12 @@ const resolveProtocol = Effect.gen(function* () {
           }
         : { protocol: named.value, declined: undefined };
 
-  return { traces: decide(traces), metrics: decide(metrics), warnings } satisfies ProtocolDecision;
+  return {
+    traces: decide(traces),
+    metrics: decide(metrics),
+    logs: decide(logs),
+    warnings,
+  } satisfies ProtocolDecision;
 });
 
 /**
@@ -395,10 +438,13 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const metrics = disabled
     ? { value: undefined, warnings: [] }
     : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
+  const logs = disabled
+    ? { value: undefined, warnings: [] }
+    : yield* signalSettings("LOGS", protocolDecision.logs.protocol, undefined);
   return {
     disabled,
-    // Both signals read the generic `OTEL_EXPORTER_OTLP_*` variables, so one
-    // bad value arrives here twice and would be logged twice.
+    // Every signal reads the generic `OTEL_EXPORTER_OTLP_*` variables, so one
+    // bad value arrives here once per signal and would be logged that often.
     warnings: [
       ...new Set([
         ...protocolDecision.warnings,
@@ -406,6 +452,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         ...temporality.warnings,
         ...traces.warnings,
         ...metrics.warnings,
+        ...logs.warnings,
       ]),
     ],
     // `value` is set only for a signal that resolved an endpoint and asked for
@@ -421,6 +468,10 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       settings: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
       declined: metrics.value === undefined ? undefined : protocolDecision.metrics.declined,
     },
+    logs: {
+      settings: protocolDecision.logs.declined === undefined ? logs.value : undefined,
+      declined: logs.value === undefined ? undefined : protocolDecision.logs.declined,
+    },
     resource: resource.value,
   };
 }).pipe(
@@ -431,6 +482,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         warnings: [],
         traces: { settings: undefined, declined: UNREADABLE },
         metrics: { settings: undefined, declined: UNREADABLE },
+        logs: { settings: undefined, declined: UNREADABLE },
         resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
       }),
     ),
@@ -446,5 +498,6 @@ export const none: OtelEnvironment = {
   warnings: [],
   traces: noSignal,
   metrics: noSignal,
+  logs: noSignal,
   resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
 };

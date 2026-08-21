@@ -50,8 +50,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     traceMaxFiles: 10,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
+    otlpLogsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpMetricsExportIntervalMs: 10_000,
+    otlpLogsExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
@@ -300,6 +302,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           tailscaleServePort: 443,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+          otlpLogsUrl: "http://localhost:4318/v1/logs",
         }),
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
@@ -340,6 +343,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ...defaultObservabilityConfig,
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+        otlpLogsUrl: "http://localhost:4318/v1/logs",
         mode: "desktop",
         port: 4888,
         cwd: process.cwd(),
@@ -534,6 +538,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
       expect(resolved.otlpServiceName).toBe("t3");
     }),
   );
@@ -548,11 +553,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         OTEL_SERVICE_NAME: "t3",
         T3CODE_OTLP_TRACES_URL: "",
         T3CODE_OTLP_METRICS_URL: "   ",
+        T3CODE_OTLP_LOGS_URL: "",
         T3CODE_OTLP_SERVICE_NAME: "",
       });
 
       expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
       expect(resolved.otlpServiceName).toBe("t3");
     }),
   );
@@ -563,11 +570,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
         OTEL_SERVICE_NAME: "t3",
         T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+        T3CODE_OTLP_LOGS_URL: "http://localhost:4318/v1/logs",
         T3CODE_OTLP_SERVICE_NAME: "t3-local",
       });
 
       expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpLogsUrl).toBe("http://localhost:4318/v1/logs");
       expect(resolved.otlpServiceName).toBe("t3-local");
     }),
   );
@@ -618,6 +627,23 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("keeps a span's schedule off a T3 Code log endpoint", () =>
+    Effect.gen(function* () {
+      // Log records batch on their own variable with their own default, so a
+      // log endpoint that came from a T3 Code name keeps T3 Code's interval
+      // instead of inheriting the span delay standing next to it.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_BSP_SCHEDULE_DELAY: "7000",
+        T3CODE_OTLP_LOGS_URL: "http://localhost:4318/v1/logs",
+      });
+
+      expect(resolved.otelEnvironment.logs.settings).toBeUndefined();
+      expect(resolved.otlpExportIntervalMs).toBe(7_000);
+      expect(resolved.otlpLogsExportIntervalMs).toBe(10_000);
+    }),
+  );
+
   it.effect("does not report a signal as declined while it is exporting", () =>
     Effect.gen(function* () {
       // grpc turns off the export these variables asked for, and says nothing
@@ -631,6 +657,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
       expect(resolved.otelEnvironment.traces.declined).toBeUndefined();
       expect(resolved.otelEnvironment.metrics.declined).toContain("grpc");
+      expect(resolved.otelEnvironment.logs.declined).toContain("grpc");
     }),
   );
 
@@ -644,6 +671,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.otlpTracesUrl).toBeUndefined();
       expect(resolved.otlpMetricsUrl).toBeUndefined();
+      expect(resolved.otlpLogsUrl).toBeUndefined();
     }),
   );
 
@@ -661,6 +689,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           observability: {
             otlpTracesUrl: "http://localhost:4318/v1/traces",
             otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+            otlpLogsUrl: "http://localhost:4318/v1/logs",
           },
         })}\n`,
       );
@@ -692,11 +721,13 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("http://localhost:4318/v1/metrics");
+      expect(resolved.otlpLogsUrl).toBe("http://localhost:4318/v1/logs");
       expect(resolved).toEqual({
         logLevel: "Info",
         ...defaultObservabilityConfig,
         otlpTracesUrl: "http://localhost:4318/v1/traces",
         otlpMetricsUrl: "http://localhost:4318/v1/metrics",
+        otlpLogsUrl: "http://localhost:4318/v1/logs",
         mode: "desktop",
         port: 4888,
         cwd: process.cwd(),

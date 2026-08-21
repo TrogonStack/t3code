@@ -295,6 +295,8 @@ describe("ServerSettingsPatch string normalization", () => {
       textGenerationModelSelection: { model: "  gpt-5.4-mini  " },
       observability: {
         otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
+        otlpMetricsUrl: "  http://localhost:4318/v1/metrics  ",
+        otlpLogsUrl: "  http://localhost:4318/v1/logs  ",
       },
       providers: {
         codex: {
@@ -315,6 +317,8 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.addProjectBaseDirectory).toBe("~/Development");
     expect(patch.textGenerationModelSelection?.model).toBe("gpt-5.4-mini");
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+    expect(patch.observability?.otlpMetricsUrl).toBe("http://localhost:4318/v1/metrics");
+    expect(patch.observability?.otlpLogsUrl).toBe("http://localhost:4318/v1/logs");
     expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(patch.providers?.codex?.homePath).toBe("~/.codex");
     expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");

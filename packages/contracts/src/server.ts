@@ -220,6 +220,8 @@ export const ServerObservability = Schema.Struct({
   otlpTracesEnabled: Schema.Boolean,
   otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
   otlpMetricsEnabled: Schema.Boolean,
+  otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpLogsEnabled: Schema.Boolean,
 });
 export type ServerObservability = typeof ServerObservability.Type;
 

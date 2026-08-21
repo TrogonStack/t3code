@@ -194,23 +194,40 @@ export function backgroundActivitySharedPolicySettings(
   };
 }
 
-function collapseOtelSignalsUrl(input: {
-  readonly tracesUrl: string;
-  readonly metricsUrl: string;
-}): string | null {
-  const tracesSuffix = "/traces";
-  const metricsSuffix = "/metrics";
-  if (!input.tracesUrl.endsWith(tracesSuffix) || !input.metricsUrl.endsWith(metricsSuffix)) {
+interface OtelSignalExport {
+  readonly signal: string;
+  readonly url: string;
+}
+
+/**
+ * One collector normally answers every signal at paths that differ only in the
+ * signal name, and reading three near-identical URLs to spot that is work. A
+ * signal pointed anywhere else keeps its own URL so it stays visible.
+ */
+function collapseOtelSignalsUrl(exports: ReadonlyArray<OtelSignalExport>): string | null {
+  if (exports.length < 2) {
     return null;
   }
 
-  const tracesBase = input.tracesUrl.slice(0, -tracesSuffix.length);
-  const metricsBase = input.metricsUrl.slice(0, -metricsSuffix.length);
-  if (tracesBase !== metricsBase) {
+  const bases = exports.map((entry) =>
+    entry.url.endsWith(`/${entry.signal}`)
+      ? entry.url.slice(0, -(entry.signal.length + 1))
+      : undefined,
+  );
+  const [base] = bases;
+  if (base === undefined || bases.some((candidate) => candidate !== base)) {
     return null;
   }
 
-  return `${tracesBase}/{traces,metrics}`;
+  return `${base}/{${exports.map((entry) => entry.signal).join(",")}}`;
+}
+
+function formatOtelSignalList(exports: ReadonlyArray<OtelSignalExport>): string {
+  const parts = exports.map((entry) => `${entry.signal} to ${entry.url}`);
+  if (parts.length < 3) {
+    return parts.join(" and ");
+  }
+  return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
 }
 
 export function formatDiagnosticsDescription(input: {
@@ -219,27 +236,26 @@ export function formatDiagnosticsDescription(input: {
   readonly otlpTracesUrl?: string | undefined;
   readonly otlpMetricsEnabled: boolean;
   readonly otlpMetricsUrl?: string | undefined;
+  readonly otlpLogsEnabled: boolean;
+  readonly otlpLogsUrl?: string | undefined;
 }): string {
   const mode = input.localTracingEnabled ? "Local trace file" : "Terminal logs only";
-  const tracesUrl = input.otlpTracesEnabled ? input.otlpTracesUrl : undefined;
-  const metricsUrl = input.otlpMetricsEnabled ? input.otlpMetricsUrl : undefined;
+  const exports = [
+    { signal: "traces", url: input.otlpTracesEnabled ? input.otlpTracesUrl : undefined },
+    { signal: "metrics", url: input.otlpMetricsEnabled ? input.otlpMetricsUrl : undefined },
+    { signal: "logs", url: input.otlpLogsEnabled ? input.otlpLogsUrl : undefined },
+  ].flatMap<OtelSignalExport>((entry) =>
+    entry.url ? [{ signal: entry.signal, url: entry.url }] : [],
+  );
 
-  if (tracesUrl && metricsUrl) {
-    const collapsedUrl = collapseOtelSignalsUrl({ tracesUrl, metricsUrl });
-    return collapsedUrl
-      ? `${mode}. Exporting OTEL to ${collapsedUrl}.`
-      : `${mode}. Exporting OTEL traces to ${tracesUrl} and metrics to ${metricsUrl}.`;
+  if (exports.length === 0) {
+    return `${mode}.`;
   }
 
-  if (tracesUrl) {
-    return `${mode}. Exporting OTEL traces to ${tracesUrl}.`;
-  }
-
-  if (metricsUrl) {
-    return `${mode}. Exporting OTEL metrics to ${metricsUrl}.`;
-  }
-
-  return `${mode}.`;
+  const collapsedUrl = collapseOtelSignalsUrl(exports);
+  return collapsedUrl
+    ? `${mode}. Exporting OTEL to ${collapsedUrl}.`
+    : `${mode}. Exporting OTEL ${formatOtelSignalList(exports)}.`;
 }
 
 export function buildProviderInstanceUpdatePatch(input: {
