@@ -244,14 +244,14 @@ Not everything in the specification is implemented. These are the ones worth kno
   proxy in front of it.
 - **Timeouts flush at shutdown.** The specification's `OTEL_EXPORTER_OTLP_TIMEOUT` is a per-request
   deadline. The exporter here has no per-request knob, so the value bounds the final flush instead.
-- **One wire format covers both signals.** `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` is read, but it
-  cannot differ from the trace protocol. Setting the two to different values logs a warning and uses
-  the trace protocol for both.
 - **Browser traces are always JSON.** The proxy that forwards traces from the client posts
   OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP and most
   collectors accept either, so this only matters against one that takes protobuf and nothing else.
-  When the server exporter resolves to `http/protobuf`, a startup warning names the split rather
+  When the trace exporter resolves to `http/protobuf`, a startup warning names the split rather
   than letting the browser half disappear while the server half looks healthy.
+- **No protocol name of T3 Code's own.** `OTEL_EXPORTER_OTLP_PROTOCOL` describes the endpoint these
+  variables named. A `T3CODE_OTLP_*` endpoint always uses `http/json`, which is what it has always
+  used.
 - **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
   accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
@@ -279,7 +279,9 @@ error a wrong one would, which reads like a bad token instead of a bad variable.
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
 name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
 an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
-batching of an export it did not point anywhere.
+batching of an export it did not point anywhere. Traces and metrics are answered separately
+throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces as
+they were.
 
 Once these variables are the ones configuring the exporter, the specification's own defaults apply:
 `OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, and `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` 512. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.

@@ -32,6 +32,13 @@ export type MetricsTemporality = "cumulative" | "delta";
 /** Everything one signal's exporter needs, or `undefined` if it is off. */
 export interface OtlpSignalSettings {
   readonly url: string;
+  /**
+   * The wire format for this signal alone. Each signal builds its own
+   * serializer, so the two are free to differ, and keeping the choice on the
+   * signal is what stops it from reaching an endpoint these variables did not
+   * supply.
+   */
+  readonly protocol: OtlpProtocol;
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly exportIntervalMs: number | undefined;
   readonly maxBatchSize: number | undefined;
@@ -58,13 +65,6 @@ export interface OtelEnvironment {
   readonly metrics: OtlpSignalSettings | undefined;
   readonly metricsTemporality: MetricsTemporality | undefined;
   readonly resource: OtlpResourceSettings;
-  /**
-   * The wire format the environment asked for, or `undefined` when it said
-   * nothing. The spec's default is `http/protobuf`, which applies to an
-   * environment that configured OTLP through these variables; one that did not
-   * keeps whatever T3 Code already used.
-   */
-  readonly protocol: OtlpProtocol | undefined;
   /**
    * Why a configured endpoint is not being used, if it is not. Carried rather
    * than logged here so the caller can report it once, at startup, where a
@@ -175,11 +175,12 @@ const signalWantsOtlp = (signal: "TRACES" | "METRICS") =>
  * configuring the exporter. A `T3CODE_OTLP_*` setup never reaches here and
  * keeps the numbers T3 Code has always used.
  */
+const SPEC_DEFAULT_PROTOCOL = "http/protobuf" as const;
 const SPEC_DEFAULT_SCHEDULE_DELAY_MS = 5_000;
 const SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE = 512;
 const SPEC_DEFAULT_METRIC_EXPORT_INTERVAL_MS = 60_000;
 
-const signalSettings = (signal: "TRACES" | "METRICS") =>
+const signalSettings = (signal: "TRACES" | "METRICS", protocol: OtlpProtocol) =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
     if (url === undefined || !(yield* signalWantsOtlp(signal))) {
@@ -200,6 +201,7 @@ const signalSettings = (signal: "TRACES" | "METRICS") =>
     return {
       value: {
         url,
+        protocol,
         headers,
         exportIntervalMs,
         maxBatchSize:
@@ -213,10 +215,15 @@ const signalSettings = (signal: "TRACES" | "METRICS") =>
     } satisfies Parsed<OtlpSignalSettings>;
   });
 
+/** What one signal should do about its wire format. */
+interface SignalProtocol {
+  readonly protocol: OtlpProtocol;
+  readonly declined: string | undefined;
+}
+
 interface ProtocolDecision {
-  readonly protocol: OtlpProtocol | undefined;
-  readonly declinedTraces: string | undefined;
-  readonly declinedMetrics: string | undefined;
+  readonly traces: SignalProtocol;
+  readonly metrics: SignalProtocol;
   readonly warnings: ReadonlyArray<string>;
 }
 
@@ -232,8 +239,8 @@ interface ProtocolDecision {
  * where traces go. A value that is not a protocol at all is a typo, and the
  * specification is explicit that those get a warning and the default.
  *
- * One serializer covers both signals, so two HTTP protocols that disagree
- * cannot both be honored and the mismatch says so.
+ * Each signal builds its own serializer, so the two are answered separately
+ * and are free to disagree.
  */
 const resolveProtocol = Effect.gen(function* () {
   const warnings: Array<string> = [];
@@ -254,26 +261,17 @@ const resolveProtocol = Effect.gen(function* () {
   const traces = (yield* read("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL")) ?? generic;
   const metrics = (yield* read("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL")) ?? generic;
 
-  const decline = (named: typeof generic) =>
-    named?.value === "grpc"
-      ? `${named.name}=grpc is not supported; this server exports OTLP over HTTP only, so this signal is not exported`
-      : undefined;
+  const decide = (named: typeof generic): SignalProtocol =>
+    named === undefined
+      ? { protocol: SPEC_DEFAULT_PROTOCOL, declined: undefined }
+      : named.value === "grpc"
+        ? {
+            protocol: SPEC_DEFAULT_PROTOCOL,
+            declined: `${named.name}=grpc is not supported; this server exports OTLP over HTTP only, so this signal is not exported`,
+          }
+        : { protocol: named.value, declined: undefined };
 
-  const overHttp = [traces, metrics].flatMap((named) =>
-    named === undefined || named.value === "grpc" ? [] : [named.value],
-  );
-  if (overHttp.length === 2 && overHttp[0] !== overHttp[1]) {
-    warnings.push(
-      `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=${overHttp[1]} cannot differ from the trace protocol here; ${overHttp[0]} is used for both`,
-    );
-  }
-
-  return {
-    protocol: overHttp[0],
-    declinedTraces: decline(traces),
-    declinedMetrics: decline(metrics),
-    warnings,
-  } satisfies ProtocolDecision;
+  return { traces: decide(traces), metrics: decide(metrics), warnings } satisfies ProtocolDecision;
 });
 
 /**
@@ -331,11 +329,11 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const temporality = yield* resolveMetricsTemporality;
   const traces = disabled
     ? { value: undefined, warning: undefined }
-    : yield* signalSettings("TRACES");
+    : yield* signalSettings("TRACES", protocolDecision.traces.protocol);
   const metrics = disabled
     ? { value: undefined, warning: undefined }
-    : yield* signalSettings("METRICS");
-  const declined = [protocolDecision.declinedTraces, protocolDecision.declinedMetrics].filter(
+    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol);
+  const declined = [protocolDecision.traces.declined, protocolDecision.metrics.declined].filter(
     (reason) => reason !== undefined,
   );
   return {
@@ -347,11 +345,10 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       traces.warning,
       metrics.warning,
     ].filter((warning) => warning !== undefined),
-    traces: protocolDecision.declinedTraces === undefined ? traces.value : undefined,
-    metrics: protocolDecision.declinedMetrics === undefined ? metrics.value : undefined,
+    traces: protocolDecision.traces.declined === undefined ? traces.value : undefined,
+    metrics: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
     metricsTemporality: temporality.value,
     resource: resource.value,
-    protocol: protocolDecision.protocol,
     declined: declined.length === 0 ? undefined : [...new Set(declined)].join(" "),
   };
 }).pipe(
@@ -364,7 +361,6 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         metrics: undefined,
         metricsTemporality: undefined,
         resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
-        protocol: undefined,
         declined: "the OpenTelemetry environment could not be read",
       }),
     ),
@@ -379,6 +375,5 @@ export const none: OtelEnvironment = {
   metrics: undefined,
   metricsTemporality: undefined,
   resource: { serviceName: undefined, serviceVersion: undefined, attributes: {} },
-  protocol: undefined,
   declined: undefined,
 };

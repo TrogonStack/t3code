@@ -186,14 +186,25 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("leaves the protocol unstated unless something states it", () =>
+  it.effect("defaults each signal to the specification's wire format", () =>
     Effect.gen(function* () {
-      const fallback = yield* OtelEnvironment.load.pipe(withEnv({}));
-      assert.strictEqual(fallback.protocol, undefined);
-      const json = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/json" }),
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
       );
-      assert.strictEqual(json.protocol, "http/json");
+      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
+      assert.strictEqual(resolved.metrics?.protocol, "http/protobuf");
+    }),
+  );
+
+  it.effect("keeps the wire format on the signal that named an endpoint", () =>
+    Effect.gen(function* () {
+      // A protocol with no endpoint of its own describes nothing, so it must
+      // not reach an export configured by some other name.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" }),
+      );
+      assert.strictEqual(resolved.traces, undefined);
+      assert.strictEqual(resolved.metrics, undefined);
     }),
   );
 
@@ -345,17 +356,16 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_PROTOCOL: "htp/json",
         }),
       );
-      assert.isDefined(resolved.traces);
-      assert.strictEqual(resolved.protocol, undefined);
+      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
       assert.strictEqual(resolved.declined, undefined);
       assert.isTrue(resolved.warnings.some((warning) => warning.includes("htp/json")));
     }),
   );
 
-  it.effect("warns when the two signals ask for different wire formats", () =>
+  it.effect("lets the two signals use different wire formats", () =>
     Effect.gen(function* () {
-      // One serializer covers both signals here, so the metric protocol cannot
-      // be honored separately and saying nothing would look like it was.
+      // Each signal builds its own serializer, so the metric protocol is
+      // honored on its own rather than losing to the trace one.
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
@@ -363,12 +373,9 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
         }),
       );
-      assert.strictEqual(resolved.protocol, "http/json");
-      assert.isTrue(
-        resolved.warnings.some((warning) =>
-          warning.includes("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"),
-        ),
-      );
+      assert.strictEqual(resolved.traces?.protocol, "http/json");
+      assert.strictEqual(resolved.metrics?.protocol, "http/protobuf");
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 
@@ -380,7 +387,8 @@ describe("OtelEnvironment", () => {
           OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json",
         }),
       );
-      assert.strictEqual(resolved.protocol, "http/json");
+      assert.strictEqual(resolved.metrics?.protocol, "http/json");
+      assert.strictEqual(resolved.traces?.protocol, "http/protobuf");
       assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
