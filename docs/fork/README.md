@@ -57,3 +57,5 @@ Each entry uses these sections:
   active, [#32](https://github.com/TrogonStack/t3code/pull/32)
 - **0020** [Server logs reach your collector](./0020-server-logs-reach-your-collector.md)
   active, [#33](https://github.com/TrogonStack/t3code/pull/33)
+- **0021** [A trace includes the client that started it](./0021-a-trace-includes-the-client-that-started-it.md)
+  active, [#34](https://github.com/TrogonStack/t3code/pull/34)
