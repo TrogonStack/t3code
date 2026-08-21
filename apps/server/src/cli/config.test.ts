@@ -538,6 +538,25 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("does not let an empty T3 Code name stand in for an answer", () =>
+    Effect.gen(function* () {
+      // An empty variable is set without saying anything. Reading it as an
+      // answer would publish an endpoint nothing can reach and would suppress
+      // the ambient one that could have been used instead.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        OTEL_SERVICE_NAME: "t3",
+        T3CODE_OTLP_TRACES_URL: "",
+        T3CODE_OTLP_METRICS_URL: "   ",
+        T3CODE_OTLP_SERVICE_NAME: "",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      expect(resolved.otlpServiceName).toBe("t3");
+    }),
+  );
+
   it.effect("keeps T3 Code's own names as the explicit answer", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveWithEnv({

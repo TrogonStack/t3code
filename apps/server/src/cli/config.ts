@@ -201,6 +201,17 @@ const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
+/**
+ * Reads a source that names an OTLP destination, treating a blank one as
+ * nobody having named it. An empty variable is set in the environment but is
+ * not an answer, and taking it as one both publishes an endpoint that cannot
+ * be reached and suppresses the ambient variable that could have been.
+ */
+const named = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+};
+
 const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
   const exists = yield* fs.exists(settingsPath).pipe(Effect.orElseSucceed(() => false));
@@ -361,12 +372,14 @@ export const resolveServerConfig = (
     // wire format, headers, batching, or aggregation of an export that a
     // T3CODE_OTLP_* name or Settings already answered, and stops startup from
     // reporting that signal as declined while it is exporting.
-    const namedTracesUrl =
-      env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl;
-    const namedMetricsUrl =
+    const namedTracesUrl = named(
+      env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl,
+    );
+    const namedMetricsUrl = named(
       env.otlpMetricsUrl ??
-      bootstrap?.otlpMetricsUrl ??
-      persistedObservabilitySettings.otlpMetricsUrl;
+        bootstrap?.otlpMetricsUrl ??
+        persistedObservabilitySettings.otlpMetricsUrl,
+    );
     const otelEnvironment = {
       ...otel,
       traces: namedTracesUrl === undefined ? otel.traces : OtelEnvironment.noSignal,
@@ -394,7 +407,8 @@ export const resolveServerConfig = (
         env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
       otlpMetricsExportIntervalMs:
         env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
-      otlpServiceName: env.otlpServiceName ?? otelEnvironment.resource.serviceName ?? "t3-server",
+      otlpServiceName:
+        named(env.otlpServiceName) ?? otelEnvironment.resource.serviceName ?? "t3-server",
       otelEnvironment,
       mode,
       port,
