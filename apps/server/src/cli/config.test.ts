@@ -539,7 +539,21 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
       expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
-      expect(resolved.otlpServiceName).toBe("t3");
+      // The endpoint is the machine's to name. The service is not.
+      expect(resolved.otlpServiceName).toBe("t3-server");
+    }),
+  );
+
+  it.effect("cannot be renamed by the environment", () =>
+    Effect.gen(function* () {
+      // A shell profile that names the app it was written for must not decide
+      // what T3 Code calls itself, or one dashboard quietly covers two apps.
+      const resolved = yield* resolveWithEnv({
+        OTEL_SERVICE_NAME: "some-other-app",
+        OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app",
+      });
+
+      expect(resolved.otlpServiceName).toBe("t3-server");
     }),
   );
 
@@ -560,7 +574,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
       expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
-      expect(resolved.otlpServiceName).toBe("t3");
+      expect(resolved.otlpServiceName).toBe("t3-server");
     }),
   );
 

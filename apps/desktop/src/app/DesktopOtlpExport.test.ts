@@ -30,7 +30,7 @@ const resolve = (
         otel,
         named: { ...noNamedEndpoints, ...overrides.named },
         namedExportIntervalMs: overrides.namedExportIntervalMs,
-        defaultServiceName: "desktop",
+        serviceName: "t3-desktop",
         runtimeAttributes: { "service.runtime": "desktop", "service.mode": "development" },
       }),
     ),
@@ -154,7 +154,6 @@ describe("resolveDesktopOtlpExport", () => {
   it.effect("cannot be made to claim it is the server process", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve({
-        OTEL_SERVICE_NAME: "t3-desktop",
         OTEL_SERVICE_VERSION: "1.2.3",
         OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=lab,service.runtime=t3-server",
       });
@@ -165,10 +164,34 @@ describe("resolveDesktopOtlpExport", () => {
     }),
   );
 
-  it.effect("keeps calling itself the desktop when nothing named the service", () =>
+  it.effect("cannot be renamed by the environment", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve({
+        OTEL_SERVICE_NAME: "some-other-app",
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+      });
+      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.lengthOf(resolved.warnings, 1);
+      assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
+    }),
+  );
+
+  it.effect("cannot be renamed through the resource attributes either", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve({
+        OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app,host.name=lab-01",
+      });
+      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.strictEqual(resolved.resource.attributes["service.name"], undefined);
+      assert.strictEqual(resolved.resource.attributes["host.name"], "lab-01");
+      assert.include(resolved.warnings[0] ?? "", "service.name was ignored");
+    }),
+  );
+
+  it.effect("names itself even when the environment says nothing", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve({});
-      assert.strictEqual(resolved.resource.serviceName, "desktop");
+      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
       assert.strictEqual(resolved.resource.serviceVersion, undefined);
     }),
   );
