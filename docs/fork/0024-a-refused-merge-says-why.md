@@ -1,6 +1,6 @@
 # 0024: A refused merge says why, and an administrator can merge anyway
 
-- PR: pending
+- PR: [TrogonStack/t3code#38](https://github.com/TrogonStack/t3code/pull/38)
 - Status: active
 
 ## What you can do now

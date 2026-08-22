@@ -64,4 +64,4 @@ Each entry uses these sections:
 - **0023** [A service name is not an environment variable](./0023-a-service-name-is-not-an-environment-variable.md)
   active, [#36](https://github.com/TrogonStack/t3code/pull/36)
 - **0024** [A refused merge says why, and an administrator can merge anyway](./0024-a-refused-merge-says-why.md)
-  active, PR pending
+  active, [#38](https://github.com/TrogonStack/t3code/pull/38)
