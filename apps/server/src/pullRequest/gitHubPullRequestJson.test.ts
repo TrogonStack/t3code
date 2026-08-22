@@ -765,7 +765,31 @@ describe("viewer permission decoding", () => {
           }),
         ),
       ),
-    ).toEqual({ canWrite: false, canUpdate: true, didAuthor: true });
+    ).toEqual({ canWrite: false, canAdminister: false, canUpdate: true, didAuthor: true });
+  });
+
+  it("counts only an administrator as able to merge past the branch's own rules", () => {
+    expect(
+      expectSuccess(
+        decodeViewerPermissionsJson(
+          viewerJson({
+            viewerPermission: "ADMIN",
+            pullRequest: { viewerCanUpdate: true, viewerDidAuthor: false },
+          }),
+        ),
+      ),
+    ).toEqual({ canWrite: true, canAdminister: true, canUpdate: true, didAuthor: false });
+
+    expect(
+      expectSuccess(
+        decodeViewerPermissionsJson(
+          viewerJson({
+            viewerPermission: "WRITE",
+            pullRequest: { viewerCanUpdate: true, viewerDidAuthor: false },
+          }),
+        ),
+      ).canAdminister,
+    ).toBe(false);
   });
 
   it("says no to a passer-by on a repository they can only read", () => {
@@ -778,7 +802,7 @@ describe("viewer permission decoding", () => {
           }),
         ),
       ),
-    ).toEqual({ canWrite: false, canUpdate: false, didAuthor: false });
+    ).toEqual({ canWrite: false, canAdminister: false, canUpdate: false, didAuthor: false });
   });
 
   it("reads silence as permission, but not as authorship", () => {
@@ -787,6 +811,7 @@ describe("viewer permission decoding", () => {
     // and claiming it for someone who did not is how an author's own rules get handed out.
     expect(expectSuccess(decodeViewerPermissionsJson(viewerJson({ pullRequest: null })))).toEqual({
       canWrite: false,
+      canAdminister: false,
       canUpdate: true,
       didAuthor: false,
     });

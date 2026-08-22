@@ -32,7 +32,10 @@ import type {
   PullRequestViewerPermissions,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t3tools/contracts";
+import {
+  PullRequestRefusal,
+  SourceControlProviderKind as SourceControlProviderKindSchema,
+} from "@t3tools/contracts";
 
 /**
  * The one failure shape every provider reports, so the service can decide what a failure means
@@ -49,6 +52,8 @@ export class PullRequestProviderError extends Schema.TaggedErrorClass<PullReques
     operation: Schema.String,
     reason: Schema.Literals(["missing-tool", "unauthenticated", "rate-limited", "failed"]),
     detail: Schema.String,
+    /** The refusal behind a `failed`, where the host named one. */
+    refusal: Schema.optional(PullRequestRefusal),
     retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -61,6 +66,7 @@ export class PullRequestProviderError extends Schema.TaggedErrorClass<PullReques
 export interface PullRequestProviderFailure {
   readonly reason: PullRequestProviderError["reason"];
   readonly retryAt?: number | undefined;
+  readonly refusal?: PullRequestRefusal | undefined;
 }
 
 /** A change request as the provider sees it, before the service attaches project context. */
@@ -393,6 +399,11 @@ export interface PullRequestProviderApi {
       readonly mergeMethod?: PullRequestMergeMethod;
       /** Only meaningful for `update-branch`; absent takes the host's own default. */
       readonly updateMethod?: PullRequestUpdateMethod;
+      /**
+       * Merge with the branch's rules stood down. Only meaningful for `merge`, and only ever
+       * passed to a provider that reports `capabilities.mergeBypass`.
+       */
+      readonly bypassRules?: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

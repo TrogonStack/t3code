@@ -199,6 +199,14 @@ const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
  * refusal the host would have answered with. Merging is the one that needs write and nothing
  * else; the other four are also the author's to take, whatever access they have.
  */
+/**
+ * Said instead of the plain merge refusal when the override was the thing asked for: someone
+ * with write access is told what they are missing rather than that they cannot merge, which
+ * they can.
+ */
+const MERGE_BYPASS_ACCESS_REFUSAL =
+  "You need admin access on this repository to merge past its own rules.";
+
 const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
   merge: "You need write access on this repository to merge.",
   ready:
@@ -384,7 +392,12 @@ function toPullRequestError(
   return (error) =>
     isProviderUnusable(error)
       ? toUnavailableError(error)
-      : new PullRequestOperationError({ operation, detail: error.detail, cause: error });
+      : new PullRequestOperationError({
+          operation,
+          detail: error.detail,
+          ...(error.refusal === undefined ? {} : { refusal: error.refusal }),
+          cause: error,
+        });
 }
 
 function withRateLimitBackoff(
@@ -1390,6 +1403,28 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
+        // A bypass is asked for by name, so it is refused by name as well. Two ways to get it
+        // wrong: a host with no override at all, and an override asked for alongside an action
+        // that is not the merge. gh refuses `--admin` with `--auto`, and the deferred merge
+        // waits on the very rules a bypass would stand down.
+        if (input.bypassRules === true) {
+          if (project.api.capabilities.mergeBypass !== true) {
+            return Effect.fail(
+              new PullRequestOperationError({
+                operation: "runAction",
+                detail: "This host cannot merge a change request past its own rules.",
+              }),
+            );
+          }
+          if (input.action !== "merge") {
+            return Effect.fail(
+              new PullRequestOperationError({
+                operation: "runAction",
+                detail: `A ${input.action} cannot be taken past the branch's rules.`,
+              }),
+            );
+          }
+        }
         // The same for the way a stale branch is brought up to date: a host that only merges
         // must not be asked to rebase and left to pick something else.
         if (
@@ -1427,6 +1462,14 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
+            if (input.bypassRules === true && viewer.mergeBypass !== true) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "runAction",
+                  detail: MERGE_BYPASS_ACCESS_REFUSAL,
+                }),
+              );
+            }
             return project.api
               .runAction({
                 cwd: project.project.workspaceRoot,
@@ -1436,6 +1479,7 @@ export const make = Effect.gen(function* () {
                 action: input.action,
                 ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
                 ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
+                ...(input.bypassRules === undefined ? {} : { bypassRules: input.bypassRules }),
               })
               .pipe(Effect.mapError(toPullRequestError("runAction")));
           }),

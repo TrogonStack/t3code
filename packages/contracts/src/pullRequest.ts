@@ -366,6 +366,12 @@ export const PullRequestCapabilities = Schema.Struct({
   /** Merge strategies the provider itself offers, before repository settings narrow them. */
   mergeMethods: Schema.Array(PullRequestMergeMethod),
   /**
+   * The host can merge past its own branch rules for someone allowed to override them. Optional
+   * for the same reason as `updateMethods`: a server that says nothing about it cannot, which is
+   * what every server before this field was.
+   */
+  mergeBypass: Schema.optional(Schema.Boolean),
+  /**
    * How this host can bring a stale branch up to date. Absent where it cannot at all, which is
    * every host that has not said otherwise — so a provider that says nothing offers nothing.
    */
@@ -431,6 +437,12 @@ export const PullRequestViewerPermissions = Schema.Struct({
    * Absent or empty means they may not, which is also what a host with no such action says.
    */
   updateMethods: Schema.optional(Schema.Array(PullRequestUpdateMethod)),
+  /**
+   * This viewer may merge past the branch's rules. The exception to "a permission the host
+   * reports nothing about is granted": overriding the rules a repository set for itself is not
+   * something to offer on the chance that it works, and a host that has not said yes has said no.
+   */
+  mergeBypass: Schema.optional(Schema.Boolean),
 });
 export type PullRequestViewerPermissions = typeof PullRequestViewerPermissions.Type;
 
@@ -874,6 +886,12 @@ export const PullRequestActionInput = Schema.Struct({
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   /** Only read for `update-branch`, where absent means the host's own default. */
   updateMethod: Schema.optional(PullRequestUpdateMethod),
+  /**
+   * Merge over the branch's own rules, for a viewer the host allows to. Only read for `merge`:
+   * the deferred merge waits for those rules to be satisfied, so arming one that overrides them
+   * is a contradiction rather than a shortcut, and every other action answers to different rules.
+   */
+  bypassRules: Schema.optional(Schema.Boolean),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 
@@ -1163,11 +1181,26 @@ export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullReq
   }
 }
 
+/**
+ * A refusal the host explained, narrowed to the ones a client can offer a way out of. Carried
+ * beside the sentence because a client cannot act on prose: whether to offer the override is a
+ * decision about which refusal this is, and matching on the wording would break the moment the
+ * wording improves.
+ */
+export const PullRequestRefusal = Schema.Literals([
+  "merge-blocked",
+  "merge-conflict",
+  "already-merged",
+]);
+export type PullRequestRefusal = typeof PullRequestRefusal.Type;
+
 export class PullRequestOperationError extends Schema.TaggedErrorClass<PullRequestOperationError>()(
   "PullRequestOperationError",
   {
     operation: Schema.String,
     detail: TrimmedNonEmptyString,
+    /** Absent where the host gave no reason worth acting on, which is most failures. */
+    refusal: Schema.optional(PullRequestRefusal),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 502 },

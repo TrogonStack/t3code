@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   VcsProcessExitError,
@@ -181,6 +182,80 @@ describe("VcsProcess.run", () => {
       });
       expect(error.message).not.toContain(providerStderr);
     }).pipe(provideLive),
+  );
+
+  const exitWith = (command: string, stderr: string) =>
+    VcsProcess.make.pipe(
+      Effect.provideService(
+        ProcessRunner.ProcessRunner,
+        ProcessRunner.ProcessRunner.of({
+          run: () =>
+            Effect.succeed({
+              stdout: "",
+              stderr,
+              code: ChildProcessSpawner.ExitCode(1),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            }),
+        }),
+      ),
+      Effect.flatMap((service) => service.run({ ...baseInput, command })),
+      Effect.flip,
+    );
+
+  it.effect("says the branch's rules refused the merge, in this repository's own words", () =>
+    Effect.gen(function* () {
+      const providerStderr =
+        "X Pull request acme/web#7 is not mergeable: the base branch policy prohibits the merge.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\n";
+      const error = yield* exitWith("gh", providerStderr);
+
+      expect(error).toMatchObject({
+        detail: "The target branch's rules do not allow this merge yet.",
+        failureKind: "merge-blocked",
+      });
+      expect(error.message).not.toContain(providerStderr);
+    }),
+  );
+
+  it.effect(
+    "separates a conflict from a rule, since only one of them is the branch's contents",
+    () =>
+      Effect.gen(function* () {
+        const error = yield* exitWith(
+          "gh",
+          "X Pull request acme/web#7 is not mergeable: the merge commit cannot be cleanly created.\n",
+        );
+
+        expect(error).toMatchObject({
+          detail: "The two branches conflict, so no merge commit can be created from them.",
+          failureKind: "merge-conflict",
+        });
+      }),
+  );
+
+  it.effect("recognises a pull request somebody else already merged", () =>
+    Effect.gen(function* () {
+      const error = yield* exitWith("gh", "X Pull request acme/web#7 was already merged\n");
+
+      expect(error).toMatchObject({
+        detail: "The pull request has already been merged.",
+        failureKind: "already-merged",
+      });
+    }),
+  );
+
+  it.effect("leaves other tools the generic reason rather than guessing at their wording", () =>
+    Effect.gen(function* () {
+      const error = yield* exitWith("glab", "the merge commit cannot be cleanly created");
+
+      expect(error).toMatchObject({
+        detail: "Process exited with a non-zero status.",
+        failureKind: "command-failed",
+      });
+    }),
   );
 
   it.effect("retains spawn causes without exposing process arguments in the error message", () =>

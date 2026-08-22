@@ -525,6 +525,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
       readonly updateMethod?: PullRequestUpdateMethod;
+      /** Only read for `merge`: gh has no bypass for anything else, and refuses it with `--auto`. */
+      readonly bypassRules?: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
     readonly commentOnPullRequest: (input: {
@@ -845,10 +847,14 @@ function actionArgs(
   action: PullRequestAction,
   mergeMethod: PullRequestMergeMethod | undefined,
   updateMethod: PullRequestUpdateMethod | undefined,
+  bypassRules: boolean | undefined,
 ): ReadonlyArray<string> {
   switch (action) {
+    // `--admin` is gh's name for merging with the repository's rules stood down. It is refused
+    // by GitHub itself for anyone the repository does not allow that, so it is asked for only
+    // where the viewer's permissions already said yes.
     case "merge":
-      return ["merge", `--${mergeMethod ?? "merge"}`];
+      return ["merge", `--${mergeMethod ?? "merge"}`, ...(bypassRules === true ? ["--admin"] : [])];
     // `--auto` arms the same command instead of running it, and still needs the strategy: GitHub
     // stores the strategy with the standing instruction rather than choosing one at merge time.
     case "enable-auto-merge":
@@ -1752,6 +1758,7 @@ export const make = Effect.gen(function* () {
         input.action,
         input.mergeMethod,
         input.updateMethod,
+        input.bypassRules,
       );
       return github
         .execute({

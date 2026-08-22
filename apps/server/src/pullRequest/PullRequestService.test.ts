@@ -1930,6 +1930,135 @@ it.effect("refuses a merge strategy the host does not offer", () =>
   }),
 );
 
+it.effect("carries the host's refusal out to the client, not just its sentence", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          runAction: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "runAction",
+                reason: "failed",
+                refusal: "merge-blocked",
+                detail: "The target branch's rules do not allow this merge yet.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        action: "merge",
+      }),
+    );
+
+    // The sentence is for the reader and the kind is for the page: without it a client offering
+    // the override would have to recognise the refusal by its wording.
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    const refused = error._tag === "PullRequestOperationError" ? error : null;
+    assert.strictEqual(refused?.detail, "The target branch's rules do not allow this merge yet.");
+    assert.strictEqual(refused?.refusal, "merge-blocked");
+  }),
+);
+
+it.effect("only lets a merge past the branch's rules when host and account both allow it", () =>
+  Effect.gen(function* () {
+    const bypasses: Array<boolean | undefined> = [];
+    const capabilities = {
+      diff: true,
+      comment: true,
+      actions: ["merge", "close"] as const,
+      mergeMethods: ["merge", "squash"] as const,
+      search: true,
+      reactions: true,
+      review: FULL_REVIEW,
+      reviewers: FULL_REVIEWERS,
+    };
+    const viewerPermissions = {
+      actions: ["merge", "close"] as const,
+      comment: true,
+      resolve: true,
+      verdicts: ["comment", "approve", "request-changes"] as const,
+      requestReviewers: true,
+    };
+    const reference = {
+      projectId: "p1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 1,
+    };
+    const serviceFor = (provider: Partial<PullRequestProviderApi>) =>
+      makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "t3code",
+            workspaceRoot: "/a",
+            repository: "pingdotgg/t3code",
+          }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            runAction: (input) => {
+              bypasses.push(input.bypassRules);
+              return Effect.void;
+            },
+            ...provider,
+          }),
+        ],
+      });
+
+    // A host with no override of its own: Bitbucket and Azure DevOps never report one.
+    const noOverride = yield* serviceFor({
+      capabilities,
+      getViewerPermissions: () => Effect.succeed(viewerPermissions),
+    });
+    assert.strictEqual(
+      (yield* Effect.flip(
+        noOverride.runAction({ ...reference, action: "merge", bypassRules: true }),
+      ))._tag,
+      "PullRequestOperationError",
+    );
+
+    // The host allows it, this account does not, which is every non-administrator on GitHub.
+    const notAnAdmin = yield* serviceFor({
+      capabilities: { ...capabilities, mergeBypass: true },
+      getViewerPermissions: () => Effect.succeed(viewerPermissions),
+    });
+    assert.strictEqual(
+      (yield* Effect.flip(
+        notAnAdmin.runAction({ ...reference, action: "merge", bypassRules: true }),
+      ))._tag,
+      "PullRequestOperationError",
+    );
+    assert.deepStrictEqual(bypasses, []);
+
+    const administrator = yield* serviceFor({
+      capabilities: { ...capabilities, mergeBypass: true },
+      getViewerPermissions: () => Effect.succeed({ ...viewerPermissions, mergeBypass: true }),
+    });
+    // Arming a merge for later cannot stand the rules down: it is those very rules it waits on.
+    assert.strictEqual(
+      (yield* Effect.flip(
+        administrator.runAction({ ...reference, action: "close", bypassRules: true }),
+      ))._tag,
+      "PullRequestOperationError",
+    );
+
+    yield* administrator.runAction({ ...reference, action: "merge", bypassRules: true });
+    yield* administrator.runAction({ ...reference, action: "merge" });
+    assert.deepStrictEqual(bypasses, [true, undefined]);
+  }),
+);
+
 it.effect("hands the provider the host its repository lives on", () =>
   Effect.gen(function* () {
     const hosts: string[] = [];

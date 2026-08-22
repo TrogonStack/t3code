@@ -52,6 +52,30 @@ describe("GitHubCli.layer", () => {
     assert.notProperty(commandFailure, "operation");
   });
 
+  it("carries the reason a merge was refused instead of a bare command failure", () => {
+    const context = { command: "gh", cwd: "/repo" } as const;
+    const refusal = new VcsProcessExitError({
+      operation: "GitHubCli.execute",
+      command: "gh",
+      cwd: context.cwd,
+      exitCode: 1,
+      failureKind: "merge-blocked",
+      detail: "The target branch's rules do not allow this merge yet.",
+      stderrLength: 214,
+      stderrTruncated: false,
+    });
+
+    const error = GitHubCli.fromVcsError(context, refusal);
+
+    assert.strictEqual(error._tag, "GitHubCliRefusedError");
+    assert.strictEqual(error.detail, refusal.detail);
+    assert.strictEqual(
+      error._tag === "GitHubCliRefusedError" ? error.refusal : null,
+      "merge-blocked",
+    );
+    assert.strictEqual(error.cause, refusal);
+  });
+
   it.effect("parses pull request view output", () =>
     Effect.gen(function* () {
       mockRun.mockReturnValueOnce(

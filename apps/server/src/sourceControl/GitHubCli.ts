@@ -6,6 +6,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
+  PullRequestRefusal,
   TrimmedNonEmptyString,
   type SourceControlRepositoryVisibility,
   type VcsError,
@@ -72,6 +73,22 @@ export class GitHubPullRequestNotFoundError extends Schema.TaggedErrorClass<GitH
     return "Pull request not found. Check the PR number or URL and try again.";
   }
 
+  override get message(): string {
+    return `GitHub CLI failed in execute: ${this.detail}`;
+  }
+}
+
+/**
+ * A refusal GitHub explained, carrying the sentence the classifier wrote for it. Separate from a
+ * plain command failure because that one says only that `gh` exited, which is true of every
+ * failure here and worth nothing to whoever pressed the button: a merge the branch's rules
+ * forbid, a branch that conflicts and a pull request somebody else already merged are three
+ * different things to do next.
+ */
+export class GitHubCliRefusedError extends Schema.TaggedErrorClass<GitHubCliRefusedError>()(
+  "GitHubCliRefusedError",
+  { ...gitHubCliFailureFields, refusal: PullRequestRefusal, detail: Schema.String },
+) {
   override get message(): string {
     return `GitHub CLI failed in execute: ${this.detail}`;
   }
@@ -153,6 +170,7 @@ export const GitHubCliError = Schema.Union([
   GitHubCliAuthenticationError,
   GitHubCliRateLimitError,
   GitHubPullRequestNotFoundError,
+  GitHubCliRefusedError,
   GitHubCliCommandError,
   GitHubPullRequestListDecodeError,
   GitHubChangeRequestListDecodeError,
@@ -189,6 +207,21 @@ export function fromVcsError(
     }
     if (error.failureKind === "not-found") {
       return new GitHubPullRequestNotFoundError({ ...context, cause: error });
+    }
+    // The classifier already wrote the sentence for the kinds it recognises, so the refusal is
+    // carried rather than restated. Everything it did not recognise stays a bare command failure:
+    // an invented reason is worse than none.
+    if (
+      error.failureKind === "merge-blocked" ||
+      error.failureKind === "merge-conflict" ||
+      error.failureKind === "already-merged"
+    ) {
+      return new GitHubCliRefusedError({
+        ...context,
+        refusal: error.failureKind,
+        detail: error.detail,
+        cause: error,
+      });
     }
   }
 

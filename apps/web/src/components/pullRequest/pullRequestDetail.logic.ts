@@ -8,6 +8,7 @@ import type {
   PullRequestDetailView,
   PullRequestMergeability,
   PullRequestReaction,
+  PullRequestRefusal,
   PullRequestReviewThread,
   PullRequestState,
   PullRequestUpdateMethod,
@@ -91,13 +92,13 @@ export function pullRequestComposerTarget<T>(
   return context === "thread" ? (target ?? null) : null;
 }
 
-/** Whether the open pull-request action group contains at least one action. */
-export function pullRequestActionMenuHasGroup(
-  showsDraftToggle: boolean,
-  showsAutoMerge: boolean,
-  showsMergeMethods: boolean,
-): boolean {
-  return showsDraftToggle || showsAutoMerge || showsMergeMethods;
+/**
+ * Whether the open pull-request action group contains at least one action, which is what the
+ * separator below it is drawn from. Taken as however many the menu has rather than one parameter
+ * each: the separator's question is only ever "any of them".
+ */
+export function pullRequestActionMenuHasGroup(...shown: ReadonlyArray<boolean>): boolean {
+  return shown.some((entry) => entry);
 }
 
 export function isStackedPullRequestBase(
@@ -856,6 +857,39 @@ const TOOL_NOISE = [
   /^exited? with (code|status) \d+\.?$/iu,
   /^unknown error\.?$/iu,
 ];
+
+/**
+ * The refusal a failed action carried, where it carried one. Read off the decoded error rather
+ * than out of its sentence: the wording is meant to keep improving, and a client that matches on
+ * prose breaks every time it does.
+ */
+export function pullRequestRefusalOf(failure: unknown): PullRequestRefusal | null {
+  if (typeof failure !== "object" || failure === null) return null;
+  const refusal = (failure as { readonly refusal?: unknown }).refusal;
+  return refusal === "merge-blocked" || refusal === "merge-conflict" || refusal === "already-merged"
+    ? refusal
+    : null;
+}
+
+/**
+ * Whether a refused merge is one to offer the override for. Only the rules can be stood down: a
+ * conflict is the branch's contents and an override does nothing about it, and a pull request
+ * already merged has nowhere left to go. An override that was itself refused is not offered
+ * again, because the next press would fail the same way.
+ */
+export function pullRequestOffersBypassRetry(options: {
+  readonly failure: unknown;
+  readonly action: PullRequestAction;
+  readonly attemptedBypass: boolean;
+  readonly viewerCanBypass: boolean;
+}): boolean {
+  return (
+    options.action === "merge" &&
+    !options.attemptedBypass &&
+    options.viewerCanBypass &&
+    pullRequestRefusalOf(options.failure) === "merge-blocked"
+  );
+}
 
 /** How much of a host's own message a toast can carry before it stops being read. */
 const FAILURE_DETAIL_MAX_LENGTH = 320;

@@ -1891,6 +1891,15 @@ function toCanWrite(viewerPermission: string | null | undefined): boolean {
   }
 }
 
+/**
+ * Whether the viewer administers the repository, which is the only role GitHub offers a merge
+ * that overrides the rules the repository set for itself. MAINTAIN is not one: it runs the
+ * project day to day and is still held to those rules.
+ */
+function toCanAdminister(viewerPermission: string | null | undefined): boolean {
+  return viewerPermission?.trim().toUpperCase() === "ADMIN";
+}
+
 export function decodeRepositoryAccessJson(
   raw: string,
 ): Result.Result<GitHubRepositoryAccess, DecodeFailure> {
@@ -2126,6 +2135,8 @@ export function buildReviewerRequestJson(
  */
 export interface GitHubViewerAccess {
   readonly canWrite: boolean;
+  /** An ADMIN role on the repository, which is the one GitHub lets override its branch rules. */
+  readonly canAdminister: boolean;
   /** GitHub's own `viewerCanUpdate`, true for the author as well as for anyone with write. */
   readonly canUpdate: boolean;
   readonly didAuthor: boolean;
@@ -2172,6 +2183,7 @@ export function decodeViewerPermissionsJson(
   const repository = decoded.success.data.repository;
   return Result.succeed({
     canWrite: toCanWrite(repository.viewerPermission),
+    canAdminister: toCanAdminister(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });
 }

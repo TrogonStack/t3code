@@ -34,6 +34,7 @@ import {
   PencilIcon,
   RefreshCwIcon,
   ServerIcon,
+  ShieldOffIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -110,6 +111,7 @@ import {
   latestPullRequestReviewOutcomes,
   isStackedPullRequestBase,
   pullRequestActionMenuHasGroup,
+  pullRequestOffersBypassRetry,
   pullRequestActionNeedsHostRefresh,
   pullRequestComposerTarget,
   pullRequestFindingKey,
@@ -191,6 +193,10 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
   "disable-auto-merge":
     "The host refused it. Check that you have write access, and that the merge has not already happened.",
 };
+
+/** Said when the override itself was refused, which is a different dead end from a plain merge. */
+const MERGE_BYPASS_FAILURE_HINT =
+  "The host refused it even with the rules stood down. A repository can forbid its own administrators from bypassing, and nothing bypasses a branch that conflicts.";
 
 /**
  * Said instead of the update hint when the reader asked for a rebase: it is the one that fails on
@@ -456,9 +462,12 @@ export function PullRequestDetailPanel({
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmation, setConfirmation] = useState<{
     readonly open: boolean;
-    readonly action: "merge" | "close" | "enable-auto-merge";
+    readonly action: "merge" | "merge-bypass" | "close" | "enable-auto-merge";
+    /** Set only when the dialog is answering a refusal, and carries what the host said. */
+    readonly refusalDetail?: string;
   }>({ open: false, action: "merge" });
   const confirmAction = confirmation.action;
+  const confirmRefusalDetail = confirmation.refusalDetail;
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
@@ -625,6 +634,7 @@ export function PullRequestDetailPanel({
     action: PullRequestAction,
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
+    options?: { readonly bypassRules?: boolean },
   ) => {
     if (pendingAction !== null) return;
     setPendingAction(action);
@@ -635,6 +645,7 @@ export function PullRequestDetailPanel({
         action,
         ...(method ? { mergeMethod: method } : {}),
         ...(updateMethod ? { updateMethod } : {}),
+        ...(options?.bypassRules ? { bypassRules: true } : {}),
       },
     });
     setPendingAction(null);
@@ -646,14 +657,30 @@ export function PullRequestDetailPanel({
       const failure = squashAtomCommandFailure(result);
       // The hint stands for what was actually asked for: a reader who pressed Update branch is
       // told to check their access, not offered the merge commit they already chose.
-      const hint =
-        updateMethod === "rebase"
+      const hint = options?.bypassRules
+        ? MERGE_BYPASS_FAILURE_HINT
+        : updateMethod === "rebase"
           ? UPDATE_BRANCH_REBASE_FAILURE_HINT
           : ACTION_FAILURE_HINTS[action];
+      const description = readableFailure(failure, hint);
+      // A merge the branch's rules held back, for a reader who may stand them down, is the one
+      // failure here with a next step. Offered as the dialog rather than as a toast: the toast
+      // is gone by the time it has been read, and this is a decision, not a notice.
+      if (
+        pullRequestOffersBypassRetry({
+          failure,
+          action,
+          attemptedBypass: options?.bypassRules === true,
+          viewerCanBypass: showsMergeBypass,
+        })
+      ) {
+        setConfirmation({ open: true, action: "merge-bypass", refusalDetail: description });
+        return;
+      }
       toastManager.add({
         type: "error",
         title: ACTION_FAILURE_LABELS[action],
-        description: readableFailure(failure, hint),
+        description,
       });
       return;
     }
@@ -1084,6 +1111,17 @@ export function PullRequestDetailPanel({
     !detail.isDraft &&
     !conflicting &&
     allowedMergeMethods.length > 1;
+  // The override, offered only where both the host and this account have said it is available.
+  // Not for a draft or a conflicting branch: neither is a rule that can be stood down, so the
+  // host refuses those with or without it.
+  const showsMergeBypass =
+    detail?.state === "open" &&
+    detail.capabilities.mergeBypass === true &&
+    detail.viewerPermissions.mergeBypass === true &&
+    can("merge") &&
+    !detail.isDraft &&
+    !conflicting &&
+    allowedMergeMethods.length > 0;
   // The pull request number carries this state in the overview and the right-panel tab mirrors
   // it. The conflict action is separate from this state: an open pull request remains green.
   const statePresentation = detail
@@ -1435,10 +1473,29 @@ export function PullRequestDetailPanel({
                           </MenuRadioGroup>
                         </>
                       ) : null}
+                      {/* Below the strategies, because it merges with whichever of them is
+                          chosen: it is the same merge with the branch's rules stood down, and
+                          reads as a last resort where it sits last. */}
+                      {showsMergeBypass ? (
+                        <>
+                          {showsDraftToggle || showsAutoMerge || showsMergeMethods ? (
+                            <MenuSeparator />
+                          ) : null}
+                          <MenuItem
+                            variant="destructive"
+                            disabled={actionPending}
+                            onClick={() => setConfirmation({ open: true, action: "merge-bypass" })}
+                          >
+                            <ShieldOffIcon className="size-3.5" />
+                            {`${selectedMergeMethodLabel} past branch rules`}
+                          </MenuItem>
+                        </>
+                      ) : null}
                       {pullRequestActionMenuHasGroup(
                         showsDraftToggle,
                         showsAutoMerge,
                         showsMergeMethods,
+                        showsMergeBypass,
                       ) ? (
                         <MenuSeparator />
                       ) : null}
@@ -1981,19 +2038,30 @@ export function PullRequestDetailPanel({
             <AlertDialogTitle>
               {confirmAction === "merge"
                 ? "Merge pull request?"
-                : confirmAction === "enable-auto-merge"
-                  ? "Enable auto-merge?"
-                  : "Close pull request?"}
+                : confirmAction === "merge-bypass"
+                  ? confirmRefusalDetail === undefined
+                    ? "Merge past the branch's rules?"
+                    : "Merge anyway?"
+                  : confirmAction === "enable-auto-merge"
+                    ? "Enable auto-merge?"
+                    : "Close pull request?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction === "merge"
                 ? `This merges #${reference.number} using ${selectedMergeMethod}.`
-                : confirmAction === "enable-auto-merge"
-                  ? // The host merges this as soon as it considers the pull request ready, which
-                    // may be immediately — there is no telling from here whether anything is
-                    // still outstanding.
-                    `This merges #${reference.number} using ${selectedMergeMethod} as soon as the host considers it ready, which may be immediately.`
-                  : `This closes #${reference.number} without merging it.`}
+                : // Said as what stops being enforced rather than as what is switched on: the
+                  // reader knows they are an administrator and does not know which of the
+                  // repository's requirements this one is standing on.
+                  confirmAction === "merge-bypass"
+                  ? // After a refusal the host's own sentence leads, because it is the reason the
+                    // dialog is open at all, and the offer reads as an answer to it.
+                    `${confirmRefusalDetail === undefined ? "" : `${confirmRefusalDetail} `}You can merge #${reference.number} using ${selectedMergeMethod} without the reviews and checks the base branch requires.`
+                  : confirmAction === "enable-auto-merge"
+                    ? // The host merges this as soon as it considers the pull request ready, which
+                      // may be immediately — there is no telling from here whether anything is
+                      // still outstanding.
+                      `This merges #${reference.number} using ${selectedMergeMethod} as soon as the host considers it ready, which may be immediately.`
+                    : `This closes #${reference.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2002,12 +2070,18 @@ export function PullRequestDetailPanel({
             </AlertDialogClose>
             <Button
               size="sm"
-              variant={confirmAction === "close" ? "destructive" : "default"}
+              variant={
+                confirmAction === "close" || confirmAction === "merge-bypass"
+                  ? "destructive"
+                  : "default"
+              }
               disabled={actionPending}
               onClick={() => {
                 const action = confirmAction;
                 setConfirmation((current) => ({ ...current, open: false }));
                 if (action === "merge") void perform("merge", selectedMergeMethod);
+                if (action === "merge-bypass")
+                  void perform("merge", selectedMergeMethod, undefined, { bypassRules: true });
                 if (action === "enable-auto-merge")
                   void perform("enable-auto-merge", selectedMergeMethod);
                 if (action === "close") void perform("close");
@@ -2015,9 +2089,11 @@ export function PullRequestDetailPanel({
             >
               {confirmAction === "merge"
                 ? selectedMergeMethodLabel
-                : confirmAction === "enable-auto-merge"
-                  ? "Enable auto-merge"
-                  : "Close"}
+                : confirmAction === "merge-bypass"
+                  ? `${selectedMergeMethodLabel} anyway`
+                  : confirmAction === "enable-auto-merge"
+                    ? "Enable auto-merge"
+                    : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
