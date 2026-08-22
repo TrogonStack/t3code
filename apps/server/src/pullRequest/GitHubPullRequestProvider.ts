@@ -30,6 +30,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     "disable-auto-merge",
   ],
   mergeMethods: ["merge", "squash", "rebase"],
+  mergeBypass: true,
   updateMethods: ["merge", "rebase"],
   search: true,
   reactions: true,
@@ -79,6 +80,10 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     // leaves them commenting, which is what an author has to say about their own change anyway.
     verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
     requestReviewers: access.canWrite,
+    // Only an administrator, and only where the plain merge is already theirs: a bypass is that
+    // same merge with the repository's rules stood down, not a way into a repository this
+    // account may not write to at all.
+    mergeBypass: access.canWrite && access.canAdminister,
     ...(access.canUpdateBranch === true ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
@@ -431,6 +436,7 @@ export const make = Effect.gen(function* () {
           action: input.action,
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
+          ...(input.bypassRules === undefined ? {} : { bypassRules: input.bypassRules }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
 

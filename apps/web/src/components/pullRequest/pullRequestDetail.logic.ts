@@ -91,13 +91,13 @@ export function pullRequestComposerTarget<T>(
   return context === "thread" ? (target ?? null) : null;
 }
 
-/** Whether the open pull-request action group contains at least one action. */
-export function pullRequestActionMenuHasGroup(
-  showsDraftToggle: boolean,
-  showsAutoMerge: boolean,
-  showsMergeMethods: boolean,
-): boolean {
-  return showsDraftToggle || showsAutoMerge || showsMergeMethods;
+/**
+ * Whether the open pull-request action group contains at least one action, which is what the
+ * separator below it is drawn from. Taken as however many the menu has rather than one parameter
+ * each: the separator's question is only ever "any of them".
+ */
+export function pullRequestActionMenuHasGroup(...shown: ReadonlyArray<boolean>): boolean {
+  return shown.some((entry) => entry);
 }
 
 export function isStackedPullRequestBase(

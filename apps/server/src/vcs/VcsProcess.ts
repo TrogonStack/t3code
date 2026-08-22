@@ -96,6 +96,24 @@ const classifyNonZeroExit = (command: string, stderr: string): VcsProcessExitFai
     return "not-found";
   }
 
+  // Why a merge was refused, which is the one failure here a reader can do something about.
+  // Matched on the host's own wording rather than passed through: the sentence a reader sees is
+  // written in the contract, and only the reason travels. gh's phrases alone so far, since the rest
+  // would be guesses, and a wrong reason is worse than the generic one.
+  if (command === "gh") {
+    if (normalized.includes("already merged")) {
+      return "already-merged";
+    }
+    if (normalized.includes("the merge commit cannot be cleanly created")) {
+      return "merge-conflict";
+    }
+    // Every other refusal gh reports comes through one shape, carrying a reason this does not
+    // have to enumerate: a branch the host will not merge yet, whatever gh's name for it is.
+    if (normalized.includes("is not mergeable")) {
+      return "merge-blocked";
+    }
+  }
+
   return "command-failed";
 };
 

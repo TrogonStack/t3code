@@ -141,6 +141,11 @@ export class GitLabCliCommandError extends Schema.TaggedErrorClass<GitLabCliComm
             return new GitLabCliAuthenticationError({ ...context, cause });
           case "rate-limited":
             return new GitLabCliRateLimitError({ ...context, cause });
+          // The merge refusals are gh's wording and glab never produces them, so there is
+          // nothing here to say beyond what a command failure already says.
+          case "merge-blocked":
+          case "merge-conflict":
+          case "already-merged":
           case "not-found":
           case "command-failed":
           case undefined:

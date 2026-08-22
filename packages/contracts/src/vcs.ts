@@ -77,6 +77,12 @@ export const VcsProcessExitFailureKind = Schema.Literals([
   "authentication",
   "not-found",
   "rate-limited",
+  /** The host's own rules on the target branch stand in the way, not the branch's contents. */
+  "merge-blocked",
+  /** The contents do: the two branches collide and no merge commit can be made from them. */
+  "merge-conflict",
+  /** Asked of a change request the host has already merged, which is nobody's mistake to fix. */
+  "already-merged",
   "command-failed",
 ]);
 export type VcsProcessExitFailureKind = typeof VcsProcessExitFailureKind.Type;
@@ -109,6 +115,36 @@ export class VcsProcessSpawnError extends Schema.TaggedErrorClass<VcsProcessSpaw
   }
 }
 
+/**
+ * The reason to say out loud, one sentence per kind the classifier recognises. A tool's own
+ * stderr never crosses this boundary, since it carries tokens, paths and whatever else the host
+ * felt like printing, so anything a reader is to be told has to be written here first.
+ */
+function exitDetail(command: string, failureKind: VcsProcessExitFailureKind): string {
+  switch (failureKind) {
+    case "authentication":
+      return "Authentication failed.";
+    case "rate-limited":
+      return "API rate limit exceeded.";
+    case "not-found":
+      return command === "glab"
+        ? "Merge request not found."
+        : command === "gh" || command === "az"
+          ? "Pull request not found."
+          : "VCS resource not found.";
+    case "merge-blocked":
+      return "The target branch's rules do not allow this merge yet.";
+    case "merge-conflict":
+      return "The two branches conflict, so no merge commit can be created from them.";
+    case "already-merged":
+      return command === "glab"
+        ? "The merge request has already been merged."
+        : "The pull request has already been merged.";
+    case "command-failed":
+      return "Process exited with a non-zero status.";
+  }
+}
+
 export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitError>()(
   "VcsProcessExitError",
   {
@@ -132,23 +168,10 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
     error: VcsProcessExitFailure,
     failureKind: VcsProcessExitFailureKind,
   ) {
-    const detail =
-      failureKind === "authentication"
-        ? "Authentication failed."
-        : failureKind === "rate-limited"
-          ? "API rate limit exceeded."
-          : failureKind === "not-found"
-            ? context.command === "glab"
-              ? "Merge request not found."
-              : context.command === "gh" || context.command === "az"
-                ? "Pull request not found."
-                : "VCS resource not found."
-            : "Process exited with a non-zero status.";
-
     return new VcsProcessExitError({
       ...context,
       exitCode: error.exitCode,
-      detail,
+      detail: exitDetail(context.command, failureKind),
       failureKind,
       stderrLength: error.stderr.length,
       stderrTruncated: error.stderrTruncated,

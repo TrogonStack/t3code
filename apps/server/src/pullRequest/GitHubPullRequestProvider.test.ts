@@ -8,8 +8,15 @@ import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullReque
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
 describe("gitHubViewerPermissions", () => {
-  it("offers everything to a viewer who can write to the repository", () => {
-    expect(gitHubViewerPermissions({ canWrite: true, canUpdate: true, didAuthor: false })).toEqual({
+  it("offers everything to a viewer who administers the repository", () => {
+    expect(
+      gitHubViewerPermissions({
+        canWrite: true,
+        canUpdate: true,
+        didAuthor: false,
+        canAdminister: true,
+      }),
+    ).toEqual({
       // Arming a merge for later is the merge, so it travels with it.
       actions: [
         "merge",
@@ -24,14 +31,31 @@ describe("gitHubViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
       requestReviewers: true,
+      mergeBypass: true,
     });
+  });
+
+  it("keeps merging past the branch's rules to the administrators who may", () => {
+    expect(
+      gitHubViewerPermissions({
+        canWrite: true,
+        canUpdate: true,
+        didAuthor: false,
+        canAdminister: false,
+      }).mergeBypass,
+    ).toBe(false);
   });
 
   it("leaves a passer-by on a repository they can only read nothing but the review", () => {
     // Every open-source pull request somebody else opened: GitHub says no to all five actions
     // and to resolving, and yes to commenting and to every verdict.
     expect(
-      gitHubViewerPermissions({ canWrite: false, canUpdate: false, didAuthor: false }),
+      gitHubViewerPermissions({
+        canWrite: false,
+        canUpdate: false,
+        didAuthor: false,
+        canAdminister: false,
+      }),
     ).toEqual({
       actions: [],
       comment: true,
@@ -39,11 +63,19 @@ describe("gitHubViewerPermissions", () => {
       verdicts: ["comment", "approve", "request-changes"],
       // Asking somebody else to review is the one thing read access never stretches to.
       requestReviewers: false,
+      mergeBypass: false,
     });
   });
 
   it("keeps an author's own pull request theirs to close, with read access and no more", () => {
-    expect(gitHubViewerPermissions({ canWrite: false, canUpdate: true, didAuthor: true })).toEqual({
+    expect(
+      gitHubViewerPermissions({
+        canWrite: false,
+        canUpdate: true,
+        didAuthor: true,
+        canAdminister: false,
+      }),
+    ).toEqual({
       // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
@@ -51,6 +83,7 @@ describe("gitHubViewerPermissions", () => {
       // GitHub refuses an author's approval of their own change, so the page does not offer one.
       verdicts: ["comment"],
       requestReviewers: false,
+      mergeBypass: false,
     });
   });
 
@@ -70,6 +103,7 @@ describe("gitHubViewerPermissions", () => {
         resolve: false,
         verdicts: ["comment", "approve", "request-changes"],
         requestReviewers: false,
+        mergeBypass: false,
       });
     }).pipe(
       Effect.provide(
@@ -110,7 +144,12 @@ describe("gitHubViewerPermissions", () => {
               mergeCapabilities: { merge: true, squash: true, rebase: true },
             }),
           getViewerAccess: () =>
-            Effect.succeed({ canWrite: false, canUpdate: true, didAuthor: false }),
+            Effect.succeed({
+              canWrite: false,
+              canUpdate: true,
+              didAuthor: false,
+              canAdminister: false,
+            }),
         }),
       ),
     ),
@@ -157,7 +196,8 @@ describe("getViewerPermissions", () => {
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
       getPullRequestDetail: () => Effect.succeed(openDetail),
       getPullRequestBaseComparison: () => comparison,
-      getViewerAccess: () => Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+      getViewerAccess: () =>
+        Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false, canAdminister: false }),
     });
 
   it.effect("offers update-branch when the comparison grants it", () =>
@@ -203,7 +243,7 @@ describe("getViewerPermissions", () => {
           getViewerAccess: (input) =>
             Effect.sync(() => {
               viewerAllowReserve = input.allowReserve;
-              return { canWrite: true, canUpdate: true, didAuthor: false };
+              return { canWrite: true, canUpdate: true, didAuthor: false, canAdminister: false };
             }),
         }),
       ),
@@ -238,7 +278,12 @@ describe("getViewerPermissions", () => {
               }),
             ),
           getViewerAccess: () =>
-            Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+            Effect.succeed({
+              canWrite: true,
+              canUpdate: true,
+              didAuthor: false,
+              canAdminister: false,
+            }),
         }),
       ),
     ),

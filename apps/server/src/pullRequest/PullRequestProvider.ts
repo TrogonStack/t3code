@@ -393,6 +393,11 @@ export interface PullRequestProviderApi {
       readonly mergeMethod?: PullRequestMergeMethod;
       /** Only meaningful for `update-branch`; absent takes the host's own default. */
       readonly updateMethod?: PullRequestUpdateMethod;
+      /**
+       * Merge with the branch's rules stood down. Only meaningful for `merge`, and only ever
+       * passed to a provider that reports `capabilities.mergeBypass`.
+       */
+      readonly bypassRules?: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
