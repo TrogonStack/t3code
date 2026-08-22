@@ -12,7 +12,11 @@
  *
  * @module ThreadBootstrapService
  */
-import type { OrchestrationCommand, OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import type {
+  OrchestrationClientOrigin,
+  OrchestrationCommand,
+  OrchestrationDispatchCommandError,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 
@@ -26,6 +30,9 @@ export interface ThreadBootstrapShape {
    * running the project's setup script before starting the first turn.
    *
    * @param command - `thread.turn.start` command with an optional bootstrap payload.
+   * @param options - Optional client origin, stamped into every event the
+   *   bootstrap produces. A caller with no client behind it, such as the MCP
+   *   toolkit, leaves it out.
    * @returns Effect containing the sequence of the persisted `thread.turn.start` event.
    *
    * On failure, rolls back a thread it created (`thread.delete`) before
@@ -33,6 +40,7 @@ export interface ThreadBootstrapShape {
    */
   readonly dispatchBootstrapTurnStart: (
     command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+    options?: { readonly origin?: OrchestrationClientOrigin },
   ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
 }
 
