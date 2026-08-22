@@ -19,6 +19,13 @@ import { ThreadBootstrapService, type ThreadBootstrapShape } from "../Services/T
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
+/**
+ * What the caller knows about who asked. A bootstrap is several commands, and every one of them
+ * was caused by the same request, so the origin travels with all of them rather than only the
+ * turn start.
+ */
+type DispatchOptions = Parameters<ThreadBootstrapShape["dispatchBootstrapTurnStart"]>[1];
+
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 function unexpectedCompatibilityError(error: never): never {
@@ -79,34 +86,40 @@ const makeThreadBootstrap = Effect.gen(function* () {
       .refreshStatus(cwd)
       .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-  const appendSetupScriptActivity = (input: {
-    readonly threadId: ThreadId;
-    readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
-    readonly summary: string;
-    readonly createdAt: string;
-    readonly payload: Record<string, unknown>;
-    readonly tone: "info" | "error";
-  }) =>
+  const appendSetupScriptActivity = (
+    input: {
+      readonly threadId: ThreadId;
+      readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
+      readonly summary: string;
+      readonly createdAt: string;
+      readonly payload: Record<string, unknown>;
+      readonly tone: "info" | "error";
+    },
+    options: DispatchOptions,
+  ) =>
     Effect.all({
       commandId: serverCommandId("setup-script-activity"),
       activityId: serverEventId,
     }).pipe(
       Effect.flatMap(({ commandId, activityId }) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId,
-          threadId: input.threadId,
-          activity: {
-            id: activityId,
-            tone: input.tone,
-            kind: input.kind,
-            summary: input.summary,
-            payload: input.payload,
-            turnId: null,
+        orchestrationEngine.dispatch(
+          {
+            type: "thread.activity.append",
+            commandId,
+            threadId: input.threadId,
+            activity: {
+              id: activityId,
+              tone: input.tone,
+              kind: input.kind,
+              summary: input.summary,
+              payload: input.payload,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
             createdAt: input.createdAt,
           },
-          createdAt: input.createdAt,
-        }),
+          options,
+        ),
       ),
     );
 
@@ -123,6 +136,7 @@ const makeThreadBootstrap = Effect.gen(function* () {
 
   const dispatchBootstrapTurnStart: ThreadBootstrapShape["dispatchBootstrapTurnStart"] = (
     command,
+    options,
   ) =>
     Effect.gen(function* () {
       const bootstrap = command.bootstrap;
@@ -136,11 +150,14 @@ const makeThreadBootstrap = Effect.gen(function* () {
         createdThread
           ? serverCommandId("bootstrap-thread-delete").pipe(
               Effect.flatMap((commandId) =>
-                orchestrationEngine.dispatch({
-                  type: "thread.delete",
-                  commandId,
-                  threadId: command.threadId,
-                }),
+                orchestrationEngine.dispatch(
+                  {
+                    type: "thread.delete",
+                    commandId,
+                    threadId: command.threadId,
+                  },
+                  options,
+                ),
               ),
               Effect.as(true),
             )
@@ -152,17 +169,20 @@ const makeThreadBootstrap = Effect.gen(function* () {
         readonly worktreePath: string;
       }) => {
         const detail = projectSetupScriptCompatibilityDetail(input.error);
-        return appendSetupScriptActivity({
-          threadId: command.threadId,
-          kind: "setup-script.failed",
-          summary: "Setup script failed to start",
-          createdAt: input.requestedAt,
-          payload: {
-            detail,
-            worktreePath: input.worktreePath,
+        return appendSetupScriptActivity(
+          {
+            threadId: command.threadId,
+            kind: "setup-script.failed",
+            summary: "Setup script failed to start",
+            createdAt: input.requestedAt,
+            payload: {
+              detail,
+              worktreePath: input.worktreePath,
+            },
+            tone: "error",
           },
-          tone: "error",
-        }).pipe(
+          options,
+        ).pipe(
           Effect.ignoreCause({ log: false }),
           Effect.flatMap(() =>
             Effect.logWarning("bootstrap turn start failed to launch setup script", {
@@ -190,22 +210,28 @@ const makeThreadBootstrap = Effect.gen(function* () {
             worktreePath: input.worktreePath,
           };
           yield* Effect.all([
-            appendSetupScriptActivity({
-              threadId: command.threadId,
-              kind: "setup-script.requested",
-              summary: "Starting setup script",
-              createdAt: input.requestedAt,
-              payload,
-              tone: "info",
-            }),
-            appendSetupScriptActivity({
-              threadId: command.threadId,
-              kind: "setup-script.started",
-              summary: "Setup script started",
-              createdAt: startedAt,
-              payload,
-              tone: "info",
-            }),
+            appendSetupScriptActivity(
+              {
+                threadId: command.threadId,
+                kind: "setup-script.requested",
+                summary: "Starting setup script",
+                createdAt: input.requestedAt,
+                payload,
+                tone: "info",
+              },
+              options,
+            ),
+            appendSetupScriptActivity(
+              {
+                threadId: command.threadId,
+                kind: "setup-script.started",
+                summary: "Setup script started",
+                createdAt: startedAt,
+                payload,
+                tone: "info",
+              },
+              options,
+            ),
           ]).pipe(
             Effect.asVoid,
             Effect.catch((error) =>
@@ -263,20 +289,23 @@ const makeThreadBootstrap = Effect.gen(function* () {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread) {
-          yield* orchestrationEngine.dispatch({
-            type: "thread.create",
-            commandId: yield* serverCommandId("bootstrap-thread-create"),
-            threadId: command.threadId,
-            projectId: bootstrap.createThread.projectId,
-            title: bootstrap.createThread.title,
-            modelSelection: bootstrap.createThread.modelSelection,
-            runtimeMode: bootstrap.createThread.runtimeMode,
-            interactionMode: bootstrap.createThread.interactionMode,
-            branch: bootstrap.createThread.branch,
-            worktreePath: bootstrap.createThread.worktreePath,
-            parentThreadId: bootstrap.createThread.parentThreadId ?? null,
-            createdAt: bootstrap.createThread.createdAt,
-          });
+          yield* orchestrationEngine.dispatch(
+            {
+              type: "thread.create",
+              commandId: yield* serverCommandId("bootstrap-thread-create"),
+              threadId: command.threadId,
+              projectId: bootstrap.createThread.projectId,
+              title: bootstrap.createThread.title,
+              modelSelection: bootstrap.createThread.modelSelection,
+              runtimeMode: bootstrap.createThread.runtimeMode,
+              interactionMode: bootstrap.createThread.interactionMode,
+              branch: bootstrap.createThread.branch,
+              worktreePath: bootstrap.createThread.worktreePath,
+              parentThreadId: bootstrap.createThread.parentThreadId ?? null,
+              createdAt: bootstrap.createThread.createdAt,
+            },
+            options,
+          );
           createdThread = true;
         }
 
@@ -311,19 +340,22 @@ const makeThreadBootstrap = Effect.gen(function* () {
             path: null,
           });
           targetWorktreePath = worktree.worktree.path;
-          yield* orchestrationEngine.dispatch({
-            type: "thread.meta.update",
-            commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
-            threadId: command.threadId,
-            branch: worktree.worktree.refName,
-            worktreePath: targetWorktreePath,
-          });
+          yield* orchestrationEngine.dispatch(
+            {
+              type: "thread.meta.update",
+              commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
+              threadId: command.threadId,
+              branch: worktree.worktree.refName,
+              worktreePath: targetWorktreePath,
+            },
+            options,
+          );
           yield* refreshGitStatus(targetWorktreePath);
         }
 
         yield* runSetupProgram();
 
-        return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+        return yield* orchestrationEngine.dispatch(finalTurnStartCommand, options);
       });
 
       return yield* bootstrapProgram.pipe(
