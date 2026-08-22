@@ -6,6 +6,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import {
+  PullRequestRefusal,
   TrimmedNonEmptyString,
   type SourceControlRepositoryVisibility,
   type VcsError,
@@ -86,7 +87,7 @@ export class GitHubPullRequestNotFoundError extends Schema.TaggedErrorClass<GitH
  */
 export class GitHubCliRefusedError extends Schema.TaggedErrorClass<GitHubCliRefusedError>()(
   "GitHubCliRefusedError",
-  { ...gitHubCliFailureFields, detail: Schema.String },
+  { ...gitHubCliFailureFields, refusal: PullRequestRefusal, detail: Schema.String },
 ) {
   override get message(): string {
     return `GitHub CLI failed in execute: ${this.detail}`;
@@ -215,7 +216,12 @@ export function fromVcsError(
       error.failureKind === "merge-conflict" ||
       error.failureKind === "already-merged"
     ) {
-      return new GitHubCliRefusedError({ ...context, detail: error.detail, cause: error });
+      return new GitHubCliRefusedError({
+        ...context,
+        refusal: error.failureKind,
+        detail: error.detail,
+        cause: error,
+      });
     }
   }
 

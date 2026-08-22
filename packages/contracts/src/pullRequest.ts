@@ -1181,11 +1181,26 @@ export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullReq
   }
 }
 
+/**
+ * A refusal the host explained, narrowed to the ones a client can offer a way out of. Carried
+ * beside the sentence because a client cannot act on prose: whether to offer the override is a
+ * decision about which refusal this is, and matching on the wording would break the moment the
+ * wording improves.
+ */
+export const PullRequestRefusal = Schema.Literals([
+  "merge-blocked",
+  "merge-conflict",
+  "already-merged",
+]);
+export type PullRequestRefusal = typeof PullRequestRefusal.Type;
+
 export class PullRequestOperationError extends Schema.TaggedErrorClass<PullRequestOperationError>()(
   "PullRequestOperationError",
   {
     operation: Schema.String,
     detail: TrimmedNonEmptyString,
+    /** Absent where the host gave no reason worth acting on, which is most failures. */
+    refusal: Schema.optional(PullRequestRefusal),
     cause: Schema.optional(Schema.Defect()),
   },
   { httpApiStatus: 502 },

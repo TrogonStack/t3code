@@ -69,6 +69,10 @@ describe("GitHubCli.layer", () => {
 
     assert.strictEqual(error._tag, "GitHubCliRefusedError");
     assert.strictEqual(error.detail, refusal.detail);
+    assert.strictEqual(
+      error._tag === "GitHubCliRefusedError" ? error.refusal : null,
+      "merge-blocked",
+    );
     assert.strictEqual(error.cause, refusal);
   });
 

@@ -111,6 +111,7 @@ import {
   latestPullRequestReviewOutcomes,
   isStackedPullRequestBase,
   pullRequestActionMenuHasGroup,
+  pullRequestOffersBypassRetry,
   pullRequestActionNeedsHostRefresh,
   pullRequestComposerTarget,
   pullRequestFindingKey,
@@ -462,8 +463,11 @@ export function PullRequestDetailPanel({
   const [confirmation, setConfirmation] = useState<{
     readonly open: boolean;
     readonly action: "merge" | "merge-bypass" | "close" | "enable-auto-merge";
+    /** Set only when the dialog is answering a refusal, and carries what the host said. */
+    readonly refusalDetail?: string;
   }>({ open: false, action: "merge" });
   const confirmAction = confirmation.action;
+  const confirmRefusalDetail = confirmation.refusalDetail;
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
@@ -658,10 +662,25 @@ export function PullRequestDetailPanel({
         : updateMethod === "rebase"
           ? UPDATE_BRANCH_REBASE_FAILURE_HINT
           : ACTION_FAILURE_HINTS[action];
+      const description = readableFailure(failure, hint);
+      // A merge the branch's rules held back, for a reader who may stand them down, is the one
+      // failure here with a next step. Offered as the dialog rather than as a toast: the toast
+      // is gone by the time it has been read, and this is a decision, not a notice.
+      if (
+        pullRequestOffersBypassRetry({
+          failure,
+          action,
+          attemptedBypass: options?.bypassRules === true,
+          viewerCanBypass: showsMergeBypass,
+        })
+      ) {
+        setConfirmation({ open: true, action: "merge-bypass", refusalDetail: description });
+        return;
+      }
       toastManager.add({
         type: "error",
         title: ACTION_FAILURE_LABELS[action],
-        description: readableFailure(failure, hint),
+        description,
       });
       return;
     }
@@ -2020,7 +2039,9 @@ export function PullRequestDetailPanel({
               {confirmAction === "merge"
                 ? "Merge pull request?"
                 : confirmAction === "merge-bypass"
-                  ? "Merge past the branch's rules?"
+                  ? confirmRefusalDetail === undefined
+                    ? "Merge past the branch's rules?"
+                    : "Merge anyway?"
                   : confirmAction === "enable-auto-merge"
                     ? "Enable auto-merge?"
                     : "Close pull request?"}
@@ -2032,7 +2053,9 @@ export function PullRequestDetailPanel({
                   // reader knows they are an administrator and does not know which of the
                   // repository's requirements this one is standing on.
                   confirmAction === "merge-bypass"
-                  ? `This merges #${reference.number} using ${selectedMergeMethod} without the reviews and checks the base branch requires.`
+                  ? // After a refusal the host's own sentence leads, because it is the reason the
+                    // dialog is open at all, and the offer reads as an answer to it.
+                    `${confirmRefusalDetail === undefined ? "" : `${confirmRefusalDetail} `}You can merge #${reference.number} using ${selectedMergeMethod} without the reviews and checks the base branch requires.`
                   : confirmAction === "enable-auto-merge"
                     ? // The host merges this as soon as it considers the pull request ready, which
                       // may be immediately — there is no telling from here whether anything is

@@ -392,7 +392,12 @@ function toPullRequestError(
   return (error) =>
     isProviderUnusable(error)
       ? toUnavailableError(error)
-      : new PullRequestOperationError({ operation, detail: error.detail, cause: error });
+      : new PullRequestOperationError({
+          operation,
+          detail: error.detail,
+          ...(error.refusal === undefined ? {} : { refusal: error.refusal }),
+          cause: error,
+        });
 }
 
 function withRateLimitBackoff(

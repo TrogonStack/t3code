@@ -1930,6 +1930,46 @@ it.effect("refuses a merge strategy the host does not offer", () =>
   }),
 );
 
+it.effect("carries the host's refusal out to the client, not just its sentence", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          runAction: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "runAction",
+                reason: "failed",
+                refusal: "merge-blocked",
+                detail: "The target branch's rules do not allow this merge yet.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        action: "merge",
+      }),
+    );
+
+    // The sentence is for the reader and the kind is for the page: without it a client offering
+    // the override would have to recognise the refusal by its wording.
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    const refused = error._tag === "PullRequestOperationError" ? error : null;
+    assert.strictEqual(refused?.detail, "The target branch's rules do not allow this merge yet.");
+    assert.strictEqual(refused?.refusal, "merge-blocked");
+  }),
+);
+
 it.effect("only lets a merge past the branch's rules when host and account both allow it", () =>
   Effect.gen(function* () {
     const bypasses: Array<boolean | undefined> = [];

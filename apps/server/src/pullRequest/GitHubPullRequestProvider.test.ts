@@ -3,9 +3,39 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { PullRequestReaction } from "@t3tools/contracts";
 
+import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
-import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
+import {
+  gitHubProviderFailure,
+  gitHubViewerPermissions,
+  loginAvatarUrl,
+  make,
+} from "./GitHubPullRequestProvider.ts";
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
+
+describe("gitHubProviderFailure", () => {
+  it("keeps which refusal it was, not only that the request failed", () => {
+    expect(
+      gitHubProviderFailure(
+        new GitHubCli.GitHubCliRefusedError({
+          command: "gh",
+          cwd: "/repo",
+          cause: null,
+          refusal: "merge-conflict",
+          detail: "The two branches conflict, so no merge commit can be created from them.",
+        }),
+      ),
+    ).toEqual({ reason: "failed", refusal: "merge-conflict" });
+  });
+
+  it("says no more than failed about a plain command failure", () => {
+    expect(
+      gitHubProviderFailure(
+        new GitHubCli.GitHubCliCommandError({ command: "gh", cwd: "/repo", cause: null }),
+      ),
+    ).toEqual({ reason: "failed" });
+  });
+});
 
 describe("gitHubViewerPermissions", () => {
   it("offers everything to a viewer who administers the repository", () => {

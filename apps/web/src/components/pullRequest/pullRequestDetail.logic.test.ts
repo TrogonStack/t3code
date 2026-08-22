@@ -24,6 +24,8 @@ import {
   mergePullRequestThreadComments,
   orderPullRequestComments,
   pullRequestActionMenuHasGroup,
+  pullRequestOffersBypassRetry,
+  pullRequestRefusalOf,
   pullRequestActionNeedsHostRefresh,
   pullRequestComposerTarget,
   pullRequestFindingKey,
@@ -125,6 +127,69 @@ describe("review thread comment pages", () => {
 describe("pull request action menu", () => {
   it("keeps the group divider when auto-merge is the only action", () => {
     expect(pullRequestActionMenuHasGroup(false, true, false)).toBe(true);
+  });
+});
+
+describe("pullRequestOffersBypassRetry", () => {
+  const refused = (refusal: string) => ({ refusal, message: "Pull request operation failed" });
+
+  it("offers the override to a reader who may use it, on the one refusal it answers", () => {
+    expect(
+      pullRequestOffersBypassRetry({
+        failure: refused("merge-blocked"),
+        action: "merge",
+        attemptedBypass: false,
+        viewerCanBypass: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps quiet where the override would change nothing", () => {
+    // A conflict is the branch's contents and an already merged pull request has nowhere left to
+    // go: offering a retry for either is offering a second failure.
+    for (const refusal of ["merge-conflict", "already-merged"]) {
+      expect(
+        pullRequestOffersBypassRetry({
+          failure: refused(refusal),
+          action: "merge",
+          attemptedBypass: false,
+          viewerCanBypass: true,
+        }),
+      ).toBe(false);
+    }
+
+    // An override that was itself refused, a reader who may not override, and a failure the host
+    // gave no reason for.
+    expect(
+      pullRequestOffersBypassRetry({
+        failure: refused("merge-blocked"),
+        action: "merge",
+        attemptedBypass: true,
+        viewerCanBypass: true,
+      }),
+    ).toBe(false);
+    expect(
+      pullRequestOffersBypassRetry({
+        failure: refused("merge-blocked"),
+        action: "merge",
+        attemptedBypass: false,
+        viewerCanBypass: false,
+      }),
+    ).toBe(false);
+    expect(
+      pullRequestOffersBypassRetry({
+        failure: new Error("Pull request operation runAction failed: Something went wrong."),
+        action: "merge",
+        attemptedBypass: false,
+        viewerCanBypass: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("reads nothing out of a failure that is not one", () => {
+    expect(pullRequestRefusalOf(null)).toBe(null);
+    expect(pullRequestRefusalOf("merge-blocked")).toBe(null);
+    expect(pullRequestRefusalOf({ refusal: "made-up" })).toBe(null);
   });
 });
 
