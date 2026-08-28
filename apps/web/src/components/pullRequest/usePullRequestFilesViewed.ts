@@ -1,3 +1,4 @@
+import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, PullRequestRef } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -66,7 +67,9 @@ export function usePullRequestFilesViewed(options: {
   const states = useMemo(() => toFileViewedStates(query.data), [query.data]);
   const truncated = query.data?.truncated === true;
   const [overlay, setOverlay] = useState<FileViewedOverlay>(NO_OVERLAY);
-  const setFilesViewed = useAtomCommand(pullRequestEnvironment.setFilesViewed);
+  const setFilesViewed = useAtomCommand(pullRequestEnvironment.setFilesViewed, {
+    reportFailure: false,
+  });
 
   // Presses waiting for the next flush, and, for every path a request is already carrying, which
   // request that is. Requests overlap and run in the order they were made, so a path pressed
@@ -116,10 +119,11 @@ export function usePullRequestFilesViewed(options: {
         // of its own, or on the next flush, and that press is the one on screen.
         const owned = new Set(mine.filter((path) => !queued.current.has(path)));
         setOverlay((current) => revertFileViewedOverlay(current, batch, owned));
-        // Nothing here was still this request's to answer for, so nothing on screen went back.
-        // A later press carries every one of these paths now, and it is the one that gets to say
-        // whether the reader's tick reached the host.
-        if (owned.size > 0) {
+        // Two silences here. Nothing was still this request's to answer for, so nothing on
+        // screen went back and a later press is the one that gets to speak for these paths. Or
+        // the connection went away mid-flight, which the reader is already being told about and
+        // which the host never refused.
+        if (owned.size > 0 && !isAtomCommandInterrupted(result)) {
           toastManager.add({ type: "error", title: "Could not update viewed files" });
         }
         return;
