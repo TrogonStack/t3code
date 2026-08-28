@@ -116,7 +116,12 @@ export function usePullRequestFilesViewed(options: {
         // of its own, or on the next flush, and that press is the one on screen.
         const owned = new Set(mine.filter((path) => !queued.current.has(path)));
         setOverlay((current) => revertFileViewedOverlay(current, batch, owned));
-        toastManager.add({ type: "error", title: "Could not update viewed files" });
+        // Nothing here was still this request's to answer for, so nothing on screen went back.
+        // A later press carries every one of these paths now, and it is the one that gets to say
+        // whether the reader's tick reached the host.
+        if (owned.size > 0) {
+          toastManager.add({ type: "error", title: "Could not update viewed files" });
+        }
         return;
       }
       refresh();
