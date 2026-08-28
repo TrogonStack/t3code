@@ -37,6 +37,11 @@ export interface PullRequestFilesViewedView {
   readonly viewedCount: number;
   /** The host had more files than the read covered, so the count above may be short. */
   readonly truncated: boolean;
+  /**
+   * Re-ask the host. The page's refresh button goes around the host's cache, and the ticks and
+   * the marks beside them are part of what the reader asked to be shown again.
+   */
+  readonly refresh: () => void;
 }
 
 /**
@@ -140,6 +145,12 @@ export function usePullRequestFilesViewed(options: {
     };
   }, [scopeKey]);
 
+  // Held through a ref for the same reason `setViewed` is: it goes into the view object below,
+  // which every file header keys off, so it has to keep one identity for the tab's life.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  const refreshFromHost = useCallback(() => refreshRef.current(), []);
+
   const setViewed = useCallback((path: string, viewed: boolean) => {
     setOverlay((current) => new Map(current).set(path, viewed));
     queued.current.set(path, viewed);
@@ -163,7 +174,15 @@ export function usePullRequestFilesViewed(options: {
   // One identity per change of what it says: the viewer keys every file it draws off this, and a
   // fresh object each render would redraw the whole diff.
   return useMemo(
-    () => ({ enabled, isViewed, isStale, setViewed, viewedCount, truncated }),
-    [enabled, isStale, isViewed, setViewed, truncated, viewedCount],
+    () => ({
+      enabled,
+      isViewed,
+      isStale,
+      setViewed,
+      viewedCount,
+      truncated,
+      refresh: refreshFromHost,
+    }),
+    [enabled, isStale, isViewed, refreshFromHost, setViewed, truncated, viewedCount],
   );
 }
