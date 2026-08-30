@@ -362,6 +362,87 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("reads file versions out of the patch, for the paths it was asked about", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(
+          response(
+            [
+              "diff --git a/a.ts b/a.ts",
+              "index 1111111..2222222 100644",
+              "--- a/a.ts",
+              "+++ b/a.ts",
+              "@@ -1 +1 @@",
+              "-a",
+              "+b",
+              "diff --git a/b.ts b/b.ts",
+              "index 3333333..4444444 100644",
+              "--- a/b.ts",
+              "+++ b/b.ts",
+              "@@ -1 +1 @@",
+              "-c",
+              "+d",
+              "",
+            ].join("\n"),
+          ),
+        ),
+      );
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const revisions = yield* api.getFileRevisions({
+        repository: "acme/web",
+        number: 71,
+        paths: ["a.ts", "missing.ts"],
+      });
+
+      // `b.ts` is in the patch and was not asked about, and `missing.ts` was asked about and is
+      // not in the patch. Neither belongs in the answer.
+      assert.deepStrictEqual([...revisions], [["a.ts", "2222222"]]);
+      expect(callAt(0)).toMatchObject({ url: "/repositories/acme/web/pullrequests/71/diff" });
+    }),
+  );
+
+  it.effect("re-reads the patch once for a burst of presses rather than once per press", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(
+          response("diff --git a/a.ts b/a.ts\nindex 1111111..2222222 100644\n@@ -1 +1 @@\n"),
+        ),
+      );
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const first = yield* api.getFileRevisions({
+        repository: "acme/web",
+        number: 72,
+        paths: ["a.ts"],
+      });
+      const second = yield* api.getFileRevisions({
+        repository: "acme/web",
+        number: 72,
+        paths: ["a.ts"],
+      });
+
+      assert.deepStrictEqual([...first], [["a.ts", "2222222"]]);
+      assert.deepStrictEqual([...second], [["a.ts", "2222222"]]);
+      assert.strictEqual(mockedRequest.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("asks Bitbucket nothing when no file has been ticked off", () =>
+    Effect.gen(function* () {
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const revisions = yield* api.getFileRevisions({
+        repository: "acme/web",
+        number: 73,
+        paths: [],
+      });
+
+      assert.strictEqual(revisions.size, 0);
+      assert.strictEqual(mockedRequest.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("aggregates every diffstat page", () =>
     Effect.gen(function* () {
       const next = "https://api.bitbucket.org/2.0/diffstat?page=2";
