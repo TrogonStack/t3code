@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   decodeAwardEmojiJson,
+  decodeRepositoryBlobsJson,
   decodeCommitsJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
@@ -606,5 +607,71 @@ describe("gitLabAwardName", () => {
     expect(gitLabAwardName("thumbs-up")).toBe("thumbsup");
     expect(gitLabAwardName("laugh")).toBe("laughing");
     expect(gitLabAwardName("hooray")).toBe("tada");
+  });
+});
+
+describe("decodeRepositoryBlobsJson", () => {
+  it("reads a blob id per path", () => {
+    const blobs = expectSuccess(
+      decodeRepositoryBlobsJson(
+        JSON.stringify({
+          data: {
+            project: {
+              repository: {
+                blobs: {
+                  nodes: [
+                    { path: "src/a.ts", oid: "aaa111" },
+                    { path: "src/b.ts", oid: "bbb222" },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect([...blobs]).toEqual([
+      ["src/a.ts", "aaa111"],
+      ["src/b.ts", "bbb222"],
+    ]);
+  });
+
+  it("leaves out a node missing either half, which names no version", () => {
+    const blobs = expectSuccess(
+      decodeRepositoryBlobsJson(
+        JSON.stringify({
+          data: {
+            project: {
+              repository: {
+                blobs: {
+                  nodes: [
+                    { path: "src/a.ts", oid: null },
+                    { path: null, oid: "bbb222" },
+                    null,
+                    { path: "src/c.ts", oid: "ccc333" },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect([...blobs]).toEqual([["src/c.ts", "ccc333"]]);
+  });
+
+  it("reads a project the reader cannot see as no blobs rather than a failure", () => {
+    // The revision simply has none of the asked-for files, which is what a caller reads as
+    // "nothing here still stands" rather than as a read that broke.
+    expect([
+      ...expectSuccess(decodeRepositoryBlobsJson(JSON.stringify({ data: { project: null } }))),
+    ]).toEqual([]);
+  });
+
+  it("fails on output that is not the query's shape", () => {
+    expect(Result.isSuccess(decodeRepositoryBlobsJson("not json"))).toBe(false);
+    expect(Result.isSuccess(decodeRepositoryBlobsJson(JSON.stringify({ errors: [] })))).toBe(false);
   });
 });

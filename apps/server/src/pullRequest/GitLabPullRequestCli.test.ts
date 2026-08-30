@@ -1402,4 +1402,129 @@ layer("GitLabPullRequestCli.layer", (it) => {
       expect(callAt(0).stdin).toBe('{"body":"true"}');
     }),
   );
+  it.effect("reads blob ids for the marked paths at the merge request's head", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              iid: 7,
+              title: "t",
+              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+              source_branch: "feat",
+              target_branch: "main",
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              diff_refs: { base_sha: "base", head_sha: "head", start_sha: "start" },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                project: { repository: { blobs: { nodes: [{ path: "src/a.ts", oid: "aaa" }] } } },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const revisions = yield* cli.getFileRevisions({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        paths: ["src/a.ts", "src/gone.ts"],
+      });
+
+      // A path the head does not have is absent rather than empty, which is the answer for a
+      // file the merge request deletes.
+      expect([...revisions]).toEqual([["src/a.ts", "aaa"]]);
+      // The head the reader is looking at, not whatever the source branch has moved on to.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const body: unknown = JSON.parse(callAt(1).stdin ?? "{}");
+      expect(body).toMatchObject({
+        variables: { fullPath: "acme/web", ref: "head", paths: ["src/a.ts", "src/gone.ts"] },
+      });
+    }),
+  );
+
+  it.effect("asks GitLab nothing when no file is marked", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const revisions = yield* cli.getFileRevisions({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        paths: [],
+      });
+
+      expect([...revisions]).toEqual([]);
+      expect(mockedExecute).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("splits the paths across requests, because GitLab charges the query by how many", () =>
+    Effect.gen(function* () {
+      const paths = Array.from({ length: 150 }, (_, index) => `src/${index}.ts`);
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              iid: 7,
+              title: "t",
+              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+              source_branch: "feat",
+              target_branch: "main",
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              diff_refs: { base_sha: "base", head_sha: "head", start_sha: "start" },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockImplementation((request) => {
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        const body = JSON.parse(request.stdin ?? "{}") as {
+          readonly variables: { readonly paths: ReadonlyArray<string> };
+        };
+        return Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                project: {
+                  repository: {
+                    blobs: {
+                      nodes: body.variables.paths.map((path) => ({ path, oid: `oid-${path}` })),
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+      });
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const revisions = yield* cli.getFileRevisions({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        paths,
+      });
+
+      assert.strictEqual(revisions.size, 150);
+      assert.strictEqual(revisions.get("src/149.ts"), "oid-src/149.ts");
+      // The diff refs, then two batches: a hundred paths and the fifty left over.
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+    }),
+  );
 });

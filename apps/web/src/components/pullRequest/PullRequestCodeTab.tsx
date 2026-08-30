@@ -16,6 +16,7 @@ import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
+  InfoIcon,
   MessageSquareIcon,
   MessageSquareOffIcon,
   Rows3Icon,
@@ -394,12 +395,13 @@ export function PullRequestCodeTab({
   );
   const filePaths = useMemo(() => files.map((file) => resolveFileDiffPath(file)), [files]);
   // Offered under a commit scope as well as from the whole change, because reading a change one
-  // commit at a time is what the scope is for. The tick itself stays the host's: it is kept
-  // against the change request, so clearing a file here clears it everywhere.
+  // commit at a time is what the scope is for. The tick is kept against the change request rather
+  // than the scope it was made in, so clearing a file here clears it everywhere.
+  const viewedFilesStore = detail.capabilities.viewedFiles;
   const filesViewed = usePullRequestFilesViewed({
     environmentId,
     reference,
-    enabled: detail.capabilities.viewedFiles === true,
+    enabled: viewedFilesStore !== undefined,
     paths: filePaths,
   });
   const { setViewed, refresh: refreshFilesViewed } = filesViewed;
@@ -1146,6 +1148,21 @@ export function PullRequestCodeTab({
           {filesViewed.enabled && files.length > 0 ? (
             <span className="flex shrink-0 items-center gap-1 tabular-nums">
               {filesViewed.viewedCount} / {files.length} viewed
+              {viewedFilesStore === "environment" ? (
+                <Tooltip>
+                  <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+                    <InfoIcon
+                      aria-label="These ticks are kept here, not on the host"
+                      className="text-muted-foreground size-3.5"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="bottom">
+                    This host keeps no shared record of which files you have read, so these ticks
+                    are kept by this environment. They follow you between the apps connected to it,
+                    but the host's own web UI will not show them.
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
               {filesViewed.truncated ? (
                 <Tooltip>
                   <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>

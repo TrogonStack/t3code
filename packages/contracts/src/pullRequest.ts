@@ -349,6 +349,19 @@ export const PullRequestReviewerCapabilities = Schema.Struct({
 export type PullRequestReviewerCapabilities = typeof PullRequestReviewerCapabilities.Type;
 
 /**
+ * Who remembers which files a reader has cleared.
+ *
+ * `host` is the host's own record, so the marks are the ones its web UI shows and a review can be
+ * carried on from either side. `environment` is this server's record, for a host that keeps no
+ * shared one: GitLab holds its viewed files in one browser's local storage, where nothing outside
+ * that browser can read or write them, so marks made here are this environment's own. They still
+ * follow the reader between the clients connected to it, which is more than the host manages, but
+ * they are not the host's and the surface says so.
+ */
+export const PullRequestViewedFilesStore = Schema.Literals(["host", "environment"]);
+export type PullRequestViewedFilesStore = typeof PullRequestViewedFilesStore.Type;
+
+/**
  * What a provider can actually do, so a surface can hide what is missing rather than offer an
  * action that would fail. Every provider fills this in for itself; nothing is assumed.
  *
@@ -385,15 +398,17 @@ export const PullRequestCapabilities = Schema.Struct({
    */
   reactions: Schema.optional(Schema.Boolean),
   /**
-   * A file can be marked as read by the person reading it, and the mark taken back. Optional for
-   * the same reason as `reactions`: a server that says nothing about it has none, which is what
-   * every server before this field was.
+   * Where the reader's own marks are kept, or absent where they are kept nowhere and the
+   * checkbox is not offered at all. Optional for the same reason as `reactions`: a server that
+   * says nothing about it has none, which is what every server before this field was.
    *
-   * True on GitHub alone so far. The others expose no equivalent, and a checkbox whose mark is
-   * forgotten the moment the tab closes is worse than no checkbox: it looks like the one beside
-   * it and keeps none of its promises.
+   * Two answers rather than a flag, because the surface has to say which one it is. A mark the
+   * host keeps is the same mark its own web UI shows; a mark this environment keeps is not, and
+   * a reader who ticks twenty files here and then opens the host would find none of them ticked.
+   * A checkbox that looks the same either way and quietly means different things is the failure
+   * this whole feature exists to avoid.
    */
-  viewedFiles: Schema.optional(Schema.Boolean),
+  viewedFiles: Schema.optional(PullRequestViewedFilesStore),
   review: PullRequestReviewCapabilities,
   reviewers: PullRequestReviewerCapabilities,
   /**

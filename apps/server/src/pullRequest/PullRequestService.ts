@@ -1,6 +1,7 @@
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -51,6 +52,7 @@ import {
 import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
@@ -462,6 +464,9 @@ function withRateLimitBackoff(
     ...(api.setFilesViewed === undefined
       ? {}
       : { setFilesViewed: interactive("setFilesViewed", api.setFilesViewed) }),
+    ...(api.getFileRevisions === undefined
+      ? {}
+      : { getFileRevisions: wrap("getFileRevisions", api.getFileRevisions) }),
     runAction: interactive("runAction", api.runAction),
     ...(api.updateChangeRequest === undefined
       ? {}
@@ -510,6 +515,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const rateLimits = yield* SourceControlRateLimit.SourceControlRateLimit;
+  const filesViewedStore = yield* PullRequestFilesViewed.PullRequestFilesViewedRepository;
 
   const refineUnknownProjectKinds = (
     projects: ReadonlyArray<OrchestrationProjectShell>,
@@ -1309,23 +1315,142 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * Which change request's marks, and whose. The host is part of it because the same
+   * `owner/repo` exists on more than one install, and the reader is part of it for the reason
+   * a host's own record is per-account. A host that will not say who is reading leaves it
+   * empty, which is one reader rather than none.
+   */
+  const filesViewedScope = (project: SupportedProject, number: number, viewer: string | null) => ({
+    provider: project.api.kind,
+    host: project.host,
+    repository: project.repository,
+    number,
+    viewer: viewer ?? "",
+  });
+
+  const toFilesViewedStoreError = (operation: string) => (cause: unknown) =>
+    new PullRequestOperationError({
+      operation,
+      detail: "This environment could not reach its record of which files you have seen.",
+      cause,
+    });
+
+  /**
+   * What the head has of these files, or null where the host cannot say. Null is not an error:
+   * without it the marks simply stop reporting staleness, which is worse than the host's own
+   * record but better than refusing to remember anything.
+   */
+  const fileRevisionsOf = (
+    project: SupportedProject,
+    number: number,
+    paths: ReadonlyArray<string>,
+    operation: string,
+  ): Effect.Effect<ReadonlyMap<string, string> | null, PullRequestError> => {
+    const read = project.api.getFileRevisions;
+    return read === undefined
+      ? Effect.succeed(null)
+      : read({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number,
+          paths,
+        }).pipe(
+          Effect.map((answer) => answer.revisions),
+          Effect.mapError(toPullRequestError(operation)),
+        );
+  };
+
+  /**
+   * The marks this environment keeps for a host that keeps none of its own.
+   *
+   * A file the head still has at the revision it was cleared at is cleared; one the head has
+   * moved on from is reported as changed, which is what GitHub says of a file pushed to since it
+   * was ticked. Revisions are asked for the marked paths alone, so the cost follows how much of
+   * the change request has been read rather than how large it is, and a reader who has marked
+   * nothing costs no host call at all.
+   */
+  const environmentFilesViewed = (
+    project: SupportedProject,
+    number: number,
+  ): Effect.Effect<PullRequestFilesViewedResult, PullRequestError> =>
+    Effect.gen(function* () {
+      const viewer = yield* viewerOf(project);
+      const marks = yield* filesViewedStore
+        .list(filesViewedScope(project, number, viewer))
+        .pipe(Effect.mapError(toFilesViewedStoreError("filesViewed")));
+      if (marks.length === 0) return { files: [], truncated: false };
+      const revisions = yield* fileRevisionsOf(
+        project,
+        number,
+        marks.map((mark) => mark.path),
+        "filesViewed",
+      );
+      return {
+        files: marks.map((mark) => ({
+          path: mark.path,
+          // Absent reads as the empty revision on both sides, so a file the change request
+          // deletes is cleared once and stays cleared rather than reporting itself changed the
+          // moment it is ticked.
+          state:
+            revisions === null || (revisions.get(mark.path) ?? "") === mark.revision
+              ? ("viewed" as const)
+              : ("dismissed" as const),
+        })),
+        // Every mark is a row this environment holds, so there is no page to run out of.
+        truncated: false,
+      };
+    });
+
+  const environmentSetFilesViewed = (
+    project: SupportedProject,
+    input: PullRequestSetFilesViewedInput,
+  ): Effect.Effect<void, PullRequestError> =>
+    Effect.gen(function* () {
+      const viewer = yield* viewerOf(project);
+      // Only the files being cleared need a revision. An unticked one is about to lose its row,
+      // and what the head has of it changes nothing about deleting it.
+      const cleared = input.files.filter((file) => file.viewed).map((file) => file.path);
+      const revisions =
+        cleared.length === 0
+          ? null
+          : yield* fileRevisionsOf(project, input.number, cleared, "setFilesViewed");
+      const viewedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* filesViewedStore
+        .set({
+          ...filesViewedScope(project, input.number, viewer),
+          files: input.files.map((file) => ({
+            path: file.path,
+            revision: revisions?.get(file.path) ?? "",
+            viewed: file.viewed,
+          })),
+          viewedAt,
+        })
+        .pipe(Effect.mapError(toFilesViewedStoreError("setFilesViewed")));
+    });
+
   const filesViewedUncached = (input: PullRequestRef) =>
     requireProject(input).pipe(
-      Effect.flatMap((project) => {
+      Effect.flatMap((project): Effect.Effect<PullRequestFilesViewedResult, PullRequestError> => {
         const read = project.api.getFilesViewed;
-        return project.api.capabilities.viewedFiles === true && read
-          ? read({
-              cwd: project.project.workspaceRoot,
-              repository: project.repository,
-              host: project.host,
-              number: input.number,
-            }).pipe(Effect.mapError(toPullRequestError("filesViewed")))
-          : Effect.fail(
-              new PullRequestOperationError({
-                operation: "filesViewed",
-                detail: "This host does not track which files a reader has seen.",
-              }),
-            );
+        if (project.api.capabilities.viewedFiles === "host" && read) {
+          return read({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+          }).pipe(Effect.mapError(toPullRequestError("filesViewed")));
+        }
+        if (project.api.capabilities.viewedFiles === "environment") {
+          return environmentFilesViewed(project, input.number);
+        }
+        return Effect.fail(
+          new PullRequestOperationError({
+            operation: "filesViewed",
+            detail: "This host does not track which files a reader has seen.",
+          }),
+        );
       }),
     );
 
@@ -1333,20 +1458,24 @@ export const make = Effect.gen(function* () {
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
         const write = project.api.setFilesViewed;
-        return project.api.capabilities.viewedFiles === true && write
-          ? write({
-              cwd: project.project.workspaceRoot,
-              repository: project.repository,
-              host: project.host,
-              number: input.number,
-              files: input.files,
-            }).pipe(Effect.mapError(toPullRequestError("setFilesViewed")))
-          : Effect.fail(
-              new PullRequestOperationError({
-                operation: "setFilesViewed",
-                detail: "This host does not track which files a reader has seen.",
-              }),
-            );
+        if (project.api.capabilities.viewedFiles === "host" && write) {
+          return write({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            files: input.files,
+          }).pipe(Effect.mapError(toPullRequestError("setFilesViewed")));
+        }
+        if (project.api.capabilities.viewedFiles === "environment") {
+          return environmentSetFilesViewed(project, input);
+        }
+        return Effect.fail(
+          new PullRequestOperationError({
+            operation: "setFilesViewed",
+            detail: "This host does not track which files a reader has seen.",
+          }),
+        );
       }),
       // Deliberately not `invalidatedByMutation`: ticking a file off says nothing about the
       // change request, and dropping a 300-file diff on every checkbox is the whole cost of

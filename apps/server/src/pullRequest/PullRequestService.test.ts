@@ -11,6 +11,8 @@ import type {
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
@@ -154,8 +156,10 @@ function makeService(input: {
   readonly providers: ReadonlyArray<PullRequestProviderApi>;
   readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
 }) {
-  return PullRequestService.make.pipe(
-    Effect.provide(
+  // Built into the test's own scope rather than provided call by call: the marks store owns a
+  // database, and `Effect.provide` would close it the moment the service was handed back.
+  return Effect.flatMap(
+    Layer.build(
       Layer.mergeAll(
         Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
         Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
@@ -172,8 +176,12 @@ function makeService(input: {
             }),
         }),
         SourceControlRateLimit.layer,
+        // The real store over a database of its own, so the environment-kept marks are exercised
+        // through the SQL that holds them rather than through a stand-in that agrees with itself.
+        PullRequestFilesViewed.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
       ),
     ),
+    (context) => Effect.provideContext(PullRequestService.make, context),
   );
 }
 
@@ -3440,7 +3448,7 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
             mergeMethods: ["merge"],
             search: true,
             reactions: true,
-            viewedFiles: true,
+            viewedFiles: "host",
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -3470,6 +3478,184 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
     // The press forgets only the reader's own ticks: a diff of any size survives it.
     assert.strictEqual(diffReads, 1);
     assert.strictEqual(viewedReads, 2);
+  }),
+);
+
+const environmentViewedProvider = (
+  revisions: Map<string, string>,
+  asked: Array<ReadonlyArray<string>>,
+) =>
+  fakeProvider("gitlab", {
+    capabilities: {
+      diff: true,
+      comment: true,
+      actions: ["merge"],
+      mergeMethods: ["merge"],
+      search: true,
+      reactions: true,
+      viewedFiles: "environment",
+      review: FULL_REVIEW,
+      reviewers: FULL_REVIEWERS,
+    },
+    getFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+    setFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+    getFileRevisions: (input) => {
+      asked.push(input.paths);
+      return Effect.succeed({
+        revisions: new Map(
+          input.paths.flatMap((path) => {
+            const revision = revisions.get(path);
+            return revision === undefined ? [] : [[path, revision] as const];
+          }),
+        ),
+      });
+    },
+  });
+
+const environmentViewedService = (
+  revisions: Map<string, string>,
+  asked: Array<ReadonlyArray<string>>,
+) =>
+  makeService({
+    projects: [
+      project({
+        id: "p1",
+        title: "on gitlab",
+        workspaceRoot: "/a",
+        repository: "group/project",
+        provider: "gitlab",
+      }),
+    ],
+    providers: [environmentViewedProvider(revisions, asked)],
+  });
+
+const GITLAB_REFERENCE = {
+  projectId: "p1" as ProjectId,
+  repository: "group/project",
+  number: 1,
+};
+
+it.effect("keeps viewed files itself for a host that keeps none of its own", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const service = yield* environmentViewedService(
+      new Map([
+        ["src/a.ts", "blob-a"],
+        ["src/b.ts", "blob-b"],
+      ]),
+      asked,
+    );
+
+    // Nothing marked is nothing to ask the host about.
+    const empty = yield* service.filesViewed(GITLAB_REFERENCE);
+    assert.deepStrictEqual(empty, { files: [], truncated: false });
+    assert.deepStrictEqual(asked, []);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [
+        { path: "src/a.ts", viewed: true },
+        { path: "src/b.ts", viewed: true },
+      ],
+    });
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
+      [
+        { path: "src/a.ts", state: "viewed" },
+        { path: "src/b.ts", state: "viewed" },
+      ],
+    );
+    assert.strictEqual(marked.truncated, false);
+    // The marked paths alone, so the cost follows how much has been read rather than PR size.
+    assert.deepStrictEqual(
+      asked.map((paths) => [...paths].toSorted()),
+      [
+        ["src/a.ts", "src/b.ts"],
+        ["src/a.ts", "src/b.ts"],
+      ],
+    );
+  }),
+);
+
+it.effect("reports a file pushed to since it was cleared as changed", () =>
+  Effect.gen(function* () {
+    const revisions = new Map([
+      ["src/a.ts", "blob-a"],
+      ["src/b.ts", "blob-b"],
+    ]);
+    const service = yield* environmentViewedService(revisions, []);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [
+        { path: "src/a.ts", viewed: true },
+        { path: "src/b.ts", viewed: true },
+      ],
+    });
+    revisions.set("src/a.ts", "blob-a-again");
+    // A push is not something the marks can hear about, so the reader asks to be re-answered.
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
+      [
+        { path: "src/a.ts", state: "dismissed" },
+        { path: "src/b.ts", state: "viewed" },
+      ],
+    );
+  }),
+);
+
+it.effect("clears a mark again when the file is put back", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const service = yield* environmentViewedService(new Map([["src/a.ts", "blob-a"]]), asked);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: false }],
+    });
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(marked.files, []);
+    // Unticking asks the host nothing: the row is going away whatever the head has.
+    assert.deepStrictEqual(asked, [["src/a.ts"]]);
+  }),
+);
+
+it.effect("keeps a deleted file cleared, which the head has no version of at all", () =>
+  Effect.gen(function* () {
+    const service = yield* environmentViewedService(new Map(), []);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/gone.ts", viewed: true }],
+    });
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(marked.files, [{ path: "src/gone.ts", state: "viewed" }]);
+  }),
+);
+
+it.effect("keeps environment marks apart from another change request's", () =>
+  Effect.gen(function* () {
+    const service = yield* environmentViewedService(new Map([["src/a.ts", "blob-a"]]), []);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    const other = yield* service.filesViewed({ ...GITLAB_REFERENCE, number: 2 });
+
+    assert.deepStrictEqual(other.files, []);
   }),
 );
 

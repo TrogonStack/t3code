@@ -28,10 +28,10 @@ const FLUSH_DELAY_MS = 400;
 const NO_OVERLAY: FileViewedOverlay = new Map();
 
 export interface PullRequestFilesViewedView {
-  /** Whether the host tracks this at all, which is what hides the whole control. */
+  /** Whether anything remembers this at all, which is what hides the whole control. */
   readonly enabled: boolean;
   readonly isViewed: (path: string) => boolean;
-  /** The host says this file has been pushed to since it was cleared. */
+  /** This file has been pushed to since it was cleared. */
   readonly isStale: (path: string) => boolean;
   readonly setViewed: (path: string, viewed: boolean) => void;
   /** How many of the files on screen are ticked off. */
@@ -46,11 +46,13 @@ export interface PullRequestFilesViewedView {
 }
 
 /**
- * Which files this reader has already cleared, as the host records it.
+ * Which files this reader has already cleared.
  *
- * The state lives on the host rather than here so a review carried on from another machine, or
- * from the host's own web UI, picks up where it was left. Presses show immediately and are held
- * over the host's answer until it agrees with them, so the checkbox never waits on a round trip.
+ * The marks live on the server rather than in this tab, so a review carried on from another
+ * machine picks up where it was left. Where the host keeps a record of its own, those are the
+ * marks, and its web UI shows the same ones; where it does not, the environment keeps them and
+ * says so. Presses show immediately and are held over the server's answer until it agrees with
+ * them, so the checkbox never waits on a round trip.
  */
 export function usePullRequestFilesViewed(options: {
   readonly environmentId: EnvironmentId;

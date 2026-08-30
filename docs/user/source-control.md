@@ -62,8 +62,12 @@ T3 Code works with the platforms your team already uses:
   where you left it on the next, and in your browser too
 - If a file is pushed to after you cleared it, it comes back marked **Changed** so you know to look
   again
-- GitHub only. GitLab, Bitbucket, and Azure DevOps do not keep this, so the checkbox is not shown
-  there
+- On GitHub, the ticks are the ones GitHub keeps, so a review carries on between T3 Code and
+  github.com in either direction
+- On GitLab, they are kept by the T3 Code server you are connected to, because GitLab only
+  remembers them in one browser's own storage. They still follow you between the apps connected to
+  that server, but GitLab's own site will not show them. An info icon beside the count says so
+- Bitbucket and Azure DevOps do not keep this at all, so the checkbox is not shown there
 - Scope the **Code** tab to a single commit and the checkboxes stay, so you can read a change one
   commit at a time. A tick belongs to the pull request, not to the commit, so a file you clear
   there is cleared everywhere

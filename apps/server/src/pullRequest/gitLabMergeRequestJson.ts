@@ -938,3 +938,77 @@ export function decodeOwnAwardIdJson(
   }
   return Result.succeed(null);
 }
+
+/**
+ * What the given paths are at one revision, as blob ids.
+ *
+ * Asked for by path rather than by walking the tree: the caller already knows which files it
+ * cares about, and GitLab charges this query by how many paths it is given. A path the revision
+ * does not have comes back missing rather than as an error, which is the answer for a file the
+ * merge request deletes.
+ */
+export const REPOSITORY_BLOBS_GRAPHQL_QUERY = `query($fullPath: ID!, $ref: String!, $paths: [String!]!) {
+  project(fullPath: $fullPath) {
+    repository {
+      blobs(ref: $ref, paths: $paths) {
+        nodes { path oid }
+      }
+    }
+  }
+}`;
+
+const RawRepositoryBlobsSchema = Schema.Struct({
+  data: Schema.Struct({
+    project: Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              blobs: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    nodes: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Array(
+                          Schema.NullOr(
+                            Schema.Struct({
+                              path: Schema.optional(Schema.NullOr(Schema.String)),
+                              oid: Schema.optional(Schema.NullOr(Schema.String)),
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  }),
+});
+
+const decodeRepositoryBlobs = decodeJsonResult(RawRepositoryBlobsSchema);
+
+/**
+ * Blob ids by path. A node without both is left out: half an answer names no version, and the
+ * caller reads an absent path as "the revision does not have this file".
+ */
+export function decodeRepositoryBlobsJson(
+  raw: string,
+): Result.Result<ReadonlyMap<string, string>, DecodeFailure> {
+  const decoded = decodeRepositoryBlobs(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const blobs = new Map<string, string>();
+  for (const node of decoded.success.data.project?.repository?.blobs?.nodes ?? []) {
+    const path = trimmed(node?.path);
+    const oid = trimmed(node?.oid);
+    if (path === null || oid === null) continue;
+    blobs.set(path, oid);
+  }
+  return Result.succeed(blobs);
+}
