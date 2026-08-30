@@ -9,7 +9,7 @@ T3 Code works with the platforms your team already uses:
 - **GitHub** – Pull requests, repository creation, and clone integration
 - **GitLab** – Merge requests, repository publishing, and hosted clones
 - **Bitbucket** – Pull request workflows (via API token authentication)
-- **Azure DevOps** – Pull request support for Microsoft-hosted repositories
+- **Azure DevOps** – Pull request support for Microsoft-hosted repositories, including the file-by-file diff
 
 ## What You Can Do
 
@@ -64,11 +64,12 @@ T3 Code works with the platforms your team already uses:
   again
 - On GitHub, the ticks are the ones GitHub keeps, so a review carries on between T3 Code and
   github.com in either direction
-- On GitLab, they are kept by the T3 Code server you are connected to, because GitLab only
-  remembers them in one browser's own storage. They still follow you between the apps connected to
-  that server, but GitLab's own site will not show them. The count reads **viewed in T3 Code** so
-  you can tell at a glance, and an info icon beside it explains why
-- Bitbucket and Azure DevOps do not keep this at all, so the checkbox is not shown there
+- On GitLab, Bitbucket, and Azure DevOps, they are kept by the T3 Code server you are connected
+  to, because none of the three offers a record T3 Code can read: GitLab remembers it in one
+  browser's own storage, Bitbucket not at all, and Azure DevOps only inside its own web app. They
+  still follow you between the apps connected to that server, but the host's own site will not
+  show them. The count reads **viewed in T3 Code** so you can tell at a glance, and an info icon
+  beside it explains why
 - Scope the **Code** tab to a single commit and the checkboxes stay, so you can read a change one
   commit at a time. A tick belongs to the pull request, not to the commit, so a file you clear
   there is cleared everywhere

@@ -13,11 +13,17 @@ import type {
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import {
+  decodeItemContentJson,
+  decodeIterationChangesJson,
+  decodeIterationsJson,
   decodePullRequestJson,
   decodePullRequestListJson,
   decodeThreadsJson,
   decodeViewerJson,
+  type AzureDevOpsChangeEntry,
+  type AzureDevOpsIteration,
   type AzureDevOpsPullRequest,
+  type AzureDevOpsRepositoryLocation,
 } from "./azureDevOpsPullRequestJson.ts";
 import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
@@ -149,8 +155,41 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
     /** Threads are not reachable through `az repos pr`, so they come from the REST API. */
     readonly listThreads: (input: {
       readonly cwd: string;
-      readonly threadsUrl: string;
+      readonly location: AzureDevOpsRepositoryLocation;
+      readonly number: number;
     }) => Effect.Effect<ReadonlyArray<PullRequestComment>, AzureDevOpsPullRequestCliError>;
+
+    /**
+     * The pushes a pull request has had, oldest first. Azure hangs the changed files off an
+     * iteration rather than off the pull request, so reading a diff starts here.
+     */
+    readonly listIterations: (input: {
+      readonly cwd: string;
+      readonly location: AzureDevOpsRepositoryLocation;
+      readonly number: number;
+    }) => Effect.Effect<ReadonlyArray<AzureDevOpsIteration>, AzureDevOpsPullRequestCliError>;
+
+    /**
+     * What one iteration changed, against the merge base rather than against the previous push,
+     * which is the whole of the pull request rather than the latest slice of it.
+     */
+    readonly listIterationChanges: (input: {
+      readonly cwd: string;
+      readonly location: AzureDevOpsRepositoryLocation;
+      readonly number: number;
+      readonly iterationId: number;
+    }) => Effect.Effect<ReadonlyArray<AzureDevOpsChangeEntry>, AzureDevOpsPullRequestCliError>;
+
+    /**
+     * One file's text at one commit. Azure has no diff route that carries content, so both sides
+     * of every changed file are read this way and the patch is made from them here.
+     */
+    readonly readItemContent: (input: {
+      readonly cwd: string;
+      readonly location: AzureDevOpsRepositoryLocation;
+      readonly path: string;
+      readonly commit: string;
+    }) => Effect.Effect<string, AzureDevOpsPullRequestCliError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
@@ -263,6 +302,68 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
       args: [...input.args, "--only-show-errors", "--output", "json"],
     });
+
+  /**
+   * A REST route reached through `az devops invoke`, which addresses it by area, resource and
+   * route parameters rather than by URL. It is used in place of `az rest` because it signs in the
+   * way the azure-devops extension does, and `az rest` mints its own token against the tenant `az`
+   * defaults to. For an organisation in any other tenant that token is rejected and Azure answers
+   * with a sign-in page, which arrives here as unreadable output rather than as a failure.
+   */
+  const invoke = <A>(input: {
+    readonly cwd: string;
+    readonly operation: string;
+    readonly resource: string;
+    readonly routeParameters: ReadonlyArray<string>;
+    readonly queryParameters?: ReadonlyArray<string>;
+    readonly decode: (raw: string) => Result.Result<A, unknown>;
+  }): Effect.Effect<A, AzureDevOpsPullRequestCliError> =>
+    executeJson({
+      cwd: input.cwd,
+      args: [
+        "devops",
+        "invoke",
+        ...detectArgs,
+        "--area",
+        "git",
+        "--resource",
+        input.resource,
+        "--api-version",
+        REST_API_VERSION,
+        "--route-parameters",
+        ...input.routeParameters,
+        ...(input.queryParameters === undefined
+          ? []
+          : ["--query-parameters", ...input.queryParameters]),
+      ],
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = input.decode(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new AzureDevOpsPullRequestReadError({
+                command: "az",
+                cwd: input.cwd,
+                operation: input.operation,
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
+
+  const repositoryRoute = (location: AzureDevOpsRepositoryLocation): ReadonlyArray<string> => [
+    `project=${location.project}`,
+    `repositoryId=${location.repository}`,
+  ];
+
+  const pullRequestRoute = (input: {
+    readonly location: AzureDevOpsRepositoryLocation;
+    readonly number: number;
+  }): ReadonlyArray<string> => [
+    ...repositoryRoute(input.location),
+    `pullRequestId=${input.number}`,
+  ];
 
   /**
    * Azure pages by raw offset. Keep reading when malformed rows leave the decoded page short, and
@@ -430,30 +531,52 @@ export const make = Effect.gen(function* () {
       ),
 
     listThreads: (input) =>
-      executeJson({
+      invoke({
         cwd: input.cwd,
-        args: [
-          "rest",
-          "--method",
-          "get",
-          "--url",
-          `${input.threadsUrl}?api-version=${REST_API_VERSION}`,
+        operation: "listThreads",
+        resource: "pullRequestThreads",
+        routeParameters: pullRequestRoute(input),
+        decode: decodeThreadsJson,
+      }),
+
+    listIterations: (input) =>
+      invoke({
+        cwd: input.cwd,
+        operation: "listIterations",
+        resource: "pullRequestIterations",
+        routeParameters: pullRequestRoute(input),
+        decode: decodeIterationsJson,
+      }),
+
+    listIterationChanges: (input) =>
+      invoke({
+        cwd: input.cwd,
+        operation: "listIterationChanges",
+        resource: "pullRequestIterationChanges",
+        routeParameters: [...pullRequestRoute(input), `iterationId=${input.iterationId}`],
+        // Azure pages this route at 1000 entries by default. A review that large is already past
+        // what the client will render, and the ceiling is Azure's own maximum for the route.
+        queryParameters: ["$top=2000"],
+        decode: decodeIterationChangesJson,
+      }),
+
+    readItemContent: (input) =>
+      invoke({
+        cwd: input.cwd,
+        operation: "readItemContent",
+        resource: "items",
+        routeParameters: repositoryRoute(input.location),
+        queryParameters: [
+          `path=${input.path}`,
+          "versionDescriptor.versionType=commit",
+          `versionDescriptor.version=${input.commit}`,
+          "includeContent=true",
+          // Without this Azure answers with the file's own bytes rather than with a JSON
+          // envelope, and `az devops invoke` refuses anything it cannot parse as JSON.
+          "$format=json",
         ],
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeThreadsJson(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
-                new AzureDevOpsPullRequestReadError({
-                  command: "az",
-                  cwd: input.cwd,
-                  operation: "listThreads",
-                  cause: decoded.failure,
-                }),
-              );
-        }),
-      ),
+        decode: decodeItemContentJson,
+      }),
 
     setPullRequestReviewers: (input) =>
       input.reviewers.some((reviewer) => !isReviewerName(reviewer))

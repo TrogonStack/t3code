@@ -476,6 +476,105 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("names the head's blob as what a cleared file was cleared at", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                pullRequestId: 42,
+                title: "Add the page",
+                status: "active",
+                sourceRefName: "refs/heads/feat/page",
+                targetRefName: "refs/heads/main",
+                creationDate: "2026-07-01T00:00:00Z",
+                url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                repository: { name: "web", project: { name: "platform" } },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                value: [
+                  {
+                    id: 1,
+                    sourceRefCommit: { commitId: "a".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                  {
+                    id: 2,
+                    sourceRefCommit: { commitId: "c".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                changeEntries: [
+                  { changeType: "edit", item: { path: "/README.md", objectId: "8f80" } },
+                  { changeType: "add", item: { path: "/DEMO.md", objectId: "0ca4" } },
+                ],
+              }),
+            ),
+          ),
+        );
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      // Kept here rather than on Azure: its own record of what a reader has read is behind an
+      // undocumented endpoint, so the marks belong to this environment and need a revision of
+      // their own to tell a re-push from a file still as it was read.
+      assert.strictEqual(provider.capabilities.viewedFiles, "environment");
+      assert.isDefined(provider.getFileRevisions);
+      const answer = yield* provider.getFileRevisions({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        paths: ["README.md"],
+      });
+
+      // The latest push, since an iteration's changes are reported against the merge base rather
+      // than against the push before it.
+      expect(argsOfCall(2)).toContain("iterationId=2");
+      // Only what was asked for. DEMO.md changed too, and nobody has marked it.
+      expect([...answer.revisions]).toEqual([["README.md", "8f80"]]);
+    }),
+  );
+
+  it.effect("leaves out a marked file the pull request no longer changes", () =>
+    Effect.gen(function* () {
+      // Which reads as the empty revision, the same thing stored for a file that had none when it
+      // was ticked. A file the pull request deletes is cleared once and stays cleared.
+      mockedExecute.mockReturnValue(Effect.succeed(output('{"changeEntries":[]}')));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.getFileRevisions);
+
+      const answer = yield* provider.getFileRevisions({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        paths: [],
+      });
+
+      expect(answer.revisions.size).toBe(0);
+      // Nothing was marked, so Azure was not asked at all.
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("reads the conversation through the REST API, pinned to a version", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
@@ -499,14 +598,18 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
 
       const comments = yield* cli.listThreads({
         cwd: "/w",
-        threadsUrl: "https://dev.azure.com/acme/platform/_apis/git/r/web/pullRequests/42/threads",
+        location: { project: "platform", repository: "web" },
+        number: 42,
       });
 
       assert.strictEqual(comments.length, 1);
-      expect(argsOfCall(0)).toContain("rest");
-      expect(argsOfCall(0)).toContain(
-        "https://dev.azure.com/acme/platform/_apis/git/r/web/pullRequests/42/threads?api-version=7.1",
-      );
+      // `az devops invoke` rather than `az rest`: it signs in the way the azure-devops extension
+      // does, and `az rest` mints its own token against whichever tenant `az` defaults to.
+      expect(argsOfCall(0)).toContain("invoke");
+      expect(argsOfCall(0)).toContain("pullRequestThreads");
+      expect(argsOfCall(0)).toContain("project=platform");
+      expect(argsOfCall(0)).toContain("repositoryId=web");
+      expect(argsOfCall(0)).toContain("pullRequestId=42");
     }),
   );
 

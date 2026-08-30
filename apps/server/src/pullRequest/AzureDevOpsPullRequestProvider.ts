@@ -3,19 +3,32 @@ import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3t
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
+  azureDevOpsFilePatch,
+  formatAzureDevOpsDiffCursor,
+  parseAzureDevOpsDiffCursor,
+  MAX_DIFF_SLICE_BYTES,
+  type AzureDevOpsFileTexts,
+} from "./azureDevOpsDiff.ts";
+import {
   PullRequestProviderError,
   type PullRequestProviderFailure,
   type ProviderChangeRequest,
   type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
+  type ProviderDiffSlice,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
-import type { AzureDevOpsPullRequest } from "./azureDevOpsPullRequestJson.ts";
+import type {
+  AzureDevOpsChangeEntry,
+  AzureDevOpsIteration,
+  AzureDevOpsPullRequest,
+  AzureDevOpsRepositoryLocation,
+} from "./azureDevOpsPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
-  // `az repos pr` has no diff command, and the REST route reports changed files without their
-  // contents, so there is no patch to show. The Code tab is hidden rather than empty.
-  diff: false,
+  // Azure serves no patch of its own, so the one the Code tab reads is built here out of the
+  // files an iteration changed and both sides of each of them.
+  diff: true,
   // Reading a conversation is a plain REST read, but posting one is not something this can
   // claim without having run it, so the composer stays hidden.
   comment: false,
@@ -33,7 +46,8 @@ const CAPABILITIES: PullRequestCapabilities = {
   // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.
   search: false,
   reactions: false,
-  // With no patch to show there are no lines to write against, so nothing here is offered.
+  // The patch has lines to write against, but writing a remark at all is what Azure is not
+  // offered for here, so nothing in a review is either.
   review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
   // `az repos pr reviewer add` and `remove` name identities, and nothing anywhere in `az repos`
   // lists the ones this repository could name — that lives behind the identity and graph APIs, a
@@ -44,6 +58,11 @@ const CAPABILITIES: PullRequestCapabilities = {
   // Rewriting a remark is false for the same reason posting one is: this cannot put a remark on
   // Azure DevOps at all, so there is nothing here it could rewrite either.
   edit: { changeRequest: true, comment: false },
+  // Azure does keep a viewed record of its own, but only behind the undocumented contribution
+  // endpoint its web UI talks to, keyed on an iteration so a push would drop every mark anyway.
+  // So they are kept here instead, and the client says whose they are rather than implying the
+  // Azure DevOps page will show them.
+  viewedFiles: "environment",
 };
 
 /**
@@ -85,8 +104,8 @@ function toChangeRequest(pullRequest: AzureDevOpsPullRequest): ProviderChangeReq
     state: pullRequest.state,
     isDraft: pullRequest.isDraft,
     mergeability: pullRequest.mergeability,
-    // Azure reports no line counts on a pull request, and with no patch to read there is
-    // nothing to count them from either.
+    // Azure counts a pull request's files but never its lines, and counting them here would mean
+    // reading every file on both sides of every row of a listing.
     additions: 0,
     deletions: 0,
     createdAt: pullRequest.createdAt,
@@ -120,6 +139,82 @@ export const make = Effect.gen(function* () {
         detail: "Azure DevOps reviews cannot be written from here yet.",
       }),
     );
+
+  /** A pull request Azure could not place has no diff to read, which reads as an empty one. */
+  const EMPTY_DIFF_SLICE: ProviderDiffSlice = { patch: "", truncated: false, nextCursor: null };
+
+  /**
+   * Everything a diff read needs before it can ask for a file: where the repository lives, and
+   * which pushes the pull request has had. A client names neither, and the pull request read is
+   * the only place Azure states the first.
+   */
+  const diffScope = (input: { readonly cwd: string; readonly number: number }) =>
+    Effect.gen(function* () {
+      const pullRequest = yield* cli.getPullRequest({ cwd: input.cwd, number: input.number });
+      const location = pullRequest.location;
+      if (location === null) return null;
+      const iterations = yield* cli.listIterations({
+        cwd: input.cwd,
+        location,
+        number: input.number,
+      });
+      return { location, iterations };
+    });
+
+  /**
+   * Both sides of one changed file. Only the sides a change actually has are asked for: Azure
+   * answers for a file that is not at a commit with a failure rather than with nothing.
+   */
+  const readTexts = (input: {
+    readonly cwd: string;
+    readonly location: AzureDevOpsRepositoryLocation;
+    readonly iteration: AzureDevOpsIteration;
+    readonly change: Pick<AzureDevOpsChangeEntry, "changeKind" | "path" | "oldPath">;
+  }) =>
+    Effect.gen(function* () {
+      const oldContents =
+        input.change.changeKind === "new"
+          ? ""
+          : yield* cli.readItemContent({
+              cwd: input.cwd,
+              location: input.location,
+              path: input.change.oldPath,
+              commit: input.iteration.mergeBaseCommit,
+            });
+      const newContents =
+        input.change.changeKind === "deleted"
+          ? ""
+          : yield* cli.readItemContent({
+              cwd: input.cwd,
+              location: input.location,
+              path: input.change.path,
+              commit: input.iteration.headCommit,
+            });
+      const texts: AzureDevOpsFileTexts = { oldContents, newContents };
+      return texts;
+    });
+
+  /**
+   * What the whole pull request changed, taken from its latest push. An iteration's changes are
+   * reported against the merge base rather than against the push before it, so the newest one is
+   * the whole of the change rather than the last slice of it.
+   */
+  const listLatestChanges = (input: {
+    readonly cwd: string;
+    readonly location: AzureDevOpsRepositoryLocation;
+    readonly number: number;
+    readonly iterations: ReadonlyArray<AzureDevOpsIteration>;
+  }) => {
+    const latest = input.iterations.at(-1);
+    return latest === undefined
+      ? Effect.succeed([] as ReadonlyArray<AzureDevOpsChangeEntry>)
+      : cli.listIterationChanges({
+          cwd: input.cwd,
+          location: input.location,
+          number: input.number,
+          iterationId: latest.id,
+        });
+  };
 
   const provider: PullRequestProviderApi = {
     kind: "azure-devops",
@@ -155,34 +250,57 @@ export const make = Effect.gen(function* () {
         ),
 
     getChangeRequest: (input) =>
-      cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
-        Effect.mapError(fail("getChangeRequest")),
-        Effect.map(
-          (pullRequest): ProviderChangeRequestDetail => ({
-            ...toChangeRequest(pullRequest),
-            body: pullRequest.body,
-            changedFiles: 0,
-            mergedAt: pullRequest.state === "merged" ? pullRequest.closedAt : null,
-            closedAt: pullRequest.state === "closed" ? pullRequest.closedAt : null,
-            reviewers: pullRequest.reviewers,
-            checks: [],
-            mergeCapabilities: { merge: true, squash: true, rebase: false },
-            viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
-            autoMergeEnabled: pullRequest.autoMergeEnabled,
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const pullRequest = yield* cli.getPullRequest({ cwd: input.cwd, number: input.number });
+        const location = pullRequest.location;
+        // The file count is two reads past the pull request itself, and it is the only thing
+        // riding on them, so a failure leaves it unknown rather than losing the whole detail.
+        const changedFiles =
+          location === null
+            ? 0
+            : yield* cli.listIterations({ cwd: input.cwd, location, number: input.number }).pipe(
+                Effect.flatMap((iterations) =>
+                  listLatestChanges({
+                    cwd: input.cwd,
+                    location,
+                    number: input.number,
+                    iterations,
+                  }),
+                ),
+                Effect.map((changes) => changes.length),
+                Effect.orElseSucceed(() => 0),
+              );
+        const detail: ProviderChangeRequestDetail = {
+          ...toChangeRequest(pullRequest),
+          body: pullRequest.body,
+          changedFiles,
+          mergedAt: pullRequest.state === "merged" ? pullRequest.closedAt : null,
+          closedAt: pullRequest.state === "closed" ? pullRequest.closedAt : null,
+          reviewers: pullRequest.reviewers,
+          checks: [],
+          mergeCapabilities: { merge: true, squash: true, rebase: false },
+          viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
+          autoMergeEnabled: pullRequest.autoMergeEnabled,
+        };
+        return detail;
+      }).pipe(Effect.mapError(fail("getChangeRequest"))),
 
     getChangeRequestActivity: (input) =>
       cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
         Effect.flatMap((pullRequest) =>
-          (pullRequest.threadsUrl === null
+          (pullRequest.location === null
             ? Effect.succeed({ comments: [], truncated: true })
-            : cli.listThreads({ cwd: input.cwd, threadsUrl: pullRequest.threadsUrl }).pipe(
-                Effect.map((comments) => ({ comments, truncated: false })),
-                Effect.orElseSucceed(() => ({ comments: [], truncated: true })),
-              )
+            : cli
+                .listThreads({
+                  cwd: input.cwd,
+                  location: pullRequest.location,
+                  number: input.number,
+                })
+                .pipe(
+                  Effect.map((comments) => ({ comments, truncated: false })),
+                  Effect.orElseSucceed(() => ({ comments: [], truncated: true })),
+                )
           ).pipe(
             Effect.map(
               (conversation): ProviderChangeRequestActivity => ({
@@ -201,16 +319,104 @@ export const make = Effect.gen(function* () {
     // reach, so the answer is the same constant the detail carries.
     getViewerPermissions: () => Effect.succeed(AZURE_DEVOPS_VIEWER_PERMISSIONS),
 
-    // Never called: `capabilities.diff` is false, and the service refuses a diff without it.
-    getDiff: () =>
-      Effect.fail(
-        new PullRequestProviderError({
-          provider: "azure-devops",
-          operation: "getDiff",
-          reason: "failed",
-          detail: "Azure DevOps cannot produce a patch for a pull request.",
-        }),
-      ),
+    // `input.commit` is deliberately dropped: Azure states no commit list on a pull request, so
+    // the Code tab has nothing to scope itself to and always asks for the whole change.
+    getDiff: (input) =>
+      Effect.gen(function* () {
+        const scope = yield* diffScope(input);
+        if (scope === null) return EMPTY_DIFF_SLICE;
+        const cursor = parseAzureDevOpsDiffCursor(input.cursor);
+        // Reading on stays with the push the first slice was taken against. A push landing
+        // mid-read would otherwise renumber the files and hand the reader one twice, or none.
+        const iteration =
+          cursor === null
+            ? scope.iterations.at(-1)
+            : scope.iterations.find((candidate) => candidate.id === cursor.iterationId);
+        if (iteration === undefined) return EMPTY_DIFF_SLICE;
+        const changes = yield* cli.listIterationChanges({
+          cwd: input.cwd,
+          location: scope.location,
+          number: input.number,
+          iterationId: iteration.id,
+        });
+
+        const sections: string[] = [];
+        let truncated = false;
+        let bytes = 0;
+        let index = cursor?.fileIndex ?? 0;
+        while (index < changes.length) {
+          const change = changes.at(index);
+          if (change === undefined) break;
+          const texts = yield* readTexts({
+            cwd: input.cwd,
+            location: scope.location,
+            iteration,
+            change,
+          });
+          const file = azureDevOpsFilePatch({ change, texts });
+          sections.push(file.section);
+          bytes += file.section.length;
+          truncated = truncated || file.truncated;
+          index += 1;
+          if (bytes >= MAX_DIFF_SLICE_BYTES) break;
+        }
+
+        const slice: ProviderDiffSlice = {
+          patch: sections.join(""),
+          truncated,
+          nextCursor:
+            index >= changes.length
+              ? null
+              : formatAzureDevOpsDiffCursor({ iterationId: iteration.id, fileIndex: index }),
+        };
+        return slice;
+      }).pipe(Effect.mapError(fail("getDiff"))),
+
+    // The patch is built from whole files, so opening the lines around a hunk is the same two
+    // reads over again rather than a wider request.
+    getDiffFileContents: (input) =>
+      Effect.gen(function* () {
+        const scope = yield* diffScope(input);
+        const iteration = scope?.iterations.at(-1);
+        if (scope === null || iteration === undefined) return { oldContents: "", newContents: "" };
+        return yield* readTexts({
+          cwd: input.cwd,
+          location: scope.location,
+          iteration,
+          change: {
+            changeKind: input.changeType,
+            path: input.newPath,
+            oldPath: input.oldPath,
+          },
+        });
+      }).pipe(Effect.mapError(fail("getDiffFileContents"))),
+
+    /**
+     * What the head has of each marked file, which is the blob Azure already names on the change
+     * it reports. One read covers every path: the latest iteration lists the whole change, so
+     * asking per file would be the same answer fetched over and over.
+     *
+     * A path the change no longer carries is left out rather than guessed at, which reads as the
+     * empty revision and leaves a file the pull request deletes cleared once and cleared for good.
+     */
+    getFileRevisions: (input) =>
+      Effect.gen(function* () {
+        const revisions = new Map<string, string>();
+        if (input.paths.length === 0) return { revisions };
+        const scope = yield* diffScope(input);
+        if (scope === null) return { revisions };
+        const changes = yield* listLatestChanges({
+          ...scope,
+          cwd: input.cwd,
+          number: input.number,
+        });
+        const marked = new Set(input.paths);
+        for (const change of changes) {
+          if (!marked.has(change.path) || change.objectId === null) continue;
+          revisions.set(change.path, change.objectId);
+        }
+        return { revisions };
+      }).pipe(Effect.mapError(fail("getFileRevisions"))),
 
     runAction: (input) =>
       cli
