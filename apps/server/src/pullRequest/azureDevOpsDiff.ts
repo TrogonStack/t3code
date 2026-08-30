@@ -48,6 +48,12 @@ export interface AzureDevOpsFilePatch {
   readonly section: string;
   /** The file changed but its hunks are not in the section, so the patch has a hole in it. */
   readonly truncated: boolean;
+  /**
+   * The diff was given up on partway rather than declined on sight, so this file spent the whole
+   * of what one file is allowed and produced a header for it. The caller reading a run of files
+   * is meant to stop here rather than pay that again for each of the ones behind it.
+   */
+  readonly abandoned: boolean;
 }
 
 /**
@@ -66,7 +72,7 @@ const PATCH_CONTEXT_LINES = 3;
  * long time. Past this the file is listed without its hunks, which is what the size ceiling already
  * does and what the reader is already shown a sign of.
  */
-const MAX_FILE_DIFF_MILLIS = 2_000;
+export const MAX_FILE_DIFF_MILLIS = 2_000;
 
 /**
  * How much patch one slice carries before the rest is left for the next one. Every file costs a
@@ -122,6 +128,8 @@ function patchHeader(change: AzureDevOpsChangeEntry): string {
 export function azureDevOpsFilePatch(input: {
   readonly change: AzureDevOpsChangeEntry;
   readonly texts: AzureDevOpsFileTexts;
+  /** How long this one file may be diffed for, at most what any file is allowed. */
+  readonly timeoutMillis?: number;
 }): AzureDevOpsFilePatch {
   const header = patchHeader(input.change);
   const { oldContents, newContents } = input.texts;
@@ -129,10 +137,10 @@ export function azureDevOpsFilePatch(input: {
   if (input.texts.binary || isBinary(oldContents) || isBinary(newContents)) {
     // Git's own wording for a file it will not spell out, which every diff viewer already reads.
     const binary = `Binary files a/${input.change.oldPath} and b/${input.change.path} differ`;
-    return { section: `${header}\n${binary}\n`, truncated: true };
+    return { section: `${header}\n${binary}\n`, truncated: true, abandoned: false };
   }
   if (byteLength(oldContents) > MAX_FILE_BYTES || byteLength(newContents) > MAX_FILE_BYTES) {
-    return { section: `${header}\n`, truncated: true };
+    return { section: `${header}\n`, truncated: true, abandoned: false };
   }
 
   const patch = structuredPatch(
@@ -142,11 +150,14 @@ export function azureDevOpsFilePatch(input: {
     newContents,
     undefined,
     undefined,
-    { context: PATCH_CONTEXT_LINES, timeout: MAX_FILE_DIFF_MILLIS },
+    {
+      context: PATCH_CONTEXT_LINES,
+      timeout: Math.min(input.timeoutMillis ?? MAX_FILE_DIFF_MILLIS, MAX_FILE_DIFF_MILLIS),
+    },
   );
   // The bound is reported by giving nothing back, and a file whose diff was given up on is a file
   // listed without its hunks rather than a file dropped from the change.
-  if (patch === undefined) return { section: `${header}\n`, truncated: true };
+  if (patch === undefined) return { section: `${header}\n`, truncated: true, abandoned: true };
 
   const hunks = patch.hunks.map((hunk) =>
     [
@@ -159,6 +170,7 @@ export function azureDevOpsFilePatch(input: {
   return {
     section: hunks.length === 0 ? `${header}\n` : `${header}\n${hunks.join("\n")}\n`,
     truncated: false,
+    abandoned: false,
   };
 }
 
@@ -170,5 +182,5 @@ export function azureDevOpsFilePatch(input: {
 export function azureDevOpsUnreadableFilePatch(
   change: AzureDevOpsChangeEntry,
 ): AzureDevOpsFilePatch {
-  return { section: `${patchHeader(change)}\n`, truncated: true };
+  return { section: `${patchHeader(change)}\n`, truncated: true, abandoned: false };
 }

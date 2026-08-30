@@ -263,13 +263,15 @@ export function useOpenChangeRequestLink(
       if (project === undefined || !reads(project.environmentId)) return false;
       event.preventDefault();
       event.stopPropagation();
+      // The selector the server derives from the same identity, not the one read out of the URL:
+      // a ref spelled any other way is refused before it reaches a provider, and matching a link
+      // only ever compares lower case. The page reads it back the same way the panel does, so
+      // both surfaces are handed the same spelling.
+      const repository = pullRequestRepositoryOf(project.repositoryIdentity) ?? parsed.repository;
       if (resolvedThreadRef) {
         useRightPanelStore.getState().openPullRequest(resolvedThreadRef, {
           projectId: project.id,
-          // The selector the server derives from the same identity, not the one read out of the
-          // URL: a ref spelled any other way is refused before it reaches a provider, and
-          // matching a link only ever compares lower case.
-          repository: pullRequestRepositoryOf(project.repositoryIdentity) ?? parsed.repository,
+          repository,
           number: parsed.number,
         });
         return true;
@@ -281,7 +283,7 @@ export function useOpenChangeRequestLink(
           // Every state, so the pull request being opened is also in the list behind it whether
           // it is open, merged or closed.
           state: "all",
-          repository: parsed.repository,
+          repository,
           number: parsed.number,
           selectedProjectId: project.id,
           // Named so the page opens the right one of two servers holding this project.

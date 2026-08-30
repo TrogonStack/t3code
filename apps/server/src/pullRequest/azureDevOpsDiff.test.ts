@@ -150,6 +150,41 @@ describe("azureDevOpsFilePatch", () => {
     );
   });
 
+  it("gives up on a file whose two sides are too far apart to diff in the time allowed", () => {
+    // The line diff costs the product of the two sides, so a pair under the size ceiling that
+    // shares nothing still runs long. Left to itself it would hold the server for as long as it
+    // took; here it is given a millisecond so the giving up is the thing being read.
+    const oldContents = Array.from({ length: 3_000 }, (_, line) => `old ${line}`).join("\n");
+    const newContents = Array.from({ length: 3_000 }, (_, line) => `new ${line}`).join("\n");
+    const patch = azureDevOpsFilePatch({
+      change: change({ path: "generated.ts", oldPath: "generated.ts" }),
+      texts: texts(oldContents, newContents),
+      timeoutMillis: 1,
+    });
+
+    expect(patch.truncated).toBe(true);
+    // And it says so, because the reader of a run of files is meant to stop rather than spend
+    // that time again on each of the ones behind it.
+    expect(patch.abandoned).toBe(true);
+    expect(patch.section).toBe(
+      [
+        "diff --git a/generated.ts b/generated.ts",
+        "--- a/generated.ts",
+        "+++ b/generated.ts",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps a file it did diff out of the giving up", () => {
+    const patch = azureDevOpsFilePatch({
+      change: change(),
+      texts: texts("one\ntwo\n", "one\ntwo again\n"),
+    });
+
+    expect(patch.abandoned).toBe(false);
+  });
+
   it("marks a file that does not end in a newline, as git does", () => {
     const patch = azureDevOpsFilePatch({
       change: change(),

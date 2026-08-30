@@ -8,6 +8,7 @@ import {
   formatAzureDevOpsDiffCursor,
   parseAzureDevOpsDiffCursor,
   MAX_DIFF_SLICE_BYTES,
+  MAX_FILE_DIFF_MILLIS,
   type AzureDevOpsFileTexts,
 } from "./azureDevOpsDiff.ts";
 import {
@@ -400,12 +401,16 @@ export const make = Effect.gen(function* () {
           const file =
             texts === null
               ? azureDevOpsUnreadableFilePatch(change)
-              : azureDevOpsFilePatch({ change, texts });
+              : azureDevOpsFilePatch({ change, texts, timeoutMillis: MAX_FILE_DIFF_MILLIS });
           sections.push(file.section);
           bytes += file.section.length;
           truncated = truncated || file.truncated;
           index += 1;
-          if (bytes >= MAX_DIFF_SLICE_BYTES) break;
+          // A file whose diff was given up on spent the whole of what one file is allowed and has
+          // a header to show for it, so the byte budget would let a change full of them spend that
+          // over and over in the one request. The slice ends there instead, and reading on picks
+          // up at the file behind it.
+          if (bytes >= MAX_DIFF_SLICE_BYTES || file.abandoned) break;
         }
 
         const slice: ProviderDiffSlice = {
