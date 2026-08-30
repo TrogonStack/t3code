@@ -350,7 +350,7 @@ describe("decodeIterationsJson", () => {
 
 describe("decodeIterationChangesJson", () => {
   it("names each changed file without the slash Azure leads its paths with", () => {
-    const changes = expectSuccess(
+    const page = expectSuccess(
       decodeIterationChangesJson(
         asJson({
           changeEntries: [
@@ -365,7 +365,7 @@ describe("decodeIterationChangesJson", () => {
       ),
     );
 
-    expect(changes.map((change) => [change.path, change.changeKind])).toEqual([
+    expect(page.changes.map((change) => [change.path, change.changeKind])).toEqual([
       ["DEMO.md", "new"],
       ["README.md", "change"],
       ["OLD.md", "deleted"],
@@ -373,7 +373,7 @@ describe("decodeIterationChangesJson", () => {
   });
 
   it("reads a rename as one file that moved, and says whether it also changed", () => {
-    const changes = expectSuccess(
+    const page = expectSuccess(
       decodeIterationChangesJson(
         asJson({
           changeEntries: [
@@ -392,7 +392,7 @@ describe("decodeIterationChangesJson", () => {
       ),
     );
 
-    expect(changes).toEqual([
+    expect(page.changes).toEqual([
       {
         path: "docs/new.md",
         oldPath: "docs/old.md",
@@ -412,7 +412,7 @@ describe("decodeIterationChangesJson", () => {
 
   it("drops the folders Azure lists alongside the files that changed", () => {
     // A review shows files, and a folder has no content on either side to show for one.
-    const changes = expectSuccess(
+    const page = expectSuccess(
       decodeIterationChangesJson(
         asJson({
           changeEntries: [
@@ -423,7 +423,52 @@ describe("decodeIterationChangesJson", () => {
       ),
     );
 
-    expect(changes.map((change) => change.path)).toEqual(["docs/page.md"]);
+    expect(page.changes.map((change) => change.path)).toEqual(["docs/page.md"]);
+  });
+
+  it("carries where the next page of a long change starts", () => {
+    const page = expectSuccess(
+      decodeIterationChangesJson(
+        asJson({
+          changeEntries: [{ changeType: "add", item: { path: "/DEMO.md", objectId: "ec00" } }],
+          nextSkip: 2000,
+        }),
+      ),
+    );
+
+    expect(page.nextSkip).toBe(2000);
+  });
+
+  it("reads the last page, which names no page after it, as the end of the change", () => {
+    const page = expectSuccess(
+      decodeIterationChangesJson(
+        asJson({
+          changeEntries: [{ changeType: "add", item: { path: "/DEMO.md", objectId: "ec00" } }],
+        }),
+      ),
+    );
+
+    expect(page.nextSkip).toBeNull();
+  });
+
+  it("reads where a rename came from out of either of the two places Azure names it", () => {
+    // The iteration-changes route answers with `originalPath`; the commit routes answer with
+    // `sourceServerItem`, and both are the same fact under two names.
+    const page = expectSuccess(
+      decodeIterationChangesJson(
+        asJson({
+          changeEntries: [
+            {
+              changeType: "rename",
+              originalPath: "/docs/old.md",
+              item: { path: "/docs/new.md", objectId: "aaaa", originalObjectId: "aaaa" },
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(page.changes.at(0)?.oldPath).toBe("docs/old.md");
   });
 });
 
@@ -431,10 +476,24 @@ describe("decodeItemContentJson", () => {
   it("reads the file's text out of the envelope Azure wraps it in", () => {
     expect(
       expectSuccess(decodeItemContentJson(asJson({ path: "/a.md", content: "one\ntwo" }))),
-    ).toBe("one\ntwo");
+    ).toEqual({ contents: "one\ntwo", isBinary: false });
   });
 
   it("reads an empty file as empty rather than as a failure to look", () => {
-    expect(expectSuccess(decodeItemContentJson(asJson({ path: "/a.md" })))).toBe("");
+    expect(expectSuccess(decodeItemContentJson(asJson({ path: "/a.md" })))).toEqual({
+      contents: "",
+      isBinary: false,
+    });
+  });
+
+  it("keeps Azure's own word that a file is binary", () => {
+    // Which it answers base64-encoded, so nothing in the text it sent would give it away.
+    expect(
+      expectSuccess(
+        decodeItemContentJson(
+          asJson({ path: "/logo.png", content: "b2xk", contentMetadata: { isBinary: true } }),
+        ),
+      ),
+    ).toEqual({ contents: "b2xk", isBinary: true });
   });
 });

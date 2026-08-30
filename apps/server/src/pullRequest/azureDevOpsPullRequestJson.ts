@@ -369,6 +369,8 @@ const RawIterationPageSchema = Schema.Struct({ value: Schema.Array(Schema.Unknow
 const RawChangeEntrySchema = Schema.Struct({
   changeType: Schema.optional(Schema.NullOr(Schema.String)),
   sourceServerItem: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Where a renamed file came from. Azure states it here on an iteration's changes. */
+  originalPath: Schema.optional(Schema.NullOr(Schema.String)),
   item: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -383,10 +385,18 @@ const RawChangeEntrySchema = Schema.Struct({
   ),
 });
 
-const RawChangePageSchema = Schema.Struct({ changeEntries: Schema.Array(Schema.Unknown) });
+const RawChangePageSchema = Schema.Struct({
+  changeEntries: Schema.Array(Schema.Unknown),
+  /** Where the page after this one starts. Azure leaves it out on the last page. */
+  nextSkip: Schema.optional(Schema.NullOr(Schema.Number)),
+});
 
 const RawItemContentSchema = Schema.Struct({
   content: Schema.optional(Schema.NullOr(Schema.String)),
+  /** What Azure makes of the file it is handing over, which is where it says it is not text. */
+  contentMetadata: Schema.optional(
+    Schema.NullOr(Schema.Struct({ isBinary: Schema.optional(Schema.NullOr(Schema.Boolean)) })),
+  ),
 });
 
 /** The head and the merge base of one iteration, which is the range its patch is taken over. */
@@ -406,6 +416,22 @@ export interface AzureDevOpsChangeEntry {
   readonly changeKind: "new" | "deleted" | "change" | "rename-pure" | "rename-changed";
   readonly objectId: string | null;
   readonly originalObjectId: string | null;
+}
+
+/**
+ * One page of what an iteration changed, and where the next one starts. Azure pages this route
+ * rather than answering with the whole change, so a review large enough to be paged is followed
+ * to its end instead of being cut off at the first page's worth.
+ */
+export interface AzureDevOpsChangePage {
+  readonly changes: ReadonlyArray<AzureDevOpsChangeEntry>;
+  readonly nextSkip: number | null;
+}
+
+/** One file's text at one commit, and whether Azure says the text is text at all. */
+export interface AzureDevOpsItemContent {
+  readonly contents: string;
+  readonly isBinary: boolean;
 }
 
 const decodeIterationPage = decodeJsonResult(RawIterationPageSchema);
@@ -466,7 +492,7 @@ export function decodeIterationsJson(
 
 export function decodeIterationChangesJson(
   raw: string,
-): Result.Result<ReadonlyArray<AzureDevOpsChangeEntry>, DecodeFailure> {
+): Result.Result<AzureDevOpsChangePage, DecodeFailure> {
   const decoded = decodeChangePage(raw);
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
   const changes: AzureDevOpsChangeEntry[] = [];
@@ -480,7 +506,10 @@ export function decodeIterationChangesJson(
     // files, and a folder has no content to show for either side of one.
     if (change.item?.isFolder === true) continue;
     if ((change.item?.gitObjectType ?? "blob").toLowerCase() !== "blob") continue;
-    const oldPath = toRepositoryPath(change.sourceServerItem) ?? path;
+    // Azure names where a renamed file came from in either of two places depending on the route
+    // and the version, so both are read and the current path stands in when neither is there.
+    const oldPath =
+      toRepositoryPath(change.sourceServerItem) ?? toRepositoryPath(change.originalPath) ?? path;
     changes.push({
       path,
       oldPath,
@@ -489,13 +518,28 @@ export function decodeIterationChangesJson(
       originalObjectId: trimmed(change.item?.originalObjectId),
     });
   }
-  return Result.succeed(changes);
+  const nextSkip = decoded.success.nextSkip ?? null;
+  return Result.succeed({
+    changes,
+    nextSkip: nextSkip !== null && Number.isSafeInteger(nextSkip) && nextSkip > 0 ? nextSkip : null,
+  });
 }
 
-/** Azure answers an absent file with an empty body rather than an error, which reads as empty. */
-export function decodeItemContentJson(raw: string): Result.Result<string, DecodeFailure> {
+/**
+ * Azure answers an absent file with an empty body rather than an error, which reads as empty.
+ *
+ * Whether the bytes are text is Azure's to say and not this decoder's to guess: a file it calls
+ * binary is reported as such however innocent its first bytes look, since Azure hands the body
+ * over in an encoding of its own choosing rather than verbatim.
+ */
+export function decodeItemContentJson(
+  raw: string,
+): Result.Result<AzureDevOpsItemContent, DecodeFailure> {
   const decoded = decodeItemContent(raw);
   return Result.isSuccess(decoded)
-    ? Result.succeed(decoded.success.content ?? "")
+    ? Result.succeed({
+        contents: decoded.success.content ?? "",
+        isBinary: decoded.success.contentMetadata?.isBinary === true,
+      })
     : Result.fail(decoded.failure);
 }

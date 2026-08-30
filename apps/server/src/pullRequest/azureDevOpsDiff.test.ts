@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   azureDevOpsFilePatch,
+  azureDevOpsUnreadableFilePatch,
   formatAzureDevOpsDiffCursor,
   parseAzureDevOpsDiffCursor,
 } from "./azureDevOpsDiff.ts";
@@ -18,11 +19,15 @@ function change(overrides: Partial<AzureDevOpsChangeEntry> = {}): AzureDevOpsCha
   };
 }
 
+function texts(oldContents: string, newContents: string, binary = false) {
+  return { oldContents, newContents, binary };
+}
+
 describe("azureDevOpsFilePatch", () => {
   it("writes a changed file as the unified patch every diff viewer already reads", () => {
     const patch = azureDevOpsFilePatch({
       change: change(),
-      texts: { oldContents: "one\ntwo\nthree\n", newContents: "one\ntwo again\nthree\n" },
+      texts: texts("one\ntwo\nthree\n", "one\ntwo again\nthree\n"),
     });
 
     expect(patch.truncated).toBe(false);
@@ -44,7 +49,7 @@ describe("azureDevOpsFilePatch", () => {
   it("names the side a new file does not have as /dev/null", () => {
     const patch = azureDevOpsFilePatch({
       change: change({ path: "DEMO.md", oldPath: "DEMO.md", changeKind: "new" }),
-      texts: { oldContents: "", newContents: "hello\n" },
+      texts: texts("", "hello\n"),
     });
 
     expect(patch.section).toContain("new file mode 100644");
@@ -58,7 +63,7 @@ describe("azureDevOpsFilePatch", () => {
   it("names the side a deleted file no longer has as /dev/null", () => {
     const patch = azureDevOpsFilePatch({
       change: change({ path: "OLD.md", oldPath: "OLD.md", changeKind: "deleted" }),
-      texts: { oldContents: "gone\n", newContents: "" },
+      texts: texts("gone\n", ""),
     });
 
     expect(patch.section).toContain("deleted file mode 100644");
@@ -73,7 +78,7 @@ describe("azureDevOpsFilePatch", () => {
     // the reader to look at a change that is not the one on the host.
     const patch = azureDevOpsFilePatch({
       change: change(),
-      texts: { oldContents: "one\r\ntwo\r\n", newContents: "one\r\ntwo again\r\n" },
+      texts: texts("one\r\ntwo\r\n", "one\r\ntwo again\r\n"),
     });
 
     expect(patch.section).toContain("-two\r");
@@ -83,7 +88,7 @@ describe("azureDevOpsFilePatch", () => {
   it("keeps a file that only moved, which has no hunks to give", () => {
     const patch = azureDevOpsFilePatch({
       change: change({ path: "docs/new.md", oldPath: "docs/old.md", changeKind: "rename-pure" }),
-      texts: { oldContents: "same\n", newContents: "same\n" },
+      texts: texts("same\n", "same\n"),
     });
 
     expect(patch.truncated).toBe(false);
@@ -102,7 +107,7 @@ describe("azureDevOpsFilePatch", () => {
   it("reports a binary file as changed rather than spelling it out", () => {
     const patch = azureDevOpsFilePatch({
       change: change({ path: "logo.png", oldPath: "logo.png" }),
-      texts: { oldContents: "PNG\u0000old", newContents: "PNG\u0000new" },
+      texts: texts("PNG\u0000old", "PNG\u0000new"),
     });
 
     expect(patch.truncated).toBe(true);
@@ -112,7 +117,7 @@ describe("azureDevOpsFilePatch", () => {
   it("shows an overlong file as changed without its hunks", () => {
     const patch = azureDevOpsFilePatch({
       change: change({ path: "bundle.js", oldPath: "bundle.js" }),
-      texts: { oldContents: "a\n".repeat(400_000), newContents: "b\n".repeat(400_000) },
+      texts: texts("a\n".repeat(400_000), "b\n".repeat(400_000)),
     });
 
     expect(patch.truncated).toBe(true);
@@ -121,13 +126,48 @@ describe("azureDevOpsFilePatch", () => {
     );
   });
 
+  it("takes the host's word that a file is binary, whatever its bytes look like", () => {
+    // Azure hands such a file over base64-encoded, so nothing in the text it sent gives it away.
+    const patch = azureDevOpsFilePatch({
+      change: change({ path: "logo.png", oldPath: "logo.png" }),
+      texts: texts("b2xk", "bmV3", true),
+    });
+
+    expect(patch.truncated).toBe(true);
+    expect(patch.section).toContain("Binary files a/logo.png and b/logo.png differ");
+  });
+
+  it("counts an overlong file in bytes rather than in characters", () => {
+    // Three bytes each, so a ceiling counted in code units would let three times the size through.
+    const patch = azureDevOpsFilePatch({
+      change: change({ path: "notes.md", oldPath: "notes.md" }),
+      texts: texts("\u4e00".repeat(200_000), "\u4e8c".repeat(200_000)),
+    });
+
+    expect(patch.truncated).toBe(true);
+    expect(patch.section).toBe(
+      ["diff --git a/notes.md b/notes.md", "--- a/notes.md", "+++ b/notes.md", ""].join("\n"),
+    );
+  });
+
   it("marks a file that does not end in a newline, as git does", () => {
     const patch = azureDevOpsFilePatch({
       change: change(),
-      texts: { oldContents: "one\n", newContents: "two" },
+      texts: texts("one\n", "two"),
     });
 
     expect(patch.section).toContain("\\ No newline at end of file");
+  });
+});
+
+describe("azureDevOpsUnreadableFilePatch", () => {
+  it("keeps a file the host would not hand over, listed without its hunks", () => {
+    const patch = azureDevOpsUnreadableFilePatch(change({ path: "huge.bin", oldPath: "huge.bin" }));
+
+    expect(patch.truncated).toBe(true);
+    expect(patch.section).toBe(
+      ["diff --git a/huge.bin b/huge.bin", "--- a/huge.bin", "+++ b/huge.bin", ""].join("\n"),
+    );
   });
 });
 

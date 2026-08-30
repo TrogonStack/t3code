@@ -21,6 +21,7 @@ import {
   decodeThreadsJson,
   decodeViewerJson,
   type AzureDevOpsChangeEntry,
+  type AzureDevOpsItemContent,
   type AzureDevOpsIteration,
   type AzureDevOpsPullRequest,
   type AzureDevOpsRepositoryLocation,
@@ -118,6 +119,23 @@ export type AzureDevOpsPullRequestCliError =
 /** The version every REST call below is pinned to, so a new default cannot reshape a response. */
 const REST_API_VERSION = "7.1";
 
+/** Azure's own ceiling for one page of an iteration's changes. */
+const CHANGE_ENTRIES_PER_PAGE = 2000;
+
+/**
+ * Where following the pages stops. Every page is an `az` process of its own, and a change this
+ * long is past what any reader will get through, so the read gives up rather than spending a
+ * minute of spawns on it. Saying so is the point: the diff reports itself as incomplete instead
+ * of presenting five pages as the whole change.
+ */
+const MAX_CHANGE_ENTRIES = 10_000;
+
+/** What an iteration changed, and whether following its pages reached the end of it. */
+export interface AzureDevOpsIterationChanges {
+  readonly changes: ReadonlyArray<AzureDevOpsChangeEntry>;
+  readonly truncated: boolean;
+}
+
 export class AzureDevOpsPullRequestCli extends Context.Service<
   AzureDevOpsPullRequestCli,
   {
@@ -178,7 +196,7 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly location: AzureDevOpsRepositoryLocation;
       readonly number: number;
       readonly iterationId: number;
-    }) => Effect.Effect<ReadonlyArray<AzureDevOpsChangeEntry>, AzureDevOpsPullRequestCliError>;
+    }) => Effect.Effect<AzureDevOpsIterationChanges, AzureDevOpsPullRequestCliError>;
 
     /**
      * One file's text at one commit. Azure has no diff route that carries content, so both sides
@@ -189,7 +207,7 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly location: AzureDevOpsRepositoryLocation;
       readonly path: string;
       readonly commit: string;
-    }) => Effect.Effect<string, AzureDevOpsPullRequestCliError>;
+    }) => Effect.Effect<AzureDevOpsItemContent, AzureDevOpsPullRequestCliError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
@@ -548,17 +566,38 @@ export const make = Effect.gen(function* () {
         decode: decodeIterationsJson,
       }),
 
-    listIterationChanges: (input) =>
-      invoke({
-        cwd: input.cwd,
-        operation: "listIterationChanges",
-        resource: "pullRequestIterationChanges",
-        routeParameters: [...pullRequestRoute(input), `iterationId=${input.iterationId}`],
-        // Azure pages this route at 1000 entries by default. A review that large is already past
-        // what the client will render, and the ceiling is Azure's own maximum for the route.
-        queryParameters: ["$top=2000"],
-        decode: decodeIterationChangesJson,
-      }),
+    listIterationChanges: (input) => {
+      const page = (skip: number) =>
+        invoke({
+          cwd: input.cwd,
+          operation: "listIterationChanges",
+          resource: "pullRequestIterationChanges",
+          routeParameters: [...pullRequestRoute(input), `iterationId=${input.iterationId}`],
+          // Azure pages this route at 1000 entries by default; this is its own maximum per page,
+          // and it names where the next page starts rather than answering with the whole change.
+          queryParameters: [`$top=${CHANGE_ENTRIES_PER_PAGE}`, `$skip=${skip}`],
+          decode: decodeIterationChangesJson,
+        });
+      const from = (
+        skip: number,
+        collected: ReadonlyArray<AzureDevOpsChangeEntry>,
+      ): Effect.Effect<AzureDevOpsIterationChanges, AzureDevOpsPullRequestCliError> =>
+        page(skip).pipe(
+          Effect.flatMap((answer) => {
+            const changes = [...collected, ...answer.changes];
+            // A page that does not move the cursor on would be read forever, and a change this
+            // long is past anything a reader will get through — so the read stops and says so,
+            // rather than quietly presenting part of it as the whole.
+            if (answer.nextSkip === null || answer.nextSkip <= skip) {
+              return Effect.succeed({ changes, truncated: false });
+            }
+            return changes.length >= MAX_CHANGE_ENTRIES
+              ? Effect.succeed({ changes, truncated: true })
+              : from(answer.nextSkip, changes);
+          }),
+        );
+      return from(0, []);
+    },
 
     readItemContent: (input) =>
       invoke({

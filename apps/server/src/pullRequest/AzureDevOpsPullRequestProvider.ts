@@ -4,6 +4,7 @@ import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3t
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
   azureDevOpsFilePatch,
+  azureDevOpsUnreadableFilePatch,
   formatAzureDevOpsDiffCursor,
   parseAzureDevOpsDiffCursor,
   MAX_DIFF_SLICE_BYTES,
@@ -18,8 +19,10 @@ import {
   type ProviderDiffSlice,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
+import type { AzureDevOpsIterationChanges } from "./AzureDevOpsPullRequestCli.ts";
 import type {
   AzureDevOpsChangeEntry,
+  AzureDevOpsItemContent,
   AzureDevOpsIteration,
   AzureDevOpsPullRequest,
   AzureDevOpsRepositoryLocation,
@@ -190,6 +193,8 @@ export const make = Effect.gen(function* () {
       return { location, iterations };
     });
 
+  const EMPTY_ITEM: AzureDevOpsItemContent = { contents: "", isBinary: false };
+
   /**
    * Both sides of one changed file. Only the sides a change actually has are asked for: Azure
    * answers for a file that is not at a commit with a failure rather than with nothing.
@@ -201,25 +206,31 @@ export const make = Effect.gen(function* () {
     readonly change: Pick<AzureDevOpsChangeEntry, "changeKind" | "path" | "oldPath">;
   }) =>
     Effect.gen(function* () {
-      const oldContents =
+      const oldItem =
         input.change.changeKind === "new"
-          ? ""
+          ? EMPTY_ITEM
           : yield* cli.readItemContent({
               cwd: input.cwd,
               location: input.location,
               path: input.change.oldPath,
               commit: input.iteration.mergeBaseCommit,
             });
-      const newContents =
+      const newItem =
         input.change.changeKind === "deleted"
-          ? ""
+          ? EMPTY_ITEM
           : yield* cli.readItemContent({
               cwd: input.cwd,
               location: input.location,
               path: input.change.path,
               commit: input.iteration.headCommit,
             });
-      const texts: AzureDevOpsFileTexts = { oldContents, newContents };
+      const texts: AzureDevOpsFileTexts = {
+        oldContents: oldItem.contents,
+        newContents: newItem.contents,
+        // Azure hands a file it calls binary over in an encoding of its own, so its own word on
+        // that is taken rather than looked for in bytes it may never have sent verbatim.
+        binary: oldItem.isBinary || newItem.isBinary,
+      };
       return texts;
     });
 
@@ -236,7 +247,7 @@ export const make = Effect.gen(function* () {
   }) => {
     const latest = input.iterations.at(-1);
     return latest === undefined
-      ? Effect.succeed([] as ReadonlyArray<AzureDevOpsChangeEntry>)
+      ? Effect.succeed({ changes: [], truncated: false } as AzureDevOpsIterationChanges)
       : cli.listIterationChanges({
           cwd: input.cwd,
           location: input.location,
@@ -296,7 +307,7 @@ export const make = Effect.gen(function* () {
                     iterations,
                   }),
                 ),
-                Effect.map((changes) => changes.length),
+                Effect.map((listed) => listed.changes.length),
                 Effect.orElseSucceed(() => 0),
               );
         const detail: ProviderChangeRequestDetail = {
@@ -362,27 +373,34 @@ export const make = Effect.gen(function* () {
             ? scope.iterations.at(-1)
             : scope.iterations.find((candidate) => candidate.id === cursor.iterationId);
         if (iteration === undefined) return EMPTY_DIFF_SLICE;
-        const changes = yield* cli.listIterationChanges({
+        const listed = yield* cli.listIterationChanges({
           cwd: input.cwd,
           location: scope.location,
           number: input.number,
           iterationId: iteration.id,
         });
+        const changes = listed.changes;
 
         const sections: string[] = [];
-        let truncated = false;
+        let truncated = listed.truncated;
         let bytes = 0;
         let index = cursor?.fileIndex ?? 0;
         while (index < changes.length) {
           const change = changes.at(index);
           if (change === undefined) break;
+          // One file per pair of reads, and a pair Azure refuses is one file rather than the
+          // whole slice: an oversize blob or a path `az` will not carry through leaves that file
+          // listed without its hunks, and everything around it still renders.
           const texts = yield* readTexts({
             cwd: input.cwd,
             location: scope.location,
             iteration,
             change,
-          });
-          const file = azureDevOpsFilePatch({ change, texts });
+          }).pipe(Effect.orElseSucceed(() => null));
+          const file =
+            texts === null
+              ? azureDevOpsUnreadableFilePatch(change)
+              : azureDevOpsFilePatch({ change, texts });
           sections.push(file.section);
           bytes += file.section.length;
           truncated = truncated || file.truncated;
@@ -425,8 +443,10 @@ export const make = Effect.gen(function* () {
      * it reports. One read covers every path: the latest iteration lists the whole change, so
      * asking per file would be the same answer fetched over and over.
      *
-     * A path the change no longer carries is left out rather than guessed at, which reads as the
-     * empty revision and leaves a file the pull request deletes cleared once and cleared for good.
+     * A path the change does not carry is at the empty revision, which is what a file the pull
+     * request deletes is at and leaves it cleared once and cleared for good. When the change was
+     * too long to follow to its end, those paths are left out instead: they were not looked at,
+     * and reporting them as deleted would clear a file nobody has read.
      */
     getFileRevisions: (input) =>
       Effect.gen(function* () {
@@ -434,15 +454,20 @@ export const make = Effect.gen(function* () {
         if (input.paths.length === 0) return { revisions };
         const scope = yield* diffScope(input);
         if (scope === null) return { revisions };
-        const changes = yield* listLatestChanges({
+        const listed = yield* listLatestChanges({
           ...scope,
           cwd: input.cwd,
           number: input.number,
         });
         const marked = new Set(input.paths);
-        for (const change of changes) {
+        for (const change of listed.changes) {
           if (!marked.has(change.path) || change.objectId === null) continue;
           revisions.set(change.path, change.objectId);
+        }
+        if (!listed.truncated) {
+          for (const path of input.paths) {
+            if (!revisions.has(path)) revisions.set(path, "");
+          }
         }
         return { revisions };
       }).pipe(Effect.mapError(fail("getFileRevisions"))),

@@ -29,6 +29,9 @@ function output(stdout: string) {
   };
 }
 
+/** A fixture's own shape, spelled the way `az` would answer with it. */
+const json = (value: Record<string, unknown>) => JSON.stringify(value);
+
 function pullRequestRows(
   count: number,
   firstNumber: number,
@@ -575,7 +578,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       const iterations = () =>
         Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               value: [
                 {
@@ -590,7 +592,6 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       const changes = () =>
         Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               changeEntries: [
                 { changeType: "edit", item: { path: "/README.md", objectId: "8f80" } },
@@ -626,10 +627,203 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("leaves out a marked file the pull request no longer changes", () =>
+  it.effect(
+    "answers for a marked file the pull request no longer changes as the empty version",
+    () =>
+      Effect.gen(function* () {
+        // Which is what was stored for it when it was ticked with nothing on the head, so a file
+        // the pull request deletes is cleared once and stays cleared.
+        mockedExecute
+          .mockReturnValueOnce(
+            Effect.succeed(
+              output(
+                json({
+                  pullRequestId: 42,
+                  title: "Add the page",
+                  status: "active",
+                  sourceRefName: "refs/heads/feat/page",
+                  targetRefName: "refs/heads/main",
+                  creationDate: "2026-07-01T00:00:00Z",
+                  url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                  repository: { name: "web", project: { name: "platform" } },
+                }),
+              ),
+            ),
+          )
+          .mockReturnValueOnce(
+            Effect.succeed(
+              output(
+                json({
+                  value: [
+                    {
+                      id: 1,
+                      sourceRefCommit: { commitId: "a".repeat(40) },
+                      commonRefCommit: { commitId: "b".repeat(40) },
+                    },
+                  ],
+                }),
+              ),
+            ),
+          )
+          .mockReturnValueOnce(Effect.succeed(output('{"changeEntries":[]}')));
+        const provider = yield* AzureDevOpsPullRequestProvider.make;
+        assert.isDefined(provider.getFileRevisions);
+
+        const answer = yield* provider.getFileRevisions({
+          cwd: "/w",
+          repository: "web",
+          host: "dev.azure.com",
+          number: 42,
+          paths: ["GONE.md"],
+        });
+
+        expect([...answer.revisions]).toEqual([["GONE.md", ""]]);
+      }),
+  );
+
+  it.effect("says nothing about the files past the end of a change it gave up following", () =>
     Effect.gen(function* () {
-      // Which reads as the empty revision, the same thing stored for a file that had none when it
-      // was ticked. A file the pull request deletes is cleared once and stays cleared.
+      // Every page is an `az` process of its own, so a change past the ceiling stops being
+      // followed. A path nobody looked at must not be answered for as deleted.
+      const entries = (from: number, count: number) =>
+        Array.from({ length: count }, (_, index) => ({
+          changeType: "edit",
+          item: { path: `/src/f${from + index}.ts`, objectId: `blob-${from + index}` },
+        }));
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                pullRequestId: 42,
+                title: "Add the page",
+                status: "active",
+                sourceRefName: "refs/heads/feat/page",
+                targetRefName: "refs/heads/main",
+                creationDate: "2026-07-01T00:00:00Z",
+                url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                repository: { name: "web", project: { name: "platform" } },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                value: [
+                  {
+                    id: 1,
+                    sourceRefCommit: { commitId: "a".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(output(json({ changeEntries: entries(0, 5_000), nextSkip: 5_000 }))),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(output(json({ changeEntries: entries(5_000, 5_000), nextSkip: 10_000 }))),
+        );
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.getFileRevisions);
+
+      const answer = yield* provider.getFileRevisions({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        paths: ["src/f1.ts", "src/f5001.ts", "src/past-the-cut.ts"],
+      });
+
+      // The second page picks up where the first said it ended.
+      expect(argsOfCall(3)).toContain("$skip=5000");
+      expect([...answer.revisions]).toEqual([
+        ["src/f1.ts", "blob-1"],
+        ["src/f5001.ts", "blob-5001"],
+      ]);
+    }),
+  );
+
+  it.effect("stops following pages when one of them does not move the cursor on", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                pullRequestId: 42,
+                title: "Add the page",
+                status: "active",
+                sourceRefName: "refs/heads/feat/page",
+                targetRefName: "refs/heads/main",
+                creationDate: "2026-07-01T00:00:00Z",
+                url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                repository: { name: "web", project: { name: "platform" } },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                value: [
+                  {
+                    id: 1,
+                    sourceRefCommit: { commitId: "a".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                changeEntries: [{ changeType: "edit", item: { path: "/a.ts", objectId: "8f80" } }],
+                nextSkip: 2_000,
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                changeEntries: [{ changeType: "edit", item: { path: "/b.ts", objectId: "0ca4" } }],
+                nextSkip: 2_000,
+              }),
+            ),
+          ),
+        );
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.getFileRevisions);
+
+      const answer = yield* provider.getFileRevisions({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        paths: ["a.ts", "b.ts"],
+      });
+
+      // Four reads and no more: a page pointing at where it already is would be read forever.
+      assert.strictEqual(mockedExecute.mock.calls.length, 4);
+      expect([...answer.revisions]).toEqual([
+        ["a.ts", "8f80"],
+        ["b.ts", "0ca4"],
+      ]);
+    }),
+  );
+
+  it.effect("asks Azure nothing when no file has been ticked off", () =>
+    Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output('{"changeEntries":[]}')));
       const provider = yield* AzureDevOpsPullRequestProvider.make;
       assert.isDefined(provider.getFileRevisions);

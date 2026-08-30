@@ -37,6 +37,11 @@ export function parseAzureDevOpsDiffCursor(
 export interface AzureDevOpsFileTexts {
   readonly oldContents: string;
   readonly newContents: string;
+  /**
+   * The host's own word on whether this is a file it will not spell out. Azure hands such a file
+   * over base64-encoded, so its bytes are not in the text to be looked for.
+   */
+  readonly binary: boolean;
 }
 
 export interface AzureDevOpsFilePatch {
@@ -66,6 +71,13 @@ export const MAX_DIFF_SLICE_BYTES = 256 * 1024;
 function isBinary(contents: string): boolean {
   return contents.includes("\u0000");
 }
+
+/**
+ * What a file costs on the wire, which is its bytes rather than its code units: a ceiling counted
+ * in characters lets a file of three-byte glyphs through at three times the size meant to be let
+ * through.
+ */
+const byteLength = (contents: string) => Buffer.byteLength(contents, "utf8");
 
 /**
  * Git points an empty range at the line before it, which is line zero for a file that is wholly
@@ -106,12 +118,12 @@ export function azureDevOpsFilePatch(input: {
   const header = patchHeader(input.change);
   const { oldContents, newContents } = input.texts;
 
-  if (isBinary(oldContents) || isBinary(newContents)) {
+  if (input.texts.binary || isBinary(oldContents) || isBinary(newContents)) {
     // Git's own wording for a file it will not spell out, which every diff viewer already reads.
     const binary = `Binary files a/${input.change.oldPath} and b/${input.change.path} differ`;
     return { section: `${header}\n${binary}\n`, truncated: true };
   }
-  if (oldContents.length > MAX_FILE_BYTES || newContents.length > MAX_FILE_BYTES) {
+  if (byteLength(oldContents) > MAX_FILE_BYTES || byteLength(newContents) > MAX_FILE_BYTES) {
     return { section: `${header}\n`, truncated: true };
   }
 
@@ -136,4 +148,15 @@ export function azureDevOpsFilePatch(input: {
     section: hunks.length === 0 ? `${header}\n` : `${header}\n${hunks.join("\n")}\n`,
     truncated: false,
   };
+}
+
+/**
+ * A file listed without its hunks, for when the host would not hand one of its two sides over.
+ * The change still belongs in the patch: leaving it out would take the file out of the review
+ * altogether, and the reader would have no sign anything was missing.
+ */
+export function azureDevOpsUnreadableFilePatch(
+  change: AzureDevOpsChangeEntry,
+): AzureDevOpsFilePatch {
+  return { section: `${patchHeader(change)}\n`, truncated: true };
 }
