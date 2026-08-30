@@ -1,8 +1,5 @@
-import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -139,15 +136,6 @@ const CONVERSATION_PAGE_SIZE = 50;
 const CONVERSATION_PAGES = 10;
 /** The same ceiling the gh and glab diff reads use. */
 const DIFF_MAX_BYTES = 8 * 1024 * 1024;
-/**
- * How long the versions read out of a patch stand for. The same window the diff itself is held
- * for, deliberately: the patch on screen and what it is said to be at must not disagree, and a
- * reader ticking their way down a file list would otherwise re-read the whole patch per press.
- */
-const FILE_REVISIONS_CACHE_TTL = Duration.seconds(60);
-/** Pull requests held at once, which is more than anyone has open. */
-const FILE_REVISIONS_CACHE_CAPACITY = 32;
-
 export interface BitbucketPullRequestBatch {
   readonly items: ReadonlyArray<BitbucketPullRequest>;
   readonly truncated: boolean;
@@ -197,9 +185,12 @@ export class BitbucketPullRequestApi extends Context.Service<
     /**
      * What the pull request's head has of each of these paths, as opaque ids.
      *
-     * Read off the pull request's own patch, the only place Bitbucket states a file's version, and
-     * held briefly so that ticking files off does not re-read it per press. Paths the patch says
-     * nothing about are left out.
+     * Read off the pull request's own patch, the only place Bitbucket states a file's version. A
+     * path the patch does not carry is answered as the empty revision, and left out altogether
+     * when the patch was cut short at the byte ceiling and so cannot be spoken for.
+     *
+     * Held by the caller rather than here: the marks and the badge they feed share one window,
+     * and a second one underneath it would keep answering after a refresh had asked it not to.
      */
     readonly getFileRevisions: (input: {
       readonly repository: string;
@@ -577,19 +568,6 @@ export const make = Effect.gen(function* () {
             ),
         );
 
-  const fileRevisionsCache = yield* Cache.makeWith(
-    (key: string) => {
-      const [repository, number] = JSON.parse(key) as [string, number];
-      return pullRequestDiff({ repository, number }).pipe(
-        Effect.map((diff) => parseDiffFileRevisions(diff.patch)),
-      );
-    },
-    {
-      capacity: FILE_REVISIONS_CACHE_CAPACITY,
-      timeToLive: (exit) => (Exit.isSuccess(exit) ? FILE_REVISIONS_CACHE_TTL : Duration.zero),
-    },
-  );
-
   return BitbucketPullRequestApi.of({
     getViewer: () =>
       bitbucket.request({ method: "GET", url: "/user" }).pipe(
@@ -666,14 +644,20 @@ export const make = Effect.gen(function* () {
     getFileRevisions: (input) =>
       input.paths.length === 0
         ? Effect.succeed(new Map())
-        : Cache.get(fileRevisionsCache, JSON.stringify([input.repository, input.number])).pipe(
-            Effect.map((all) => {
+        : pullRequestDiff({ repository: input.repository, number: input.number }).pipe(
+            Effect.map((diff) => {
+              const all = parseDiffFileRevisions(diff.patch);
               // Narrowed to what was asked for rather than handed back whole: the caller compares
               // the paths it named, and a patch of a thousand files has no business in its answer.
+              //
+              // A patch cut short at the byte ceiling says nothing about the files past the cut,
+              // so those paths are left out rather than reported as removed: the caller reads an
+              // absent path as one it could not learn about, and a mark on it is left alone.
               const asked = new Map<string, string>();
               for (const path of input.paths) {
                 const revision = all.get(path);
                 if (revision !== undefined) asked.set(path, revision);
+                else if (!diff.truncated) asked.set(path, "");
               }
               return asked;
             }),

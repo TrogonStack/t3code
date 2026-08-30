@@ -1100,7 +1100,16 @@ export const make = Effect.gen(function* () {
               { concurrency: 2 },
             );
           }),
-          Effect.map((pages) => new Map(pages.flatMap((page) => [...page]))),
+          Effect.map((pages) => {
+            const revisions = new Map(pages.flatMap((page) => [...page]));
+            // Every path was looked for at the head, so one that is not there is one the merge
+            // request removed rather than one this could not read. Said as the empty revision,
+            // which is an answer the caller can compare against and keep.
+            for (const path of input.paths) {
+              if (!revisions.has(path)) revisions.set(path, "");
+            }
+            return revisions as ReadonlyMap<string, string>;
+          }),
         );
 
   const viewerUsername = (input: { readonly cwd: string }) =>

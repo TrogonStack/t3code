@@ -395,36 +395,39 @@ layer("BitbucketPullRequestApi.layer", (it) => {
         paths: ["a.ts", "missing.ts"],
       });
 
-      // `b.ts` is in the patch and was not asked about, and `missing.ts` was asked about and is
-      // not in the patch. Neither belongs in the answer.
-      assert.deepStrictEqual([...revisions], [["a.ts", "2222222"]]);
+      // `b.ts` is in the patch and was not asked about, so it does not belong in the answer.
+      // `missing.ts` was asked about and the whole patch was read without finding it, which is
+      // what a file this pull request deletes looks like, so it is answered as the empty version.
+      assert.deepStrictEqual(
+        [...revisions],
+        [
+          ["a.ts", "2222222"],
+          ["missing.ts", ""],
+        ],
+      );
       expect(callAt(0)).toMatchObject({ url: "/repositories/acme/web/pullrequests/71/diff" });
     }),
   );
 
-  it.effect("re-reads the patch once for a burst of presses rather than once per press", () =>
+  it.effect("says nothing about the files past the end of a patch it could not read whole", () =>
     Effect.gen(function* () {
+      // Bitbucket's patch is read up to a byte ceiling, and a file past the cut was not looked at.
+      // Answering for it as deleted would clear a mark on it once and for good.
       mockedRequest.mockReturnValueOnce(
-        Effect.succeed(
-          response("diff --git a/a.ts b/a.ts\nindex 1111111..2222222 100644\n@@ -1 +1 @@\n"),
-        ),
+        Effect.succeed({
+          body: "diff --git a/a.ts b/a.ts\nindex 1111111..2222222 100644\n@@ -1 +1 @@\n",
+          truncated: true,
+        }),
       );
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
-      const first = yield* api.getFileRevisions({
+      const revisions = yield* api.getFileRevisions({
         repository: "acme/web",
         number: 72,
-        paths: ["a.ts"],
-      });
-      const second = yield* api.getFileRevisions({
-        repository: "acme/web",
-        number: 72,
-        paths: ["a.ts"],
+        paths: ["a.ts", "past-the-cut.ts"],
       });
 
-      assert.deepStrictEqual([...first], [["a.ts", "2222222"]]);
-      assert.deepStrictEqual([...second], [["a.ts", "2222222"]]);
-      assert.strictEqual(mockedRequest.mock.calls.length, 1);
+      assert.deepStrictEqual([...revisions], [["a.ts", "2222222"]]);
     }),
   );
 

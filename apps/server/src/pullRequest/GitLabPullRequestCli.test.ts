@@ -1442,9 +1442,12 @@ layer("GitLabPullRequestCli.layer", (it) => {
         paths: ["src/a.ts", "src/gone.ts"],
       });
 
-      // A path the head does not have is absent rather than empty, which is the answer for a
-      // file the merge request deletes.
-      expect([...revisions]).toEqual([["src/a.ts", "aaa"]]);
+      // Every path was looked for at the head, so one the head does not have is one the merge
+      // request removed: said as the empty version, which a mark on it was stamped with too.
+      expect([...revisions]).toEqual([
+        ["src/a.ts", "aaa"],
+        ["src/gone.ts", ""],
+      ]);
       // The head the reader is looking at, not whatever the source branch has moved on to.
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const body: unknown = JSON.parse(callAt(1).stdin ?? "{}");
@@ -1491,13 +1494,11 @@ layer("GitLabPullRequestCli.layer", (it) => {
         ),
       );
       mockedExecute.mockImplementation((request) => {
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         const body = JSON.parse(request.stdin ?? "{}") as {
           readonly variables: { readonly paths: ReadonlyArray<string> };
         };
         return Effect.succeed(
           output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               data: {
                 project: {

@@ -1,5 +1,7 @@
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import type {
@@ -3484,6 +3486,7 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
 const environmentViewedProvider = (
   revisions: Map<string, string>,
   asked: Array<ReadonlyArray<string>>,
+  unreadable: ReadonlySet<string> = new Set(),
 ) =>
   fakeProvider("gitlab", {
     capabilities: {
@@ -3502,11 +3505,12 @@ const environmentViewedProvider = (
     getFileRevisions: (input) => {
       asked.push(input.paths);
       return Effect.succeed({
+        // A path the host looked at and did not find is at the empty version, which is what a
+        // file the change request deletes is at. One it could not look at is left out entirely.
         revisions: new Map(
-          input.paths.flatMap((path) => {
-            const revision = revisions.get(path);
-            return revision === undefined ? [] : [[path, revision] as const];
-          }),
+          input.paths.flatMap((path) =>
+            unreadable.has(path) ? [] : [[path, revisions.get(path) ?? ""] as const],
+          ),
         ),
       });
     },
@@ -3515,6 +3519,7 @@ const environmentViewedProvider = (
 const environmentViewedService = (
   revisions: Map<string, string>,
   asked: Array<ReadonlyArray<string>>,
+  unreadable: ReadonlySet<string> = new Set(),
 ) =>
   makeService({
     projects: [
@@ -3526,7 +3531,7 @@ const environmentViewedService = (
         provider: "gitlab",
       }),
     ],
-    providers: [environmentViewedProvider(revisions, asked)],
+    providers: [environmentViewedProvider(revisions, asked, unreadable)],
   });
 
 const GITLAB_REFERENCE = {
@@ -3720,6 +3725,160 @@ it.effect("keeps a deleted file cleared, which the head has no version of at all
     const marked = yield* service.filesViewed(GITLAB_REFERENCE);
 
     assert.deepStrictEqual(marked.files, [{ path: "src/gone.ts", state: "viewed" }]);
+  }),
+);
+
+it.effect("leaves a mark alone when the host could not say what the head has of it", () =>
+  Effect.gen(function* () {
+    // A host answers for as much of a long change as it can read in one go. Reading the rest as
+    // deleted would clear every file past the cut over a version nobody ever looked at.
+    const revisions = new Map([
+      ["src/a.ts", "blob-a"],
+      ["src/past-the-cut.ts", "blob-b"],
+    ]);
+    const service = yield* environmentViewedService(
+      revisions,
+      [],
+      new Set(["src/past-the-cut.ts"]),
+    );
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [
+        { path: "src/a.ts", viewed: true },
+        { path: "src/past-the-cut.ts", viewed: true },
+      ],
+    });
+    revisions.set("src/a.ts", "blob-a-again");
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
+      [
+        { path: "src/a.ts", state: "dismissed" },
+        { path: "src/past-the-cut.ts", state: "viewed" },
+      ],
+    );
+  }),
+);
+
+it.effect("finishes two presses on one file in the order they were made", () =>
+  Effect.gen(function* () {
+    // A tick asks the host what it has of the file before it stores anything, and an untick asks
+    // nothing at all, so the second press would otherwise land first and be overwritten by the
+    // first one finishing behind it.
+    const held = yield* Deferred.make<void>();
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: true,
+            viewedFiles: "environment",
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+          setFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+          getFileRevisions: (input) =>
+            Deferred.await(held).pipe(
+              Effect.as({ revisions: new Map(input.paths.map((path) => [path, "blob-a"])) }),
+            ),
+        }),
+      ],
+    });
+
+    const tick = service
+      .setFilesViewed({
+        ...GITLAB_REFERENCE,
+        files: [{ path: "src/a.ts", viewed: true }],
+      })
+      .pipe(Effect.runFork);
+    // Far enough for the tick to be waiting on the host rather than still on its way there.
+    yield* TestClock.adjust("1 second");
+    const untick = service
+      .setFilesViewed({
+        ...GITLAB_REFERENCE,
+        files: [{ path: "src/a.ts", viewed: false }],
+      })
+      .pipe(Effect.runFork);
+    yield* TestClock.adjust("1 second");
+    yield* Deferred.succeed(held, undefined);
+    yield* Fiber.join(tick);
+    yield* Fiber.join(untick);
+
+    // The untick came second and stands: the file is open again.
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+    assert.deepStrictEqual(marked.files, []);
+  }),
+);
+
+it.effect("keeps the marks of two Azure repositories of the same name apart", () =>
+  Effect.gen(function* () {
+    // Azure addresses a repository by its bare name, which is unique inside one of its projects
+    // and not across an organisation. Two `web` repositories would otherwise share one row.
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "platform web",
+          workspaceRoot: "/a",
+          repository: "acme/platform/_git/web",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+        project({
+          id: "p2",
+          title: "other web",
+          workspaceRoot: "/b",
+          repository: "acme/other/_git/web",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+      ],
+      providers: [
+        fakeProvider("azure-devops", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: true,
+            viewedFiles: "environment",
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getFilesViewed: () => Effect.die("the host keeps no marks of this environment's own"),
+          setFilesViewed: () => Effect.die("the host keeps no marks of this environment's own"),
+          getFileRevisions: (input) =>
+            Effect.succeed({ revisions: new Map(input.paths.map((path) => [path, "blob-a"])) }),
+        }),
+      ],
+    });
+    const platform = { projectId: "p1" as ProjectId, repository: "web", number: 1 };
+    const other = { projectId: "p2" as ProjectId, repository: "web", number: 1 };
+
+    yield* service.setFilesViewed({ ...platform, files: [{ path: "src/a.ts", viewed: true }] });
+
+    assert.deepStrictEqual((yield* service.filesViewed(platform)).files, [
+      { path: "src/a.ts", state: "viewed" },
+    ]);
+    assert.deepStrictEqual((yield* service.filesViewed(other)).files, []);
   }),
 );
 

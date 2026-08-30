@@ -212,8 +212,12 @@ export interface ProviderFilesViewed {
  * What version each of the asked-for files is at, on the change request's head.
  *
  * Opaque strings: the caller only ever compares one against another, and every host names a
- * version its own way. A path the host answered nothing for is absent, which is the answer for a
- * file the change request deletes rather than a failure to look.
+ * version its own way. The empty string is an answer rather than a gap — it is what a file the
+ * change request deletes is at, and a mark taken against it stays cleared.
+ *
+ * A path is absent only when the read could not say: a host that answered for part of the change
+ * must leave the rest out rather than report it as deleted, or a file past the cut would be
+ * cleared once and cleared for good.
  */
 export interface ProviderFileRevisions {
   readonly revisions: ReadonlyMap<string, string>;
