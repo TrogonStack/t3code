@@ -61,6 +61,14 @@ const MAX_FILE_BYTES = 512 * 1024;
 const PATCH_CONTEXT_LINES = 3;
 
 /**
+ * How long one file may be diffed for. The line diff costs the product of the two sides, so a pair
+ * of files under the size ceiling that share almost nothing can still hold the whole server for a
+ * long time. Past this the file is listed without its hunks, which is what the size ceiling already
+ * does and what the reader is already shown a sign of.
+ */
+const MAX_FILE_DIFF_MILLIS = 2_000;
+
+/**
  * How much patch one slice carries before the rest is left for the next one. Every file costs a
  * request per side, so the read stops on what it has produced rather than on a file count: a
  * hundred one-line changes are cheaper to finish than three long ones.
@@ -134,8 +142,12 @@ export function azureDevOpsFilePatch(input: {
     newContents,
     undefined,
     undefined,
-    { context: PATCH_CONTEXT_LINES },
+    { context: PATCH_CONTEXT_LINES, timeout: MAX_FILE_DIFF_MILLIS },
   );
+  // The bound is reported by giving nothing back, and a file whose diff was given up on is a file
+  // listed without its hunks rather than a file dropped from the change.
+  if (patch === undefined) return { section: `${header}\n`, truncated: true };
+
   const hunks = patch.hunks.map((hunk) =>
     [
       `@@ -${hunkRange(hunk.oldStart, hunk.oldLines)} +${hunkRange(hunk.newStart, hunk.newLines)} @@`,

@@ -748,6 +748,140 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("stops following pages by what Azure counts, not by what survives decoding", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                pullRequestId: 42,
+                title: "Add the page",
+                status: "active",
+                sourceRefName: "refs/heads/feat/page",
+                targetRefName: "refs/heads/main",
+                creationDate: "2026-07-01T00:00:00Z",
+                url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                repository: { name: "web", project: { name: "platform" } },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                value: [
+                  {
+                    id: 1,
+                    sourceRefCommit: { commitId: "a".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                ],
+              }),
+            ),
+          ),
+        )
+        // Nothing a review can show, so every page decodes to nothing at all and a ceiling counted
+        // in files would never be reached however long the walk went on.
+        .mockImplementation((command) => {
+          const skip = command.args.find((arg) => arg.startsWith("$skip="));
+          const from = Number(skip?.slice("$skip=".length) ?? 0);
+          return Effect.succeed(
+            output(
+              json({
+                changeEntries: [{ changeType: "add", item: { path: "/src", isFolder: true } }],
+                nextSkip: from + 2_000,
+              }),
+            ),
+          );
+        });
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      assert.isDefined(provider.getFileRevisions);
+
+      const answer = yield* provider.getFileRevisions({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        paths: ["src/page.ts"],
+      });
+
+      // The pull request, its pushes, and five pages: the walk gives up on Azure's own offset
+      // rather than spending an `az` process a page for as long as Azure keeps paging.
+      assert.strictEqual(mockedExecute.mock.calls.length, 7);
+      // And it read part of a change, so it says nothing about the file it never saw.
+      assert.strictEqual(answer.revisions.size, 0);
+    }),
+  );
+
+  it.effect("takes Azure's own word on a file it will not spell out", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                pullRequestId: 42,
+                title: "Add the page",
+                status: "active",
+                sourceRefName: "refs/heads/feat/page",
+                targetRefName: "refs/heads/main",
+                creationDate: "2026-07-01T00:00:00Z",
+                url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+                repository: { name: "web", project: { name: "platform" } },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                value: [
+                  {
+                    id: 1,
+                    sourceRefCommit: { commitId: "a".repeat(40) },
+                    commonRefCommit: { commitId: "b".repeat(40) },
+                  },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                changeEntries: [
+                  { changeType: "add", item: { path: "/logo.png", objectId: "8f80" } },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(json({ content: "iVBORw0KGgo=", contentMetadata: { isBinary: true } })),
+          ),
+        );
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      const slice = yield* provider.getDiff({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+      });
+
+      // Azure leaves the metadata out unless it is asked for, and without it every file reads as
+      // text however it was stored.
+      expect(argsOfCall(3)).toContain("includeContentMetadata=true");
+      expect(slice.patch).toContain("Binary files a/logo.png and b/logo.png differ");
+      assert.isTrue(slice.truncated);
+    }),
+  );
+
   it.effect("stops following pages when one of them does not move the cursor on", () =>
     Effect.gen(function* () {
       mockedExecute
@@ -810,11 +944,13 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
         repository: "web",
         host: "dev.azure.com",
         number: 42,
-        paths: ["a.ts", "b.ts"],
+        paths: ["a.ts", "b.ts", "unlisted.ts"],
       });
 
       // Four reads and no more: a page pointing at where it already is would be read forever.
       assert.strictEqual(mockedExecute.mock.calls.length, 4);
+      // And what was read is not the whole change, so the file nobody listed is left unanswered
+      // rather than reported as gone from the change request.
       expect([...answer.revisions]).toEqual([
         ["a.ts", "8f80"],
         ["b.ts", "0ca4"],

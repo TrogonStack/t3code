@@ -123,10 +123,14 @@ const REST_API_VERSION = "7.1";
 const CHANGE_ENTRIES_PER_PAGE = 2000;
 
 /**
- * Where following the pages stops. Every page is an `az` process of its own, and a change this
+ * Where following the pages stops, counted in the entries Azure was asked to skip rather than in
+ * the files that survived decoding. Every page is an `az` process of its own, and a change this
  * long is past what any reader will get through, so the read gives up rather than spending a
  * minute of spawns on it. Saying so is the point: the diff reports itself as incomplete instead
  * of presenting five pages as the whole change.
+ *
+ * Azure's own count is what bounds this, because a page can be entirely folders and other entries
+ * a review has nothing to show for. Bounding on what was kept would follow such a change forever.
  */
 const MAX_CHANGE_ENTRIES = 10_000;
 
@@ -585,13 +589,12 @@ export const make = Effect.gen(function* () {
         page(skip).pipe(
           Effect.flatMap((answer) => {
             const changes = [...collected, ...answer.changes];
-            // A page that does not move the cursor on would be read forever, and a change this
-            // long is past anything a reader will get through — so the read stops and says so,
-            // rather than quietly presenting part of it as the whole.
-            if (answer.nextSkip === null || answer.nextSkip <= skip) {
-              return Effect.succeed({ changes, truncated: false });
-            }
-            return changes.length >= MAX_CHANGE_ENTRIES
+            // The last page names no page after it, and only that is the end of the change.
+            if (answer.nextSkip === null) return Effect.succeed({ changes, truncated: false });
+            // A page pointing at where the read already is would be followed forever, and one
+            // past the ceiling is a change nobody will read to the end of. Both stop the read
+            // and both say so, rather than presenting part of a change as the whole of it.
+            return answer.nextSkip <= skip || answer.nextSkip >= MAX_CHANGE_ENTRIES
               ? Effect.succeed({ changes, truncated: true })
               : from(answer.nextSkip, changes);
           }),
@@ -610,6 +613,10 @@ export const make = Effect.gen(function* () {
           "versionDescriptor.versionType=commit",
           `versionDescriptor.version=${input.commit}`,
           "includeContent=true",
+          // Azure leaves `contentMetadata` out unless this is asked for, and with it goes its own
+          // word on whether the file is binary — which is the only reliable one, since a binary
+          // file arrives encoded rather than as the bytes it is on the host.
+          "includeContentMetadata=true",
           // Without this Azure answers with the file's own bytes rather than with a JSON
           // envelope, and `az devops invoke` refuses anything it cannot parse as JSON.
           "$format=json",
