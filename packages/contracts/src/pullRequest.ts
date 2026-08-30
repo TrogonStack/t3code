@@ -9,6 +9,7 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { type RepositoryIdentity } from "./environment.ts";
 import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
@@ -614,6 +615,32 @@ export const PullRequestRef = Schema.Struct({
   number: PositiveInt,
 });
 export type PullRequestRef = typeof PullRequestRef.Type;
+
+/**
+ * The `repository` a {@link PullRequestRef} carries, read off the project's recorded identity.
+ *
+ * `displayName` is the full path below the host, which is what nested GitLab groups need;
+ * owner/name is the two-segment fallback for identities recorded before that field existed.
+ *
+ * Azure DevOps is the exception: `az repos pr list --repository` takes a repository name, and
+ * takes the organisation and project from the checkout it detects, so the recorded
+ * `org/project/_git/repo` path is refused outright and the whole repository reads as
+ * unavailable. Its name is the last segment, which is what this hands over.
+ *
+ * Shared rather than server-only because the server checks a ref's `repository` against the one
+ * it derives here, so a client that spells it any other way is turned away at the door.
+ */
+export function pullRequestRepositoryOf(
+  identity: RepositoryIdentity | null | undefined,
+): string | null {
+  if (!identity) return null;
+  if (identity.provider === "azure-devops") {
+    const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
+    return identity.name || segments.at(-1) || null;
+  }
+  if (identity.displayName) return identity.displayName;
+  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
+}
 
 /**
  * One row's line counts, read after the listing rather than inside it. On GitHub the pair is

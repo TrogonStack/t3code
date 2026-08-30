@@ -11,6 +11,7 @@ import {
   PullRequestUnavailableError,
   pullRequestHostOf,
   pullRequestProviderRequirement,
+  pullRequestRepositoryOf,
   resolvePullRequestAuthorFilter,
   type OrchestrationProjectShell,
   type PullRequestAction,
@@ -487,27 +488,13 @@ function withRateLimitBackoff(
 }
 
 /**
- * The provider-native repository selector. `displayName` is the full path below the host, which
- * is what nested GitLab groups need; owner/name is the two-segment fallback for identities
- * recorded before that field existed.
- *
- * Azure DevOps is the exception: `az repos pr list --repository` takes a repository name, and
- * takes the organisation and project from the checkout it detects — so the recorded
- * `org/project/_git/repo` path is refused outright and the whole repository reads as
- * unavailable. Its name is the last segment, which is what this hands over.
- *
- * One function because everything downstream is keyed by what it answers: the rows' own
- * `repository`, the per-repository cursors, and the detail and diff reads a row leads to.
+ * The provider-native repository selector for a project, which everything downstream is keyed by:
+ * the rows' own `repository`, the per-repository cursors, and the detail and diff reads a row
+ * leads to. The rule itself is shared with the clients that build a ref, since a ref spelled any
+ * other way is refused before it reaches a provider.
  */
 export function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
-  const identity = project.repositoryIdentity;
-  if (!identity) return null;
-  if (identity.provider === "azure-devops") {
-    const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
-    return identity.name || segments.at(-1) || null;
-  }
-  if (identity.displayName) return identity.displayName;
-  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
+  return pullRequestRepositoryOf(project.repositoryIdentity);
 }
 
 export const make = Effect.gen(function* () {

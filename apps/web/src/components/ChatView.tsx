@@ -19,6 +19,7 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
+  pullRequestRepositoryOf,
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
@@ -3476,7 +3477,7 @@ function ChatViewContent(props: ChatViewProps) {
   // The thread's own change request, placed against the project it belongs to. Without a
   // project there is nothing to resolve it against, so the caller falls back to the browser.
   const linkedThreadPullRequest = activeThread?.linkedPullRequest ?? null;
-  const activeProjectRepository = activeProject?.repositoryIdentity?.displayName ?? null;
+  const activeProjectRepository = pullRequestRepositoryOf(activeProject?.repositoryIdentity);
   const threadRepository = linkedThreadPullRequest?.repository ?? activeProjectRepository;
   const openThreadPullRequest = useCallback(
     (number: number) => {

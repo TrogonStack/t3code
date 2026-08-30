@@ -8,7 +8,11 @@ import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
 import { type MouseEvent, useCallback } from "react";
 
-import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  pullRequestHostOf,
+  pullRequestRepositoryOf,
+  type SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
@@ -262,9 +266,10 @@ export function useOpenChangeRequestLink(
       if (resolvedThreadRef) {
         useRightPanelStore.getState().openPullRequest(resolvedThreadRef, {
           projectId: project.id,
-          // The identity's own spelling, not the one read out of the URL: the panel asks the
-          // provider for this repository, while matching a link only ever compares lower case.
-          repository: project.repositoryIdentity?.displayName ?? parsed.repository,
+          // The selector the server derives from the same identity, not the one read out of the
+          // URL: a ref spelled any other way is refused before it reaches a provider, and
+          // matching a link only ever compares lower case.
+          repository: pullRequestRepositoryOf(project.repositoryIdentity) ?? parsed.repository,
           number: parsed.number,
         });
         return true;
