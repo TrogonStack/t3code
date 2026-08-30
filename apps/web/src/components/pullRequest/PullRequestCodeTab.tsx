@@ -43,6 +43,7 @@ import {
   resolveFileDiffPreviousPath,
   type RenderablePatch,
 } from "~/lib/diffRendering";
+import { APP_BASE_NAME } from "~/branding";
 import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
 import {
@@ -1147,7 +1148,10 @@ export function PullRequestCodeTab({
           </span>
           {filesViewed.enabled && files.length > 0 ? (
             <span className="flex shrink-0 items-center gap-1 tabular-nums">
-              {filesViewed.viewedCount} / {files.length} viewed
+              {/* Named on a host that keeps no record of its own, so the reader is told whose
+                  ticks these are without having to find the icon beside them. */}
+              {filesViewed.viewedCount} / {files.length}{" "}
+              {viewedFilesStore === "environment" ? `viewed in ${APP_BASE_NAME}` : "viewed"}
               {viewedFilesStore === "environment" ? (
                 <Tooltip>
                   <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
