@@ -113,6 +113,15 @@ const LIST_STATS_CACHE_TTL = Duration.seconds(60);
  * all only so opening a change request on two devices costs one read.
  */
 const FILES_VIEWED_CACHE_TTL = Duration.seconds(15);
+/**
+ * How long the head's blob for a file is believed without asking the host again, and how long a
+ * held answer still stands while the next one is fetched. The marks themselves are this
+ * environment's own rows and cost nothing to read; this is the host call behind the **Changed**
+ * badge alone, so a held answer costs a badge that is a minute behind rather than a stale tick.
+ */
+const FILE_REVISIONS_CACHE_TTL = Duration.seconds(60);
+const FILE_REVISIONS_STALE_WINDOW = Duration.minutes(10);
+const FILE_REVISIONS_CACHE_CAPACITY = 64;
 /** A diff can stay interactive while its next cached value is fetched off the critical path. */
 const DIFF_STALE_WINDOW = Duration.minutes(10);
 /** How long one host's signed-in login is believed without asking its CLI again. */
@@ -1302,6 +1311,10 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const context = yield* Effect.context<never>();
+  /** Runs a refresh as its own fiber, for the reads that answer from a held value first. */
+  const runFork = Effect.runForkWith(context);
+
   /**
    * Which change request's marks, and whose. The host is part of it because the same
    * `owner/repo` exists on more than one install, and the reader is part of it for the reason
@@ -1324,29 +1337,120 @@ export const make = Effect.gen(function* () {
     });
 
   /**
+   * What the head has of the files a reader has marked, held between reads. A path that was asked
+   * for and is not in the answer is one the head does not carry, which the marks read as the empty
+   * revision — so the entry remembers what it has been asked rather than treating every miss as an
+   * answer it never had.
+   */
+  interface HeldFileRevisions {
+    readonly at: number;
+    readonly asked: ReadonlySet<string>;
+    readonly revisions: ReadonlyMap<string, string>;
+  }
+  const heldFileRevisions = new Map<string, HeldFileRevisions>();
+  const refreshingFileRevisions = new Set<string>();
+  /**
+   * Normalised, because a reference reaches here spelled however the client spelled it while the
+   * project carries the remote's own spelling, and a refresh that missed by a capital would leave
+   * the held answer standing.
+   */
+  const fileRevisionsScope = (projectId: string, repository: string, number: number) =>
+    `${projectId} ${repository.trim().toLowerCase()} ${number}`;
+
+  const recordFileRevisions = (
+    scope: string,
+    paths: ReadonlyArray<string>,
+    answer: ReadonlyMap<string, string>,
+  ) =>
+    Effect.map(Clock.currentTimeMillis, (at) => {
+      const held = heldFileRevisions.get(scope);
+      // Past the stale window the old entry is not worth merging into: it would carry paths
+      // nobody has asked about since, at revisions the head has long moved off.
+      const carried =
+        held !== undefined && at - held.at <= Duration.toMillis(FILE_REVISIONS_STALE_WINDOW)
+          ? held
+          : null;
+      const revisions = new Map(carried?.revisions ?? []);
+      const asked = new Set(carried?.asked ?? []);
+      for (const path of paths) {
+        asked.add(path);
+        const revision = answer.get(path);
+        if (revision === undefined) revisions.delete(path);
+        else revisions.set(path, revision);
+      }
+      heldFileRevisions.delete(scope);
+      if (heldFileRevisions.size >= FILE_REVISIONS_CACHE_CAPACITY) {
+        const oldest = heldFileRevisions.keys().next().value;
+        if (oldest !== undefined) heldFileRevisions.delete(oldest);
+      }
+      heldFileRevisions.set(scope, { at, asked, revisions });
+      return revisions;
+    });
+
+  /** A held entry that covers every path asked for and is still worth answering from. */
+  const heldFileRevisionsFor = (scope: string, paths: ReadonlyArray<string>, now: number) => {
+    const held = heldFileRevisions.get(scope);
+    if (held === undefined) return null;
+    if (now - held.at > Duration.toMillis(FILE_REVISIONS_STALE_WINDOW)) return null;
+    return paths.every((path) => held.asked.has(path)) ? held : null;
+  };
+
+  const forgetFileRevisions = (scope: string) => {
+    heldFileRevisions.delete(scope);
+  };
+
+  /**
    * What the head has of these files, or null where the host cannot say. Null is not an error:
    * without it the marks simply stop reporting staleness, which is worse than the host's own
    * record but better than refusing to remember anything.
+   *
+   * `held` answers from a value past its lifetime and fetches the next one off the critical path,
+   * because a badge a moment behind beats a page of ticks that will not paint until a host answers.
+   * `fresh` is for the press itself, which stamps what it stores and would otherwise write a
+   * revision the head had already moved off.
    */
   const fileRevisionsOf = (
     project: SupportedProject,
     number: number,
     paths: ReadonlyArray<string>,
     operation: string,
+    freshness: "held" | "fresh" = "held",
   ): Effect.Effect<ReadonlyMap<string, string> | null, PullRequestError> => {
     const read = project.api.getFileRevisions;
-    return read === undefined
-      ? Effect.succeed(null)
-      : read({
-          cwd: project.project.workspaceRoot,
-          repository: project.repository,
-          host: project.host,
-          number,
-          paths,
-        }).pipe(
-          Effect.map((answer) => answer.revisions),
-          Effect.mapError(toPullRequestError(operation)),
+    if (read === undefined) return Effect.succeed(null);
+    const scope = fileRevisionsScope(project.project.id, project.repository, number);
+    // Suspended, so a held answer costs the host nothing: a provider is free to do its work as
+    // the request is built rather than as the effect is run.
+    const fetch = Effect.suspend(() =>
+      read({
+        cwd: project.project.workspaceRoot,
+        repository: project.repository,
+        host: project.host,
+        number,
+        paths,
+      }).pipe(
+        Effect.mapError(toPullRequestError(operation)),
+        Effect.flatMap((answer) => recordFileRevisions(scope, paths, answer.revisions)),
+      ),
+    );
+    return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+      const held = heldFileRevisionsFor(scope, paths, now);
+      if (held === null) return fetch;
+      if (now - held.at <= Duration.toMillis(FILE_REVISIONS_CACHE_TTL))
+        return Effect.succeed(held.revisions);
+      if (freshness === "fresh") return fetch;
+      if (refreshingFileRevisions.has(scope)) return Effect.succeed(held.revisions);
+      // Its own fiber rather than a child: the caller has been answered and is gone before this
+      // lands. One at a time per change request, so a page of files costs one host read.
+      return Effect.sync(() => {
+        refreshingFileRevisions.add(scope);
+        runFork(
+          Effect.ignore(fetch).pipe(
+            Effect.ensuring(Effect.sync(() => refreshingFileRevisions.delete(scope))),
+          ),
         );
+      }).pipe(Effect.as(held.revisions));
+    });
   };
 
   /**
@@ -1402,7 +1506,7 @@ export const make = Effect.gen(function* () {
       const revisions =
         cleared.length === 0
           ? null
-          : yield* fileRevisionsOf(project, input.number, cleared, "setFilesViewed");
+          : yield* fileRevisionsOf(project, input.number, cleared, "setFilesViewed", "fresh");
       const viewedAt = DateTime.formatIso(yield* DateTime.now);
       yield* filesViewedStore
         .set({
@@ -1995,9 +2099,6 @@ export const make = Effect.gen(function* () {
       return { stats: stats.flat() };
     });
 
-  const context = yield* Effect.context<never>();
-  const runFork = Effect.runForkWith(context);
-
   /**
    * The diff is not live-polled and is expensive enough to keep its stale-while-revalidate path.
    * Explicit refreshes and mutations still strand held values through the reference epoch.
@@ -2279,9 +2380,18 @@ export const make = Effect.gen(function* () {
         // A whole-workspace refresh is the reader asking to be re-answered from the hosts,
         // and that includes who the hosts say they are.
         viewersByHost.clear();
+        heldFileRevisions.clear();
         return;
       }
       bumpRefEpoch(input.reference);
+      // Not keyed by epoch, so this one is dropped by hand rather than stranded.
+      forgetFileRevisions(
+        fileRevisionsScope(
+          input.reference.projectId,
+          input.reference.repository,
+          input.reference.number,
+        ),
+      );
     });
 
   // A mutation's own client re-reads right after it, and every other client's next read must

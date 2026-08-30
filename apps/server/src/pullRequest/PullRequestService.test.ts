@@ -3568,14 +3568,92 @@ it.effect("keeps viewed files itself for a host that keeps none of its own", () 
       ],
     );
     assert.strictEqual(marked.truncated, false);
-    // The marked paths alone, so the cost follows how much has been read rather than PR size.
+    // The marked paths alone, so the cost follows how much has been read rather than PR size,
+    // and the read after the press is answered from what the press already heard.
     assert.deepStrictEqual(
       asked.map((paths) => [...paths].toSorted()),
+      [["src/a.ts", "src/b.ts"]],
+    );
+  }),
+);
+
+it.effect("reads the marks without asking the host what the head has every time", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const service = yield* environmentViewedService(new Map([["src/a.ts", "blob-a"]]), asked);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    // Past the marks' own cache, so this read reaches the point where the host would be asked.
+    yield* TestClock.adjust("20 seconds");
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(marked.files, [{ path: "src/a.ts", state: "viewed" }]);
+    assert.deepStrictEqual(asked, [["src/a.ts"]]);
+  }),
+);
+
+it.effect("answers the marks from what it last heard while it asks the host again", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const revisions = new Map([["src/a.ts", "blob-a"]]);
+    const service = yield* environmentViewedService(revisions, asked);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    revisions.set("src/a.ts", "blob-a-again");
+    yield* TestClock.adjust("90 seconds");
+    const held = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    // The push is not in this answer, because waiting for the host is the thing being avoided.
+    assert.deepStrictEqual(held.files, [{ path: "src/a.ts", state: "viewed" }]);
+    assert.strictEqual(asked.length, 2);
+
+    yield* TestClock.adjust("20 seconds");
+    const caught = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(caught.files, [{ path: "src/a.ts", state: "dismissed" }]);
+    // The refresh behind the previous answer is the one that heard about the push.
+    assert.strictEqual(asked.length, 2);
+  }),
+);
+
+it.effect("asks the host about a file it has not been asked about before", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const service = yield* environmentViewedService(
+      new Map([
+        ["src/a.ts", "blob-a"],
+        ["src/b.ts", "blob-b"],
+      ]),
+      asked,
+    );
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    yield* TestClock.adjust("20 seconds");
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/b.ts", viewed: true }],
+    });
+    yield* TestClock.adjust("20 seconds");
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
       [
-        ["src/a.ts", "src/b.ts"],
-        ["src/a.ts", "src/b.ts"],
+        { path: "src/a.ts", state: "viewed" },
+        { path: "src/b.ts", state: "viewed" },
       ],
     );
+    // The second press paid for its own file; the read that follows was already covered.
+    assert.deepStrictEqual(asked, [["src/a.ts"], ["src/b.ts"]]);
   }),
 );
 

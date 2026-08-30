@@ -553,6 +553,79 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reads where a pull request lives once, however often it is asked about", () =>
+    Effect.gen(function* () {
+      // A pull request cannot move repositories, and the marks would otherwise pay for a whole
+      // pull request read every time they checked whether a file had been pushed to.
+      const pullRequest = Effect.succeed(
+        output(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          JSON.stringify({
+            pullRequestId: 42,
+            title: "Add the page",
+            status: "active",
+            sourceRefName: "refs/heads/feat/page",
+            targetRefName: "refs/heads/main",
+            creationDate: "2026-07-01T00:00:00Z",
+            url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+            repository: { name: "web", project: { name: "platform" } },
+          }),
+        ),
+      );
+      const iterations = () =>
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              value: [
+                {
+                  id: 1,
+                  sourceRefCommit: { commitId: "a".repeat(40) },
+                  commonRefCommit: { commitId: "b".repeat(40) },
+                },
+              ],
+            }),
+          ),
+        );
+      const changes = () =>
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              changeEntries: [
+                { changeType: "edit", item: { path: "/README.md", objectId: "8f80" } },
+              ],
+            }),
+          ),
+        );
+      mockedExecute
+        .mockReturnValueOnce(pullRequest)
+        .mockReturnValueOnce(iterations())
+        .mockReturnValueOnce(changes())
+        .mockReturnValueOnce(iterations())
+        .mockReturnValueOnce(changes());
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+      const read = provider.getFileRevisions;
+      assert.isDefined(read);
+      const ask = () =>
+        read({
+          cwd: "/w",
+          repository: "web",
+          host: "dev.azure.com",
+          number: 42,
+          paths: ["README.md"],
+        });
+
+      yield* ask();
+      const again = yield* ask();
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 5);
+      // The second read goes straight to the pushes, and still answers with the head's blob.
+      expect(argsOfCall(3)).toContain("pullRequestIterations");
+      expect([...again.revisions]).toEqual([["README.md", "8f80"]]);
+    }),
+  );
+
   it.effect("leaves out a marked file the pull request no longer changes", () =>
     Effect.gen(function* () {
       // Which reads as the empty revision, the same thing stored for a file that had none when it

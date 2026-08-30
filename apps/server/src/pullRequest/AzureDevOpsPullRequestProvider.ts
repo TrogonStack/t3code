@@ -144,14 +144,43 @@ export const make = Effect.gen(function* () {
   const EMPTY_DIFF_SLICE: ProviderDiffSlice = { patch: "", truncated: false, nextCursor: null };
 
   /**
+   * Where a pull request's repository lives, which is the route every other read of it needs and
+   * the one thing only the pull request itself states. A pull request cannot move between
+   * repositories, so it is remembered rather than re-read: the marks alone would otherwise pay for
+   * a whole pull request read every time they checked whether a file had been pushed to.
+   *
+   * Bounded and oldest-first, since a long-lived server sees far more pull requests than a reader
+   * ever has open.
+   */
+  const LOCATION_CACHE_CAPACITY = 128;
+  const locations = new Map<string, AzureDevOpsRepositoryLocation>();
+
+  const locationOf = (input: { readonly cwd: string; readonly number: number }) => {
+    const key = `${input.cwd} ${input.number}`;
+    const held = locations.get(key);
+    if (held !== undefined) return Effect.succeed(held);
+    return cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
+      Effect.map((pullRequest) => {
+        const location = pullRequest.location;
+        if (location === null) return null;
+        if (locations.size >= LOCATION_CACHE_CAPACITY) {
+          const oldest = locations.keys().next().value;
+          if (oldest !== undefined) locations.delete(oldest);
+        }
+        locations.set(key, location);
+        return location;
+      }),
+    );
+  };
+
+  /**
    * Everything a diff read needs before it can ask for a file: where the repository lives, and
-   * which pushes the pull request has had. A client names neither, and the pull request read is
-   * the only place Azure states the first.
+   * which pushes the pull request has had. A client names neither, and the iterations are read
+   * afresh every time because the newest one is what a push adds.
    */
   const diffScope = (input: { readonly cwd: string; readonly number: number }) =>
     Effect.gen(function* () {
-      const pullRequest = yield* cli.getPullRequest({ cwd: input.cwd, number: input.number });
-      const location = pullRequest.location;
+      const location = yield* locationOf(input);
       if (location === null) return null;
       const iterations = yield* cli.listIterations({
         cwd: input.cwd,
