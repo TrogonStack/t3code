@@ -1147,11 +1147,17 @@ export function PullRequestCodeTab({
             {nextCursor === null ? "" : "+"}
           </span>
           {filesViewed.enabled && files.length > 0 ? (
-            <span className="flex shrink-0 items-center gap-1 tabular-nums">
+            <span className="flex min-w-0 items-center gap-1 tabular-nums">
               {/* Named on a host that keeps no record of its own, so the reader is told whose
-                  ticks these are without having to find the icon beside them. */}
-              {filesViewed.viewedCount} / {files.length}{" "}
-              {viewedFilesStore === "environment" ? `viewed in ${APP_BASE_NAME}` : "viewed"}
+                  ticks these are without having to find the icon beside them. The count holds its
+                  width and the wording gives way, so this segment cannot push the controls on the
+                  right off the strip in the narrow right panel. */}
+              <span className="shrink-0">
+                {filesViewed.viewedCount} / {files.length}
+              </span>
+              <span className="truncate">
+                {viewedFilesStore === "environment" ? `viewed in ${APP_BASE_NAME}` : "viewed"}
+              </span>
               {viewedFilesStore === "environment" ? (
                 <Tooltip>
                   <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
