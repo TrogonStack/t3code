@@ -20,7 +20,10 @@ import {
   type ProviderDiffSlice,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
-import type { AzureDevOpsIterationChanges } from "./AzureDevOpsPullRequestCli.ts";
+import type {
+  AzureDevOpsIterationChanges,
+  AzureDevOpsPullRequestCliError,
+} from "./AzureDevOpsPullRequestCli.ts";
 import type {
   AzureDevOpsChangeEntry,
   AzureDevOpsItemContent,
@@ -195,6 +198,18 @@ export const make = Effect.gen(function* () {
     });
 
   const EMPTY_ITEM: AzureDevOpsItemContent = { contents: "", isBinary: false };
+
+  /**
+   * Whether a failed side read is this one file's problem rather than the whole connection's. A
+   * path `az` will not carry, a blob it will not hand over and an answer that came back unreadable
+   * are all one file, and the rest of the change still renders around it. A signed-out CLI, a rate
+   * limit or no `az` at all is the read failing, and belongs to the caller, which pauses the host
+   * rather than showing every file in the change as unreadable.
+   */
+  const isFileScopedReadFailure = (error: AzureDevOpsPullRequestCliError): boolean =>
+    error._tag === "AzureDevOpsPullRequestNotFoundError" ||
+    error._tag === "AzureDevOpsCommandFailedError" ||
+    error._tag === "AzureDevOpsPullRequestReadError";
 
   /**
    * Both sides of one changed file. Only the sides a change actually has are asked for: Azure
@@ -397,7 +412,7 @@ export const make = Effect.gen(function* () {
             location: scope.location,
             iteration,
             change,
-          }).pipe(Effect.orElseSucceed(() => null));
+          }).pipe(Effect.catchIf(isFileScopedReadFailure, () => Effect.succeed(null)));
           const file =
             texts === null
               ? azureDevOpsUnreadableFilePatch(change)

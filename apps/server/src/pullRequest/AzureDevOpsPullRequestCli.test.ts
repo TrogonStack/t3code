@@ -32,6 +32,27 @@ function output(stdout: string) {
 /** A fixture's own shape, spelled the way `az` would answer with it. */
 const json = (value: Record<string, unknown>) => JSON.stringify(value);
 
+const pullRequestRow = {
+  pullRequestId: 42,
+  title: "Add the page",
+  status: "active",
+  sourceRefName: "refs/heads/feat/page",
+  targetRefName: "refs/heads/main",
+  creationDate: "2026-07-01T00:00:00Z",
+  url: "https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/42",
+  repository: { name: "web", project: { name: "platform" } },
+};
+
+const oneIteration = {
+  value: [
+    {
+      id: 1,
+      sourceRefCommit: { commitId: "a".repeat(40) },
+      commonRefCommit: { commitId: "b".repeat(40) },
+    },
+  ],
+};
+
 function pullRequestRows(
   count: number,
   firstNumber: number,
@@ -812,6 +833,91 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       assert.strictEqual(mockedExecute.mock.calls.length, 7);
       // And it read part of a change, so it says nothing about the file it never saw.
       assert.strictEqual(answer.revisions.size, 0);
+    }),
+  );
+
+  it.effect("leaves one file the host would not hand over listed without its hunks", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(json(pullRequestRow))))
+        .mockReturnValueOnce(Effect.succeed(output(json(oneIteration))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                changeEntries: [
+                  { changeType: "add", item: { path: "/huge.bin", objectId: "8f80" } },
+                  { changeType: "add", item: { path: "/DEMO.md", objectId: "0ca4" } },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.fail(
+            new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+              operation: "execute",
+              command: "az",
+              cwd: "/w",
+              argumentCount: 1,
+              cause: "the blob is past what the route will carry",
+            }),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output(json({ content: "hello\n" }))));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      const slice = yield* provider.getDiff({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+      });
+
+      assert.isTrue(slice.truncated);
+      expect(slice.patch).toContain("diff --git a/huge.bin b/huge.bin");
+      // And the file behind it still renders, which is the point of giving up on one file.
+      expect(slice.patch).toContain("+hello");
+    }),
+  );
+
+  it.effect("fails the whole read when it is the connection that would not answer", () =>
+    Effect.gen(function* () {
+      // A rate limit is not this file's problem, and answering with a change full of files listed
+      // without their hunks would read as a change nobody can see rather than as a host to wait
+      // for.
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(json(pullRequestRow))))
+        .mockReturnValueOnce(Effect.succeed(output(json(oneIteration))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              json({
+                changeEntries: [
+                  { changeType: "add", item: { path: "/DEMO.md", objectId: "0ca4" } },
+                ],
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.fail(
+            new AzureDevOpsCli.AzureDevOpsCliRateLimitError({
+              operation: "execute",
+              command: "az",
+              cwd: "/w",
+              argumentCount: 1,
+              cause: "429",
+            }),
+          ),
+        );
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      const error = yield* Effect.flip(
+        provider.getDiff({ cwd: "/w", repository: "web", host: "dev.azure.com", number: 42 }),
+      );
+
+      assert.strictEqual(error.reason, "rate-limited");
     }),
   );
 
