@@ -256,7 +256,7 @@ describe("buildInitialGrokProviderSnapshot", () => {
   );
 });
 
-it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
+it.layer(NodeServices.layer, { excludeTestServices: true })("checkGrokProviderStatus", (it) => {
   it.effect("reports the binary as missing when the binary path does not resolve", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkGrokProviderStatus(

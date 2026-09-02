@@ -1845,6 +1845,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   ProviderEventLoggers.NoOpProviderEventLoggers,
                 ),
               ),
+              Layer.provideMerge(ModelManifest.layerTest),
               Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
               Layer.provideMerge(NodeServices.layer),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
