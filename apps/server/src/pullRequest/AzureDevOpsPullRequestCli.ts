@@ -415,6 +415,13 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * Azure names its own items with a leading slash, which the repository paths carried around
+   * here have had taken off so they match the patch and the viewed mark. Put it back on the way
+   * out, because the items route is documented in Azure's own spelling.
+   */
+  const toItemPath = (path: string) => (path.startsWith("/") ? path : `/${path}`);
+
   const repositoryRoute = (location: AzureDevOpsRepositoryLocation): ReadonlyArray<string> => [
     `project=${location.project}`,
     `repositoryId=${location.repository}`,
@@ -654,7 +661,7 @@ export const make = Effect.gen(function* () {
         resource: "items",
         routeParameters: repositoryRoute(input.location),
         queryParameters: [
-          `path=${input.path}`,
+          `path=${toItemPath(input.path)}`,
           "versionDescriptor.versionType=commit",
           `versionDescriptor.version=${input.commit}`,
           "includeContent=true",

@@ -1349,6 +1349,25 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("asks for a file by Azure's own spelling of its path", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(json({ content: "const a = 1;" }))));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      // The path carried around here has had Azure's leading slash taken off so it matches the
+      // patch and the viewed mark. The items route is documented in Azure's spelling, so it goes
+      // back on the way out rather than being sent as the shorter name.
+      yield* cli.readItemContent({
+        cwd: "/w",
+        location: { project: "platform", repository: "web" },
+        path: "src/app.ts",
+        commit: "a".repeat(40),
+      });
+
+      expect(argsOfCall(0)).toContain("path=/src/app.ts");
+    }),
+  );
+
   it.effect("reports a pull request it cannot place as its own outcome", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
