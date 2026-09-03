@@ -1023,9 +1023,13 @@ export function decodeRepositoryBlobsJson(
   if (nodes === undefined || nodes === null) return Result.succeed(null);
   const blobs = new Map<string, string>();
   for (const node of nodes) {
-    const path = trimmed(node?.path);
+    // Not trimmed, unlike everything else read out of this payload: a leading or trailing space
+    // is a legal part of a file's name, so a path trimmed here is filed under a key neither the
+    // asked-for path nor the viewed mark is spelled with, and the caller reads the file it was
+    // asked about as one this revision does not carry.
+    const path = node?.path;
     const oid = trimmed(node?.oid);
-    if (path === null || oid === null) continue;
+    if (path === undefined || path === null || path.length === 0 || oid === null) continue;
     blobs.set(path, oid);
   }
   return Result.succeed(blobs);
