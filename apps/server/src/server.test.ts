@@ -680,6 +680,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(gitWorkflowLayer),
       Layer.provide(projectSetupScriptRunnerLayer),
       Layer.provide(vcsStatusBroadcasterLayer),
+      Layer.provide(threadDeletionReactorLayer),
     );
     const resourceTelemetryLayer = ResourceTelemetry.layer.pipe(
       Layer.provide(
