@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import type {
   PullRequestActor,
   PullRequestComment,
+  PullRequestMergeMethod,
   PullRequestMergeability,
   PullRequestState,
 } from "@t3tools/contracts";
@@ -38,6 +39,14 @@ const RawPullRequestSchema = Schema.Struct({
    * entirely once nobody has. So its presence is the answer, and there is no third state.
    */
   autoCompleteSetBy: Schema.optional(Schema.NullOr(RawIdentitySchema)),
+  completionOptions: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        mergeStrategy: Schema.optional(Schema.NullOr(Schema.String)),
+        squashMerge: Schema.optional(Schema.NullOr(Schema.Boolean)),
+      }),
+    ),
+  ),
   mergeStatus: Schema.optional(Schema.NullOr(Schema.String)),
   createdBy: Schema.optional(Schema.NullOr(RawIdentitySchema)),
   reviewers: Schema.optional(Schema.NullOr(Schema.Array(RawIdentitySchema))),
@@ -139,6 +148,8 @@ export interface AzureDevOpsPullRequest {
   readonly location: AzureDevOpsRepositoryLocation | null;
   /** Whether Azure is set to complete this on its own once its policies pass. */
   readonly autoMergeEnabled: boolean;
+  /** The completion strategy Azure stored with auto-complete, where it reported one. */
+  readonly autoMergeMethod?: PullRequestMergeMethod;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -196,6 +207,23 @@ function toLocation(
   return { project, repository };
 }
 
+function toAutoMergeMethod(
+  raw: Schema.Schema.Type<typeof RawPullRequestSchema>,
+): PullRequestMergeMethod | undefined {
+  if (raw.autoCompleteSetBy == null) return undefined;
+  switch (raw.completionOptions?.mergeStrategy?.trim().toLowerCase()) {
+    case "squash":
+      return "squash";
+    case "rebase":
+    case "rebasemerge":
+      return "rebase";
+    case "nofastforward":
+      return "merge";
+    default:
+      return raw.completionOptions?.squashMerge === true ? "squash" : undefined;
+  }
+}
+
 /**
  * Null when Azure said too little to place the pull request: a row with no browser url and no
  * branch left after its prefix is dropped cannot be rendered or opened, and the wire contract
@@ -204,6 +232,7 @@ function toLocation(
 function toPullRequest(
   raw: Schema.Schema.Type<typeof RawPullRequestSchema>,
 ): AzureDevOpsPullRequest | null {
+  const autoMergeMethod = toAutoMergeMethod(raw);
   const reviewers = (raw.reviewers ?? []).flatMap((reviewer) => {
     const actor = toActor(reviewer);
     return actor === null ? [] : [actor];
@@ -240,6 +269,7 @@ function toPullRequest(
     reviewers,
     location: toLocation(raw),
     autoMergeEnabled: (raw.autoCompleteSetBy ?? null) !== null,
+    ...(autoMergeMethod === undefined ? {} : { autoMergeMethod }),
   };
 }
 

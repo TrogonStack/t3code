@@ -44,6 +44,7 @@ import {
   type RenderablePatch,
 } from "~/lib/diffRendering";
 import { APP_BASE_NAME } from "~/branding";
+import { PREFERRED_HIGHLIGHTER } from "~/lib/syntaxHighlighting";
 import { cn } from "~/lib/utils";
 import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
 import {
@@ -831,6 +832,7 @@ export function PullRequestCodeTab({
       lineDiffType: "none" as const,
       overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
       theme: resolveDiffThemeName(resolvedTheme),
+      preferredHighlighter: PREFERRED_HIGHLIGHTER,
       themeType: resolvedTheme,
       stickyHeaders: true,
       loadDiffFiles,
