@@ -347,15 +347,13 @@ export const make = Effect.gen(function* () {
                   Effect.orElseSucceed(() => ({ comments: [], truncated: true })),
                 )
           ).pipe(
-            Effect.map(
-              (conversation): ProviderChangeRequestActivity => ({
-                comments: conversation.comments,
-                commentCount: conversation.comments.length,
-                commentsTruncated: conversation.truncated,
-                reviewThreads: [],
-                commits: [],
-              }),
-            ),
+            Effect.map((conversation): ProviderChangeRequestActivity => ({
+              comments: conversation.comments,
+              commentCount: conversation.comments.length,
+              commentsTruncated: conversation.truncated,
+              reviewThreads: [],
+              commits: [],
+            })),
           ),
         ),
       ),
