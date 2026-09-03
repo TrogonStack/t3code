@@ -1,4 +1,20 @@
 const ENTRY = "diff --git ";
+const QUOTE = '"';
+
+const NAMED_ESCAPES: Record<string, number> = {
+  '"': 0x22,
+  "\\": 0x5c,
+  a: 0x07,
+  b: 0x08,
+  f: 0x0c,
+  n: 0x0a,
+  r: 0x0d,
+  t: 0x09,
+  v: 0x0b,
+};
+
+const utf8 = new TextEncoder();
+const fromUtf8 = new TextDecoder();
 
 interface Entry {
   oldPath: string | null;
@@ -9,10 +25,85 @@ interface Entry {
   inBody: boolean;
 }
 
+/**
+ * The name inside git's quoted form, which git reaches for when a name holds a tab, a newline, a
+ * quote, a backslash, or, under `core.quotePath`, any byte outside ASCII.
+ *
+ * The escapes are per byte, so a name in any other alphabet arrives as a run of octal and only
+ * reads back as itself once those bytes are rejoined and decoded together. A name git had no
+ * reason to quote is already the name.
+ */
+function unquotePath(token: string): string {
+  if (token.length < 2 || !token.startsWith(QUOTE) || !token.endsWith(QUOTE)) return token;
+  const body = token.slice(1, -1);
+  const bytes: Array<number> = [];
+  // Anything git left as itself is encoded a run at a time rather than a unit at a time, so a
+  // character written outside the basic plane keeps its pair together and comes back as itself
+  // instead of as two halves neither of which is a character.
+  let literal = "";
+  const flush = () => {
+    if (literal.length === 0) return;
+    bytes.push(...utf8.encode(literal));
+    literal = "";
+  };
+  let at = 0;
+  while (at < body.length) {
+    const char = body.charAt(at);
+    if (char !== "\\") {
+      literal += char;
+      at += 1;
+      continue;
+    }
+    const escaped = body.charAt(at + 1);
+    if (escaped === "") {
+      flush();
+      bytes.push(0x5c);
+      break;
+    }
+    const named = NAMED_ESCAPES[escaped];
+    if (named !== undefined) {
+      flush();
+      bytes.push(named);
+      at += 2;
+      continue;
+    }
+    const octal = body.slice(at + 1, at + 4);
+    if (/^[0-7]{3}$/.test(octal)) {
+      flush();
+      bytes.push(Number.parseInt(octal, 8));
+      at += 4;
+      continue;
+    }
+    literal += escaped;
+    at += 2;
+  }
+  flush();
+  return fromUtf8.decode(new Uint8Array(bytes));
+}
+
+/** Where a quoted name closes, given git escapes every quote the name itself holds. */
+function quotedEnd(rest: string): number {
+  for (let at = 1; at < rest.length; at += 1) {
+    const char = rest.charAt(at);
+    if (char === "\\") {
+      at += 1;
+      continue;
+    }
+    if (char === QUOTE) return at;
+  }
+  return -1;
+}
+
 /** `a/x` and `b/x` on a `---` or `+++` line; `/dev/null` is the side that has no file. */
 function sidePath(rest: string, prefix: string): string | null {
   if (rest === "/dev/null") return null;
-  return rest.startsWith(prefix) ? rest.slice(prefix.length) : rest;
+  const path = unquotePath(rest);
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+function headerSide(token: string, prefix: string): string | null {
+  const path = unquotePath(token);
+  return path.startsWith(prefix) ? path.slice(prefix.length) : null;
 }
 
 /**
@@ -21,8 +112,21 @@ function sidePath(rest: string, prefix: string): string | null {
  * `a/one two b/one two` splits in more than one place, so the split that leaves both sides equal
  * wins. A rename is the only entry whose sides differ, and a rename states its names on lines of
  * its own. Anything still ambiguous is left unnamed rather than guessed at.
+ *
+ * A quoted name ends at its own closing quote, so a header carrying one splits there and needs
+ * none of that guessing. Git quotes only the side that needs it, so one side can be quoted alone.
  */
 function headerPaths(rest: string): readonly [string | null, string | null] {
+  if (rest.startsWith(QUOTE)) {
+    const end = quotedEnd(rest);
+    if (end === -1 || rest.charAt(end + 1) !== " ") return [null, null];
+    return [headerSide(rest.slice(0, end + 1), "a/"), headerSide(rest.slice(end + 2), "b/")];
+  }
+  if (rest.endsWith(QUOTE)) {
+    const opens = rest.indexOf(QUOTE);
+    if (opens < 1 || rest.charAt(opens - 1) !== " ") return [null, null];
+    return [headerSide(rest.slice(0, opens - 1), "a/"), headerSide(rest.slice(opens), "b/")];
+  }
   if (!rest.startsWith("a/")) return [null, null];
   const splits: Array<number> = [];
   for (let at = rest.indexOf(" b/"); at !== -1; at = rest.indexOf(" b/", at + 1)) splits.push(at);
@@ -82,9 +186,9 @@ export function parseDiffFileRevisions(patch: string): ReadonlyMap<string, strin
     } else if (line.startsWith("deleted file mode")) {
       entry.deleted = true;
     } else if (line.startsWith("rename from ")) {
-      entry.oldPath = line.slice("rename from ".length);
+      entry.oldPath = unquotePath(line.slice("rename from ".length));
     } else if (line.startsWith("rename to ")) {
-      entry.newPath = line.slice("rename to ".length);
+      entry.newPath = unquotePath(line.slice("rename to ".length));
     } else if (line.startsWith("--- ")) {
       entry.oldPath = sidePath(line.slice(4), "a/");
     } else if (line.startsWith("+++ ")) {

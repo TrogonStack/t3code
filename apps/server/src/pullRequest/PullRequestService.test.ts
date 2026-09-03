@@ -4162,6 +4162,47 @@ it.effect("asks the host about a file it has not been asked about before", () =>
   }),
 );
 
+it.effect("does not let a press about one file keep another file's version alive", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const revisions = new Map([
+      ["src/a.ts", "blob-a"],
+      ["src/b.ts", "blob-b"],
+    ]);
+    const service = yield* environmentViewedService(revisions, asked);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    yield* TestClock.adjust("40 seconds");
+    // This press asks about its own file and carries the other one forward untouched. Counting
+    // the whole scope as heard from would put the first file's version back inside the window it
+    // had almost aged out of, and a reader working down a long diff renews it press after press.
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/b.ts", viewed: true }],
+    });
+    assert.deepStrictEqual(asked, [["src/a.ts"], ["src/b.ts"]]);
+
+    revisions.set("src/a.ts", "blob-a-again");
+    yield* TestClock.adjust("30 seconds");
+    yield* service.filesViewed(GITLAB_REFERENCE);
+    assert.strictEqual(asked.length, 3);
+
+    yield* TestClock.adjust("20 seconds");
+    const caught = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...caught.files].toSorted((left, right) => left.path.localeCompare(right.path)),
+      [
+        { path: "src/a.ts", state: "dismissed" },
+        { path: "src/b.ts", state: "viewed" },
+      ],
+    );
+  }),
+);
+
 it.effect("reports a file pushed to since it was cleared as changed", () =>
   Effect.gen(function* () {
     const revisions = new Map([
@@ -4260,6 +4301,29 @@ it.effect("leaves a mark alone when the host could not say what the head has of 
         { path: "src/past-the-cut.ts", state: "viewed" },
       ],
     );
+  }),
+);
+
+it.effect("keeps a file cleared that the press could not learn a version for", () =>
+  Effect.gen(function* () {
+    // The press is the only moment a mark is given something to be measured against, and a host
+    // reading as much of a long change as it can manage does not always reach the file being
+    // ticked. Storing the empty version there reads as the head having nothing of the file, so the
+    // first read that does reach it reports the reader's own press back to them as work to do.
+    const revisions = new Map([["src/past-the-cut.ts", "blob-b"]]);
+    const unreadable = new Set(["src/past-the-cut.ts"]);
+    const service = yield* environmentViewedService(revisions, [], unreadable);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/past-the-cut.ts", viewed: true }],
+    });
+    unreadable.delete("src/past-the-cut.ts");
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+
+    assert.deepStrictEqual((yield* service.filesViewed(GITLAB_REFERENCE)).files, [
+      { path: "src/past-the-cut.ts", state: "viewed" },
+    ]);
   }),
 );
 

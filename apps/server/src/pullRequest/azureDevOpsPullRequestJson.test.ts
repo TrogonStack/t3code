@@ -400,6 +400,30 @@ describe("decodeIterationChangesJson", () => {
     ]);
   });
 
+  it("keeps a space at the end of a file's name, which belongs to the name", () => {
+    // Git will carry a name that ends in a space, and the patch and the viewed mark are both
+    // keyed by it. Tidying it here files the change under a name nothing else uses.
+    const page = expectSuccess(
+      decodeIterationChangesJson(
+        asJson({
+          changeEntries: [
+            { changeType: "edit", item: { path: "/docs/readme.md ", objectId: "ec00" } },
+            {
+              changeType: "rename",
+              sourceServerItem: "/docs/old.md ",
+              item: { path: "/docs/moved.md", objectId: "aaaa", originalObjectId: "aaaa" },
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(page.changes.map((change) => [change.path, change.oldPath])).toEqual([
+      ["docs/readme.md ", "docs/readme.md "],
+      ["docs/moved.md", "docs/old.md "],
+    ]);
+  });
+
   it("reads a rename as one file that moved, and says whether it also changed", () => {
     const page = expectSuccess(
       decodeIterationChangesJson(

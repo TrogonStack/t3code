@@ -473,10 +473,15 @@ const decodeItemContent = decodeJsonResult(RawItemContentSchema);
 /**
  * Azure leads a path with a slash, which is its own spelling rather than part of the name. Every
  * other host, and every patch, names the same file without it.
+ *
+ * Not trimmed, unlike everything else read out of this payload: a leading or trailing space is a
+ * legal part of a file's name, and a path trimmed here no longer matches the one the patch and the
+ * viewed mark are keyed by, so the file is filed under a name nothing else uses.
  */
 function toRepositoryPath(value: string | null | undefined): string | null {
-  const path = trimmed(value);
-  return path === null ? null : path.replace(/^\/+/, "");
+  if (value === undefined || value === null) return null;
+  const path = value.replace(/^\/+/, "");
+  return path.length === 0 ? null : path;
 }
 
 /**

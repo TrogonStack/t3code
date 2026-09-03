@@ -437,6 +437,11 @@ export const make = Effect.gen(function* () {
 
     // The patch is built from whole files, so opening the lines around a hunk is the same two
     // reads over again rather than a wider request.
+    //
+    // Read against the latest iteration, which is the one the patch was taken against unless a
+    // push landed in between. Nothing in the request says which push the reader is looking at, so
+    // there is no older iteration to go back to: expansion is stale after a mid-review push on
+    // every host here, and the diff it belongs to is stale with it.
     getDiffFileContents: (input) =>
       Effect.gen(function* () {
         const scope = yield* diffScope(input);

@@ -29,6 +29,21 @@ function output(stdout: string) {
   };
 }
 
+/** What VcsProcess allows a read that asked for no ceiling of its own. */
+const VCS_DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
+
+/**
+ * The runner as it really behaves: it cuts stdout at the ceiling its caller asked for, and cuts
+ * it at the process default when the caller asked for none. A read whose response is larger than
+ * its ceiling gets JSON that stops mid-string, which is the whole cost of an unset ceiling.
+ */
+function outputWithin(maxOutputBytes: number | undefined, response: string) {
+  const ceiling = maxOutputBytes ?? VCS_DEFAULT_MAX_OUTPUT_BYTES;
+  return ceiling >= Buffer.byteLength(response)
+    ? output(response)
+    : { ...output(response.slice(0, ceiling)), stdoutTruncated: true };
+}
+
 /** A fixture's own shape, spelled the way `az` would answer with it. */
 const json = (value: Record<string, unknown>) => JSON.stringify(value);
 
@@ -78,6 +93,32 @@ function argsOfCall(index: number): ReadonlyArray<string> {
   const call = mockedExecute.mock.calls[index];
   assert.isDefined(call);
   return call[0].args;
+}
+
+/** The output ceiling the nth az invocation asked for, if it asked for one at all. */
+function maxOutputBytesOfCall(index: number) {
+  const call = mockedExecute.mock.calls[index];
+  assert.isDefined(call);
+  return call[0].maxOutputBytes;
+}
+
+/** A page of change entries the size Azure really answers with, url and object ids and all. */
+function changeEntries(count: number): ReadonlyArray<Record<string, unknown>> {
+  const commit = "c".repeat(40);
+  return Array.from({ length: count }, (_, index) => {
+    const path = `/apps/server/src/generated/module-${index}/persisted-projection-${index}.ts`;
+    return {
+      changeType: "edit",
+      item: {
+        path,
+        objectId: "a".repeat(40),
+        originalObjectId: "b".repeat(40),
+        commitId: commit,
+        gitObjectType: "blob",
+        url: `https://dev.azure.com/acme/platform/_apis/git/repositories/6f9c9b7f-0000-0000-0000-000000000000/items${path}?versionType=Commit&version=${commit}`,
+      },
+    };
+  });
 }
 
 afterEach(() => {
@@ -131,20 +172,9 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       const response = JSON.stringify(rows);
       expect(Buffer.byteLength(response)).toBeGreaterThan(1_000_000);
 
-      mockedExecute.mockImplementationOnce((input) => {
-        const maxOutputBytes =
-          "maxOutputBytes" in input && typeof input.maxOutputBytes === "number"
-            ? input.maxOutputBytes
-            : 1_000_000;
-        return Effect.succeed(
-          maxOutputBytes >= Buffer.byteLength(response)
-            ? output(response)
-            : {
-                ...output(response.slice(0, maxOutputBytes)),
-                stdoutTruncated: true,
-              },
-        );
-      });
+      mockedExecute.mockImplementationOnce((input) =>
+        Effect.succeed(outputWithin(input.maxOutputBytes, response)),
+      );
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
 
       const batch = yield* cli.listPullRequests({
@@ -1159,6 +1189,59 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       expect(argsOfCall(0)).toContain("project=platform");
       expect(argsOfCall(0)).toContain("repositoryId=web");
       expect(argsOfCall(0)).toContain("pullRequestId=42");
+      // Threads are the reader's own words rather than a file's, so this one stays on whatever
+      // the process allows by default and the raised ceilings stay with the reads that need them.
+      assert.isUndefined(maxOutputBytesOfCall(0));
+    }),
+  );
+
+  it.effect("reads a full page of change entries, which is past the default output limit", () =>
+    Effect.gen(function* () {
+      const response = json({ changeEntries: changeEntries(2_000) });
+      // Azure's own maximum for this route, and every entry carries a path, a url and three
+      // object ids, so an ordinary page of a large change already outgrows the default.
+      expect(Buffer.byteLength(response)).toBeGreaterThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+      mockedExecute.mockImplementationOnce((input) =>
+        Effect.succeed(outputWithin(input.maxOutputBytes, response)),
+      );
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const page = yield* cli.listIterationChanges({
+        cwd: "/w",
+        location: { project: "platform", repository: "web" },
+        number: 42,
+        iterationId: 1,
+      });
+
+      // Cut at the default this would arrive as JSON stopping mid-string, and a perfectly
+      // ordinary page would be reported as a host answering with nonsense.
+      assert.strictEqual(page.changes.length, 2_000);
+      assert.isFalse(page.truncated);
+    }),
+  );
+
+  it.effect("reads a file whose JSON envelope is past the default output limit", () =>
+    Effect.gen(function* () {
+      // Under a megabyte as bytes on the host, so this is a file the other hosts hand over.
+      const file = "const value = 1;\n".repeat(57_000);
+      const response = json({ content: file });
+      expect(Buffer.byteLength(file)).toBeLessThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+      // And past it once Azure wraps it, because there is no route here that serves the bytes.
+      expect(Buffer.byteLength(response)).toBeGreaterThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+      mockedExecute.mockImplementationOnce((input) =>
+        Effect.succeed(outputWithin(input.maxOutputBytes, response)),
+      );
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const item = yield* cli.readItemContent({
+        cwd: "/w",
+        location: { project: "platform", repository: "web" },
+        path: "src/generated/schema.ts",
+        commit: "a".repeat(40),
+      });
+
+      assert.strictEqual(item.contents, file);
+      assert.isFalse(item.isBinary);
     }),
   );
 

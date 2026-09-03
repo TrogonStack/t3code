@@ -4,9 +4,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   PullRequestActionInput,
   PullRequestCapabilities,
+  PullRequestFilesViewedResult,
   PullRequestListInput,
   PullRequestListResult,
   PullRequestReviewerRequestInput,
+  PullRequestSetFilesViewedInput,
   pullRequestRepositoryOf,
   resolvePullRequestAuthorFilter,
 } from "./pullRequest.ts";
@@ -15,6 +17,8 @@ const decodeListResult = Schema.decodeUnknownSync(PullRequestListResult);
 const decodeListInput = Schema.decodeUnknownSync(PullRequestListInput);
 const decodeReviewerRequest = Schema.decodeUnknownSync(PullRequestReviewerRequestInput);
 const decodeAction = Schema.decodeUnknownSync(PullRequestActionInput);
+const decodeSetFilesViewed = Schema.decodeUnknownSync(PullRequestSetFilesViewedInput);
+const decodeFilesViewed = Schema.decodeUnknownSync(PullRequestFilesViewedResult);
 
 const LIST_RESULT: PullRequestListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
@@ -307,5 +311,41 @@ describe("the repository a ref names", () => {
   it("names nothing for a project with no remote to name it by", () => {
     expect(pullRequestRepositoryOf(null)).toBeNull();
     expect(pullRequestRepositoryOf(identity({ provider: "github" }))).toBeNull();
+  });
+});
+
+describe("naming the file a tick belongs to", () => {
+  // A space on either end of a name is part of the name as far as git is concerned. The patch on
+  // screen and the environment's record of what was cleared are both keyed by it, so a path
+  // tidied in transit ticks a file that does not exist and leaves the one on screen unticked.
+  it("keeps the spaces around a path being ticked", () => {
+    expect(
+      decodeSetFilesViewed({
+        projectId: "p1",
+        repository: "group/project",
+        number: 7,
+        files: [{ path: "docs/readme.md ", viewed: true }],
+      }).files,
+    ).toEqual([{ path: "docs/readme.md ", viewed: true }]);
+  });
+
+  it("keeps the spaces around a path being reported back", () => {
+    expect(
+      decodeFilesViewed({
+        files: [{ path: " leading.md", state: "viewed" }],
+        truncated: false,
+      }).files,
+    ).toEqual([{ path: " leading.md", state: "viewed" }]);
+  });
+
+  it("still refuses a path that is nothing at all", () => {
+    expect(() =>
+      decodeSetFilesViewed({
+        projectId: "p1",
+        repository: "group/project",
+        number: 7,
+        files: [{ path: "", viewed: true }],
+      }),
+    ).toThrow();
   });
 });

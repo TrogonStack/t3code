@@ -35,11 +35,15 @@ export type PullRequestFilesViewedScope = typeof PullRequestFilesViewedScope.Typ
 export const PullRequestFileViewedMark = Schema.Struct({
   path: Schema.String,
   /**
-   * The host's own name for that version of the file, opaque here. Empty where the host had none
-   * to give, which is its own answer rather than a missing one: a file with no version at the head
-   * is one the change request deletes, and it stays deleted.
+   * The host's own name for that version of the file, opaque here.
+   *
+   * Empty where the host said it had none to give, which is its own answer rather than a missing
+   * one: a file with no version at the head is one the change request deletes, and it stays
+   * deleted. Null where the host could not say at all, which is no baseline rather than an empty
+   * one: stamping such a mark with the empty revision would report the file as changed the moment
+   * anything did answer, so a mark with no baseline stays cleared until a press replaces it.
    */
-  revision: Schema.String,
+  revision: Schema.NullOr(Schema.String),
 });
 export type PullRequestFileViewedMark = typeof PullRequestFileViewedMark.Type;
 

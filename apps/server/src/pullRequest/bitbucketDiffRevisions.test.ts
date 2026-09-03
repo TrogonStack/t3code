@@ -130,4 +130,87 @@ describe("parseDiffFileRevisions", () => {
   it("reads nothing out of an empty patch", () => {
     assert.strictEqual(parseDiffFileRevisions("").size, 0);
   });
+
+  it("reads a name git had to quote, here one holding a tab", () => {
+    const revisions = parseDiffFileRevisions(
+      patchOf(
+        'diff --git "a/we\\tird.ts" "b/we\\tird.ts"',
+        "index 4444444..5555555 100644",
+        '--- "a/we\\tird.ts"',
+        '+++ "b/we\\tird.ts"',
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+      ),
+    );
+
+    assert.deepStrictEqual([...revisions], [["we\tird.ts", "5555555"]]);
+  });
+
+  it("rejoins the octal bytes git writes for a name outside ASCII", () => {
+    const revisions = parseDiffFileRevisions(
+      patchOf(
+        'diff --git "a/caf\\303\\251/r\\303\\251sum\\303\\251.ts" "b/caf\\303\\251/r\\303\\251sum\\303\\251.ts"',
+        "index 6666666..7777777 100644",
+        "@@ -1 +1 @@",
+      ),
+    );
+
+    assert.deepStrictEqual([...revisions], [["café/résumé.ts", "7777777"]]);
+  });
+
+  it("splits a rename header where git quoted only the side that needed it", () => {
+    const revisions = parseDiffFileRevisions(
+      patchOf(
+        'diff --git a/old.ts "b/new\\tname.ts"',
+        "similarity index 90%",
+        "rename from old.ts",
+        'rename to "new\\tname.ts"',
+        "index 8888888..9999999 100644",
+        "--- a/old.ts",
+        '+++ "b/new\\tname.ts"',
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+      ),
+    );
+
+    assert.deepStrictEqual([...revisions], [["new\tname.ts", "9999999"]]);
+  });
+
+  it("names a quoted rename that changed nothing, which states no paths of its own", () => {
+    const revisions = parseDiffFileRevisions(
+      patchOf(
+        'diff --git "a/old\\tname.ts" "b/new\\tname.ts"',
+        "similarity index 100%",
+        'rename from "old\\tname.ts"',
+        'rename to "new\\tname.ts"',
+        "index abcabca..abcabca 100644",
+      ),
+    );
+
+    assert.deepStrictEqual([...revisions], [["new\tname.ts", "abcabca"]]);
+  });
+
+  it("keeps a character from outside the basic plane that git left unescaped", () => {
+    // `core.quotePath` off leaves the name's own bytes in place, and git still quotes the header
+    // for the tab. Encoding what it left one unit at a time would split the pair into two halves.
+    const revisions = parseDiffFileRevisions(
+      patchOf(
+        'diff --git "a/we\\tird-\u{1f680}.ts" "b/we\\tird-\u{1f680}.ts"',
+        "index aaaaaaa..bbbbbbb 100644",
+        "@@ -1 +1 @@",
+      ),
+    );
+
+    assert.deepStrictEqual([...revisions], [["we\tird-\u{1f680}.ts", "bbbbbbb"]]);
+  });
+
+  it("splits an unquoted header whose names hold a space, by the sides agreeing", () => {
+    const revisions = parseDiffFileRevisions(
+      patchOf("diff --git a/one two b/one two", "index ddddddd..eeeeeee 100644", "@@ -1 +1 @@"),
+    );
+
+    assert.deepStrictEqual([...revisions], [["one two", "eeeeeee"]]);
+  });
 });

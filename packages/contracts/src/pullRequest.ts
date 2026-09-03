@@ -907,6 +907,11 @@ export const PullRequestDiffFileContentsResult = Schema.Struct({
 });
 export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileContentsResult.Type;
 
+// Not trimmed: a leading or trailing space is a legal part of a file's name, and both the patch
+// and the environment's own record of what a reader cleared are keyed by the name the host gave.
+// Trimming it here files the mark under a name nothing else uses, so the tick never comes back.
+const FilePath = Schema.String.check(Schema.isNonEmpty());
+
 /**
  * Where one file of a change request stands with the person reading it.
  *
@@ -919,7 +924,7 @@ export const PullRequestFileViewedState = Schema.Literals(["unviewed", "viewed",
 export type PullRequestFileViewedState = typeof PullRequestFileViewedState.Type;
 
 export const PullRequestFileViewed = Schema.Struct({
-  path: TrimmedNonEmptyString,
+  path: FilePath,
   state: PullRequestFileViewedState,
 });
 export type PullRequestFileViewed = typeof PullRequestFileViewed.Type;
@@ -953,7 +958,7 @@ export const PullRequestSetFilesViewedInput = Schema.Struct({
   ...PullRequestRef.fields,
   files: Schema.Array(
     Schema.Struct({
-      path: TrimmedNonEmptyString,
+      path: FilePath,
       viewed: Schema.Boolean,
     }),
   ),

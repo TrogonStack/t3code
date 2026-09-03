@@ -119,6 +119,19 @@ export type AzureDevOpsPullRequestCliError =
 /** The version every REST call below is pinned to, so a new default cannot reshape a response. */
 const REST_API_VERSION = "7.1";
 const PULL_REQUEST_LIST_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
+/**
+ * A full page of change entries is two thousand files, each carrying its path, its url and
+ * several object ids, which is past the megabyte a read is given by default. Output cut at that
+ * ceiling arrives here as JSON that will not parse, so a change large enough to be paged would
+ * report itself as a host returning nonsense rather than as the ordinary page it is.
+ */
+const CHANGE_ENTRIES_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+/**
+ * Four times the megabyte of file the other hosts hand over, because Azure has no route that
+ * serves the bytes themselves: the file arrives inside a JSON envelope, escaped if it is text and
+ * base64 if it is not, and both are larger than the file they carry.
+ */
+const ITEM_CONTENT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 /** Azure's own ceiling for one page of an iteration's changes. */
 const CHANGE_ENTRIES_PER_PAGE = 2000;
@@ -354,10 +367,12 @@ export const make = Effect.gen(function* () {
     readonly resource: string;
     readonly routeParameters: ReadonlyArray<string>;
     readonly queryParameters?: ReadonlyArray<string>;
+    readonly maxOutputBytes?: number;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, AzureDevOpsPullRequestCliError> =>
     executeJson({
       cwd: input.cwd,
+      ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
       args: [
         "devops",
         "invoke",
@@ -597,6 +612,7 @@ export const make = Effect.gen(function* () {
           // Azure pages this route at 1000 entries by default; this is its own maximum per page,
           // and it names where the next page starts rather than answering with the whole change.
           queryParameters: [`$top=${CHANGE_ENTRIES_PER_PAGE}`, `$skip=${skip}`],
+          maxOutputBytes: CHANGE_ENTRIES_MAX_OUTPUT_BYTES,
           decode: decodeIterationChangesJson,
         });
       const from = (
@@ -638,6 +654,7 @@ export const make = Effect.gen(function* () {
           // envelope, and `az devops invoke` refuses anything it cannot parse as JSON.
           "$format=json",
         ],
+        maxOutputBytes: ITEM_CONTENT_MAX_OUTPUT_BYTES,
         decode: decodeItemContentJson,
       }),
 

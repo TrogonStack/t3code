@@ -1534,7 +1534,14 @@ export const make = Effect.gen(function* () {
         const oldest = heldFileRevisions.keys().next().value;
         if (oldest !== undefined) heldFileRevisions.delete(oldest);
       }
-      heldFileRevisions.set(scope, { at, asked, revisions });
+      // The entry is only as fresh as the oldest revision in it. Stamping it with now because
+      // this read answered would let a reader ticking one new file after another keep carrying the
+      // first file's revision past the point it would have been read again, since every press
+      // renews the whole scope while asking about one path.
+      const stamped = [...revisions.keys()].every((path) => answer.has(path))
+        ? at
+        : (carried?.at ?? at);
+      heldFileRevisions.set(scope, { at: stamped, asked, revisions });
       return revisions;
     });
 
@@ -1632,8 +1639,9 @@ export const make = Effect.gen(function* () {
       if (marks.length === 0) return { files: [], truncated: false };
       // These rows are this environment's own. A rate limit or a signed-out CLI costs the marks
       // their staleness, which is the thing `fileRevisionsOf` already answers null for, and must
-      // not cost the reader every tick they have made. The press itself still fails loudly: a
-      // mark stamped with a revision nobody read is wrong rather than merely less informed.
+      // not cost the reader every tick they have made. The press itself still fails loudly on a
+      // host that errors, since a mark stamped with a revision nobody read is wrong rather than
+      // merely less informed; a host that answers without the path is stored with no baseline.
       const revisions = yield* fileRevisionsOf(
         project,
         number,
@@ -1654,6 +1662,11 @@ export const make = Effect.gen(function* () {
           // as changed against a revision nobody read. A file the change request deletes is
           // answered as the empty revision, which is what its mark was stamped with, so it is
           // cleared once and stays cleared.
+          // A mark stamped with no baseline has nothing to compare against, so it holds until
+          // the reader presses it again. That is the press the host would not answer for, and
+          // reporting it as changed against a revision it was never measured at would move the
+          // file the reader just cleared back into the pile.
+          if (mark.revision === null) return { path: mark.path, state: "viewed" as const };
           const revision = revisions?.get(mark.path);
           return {
             path: mark.path,
@@ -1725,9 +1738,14 @@ export const make = Effect.gen(function* () {
       yield* filesViewedStore
         .set({
           ...filesViewedScope(project, input.number, viewer),
+          // A path left out of the answer is the host declining to say, not the head having
+          // nothing of the file: the empty revision is an answer, and a mark stamped with it is
+          // reported as changed as soon as the file turns out to have a version after all. Such a
+          // mark is stored with no baseline instead, and a host too far behind to answer for a
+          // large change stays tickable rather than clearing files that come straight back.
           files: input.files.map((file) => ({
             path: file.path,
-            revision: revisions?.get(file.path) ?? "",
+            revision: revisions?.get(file.path) ?? null,
             viewed: file.viewed,
           })),
           viewedAt,
