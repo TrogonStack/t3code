@@ -132,6 +132,16 @@ const CHANGE_ENTRIES_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
  * base64 if it is not, and both are larger than the file they carry.
  */
 const ITEM_CONTENT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+/**
+ * What a review's own history is given. Neither of these routes pages, so each answers with the
+ * whole of it at once and grows with how long the review ran rather than with how large the change
+ * is. Threads are the nearer ceiling of the two: Azure opens one per vote and per ref update
+ * alongside the ones people wrote, and every comment carries a full identity beside its text, so
+ * the answer is far larger than the handful of fields read back out of it. Cut at the default,
+ * both arrive as JSON that stops mid-string, and a long review would report its host as answering
+ * with nonsense.
+ */
+const REVIEW_HISTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /** Azure's own ceiling for one page of an iteration's changes. */
 const CHANGE_ENTRIES_PER_PAGE = 2000;
@@ -590,6 +600,7 @@ export const make = Effect.gen(function* () {
         operation: "listThreads",
         resource: "pullRequestThreads",
         routeParameters: pullRequestRoute(input),
+        maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
         decode: decodeThreadsJson,
       }),
 
@@ -599,6 +610,7 @@ export const make = Effect.gen(function* () {
         operation: "listIterations",
         resource: "pullRequestIterations",
         routeParameters: pullRequestRoute(input),
+        maxOutputBytes: REVIEW_HISTORY_MAX_OUTPUT_BYTES,
         decode: decodeIterationsJson,
       }),
 

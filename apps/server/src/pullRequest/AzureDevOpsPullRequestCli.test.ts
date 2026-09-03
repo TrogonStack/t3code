@@ -121,6 +121,66 @@ function changeEntries(count: number): ReadonlyArray<Record<string, unknown>> {
   });
 }
 
+/** An Azure identity, which rides along with every comment and every push Azure answers with. */
+function identity(name: string) {
+  const id = "6f9c9b7f-0000-0000-0000-000000000000";
+  return {
+    displayName: name,
+    id,
+    uniqueName: `${name.toLowerCase().replace(/ /g, ".")}@acme.com`,
+    descriptor: `aad.${"z".repeat(52)}`,
+    imageUrl: `https://dev.azure.com/acme/_api/_common/identityImage?id=${id}`,
+    url: `https://spsprodweu1.vssps.visualstudio.com/A${id}/_apis/Identities/${id}`,
+    _links: {
+      avatar: {
+        href: `https://dev.azure.com/acme/_apis/GraphProfile/MemberAvatars/aad.${"z".repeat(52)}`,
+      },
+    },
+  };
+}
+
+/** A review's threads the shape Azure answers with, system threads and identities and all. */
+function threadRows(count: number): ReadonlyArray<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    publishedDate: "2026-07-02T00:00:00Z",
+    lastUpdatedDate: "2026-07-02T00:00:00Z",
+    status: "active",
+    threadContext: { filePath: `/apps/server/src/generated/module-${index}.ts` },
+    identities: { 1: identity("Reviewer One") },
+    isDeleted: false,
+    comments: [
+      {
+        id: 1,
+        parentCommentId: 0,
+        author: identity("Reviewer One"),
+        content: `Comment ${index}: ${"this needs another look. ".repeat(20)}`,
+        publishedDate: "2026-07-02T00:00:00Z",
+        lastUpdatedDate: "2026-07-02T00:00:00Z",
+        commentType: "text",
+        usersLiked: [],
+      },
+    ],
+  }));
+}
+
+/** A review's iterations the shape Azure answers with, one per push. */
+function iterationRows(count: number): ReadonlyArray<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    description: `Pushed ${index} commits`,
+    author: identity("Author One"),
+    createdDate: "2026-07-02T00:00:00Z",
+    updatedDate: "2026-07-02T00:00:00Z",
+    sourceRefCommit: { commitId: `${index}`.padStart(40, "a") },
+    targetRefCommit: { commitId: "b".repeat(40) },
+    commonRefCommit: { commitId: "c".repeat(40) },
+    hasMultipleCommits: true,
+    reason: "push",
+    push: { pushId: index + 1, date: "2026-07-02T00:00:00Z", pushedBy: identity("Author One") },
+  }));
+}
+
 afterEach(() => {
   mockedExecute.mockReset();
 });
@@ -1189,9 +1249,53 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       expect(argsOfCall(0)).toContain("project=platform");
       expect(argsOfCall(0)).toContain("repositoryId=web");
       expect(argsOfCall(0)).toContain("pullRequestId=42");
-      // Threads are the reader's own words rather than a file's, so this one stays on whatever
-      // the process allows by default and the raised ceilings stay with the reads that need them.
-      assert.isUndefined(maxOutputBytesOfCall(0));
+      // A review's threads grow with how long it ran, and this route does not page, so the read
+      // asks for more than the process default rather than taking whatever it is given.
+      expect(maxOutputBytesOfCall(0)).toBeGreaterThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+    }),
+  );
+
+  it.effect("reads a long review's threads, which are past the default output limit", () =>
+    Effect.gen(function* () {
+      const response = json({ value: threadRows(800) });
+      // Azure opens a thread per vote and per ref update beside the ones people wrote, and every
+      // comment carries a full identity, so a review argued over for weeks outgrows the default.
+      expect(Buffer.byteLength(response)).toBeGreaterThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+      mockedExecute.mockImplementationOnce((input) =>
+        Effect.succeed(outputWithin(input.maxOutputBytes, response)),
+      );
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const comments = yield* cli.listThreads({
+        cwd: "/w",
+        location: { project: "platform", repository: "web" },
+        number: 42,
+      });
+
+      assert.strictEqual(comments.length, 800);
+    }),
+  );
+
+  it.effect("reads a long review's iterations, which are past the default output limit", () =>
+    Effect.gen(function* () {
+      const response = json({ value: iterationRows(1_200) });
+      // This route does not page, so the whole history arrives at once. Cut at the default it is
+      // JSON stopping mid-string, and every diff and file revision read on this host fails with
+      // it, since each of them starts by asking which iteration is the latest.
+      expect(Buffer.byteLength(response)).toBeGreaterThan(VCS_DEFAULT_MAX_OUTPUT_BYTES);
+      mockedExecute.mockImplementationOnce((input) =>
+        Effect.succeed(outputWithin(input.maxOutputBytes, response)),
+      );
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const iterations = yield* cli.listIterations({
+        cwd: "/w",
+        location: { project: "platform", repository: "web" },
+        number: 42,
+      });
+
+      assert.strictEqual(iterations.length, 1_200);
+      assert.strictEqual(iterations.at(-1)?.id, 1_200);
     }),
   );
 
