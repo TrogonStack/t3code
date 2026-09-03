@@ -65,7 +65,7 @@ function ChecksBody({ checks }: { checks: ReadonlyArray<PullRequestCheck> }) {
             <TooltipPopup side="top">{check.description ?? check.name}</TooltipPopup>
           </Tooltip>
           <span className="shrink-0 text-muted-foreground">
-            {pullRequestCheckStatusLabel(check.status)}
+            {pullRequestCheckStatusLabel(check)}
           </span>
           {check.url === null ? null : (
             <button

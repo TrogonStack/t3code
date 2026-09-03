@@ -15,6 +15,7 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadBootstrapService, type ThreadBootstrapShape } from "../Services/ThreadBootstrap.ts";
 
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -63,6 +64,7 @@ const makeThreadBootstrap = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
+  const threadDeletionReactor = yield* ThreadDeletionReactor;
   const crypto = yield* Crypto.Crypto;
 
   const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
@@ -289,7 +291,7 @@ const makeThreadBootstrap = Effect.gen(function* () {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread) {
-          yield* orchestrationEngine.dispatch(
+          const created = yield* orchestrationEngine.dispatch(
             {
               type: "thread.create",
               commandId: yield* serverCommandId("bootstrap-thread-create"),
@@ -306,14 +308,20 @@ const makeThreadBootstrap = Effect.gen(function* () {
             },
             options,
           );
+          // The successful create is a fence in the engine command queue:
+          // every delete for the prior incarnation committed before it.
+          // Drain through that event before setup or turn start can own
+          // terminals and provider sessions under the reused thread id.
+          yield* threadDeletionReactor.drainThrough(created.sequence);
           createdThread = true;
         }
 
         if (bootstrap?.prepareWorktree) {
           let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
-          // "Start from origin" is a stored default; repos without an
-          // origin remote fall back to the local base branch instead of
-          // failing the whole bootstrap on `git fetch origin`.
+          // "Start from origin" is a stored default; repos without the
+          // requested remote branch, or without an origin remote at all,
+          // fall back to the local base branch instead of failing the whole
+          // bootstrap on `git fetch origin`.
           const startFromOrigin =
             bootstrap.prepareWorktree.startFromOrigin === true &&
             (yield* gitWorkflow.remoteExists({
@@ -325,12 +333,19 @@ const makeThreadBootstrap = Effect.gen(function* () {
               cwd: bootstrap.prepareWorktree.projectCwd,
               remoteName: "origin",
             });
-            const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+            const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
               cwd: bootstrap.prepareWorktree.projectCwd,
               refName: bootstrap.prepareWorktree.baseBranch,
-              fallbackRemoteName: "origin",
+              remoteName: "origin",
             });
-            worktreeBaseRef = resolvedRemoteBase.commitSha;
+            if (remoteBaseExists) {
+              const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                refName: bootstrap.prepareWorktree.baseBranch,
+                fallbackRemoteName: "origin",
+              });
+              worktreeBaseRef = resolvedRemoteBase.commitSha;
+            }
           }
           const worktree = yield* gitWorkflow.createWorktree({
             cwd: bootstrap.prepareWorktree.projectCwd,
