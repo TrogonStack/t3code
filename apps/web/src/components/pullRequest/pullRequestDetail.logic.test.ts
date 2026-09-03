@@ -27,11 +27,13 @@ import {
   pullRequestOffersBypassRetry,
   pullRequestRefusalOf,
   pullRequestActionNeedsHostRefresh,
+  pullRequestCheckoutCommand,
   pullRequestComposerTarget,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   pullRequestReviewOutcome,
   readableFailure,
+  resolvePullRequestPrimaryControl,
   shouldRefreshPullRequestActivity,
   resolveBaseFreshness,
   buildPullRequestTimeline,
@@ -39,6 +41,23 @@ import {
   editPullRequestThreadComment,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+
+describe("pull request checkout commands", () => {
+  it.each([
+    ["github", "feature", null, "gh pr checkout 42"],
+    ["gitlab", "feature", null, "glab mr checkout 42"],
+    ["azure-devops", "feature", null, "az repos pr checkout --id 42"],
+    [
+      "bitbucket",
+      "feature/checkout",
+      "maria/t3code",
+      "git clone --single-branch --branch feature/checkout https://bitbucket.org/maria/t3code.git t3code-pr-42",
+    ],
+    ["unknown", "feature", null, null],
+  ] as const)("builds the %s command", (provider, branch, repository, expected) => {
+    expect(pullRequestCheckoutCommand(provider, 42, branch, repository)).toBe(expected);
+  });
+});
 
 const TIMELINE_SOURCE: Pick<
   PullRequestDetailView,
@@ -190,6 +209,54 @@ describe("pullRequestOffersBypassRetry", () => {
     expect(pullRequestRefusalOf(null)).toBe(null);
     expect(pullRequestRefusalOf("merge-blocked")).toBe(null);
     expect(pullRequestRefusalOf({ refusal: "made-up" })).toBe(null);
+  });
+});
+
+describe("pull request primary control", () => {
+  const open = {
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    checksState: "passing" as const,
+    autoMergeEnabled: false,
+    hasMergeMethod: true,
+    canMerge: true,
+    canMarkReady: true,
+    canEnableAutoMerge: true,
+  };
+
+  it("moves pending and failing checks to auto-merge", () => {
+    expect(resolvePullRequestPrimaryControl({ ...open, checksState: "pending" })).toBe(
+      "enable-auto-merge",
+    );
+    expect(resolvePullRequestPrimaryControl({ ...open, checksState: "failing" })).toBe(
+      "enable-auto-merge",
+    );
+  });
+
+  it("does not offer auto-merge while the host state is unknown", () => {
+    expect(
+      resolvePullRequestPrimaryControl({
+        ...open,
+        checksState: "pending",
+        autoMergeEnabled: undefined,
+      }),
+    ).toBe("merge");
+  });
+
+  it("keeps armed and terminal states in the merge button slot", () => {
+    expect(resolvePullRequestPrimaryControl({ ...open, autoMergeEnabled: true })).toBe(
+      "auto-merge-armed",
+    );
+    expect(resolvePullRequestPrimaryControl({ ...open, state: "merged" })).toBe("merged");
+    expect(resolvePullRequestPrimaryControl({ ...open, state: "closed" })).toBe("closed");
+  });
+
+  it("keeps conflicts and drafts actionable before merge", () => {
+    expect(resolvePullRequestPrimaryControl({ ...open, mergeability: "conflicting" })).toBe(
+      "resolve",
+    );
+    expect(resolvePullRequestPrimaryControl({ ...open, isDraft: true })).toBe("ready");
   });
 });
 
@@ -1290,7 +1357,9 @@ describe("which actions need the host read again after they run", () => {
     // Imported from the contract rather than hand-listed, so a new PullRequestAction fails this
     // test until somebody decides which side of the diff it belongs on.
     expect(PullRequestAction.literals.map(pullRequestActionNeedsHostRefresh)).toEqual(
-      PullRequestAction.literals.map((action) => action === "update-branch"),
+      PullRequestAction.literals.map(
+        (action) => action === "update-branch" || action === "approve-workflows",
+      ),
     );
   });
 
@@ -1307,6 +1376,7 @@ describe("which actions need the host read again after they run", () => {
       "enable-auto-merge",
       "disable-auto-merge",
       "merge",
+      "revert",
     ] as const) {
       expect(pullRequestActionNeedsHostRefresh(action)).toBe(false);
     }

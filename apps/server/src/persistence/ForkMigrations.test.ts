@@ -12,7 +12,7 @@ import {
   SharedMigrationLedgerMismatchError,
   verifySharedMigrationLedger,
 } from "./ForkMigrations.ts";
-import * as NodeSqliteClient from "./NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const UPSTREAM_MAX = Math.max(...migrationEntries.map(([id]) => id));
 

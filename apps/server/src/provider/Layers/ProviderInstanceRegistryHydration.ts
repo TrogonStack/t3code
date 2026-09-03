@@ -33,7 +33,7 @@
  *      priming that snapshot's secret references first so the whole boot
  *      fleet costs one unlock rather than one per instance.
  *   2. Fork a daemon fiber (lifetime tied to the layer's scope) that
- *      subscribes to `ServerSettingsService.streamChanges` and calls
+ *      acquires `ServerSettingsService.subscribeChanges` and calls
  *      `ProviderInstanceRegistryMutator.reconcile` on every emission.
  *
  * Failures inside the watcher are logged and swallowed so a single bad
@@ -140,16 +140,16 @@ const SettingsWatcherLive = Layer.effectDiscard(
     const mutator = yield* ProviderInstanceRegistryMutator;
     const serverSettings = yield* ServerSettingsService;
     const secretResolver = yield* ProviderSecretResolver;
-    yield* serverSettings.streamChanges.pipe(
+    const settingsChanges = yield* serverSettings.subscribeChanges;
+    yield* settingsChanges.pipe(
       Stream.runForEach((next) => {
         const configMap = deriveProviderInstanceConfigMap(next);
-        return primeConfigMapSecrets(secretResolver, configMap)
-          .pipe(Effect.andThen(mutator.reconcile(configMap)))
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
-            ),
-          );
+        return primeConfigMapSecrets(secretResolver, configMap).pipe(
+          Effect.andThen(mutator.reconcile(configMap)),
+          Effect.catchCause((cause) =>
+            Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
+          ),
+        );
       }),
       Effect.forkScoped,
     );
@@ -158,14 +158,14 @@ const SettingsWatcherLive = Layer.effectDiscard(
 
 /**
  * Hydrate `ProviderInstanceRegistry` from `ServerSettings` and keep it in
- * sync with subsequent `streamChanges` emissions.
+ * sync with subsequent `subscribeChanges` emissions.
  *
  * The Layer's two halves:
  *   - `ProviderInstanceRegistryMutableLayer` produces the registry +
  *     mutator from the initial config map. Its scope owns every
  *     per-instance child scope created during reconcile.
- *   - `SettingsWatcherLive` consumes the mutator and runs a daemon fiber
- *     in the same scope.
+ *   - `SettingsWatcherLive` consumes the mutator, acquires its settings
+ *     subscription before forking, and runs a daemon fiber in the same scope.
  *
  * Composing via `Layer.provideMerge` makes the watcher's deps available
  * from the mutable layer while still surfacing the registry as an output.
