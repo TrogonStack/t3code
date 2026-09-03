@@ -15,6 +15,13 @@ export interface AzureDevOpsDiffCursor {
 
 const CURSOR_SEPARATOR = ":";
 
+/**
+ * Both halves are plain decimal, because `Number` is wider than what was written: it reads an
+ * empty or padded half as zero and `0x3` as three, so a cursor this did not write would resume
+ * from a position nothing ever handed out.
+ */
+const CURSOR_COMPONENT = /^\d+$/;
+
 export function formatAzureDevOpsDiffCursor(cursor: AzureDevOpsDiffCursor): string {
   return `${cursor.iterationId}${CURSOR_SEPARATOR}${cursor.fileIndex}`;
 }
@@ -26,6 +33,8 @@ export function parseAzureDevOpsDiffCursor(
   if (raw === null || raw === undefined) return null;
   const [iteration, file, ...rest] = raw.split(CURSOR_SEPARATOR);
   if (rest.length > 0) return null;
+  if (iteration === undefined || file === undefined) return null;
+  if (!CURSOR_COMPONENT.test(iteration) || !CURSOR_COMPONENT.test(file)) return null;
   const iterationId = Number(iteration);
   const fileIndex = Number(file);
   if (!Number.isSafeInteger(iterationId) || iterationId <= 0) return null;

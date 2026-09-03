@@ -220,4 +220,13 @@ describe("a diff cursor", () => {
       expect(parseAzureDevOpsDiffCursor(raw)).toBeNull();
     }
   });
+
+  it("refuses a half it did not write rather than reading it as the first file", () => {
+    // `Number` is wider than the cursor: an empty, padded or hex half would otherwise pass as a
+    // position, and the read would resume against an iteration the client never saw instead of
+    // starting again from the latest one.
+    for (const raw of ["1:", ":4", "1: ", " 1:4", "1:0x2", "0x1:2", "1e2:0", "1:4.0"]) {
+      expect(parseAzureDevOpsDiffCursor(raw)).toBeNull();
+    }
+  });
 });
