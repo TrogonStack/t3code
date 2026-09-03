@@ -107,11 +107,16 @@ export const make = Effect.gen(function* () {
     // the last few hundred milliseconds, so it is a handful of rows on a local database, and a
     // mixed batch of clears and un-clears has no single statement anyway.
     set: (input) =>
-      Effect.forEach(
-        input.files,
-        (file) =>
-          file.viewed
-            ? sql`
+      // One transaction for the batch. A press is a handful of files, and a failure part way
+      // through would otherwise leave some of them cleared and the rest not, which the reader
+      // sees on the next read as marks they never made.
+      sql
+        .withTransaction(
+          Effect.forEach(
+            input.files,
+            (file) =>
+              file.viewed
+                ? sql`
                 INSERT INTO pull_request_files_viewed (
                   provider,
                   host,
@@ -135,7 +140,7 @@ export const make = Effect.gen(function* () {
                 ON CONFLICT (provider, host, repository, number, viewer, path)
                 DO UPDATE SET revision = excluded.revision, viewed_at = excluded.viewed_at
               `
-            : sql`
+                : sql`
                 DELETE FROM pull_request_files_viewed
                 WHERE provider = ${input.provider}
                   AND host = ${input.host}
@@ -144,12 +149,14 @@ export const make = Effect.gen(function* () {
                   AND viewer = ${input.viewer}
                   AND path = ${file.path}
               `,
-        { discard: true },
-      ).pipe(
-        Effect.mapError(
-          (cause) => new PersistenceSqlError({ operation: "setPullRequestFilesViewed", cause }),
+            { discard: true },
+          ),
+        )
+        .pipe(
+          Effect.mapError(
+            (cause) => new PersistenceSqlError({ operation: "setPullRequestFilesViewed", cause }),
+          ),
         ),
-      ),
   });
 });
 

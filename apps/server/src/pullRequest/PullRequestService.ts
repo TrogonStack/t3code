@@ -1482,10 +1482,10 @@ export const make = Effect.gen(function* () {
     });
 
   /**
-   * What the head has of the files a reader has marked, held between reads. A path that was asked
-   * for and is not in the answer is one the head does not carry, which the marks read as the empty
-   * revision — so the entry remembers what it has been asked rather than treating every miss as an
-   * answer it never had.
+   * What the head has of the files a reader has marked, held between reads. A host says the empty
+   * revision for a file the change request deletes, and leaves out a path it could not look at, so
+   * the entry remembers what it has been asked as well as what it heard: a path asked for and
+   * missing from an answer keeps whatever version was last given for it.
    */
   interface HeldFileRevisions {
     readonly at: number;
@@ -1532,8 +1532,10 @@ export const make = Effect.gen(function* () {
       for (const path of paths) {
         asked.add(path);
         const revision = answer.get(path);
-        if (revision === undefined) revisions.delete(path);
-        else revisions.set(path, revision);
+        // Left out of the answer is the host not saying, not the head having nothing: deleting
+        // the version it last gave would turn a file already reported as changed back into a
+        // cleared one on the next answer that had to stop short.
+        if (revision !== undefined) revisions.set(path, revision);
       }
       heldFileRevisions.delete(scope);
       if (heldFileRevisions.size >= FILE_REVISIONS_CACHE_CAPACITY) {
@@ -1636,11 +1638,22 @@ export const make = Effect.gen(function* () {
         .list(filesViewedScope(project, number, viewer))
         .pipe(Effect.mapError(toFilesViewedStoreError("filesViewed")));
       if (marks.length === 0) return { files: [], truncated: false };
+      // These rows are this environment's own. A rate limit or a signed-out CLI costs the marks
+      // their staleness, which is the thing `fileRevisionsOf` already answers null for, and must
+      // not cost the reader every tick they have made. The press itself still fails loudly: a
+      // mark stamped with a revision nobody read is wrong rather than merely less informed.
       const revisions = yield* fileRevisionsOf(
         project,
         number,
         marks.map((mark) => mark.path),
         "filesViewed",
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("reporting viewed files without what the head has of them", {
+            operation: "filesViewed",
+            reason: error._tag,
+          }).pipe(Effect.as(null)),
+        ),
       );
       return {
         files: marks.map((mark) => {
@@ -1679,15 +1692,19 @@ export const make = Effect.gen(function* () {
     number: number,
     write: Effect.Effect<void, PullRequestError>,
   ) =>
-    Effect.gen(function* () {
+    // Suspended rather than generated, so finding the gate, putting it in and taking a place in
+    // its queue are one step. `Semaphore.make` is an effect, and yielding for it between the
+    // lookup and the insert lets two presses each find nothing, each make a gate of their own,
+    // and neither wait on the other, which is the ordering this exists for.
+    Effect.suspend(() => {
       const key = `${project.project.id} ${filesViewedRepositoryOf(project).trim().toLowerCase()} ${number}`;
       const held = filesViewedGates.get(key);
-      const entry = held ?? { gate: yield* Semaphore.make(1), pending: 0 };
+      const entry = held ?? { gate: Semaphore.makeUnsafe(1), pending: 0 };
       if (held === undefined) filesViewedGates.set(key, entry);
       entry.pending += 1;
       // Dropped once nobody is queued behind it, so a long-lived server does not keep a gate per
       // change request anyone has ever ticked a file in.
-      return yield* entry.gate
+      return entry.gate
         .withPermits(1)(write)
         .pipe(
           Effect.ensuring(
@@ -2802,6 +2819,12 @@ export const make = Effect.gen(function* () {
           Effect.sync(() => {
             bumpRefEpoch(input);
             listingsEpoch = ++epochCounter;
+            // Not keyed by epoch, so this one is dropped by hand. Merging or bringing a stale
+            // branch up to date moves the head, and a mark compared against what the head had
+            // before it moved reports a file as cleared that has been pushed to since.
+            forgetFileRevisions(
+              fileRevisionsScope(input.projectId, input.repository, input.number),
+            );
           }),
         ),
       );

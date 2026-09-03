@@ -1057,7 +1057,7 @@ export const make = Effect.gen(function* () {
     readonly repository: string;
     readonly ref: string;
     readonly paths: ReadonlyArray<string>;
-  }): Effect.Effect<ReadonlyMap<string, string>, GitLabPullRequestCliError> =>
+  }): Effect.Effect<ReadonlyMap<string, string> | null, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
       path: "graphql",
@@ -1068,7 +1068,7 @@ export const make = Effect.gen(function* () {
       }),
     }).pipe(
       Effect.flatMap(
-        (result): Effect.Effect<ReadonlyMap<string, string>, GitLabPullRequestCliError> => {
+        (result): Effect.Effect<ReadonlyMap<string, string> | null, GitLabPullRequestCliError> => {
           const decoded = decodeRepositoryBlobsJson(result.stdout.trim());
           return Result.isSuccess(decoded)
             ? Effect.succeed(decoded.success)
@@ -1100,19 +1100,31 @@ export const make = Effect.gen(function* () {
             }
             return Effect.forEach(
               batches,
-              (paths) => blobsAt({ ...input, ref: refs.headSha, paths }),
+              (paths) =>
+                blobsAt({ ...input, ref: refs.headSha, paths }).pipe(
+                  Effect.map((page) => ({ paths, page })),
+                ),
               { concurrency: 2 },
+            ).pipe(
+              Effect.map((pages) => {
+                const revisions = new Map<string, string>();
+                for (const { paths, page } of pages) {
+                  // A batch GitLab did not answer says nothing about its paths, so they are left
+                  // out and the caller reads them as versions it could not learn, which leaves
+                  // the marks on them alone. Filling them in as removed would report every file
+                  // a reader has cleared as changed over a project the token cannot see.
+                  if (page === null) continue;
+                  for (const [path, oid] of page) revisions.set(path, oid);
+                  // Within a batch that was answered, every path was looked for at the head, so
+                  // one that is not there is one the merge request removed. Said as the empty
+                  // revision, which is an answer the caller can compare against and keep.
+                  for (const path of paths) {
+                    if (!revisions.has(path)) revisions.set(path, "");
+                  }
+                }
+                return revisions as ReadonlyMap<string, string>;
+              }),
             );
-          }),
-          Effect.map((pages) => {
-            const revisions = new Map(pages.flatMap((page) => [...page]));
-            // Every path was looked for at the head, so one that is not there is one the merge
-            // request removed rather than one this could not read. Said as the empty revision,
-            // which is an answer the caller can compare against and keep.
-            for (const path of input.paths) {
-              if (!revisions.has(path)) revisions.set(path, "");
-            }
-            return revisions as ReadonlyMap<string, string>;
           }),
         );
 

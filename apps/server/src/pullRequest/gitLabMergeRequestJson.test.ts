@@ -633,8 +633,16 @@ describe("gitLabAwardName", () => {
 });
 
 describe("decodeRepositoryBlobsJson", () => {
+  /** Null is the query going unanswered, which these cases are not about. */
+  function expectBlobs(result: Result.Result<ReadonlyMap<string, string> | null, unknown>) {
+    const blobs = expectSuccess(result);
+    expect(blobs).not.toBe(null);
+    if (blobs === null) throw new Error("expected an answered blobs query");
+    return blobs;
+  }
+
   it("reads a blob id per path", () => {
-    const blobs = expectSuccess(
+    const blobs = expectBlobs(
       decodeRepositoryBlobsJson(
         JSON.stringify({
           data: {
@@ -660,7 +668,7 @@ describe("decodeRepositoryBlobsJson", () => {
   });
 
   it("leaves out a node missing either half, which names no version", () => {
-    const blobs = expectSuccess(
+    const blobs = expectBlobs(
       decodeRepositoryBlobsJson(
         JSON.stringify({
           data: {
@@ -684,12 +692,24 @@ describe("decodeRepositoryBlobsJson", () => {
     expect([...blobs]).toEqual([["src/c.ts", "ccc333"]]);
   });
 
-  it("reads a project the reader cannot see as no blobs rather than a failure", () => {
-    // The revision simply has none of the asked-for files, which is what a caller reads as
-    // "nothing here still stands" rather than as a read that broke.
-    expect([
-      ...expectSuccess(decodeRepositoryBlobsJson(JSON.stringify({ data: { project: null } }))),
-    ]).toEqual([]);
+  it("tells a project the reader cannot see from a revision with none of the files", () => {
+    // Null is the query going unanswered. Read as an empty answer it would say the head has none
+    // of the asked-for files, which reports every file a reader has cleared as changed.
+    expect(
+      expectSuccess(decodeRepositoryBlobsJson(JSON.stringify({ data: { project: null } }))),
+    ).toBe(null);
+    expect(
+      expectSuccess(
+        decodeRepositoryBlobsJson(JSON.stringify({ data: { project: { repository: null } } })),
+      ),
+    ).toBe(null);
+    expect(
+      expectSuccess(
+        decodeRepositoryBlobsJson(
+          JSON.stringify({ data: { project: { repository: { blobs: { nodes: [] } } } } }),
+        ),
+      ),
+    ).toEqual(new Map());
   });
 
   it("fails on output that is not the query's shape", () => {

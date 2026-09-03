@@ -1002,18 +1002,27 @@ const RawRepositoryBlobsSchema = Schema.Struct({
 const decodeRepositoryBlobs = decodeJsonResult(RawRepositoryBlobsSchema);
 
 /**
- * Blob ids by path. A node without both is left out: half an answer names no version, and the
- * caller reads an absent path as "the revision does not have this file".
+ * Blob ids by path, or null where GitLab did not answer the query at all.
+ *
+ * A project the token cannot see comes back as `project: null`, and a repository can come back
+ * without a blobs connection, neither of which says anything about the paths that were asked for.
+ * That is worth telling apart from a connection that answered: read as "the revision has none of
+ * these files", an unanswered query reports every file a reader has cleared as changed.
+ *
+ * Within an answer, a node missing either half is left out, because half of one names no version,
+ * and the caller reads an absent path as one the revision does not carry.
  */
 export function decodeRepositoryBlobsJson(
   raw: string,
-): Result.Result<ReadonlyMap<string, string>, DecodeFailure> {
+): Result.Result<ReadonlyMap<string, string> | null, DecodeFailure> {
   const decoded = decodeRepositoryBlobs(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
+  const nodes = decoded.success.data.project?.repository?.blobs?.nodes;
+  if (nodes === undefined || nodes === null) return Result.succeed(null);
   const blobs = new Map<string, string>();
-  for (const node of decoded.success.data.project?.repository?.blobs?.nodes ?? []) {
+  for (const node of nodes) {
     const path = trimmed(node?.path);
     const oid = trimmed(node?.oid);
     if (path === null || oid === null) continue;

@@ -4263,6 +4263,110 @@ it.effect("leaves a mark alone when the host could not say what the head has of 
   }),
 );
 
+it.effect("keeps the version it last heard when a later read of the head stops short", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const revisions = new Map([["src/a.ts", "blob-a"]]);
+    const unreadable = new Set<string>();
+    const service = yield* environmentViewedService(revisions, asked, unreadable);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    revisions.set("src/a.ts", "blob-a-again");
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+    assert.deepStrictEqual((yield* service.filesViewed(GITLAB_REFERENCE)).files, [
+      { path: "src/a.ts", state: "dismissed" },
+    ]);
+
+    // The read behind the next answer has to stop before this file. Forgetting the version it was
+    // last seen at would put the badge the reader has already been shown back to cleared, over an
+    // answer that said nothing about the file either way.
+    unreadable.add("src/a.ts");
+    yield* TestClock.adjust("90 seconds");
+    yield* service.filesViewed(GITLAB_REFERENCE);
+    yield* TestClock.adjust("20 seconds");
+
+    assert.deepStrictEqual((yield* service.filesViewed(GITLAB_REFERENCE)).files, [
+      { path: "src/a.ts", state: "dismissed" },
+    ]);
+  }),
+);
+
+it.effect("forgets what the head had of a marked file once a mutation moves the head", () =>
+  Effect.gen(function* () {
+    const revisions = new Map([["src/a.ts", "blob-a"]]);
+    const service = yield* environmentViewedService(revisions, []);
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    // Merging moves the head under the mark, and nobody asks for the refresh: the mutation is
+    // the thing that knows, so it drops what it was holding rather than waiting to be told.
+    revisions.set("src/a.ts", "blob-a-again");
+    yield* service.runAction({ ...GITLAB_REFERENCE, action: "merge" });
+
+    assert.deepStrictEqual((yield* service.filesViewed(GITLAB_REFERENCE)).files, [
+      { path: "src/a.ts", state: "dismissed" },
+    ]);
+  }),
+);
+
+it.effect("still reports its own marks when the host will not say what the head has", () =>
+  Effect.gen(function* () {
+    let answering = true;
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: true,
+            viewedFiles: "environment",
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+          setFilesViewed: () => Effect.die("the host keeps no marks of its own"),
+          getFileRevisions: (input) =>
+            answering
+              ? Effect.succeed({
+                  revisions: new Map(input.paths.map((path) => [path, "blob-a"] as const)),
+                })
+              : Effect.fail(requestFailed),
+        }),
+      ],
+    });
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: [{ path: "src/a.ts", viewed: true }],
+    });
+    answering = false;
+    yield* service.invalidate({ reference: GITLAB_REFERENCE });
+
+    // The rows are this environment's own. A rate limit or a signed-out CLI costs them the
+    // staleness they would have carried, not the reader's whole record of what they have read.
+    assert.deepStrictEqual((yield* service.filesViewed(GITLAB_REFERENCE)).files, [
+      { path: "src/a.ts", state: "viewed" },
+    ]);
+  }),
+);
+
 it.effect("finishes two presses on one file in the order they were made", () =>
   Effect.gen(function* () {
     // A tick asks the host what it has of the file before it stores anything, and an untick asks

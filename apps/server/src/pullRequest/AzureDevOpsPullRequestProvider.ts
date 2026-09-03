@@ -8,6 +8,7 @@ import {
   formatAzureDevOpsDiffCursor,
   parseAzureDevOpsDiffCursor,
   MAX_DIFF_SLICE_BYTES,
+  byteLength,
   MAX_FILE_DIFF_MILLIS,
   type AzureDevOpsFileTexts,
 } from "./azureDevOpsDiff.ts";
@@ -415,7 +416,7 @@ export const make = Effect.gen(function* () {
               ? azureDevOpsUnreadableFilePatch(change)
               : azureDevOpsFilePatch({ change, texts, timeoutMillis: MAX_FILE_DIFF_MILLIS });
           sections.push(file.section);
-          bytes += file.section.length;
+          bytes += byteLength(file.section);
           truncated = truncated || file.truncated;
           index += 1;
           // A file whose diff was given up on spent the whole of what one file is allowed and has

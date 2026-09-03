@@ -1457,6 +1457,47 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("leaves the paths out when GitLab did not answer the blobs query", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              iid: 7,
+              title: "t",
+              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+              source_branch: "feat",
+              target_branch: "main",
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              diff_refs: { base_sha: "base", head_sha: "head", start_sha: "start" },
+            }),
+          ),
+        ),
+      );
+      // What GitLab says of a project the token cannot see. It is not the head having none of
+      // these files, and reading it that way would report every file the reader has cleared as
+      // changed on nothing worse than a permission.
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          output(JSON.stringify({ data: { project: null } })),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const revisions = yield* cli.getFileRevisions({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        paths: ["src/a.ts", "src/b.ts"],
+      });
+
+      expect([...revisions]).toEqual([]);
+    }),
+  );
+
   it.effect("asks GitLab nothing when no file is marked", () =>
     Effect.gen(function* () {
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;

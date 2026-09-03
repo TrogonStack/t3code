@@ -91,7 +91,7 @@ function isBinary(contents: string): boolean {
  * in characters lets a file of three-byte glyphs through at three times the size meant to be let
  * through.
  */
-const byteLength = (contents: string) => Buffer.byteLength(contents, "utf8");
+export const byteLength = (contents: string) => Buffer.byteLength(contents, "utf8");
 
 /**
  * Git points an empty range at the line before it, which is line zero for a file that is wholly
