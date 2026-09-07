@@ -15,6 +15,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
+import { ProviderSecretResolverPassthroughLayer } from "../Services/ProviderSecretResolver.ts";
 import { CursorDriver } from "./CursorDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
@@ -28,6 +29,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
     }),
   ),
   Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+  Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,

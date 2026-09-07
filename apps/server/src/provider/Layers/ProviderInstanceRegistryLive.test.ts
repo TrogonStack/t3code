@@ -644,6 +644,7 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
     Layer.provideMerge(ModelManifest.layerTest),
+    Layer.provideMerge(CodexResetCredit.layerTest),
   );
 
   const codexDriverKind = ProviderDriverKind.make("codex");

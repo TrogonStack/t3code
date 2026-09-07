@@ -146,6 +146,7 @@ const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* 
             return {
               sessionId: nativeSessionId,
               initializeResult: { protocolVersion: 1 },
+              authenticateResult: {},
               sessionSetupResult: { sessionId: nativeSessionId },
               modelConfigId: "model",
             };

@@ -34,6 +34,7 @@ const initialized = {
 const started: AcpSessionRuntimeStartResult = {
   sessionId: "native-session",
   initializeResult: initialized,
+  authenticateResult: {},
   sessionSetupResult: {
     sessionId: "native-session",
     models: {

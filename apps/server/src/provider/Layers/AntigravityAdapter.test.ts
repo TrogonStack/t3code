@@ -159,6 +159,7 @@ const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (option
             protocolVersion: 1,
             agentCapabilities: { sessionCapabilities: { resume: {} } },
           },
+          authenticateResult: {},
           sessionSetupResult: { sessionId: nativeSessionId, configOptions: configOptions() },
           modelConfigId: "model",
         };

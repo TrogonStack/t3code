@@ -25,6 +25,7 @@ import {
   ProviderVersionCache,
   resolveLatestProviderVersion,
 } from "../providerMaintenance.ts";
+import { ProviderSecretResolverPassthroughLayer } from "../Services/ProviderSecretResolver.ts";
 import { CodexDriver } from "./CodexDriver.ts";
 
 const testLayer = ServerConfig.layerTest(process.cwd(), {
@@ -40,6 +41,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
     }),
   ),
   Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+  Layer.provideMerge(ProviderSecretResolverPassthroughLayer),
   Layer.provideMerge(
     Layer.succeed(
       HttpClient.HttpClient,

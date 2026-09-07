@@ -19,11 +19,14 @@ describe("mergeProviderInstanceEnvironment", () => {
         CLAUDE_CONFIG_DIR: "~/.inherited-claude",
       };
       const environment = mergeProviderInstanceEnvironment(
-        [
-          { name: "CODEX_HOME", value, sensitive: false },
-          { name: "CLAUDE_CONFIG_DIR", value, sensitive: false },
-          { name: "CUSTOM_VALUE", value, sensitive: false },
-        ],
+        {
+          variables: [
+            { name: "CODEX_HOME", value, sensitive: false },
+            { name: "CLAUDE_CONFIG_DIR", value, sensitive: false },
+            { name: "CUSTOM_VALUE", value, sensitive: false },
+          ],
+          unresolved: [],
+        },
         baseEnv,
       );
 
@@ -44,7 +47,10 @@ describe("mergeProviderInstanceEnvironment", () => {
 
     expect(
       mergeProviderInstanceEnvironment(
-        [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
+        {
+          variables: [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
+          unresolved: [],
+        },
         baseEnv,
       ),
     ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom" });

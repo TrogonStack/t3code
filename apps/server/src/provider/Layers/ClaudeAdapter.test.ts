@@ -5644,13 +5644,17 @@ describe("ClaudeAdapterLive", () => {
         return;
       }
 
-      const result = yield* Effect.promise(() =>
+      const result = (yield* Effect.promise(() =>
         canUseTool(
           "Task",
           { subagent_type: "general", prompt: "do it", description: "task" },
-          { signal: new AbortController().signal, toolUseID: "tool-use-task-1" },
+          {
+            signal: new AbortController().signal,
+            requestId: "request-task-1",
+            toolUseID: "tool-use-task-1",
+          },
         ),
-      );
+      )) as PermissionResult;
       assert.equal(result.behavior, "deny");
       if (result.behavior === "deny") {
         assert.include(result.message, "mcp__t3-code__spawn_thread");
@@ -5702,16 +5706,20 @@ describe("ClaudeAdapterLive", () => {
         return;
       }
 
-      const result = yield* Effect.promise(() =>
+      const result = (yield* Effect.promise(() =>
         canUseTool(
           "Task",
           { subagent_type: "general", prompt: "do it", description: "task" },
-          { signal: new AbortController().signal, toolUseID: "tool-use-task-2" },
+          {
+            signal: new AbortController().signal,
+            requestId: "request-task-2",
+            toolUseID: "tool-use-task-2",
+          },
         ),
-      );
+      )) as PermissionResult;
       assert.equal(result.behavior, "allow");
       const systemPrompt = createInput?.options.systemPrompt as { append?: string };
-      assert.isUndefined(systemPrompt.append);
+      assert.notInclude(systemPrompt.append ?? "", "mcp__t3-code__await_thread");
     }).pipe(Effect.scoped, Effect.provide(harness.layer));
   });
 

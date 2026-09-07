@@ -92,6 +92,7 @@ const sessionSetupResult = {
 const started = {
   sessionId: "session-1",
   initializeResult,
+  authenticateResult: {},
   sessionSetupResult,
   modelConfigId: "model",
 } satisfies AcpSessionRuntimeStartResult;

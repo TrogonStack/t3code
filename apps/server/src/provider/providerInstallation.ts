@@ -115,7 +115,7 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
       }
       const binaryPath = entry.config.binaryPath.trim();
       return resolveCommandPath(binaryPath, {
-        env: mergeProviderInstanceEnvironment(entry.environment),
+        env: mergeProviderInstanceEnvironment({ variables: entry.environment, unresolved: [] }),
       }).pipe(
         Effect.map((resolved) => [binaryPath, resolved]),
         Effect.catch(() => Effect.succeed([binaryPath])),

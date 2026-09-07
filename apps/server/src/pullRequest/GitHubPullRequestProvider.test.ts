@@ -113,6 +113,7 @@ describe("gitHubViewerPermissions", () => {
         canUpdate: true,
         didAuthor: false,
         canAdminister: false,
+        canTriage: true,
       }).mergeBypass,
     ).toBe(false);
   });
@@ -146,6 +147,7 @@ describe("gitHubViewerPermissions", () => {
       canTriage: true,
       canUpdate: false,
       didAuthor: false,
+      canAdminister: false,
     });
     expect(permissions.labels).toBe(true);
     expect(permissions.requestReviewers).toBe(false);
