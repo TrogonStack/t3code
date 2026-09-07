@@ -33,8 +33,6 @@ type RuntimeLayerSource =
   | typeof ClientTracingLive
   | ReturnType<typeof managedRelayClientLayer>;
 
-export const remoteHttpRuntime = ManagedRuntime.make(httpClientLayer);
-
 const primaryHttpRuntime = ManagedRuntime.make(
   PrimaryEnvironmentHttpClient.layer.pipe(Layer.provide(primaryEnvironmentHttpLayer)),
 );
