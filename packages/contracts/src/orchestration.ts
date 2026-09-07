@@ -148,6 +148,8 @@ export type ProviderApprovalDecision = typeof ProviderApprovalDecision.Type;
 export const ProviderApprovalOption = Schema.Struct({
   decision: ProviderApprovalDecision,
   label: TrimmedNonEmptyString,
+  /** Provider-supplied caution shown next to the option, such as a prompt injection warning. */
+  warning: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderApprovalOption = typeof ProviderApprovalOption.Type;
 export const ProviderUserInputAnswers = Schema.Record(Schema.String, Schema.Unknown);
@@ -282,6 +284,48 @@ export const ProjectFaviconPath = TrimmedNonEmptyString.check(
 );
 export type ProjectFaviconPath = typeof ProjectFaviconPath.Type;
 
+export const ProjectIconColor = Schema.Literals([
+  "gray",
+  "red",
+  "orange",
+  "amber",
+  "yellow",
+  "lime",
+  "green",
+  "emerald",
+  "teal",
+  "cyan",
+  "sky",
+  "blue",
+  "indigo",
+  "violet",
+  "purple",
+  "fuchsia",
+  "pink",
+  "rose",
+]);
+export type ProjectIconColor = typeof ProjectIconColor.Type;
+
+const ProjectLucideIconName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+);
+
+const ProjectEmoji = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
+
+export const ProjectIconOverride = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("lucide"),
+    name: ProjectLucideIconName,
+    color: ProjectIconColor,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("emoji"),
+    emoji: ProjectEmoji,
+  }),
+]);
+export type ProjectIconOverride = typeof ProjectIconOverride.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   title: TrimmedNonEmptyString,
@@ -296,6 +340,7 @@ export const OrchestrationProject = Schema.Struct({
   autoPull: Schema.optional(Schema.Boolean),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -450,6 +495,7 @@ export const OrchestrationThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -478,6 +524,9 @@ export const OrchestrationThread = Schema.Struct({
   // servers never need each other's threads to agree on the merged list.
   // Optional so payloads from pre-reorder servers still decode.
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  // Manual Active placement. Keyless threads retain their creation/re-entry
+  // order above the arranged run. Settling clears this slot.
+  activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -509,6 +558,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   autoPull: Schema.optional(Schema.Boolean),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -528,6 +578,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -542,6 +593,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
@@ -731,6 +783,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
 });
 
@@ -756,6 +809,7 @@ const ThreadCreateCommand = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
+  historyImport: Schema.optional(Schema.Literal(true)),
 });
 
 const ThreadDeleteCommand = Schema.Struct({
@@ -845,6 +899,13 @@ const ThreadPinReorderCommand = Schema.Struct({
   // these keys, so a drag writes one key to one thread — neighbors (possibly
   // on other servers) are never touched. Clients compute a key that sorts
   // between the dropped position's neighbors.
+  orderKey: TrimmedNonEmptyString,
+});
+
+const ThreadActiveReorderCommand = Schema.Struct({
+  type: Schema.Literal("thread.active.reorder"),
+  commandId: CommandId,
+  threadId: ThreadId,
   orderKey: TrimmedNonEmptyString,
 });
 
@@ -976,6 +1037,17 @@ const ThreadUserInputRespondCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+// Closes an async question without answering it. The agent is not messaged;
+// the composer is simply released. Native callback questions cannot be dismissed
+// this way because the provider is blocked waiting on a reply.
+const ThreadUserInputDismissCommand = Schema.Struct({
+  type: Schema.Literal("thread.user-input.dismiss"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  requestId: ApprovalRequestId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadCheckpointRevertCommand = Schema.Struct({
   type: Schema.Literal("thread.checkpoint.revert"),
   commandId: CommandId,
@@ -1012,6 +1084,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPinCommand,
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
+  ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -1019,6 +1092,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
+  ThreadUserInputDismissCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
 ]);
@@ -1040,6 +1114,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPinCommand,
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
+  ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
@@ -1047,6 +1122,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
+  ThreadUserInputDismissCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
 ]);
@@ -1077,6 +1153,20 @@ const ThreadMessageAssistantCompleteCommand = Schema.Struct({
   messageId: MessageId,
   turnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
+});
+
+const ThreadHistoryImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.history.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messages: Schema.Array(
+    Schema.Struct({
+      messageId: MessageId,
+      role: Schema.Literals(["user", "assistant"]),
+      text: Schema.String,
+      createdAt: IsoDateTime,
+    }),
+  ).check(Schema.isNonEmpty()),
 });
 
 const ThreadProposedPlanUpsertCommand = Schema.Struct({
@@ -1125,16 +1215,35 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+const ThreadPullRequestSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.pull-request.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  snapshotSequence: NonNegativeInt,
+  expected: Schema.Struct({
+    workspaceRoot: TrimmedNonEmptyString,
+    branch: Schema.NullOr(TrimmedNonEmptyString),
+    worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+    linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+    branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  }),
+  branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+  linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
+  ThreadHistoryImportCommand,
   ThreadProposedPlanUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadPullRequestSyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1189,6 +1298,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -1203,6 +1313,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
+  projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });
@@ -1295,6 +1406,9 @@ export const ThreadPinReorderedPayload = Schema.Struct({
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
+  // Order updates use this existing event so older clients can ignore the
+  // new field while continuing to decode the event stream.
+  activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   title: Schema.optional(TrimmedNonEmptyString),
   /** Intent marker consumed by the title-generation reactor. Keeping this on
       the existing event lets older clients safely ignore the new field. */
@@ -1307,6 +1421,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   updatedAt: IsoDateTime,
 });
 
@@ -1429,6 +1544,7 @@ export const OrchestrationEventMetadata = Schema.Struct({
   adapterKey: Schema.optional(TrimmedNonEmptyString),
   requestId: Schema.optional(ApprovalRequestId),
   ingestedAt: Schema.optional(IsoDateTime),
+  historyImport: Schema.optional(Schema.Boolean),
   origin: Schema.optional(OrchestrationClientOrigin),
 });
 export type OrchestrationEventMetadata = typeof OrchestrationEventMetadata.Type;
