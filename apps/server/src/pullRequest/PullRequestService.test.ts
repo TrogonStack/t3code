@@ -5594,6 +5594,58 @@ it.effect("bounds the paths one change request's held revisions carry", () =>
   }),
 );
 
+it.effect("keeps the marked paths when a whole-change answer is wider than the cap", () =>
+  Effect.gen(function* () {
+    // A host with no per-file version answers with the whole change, which on a wide review
+    // carries more paths than one entry holds. What the trim reaches has to be the paths the
+    // answer threw in rather than the ones the reader ticked: a mark stored with no baseline
+    // reports viewed however far the head moves off it.
+    const head = new Map<string, string>(
+      Array.from(
+        { length: MAX_FILE_REVISION_PATHS + 178 },
+        (_, index) =>
+          [`src/f${String(index).padStart(4, "0")}.ts`, `blob-${String(index)}`] as const,
+      ),
+    );
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        {
+          ...environmentViewedProvider(head, []),
+          getFileRevisions: () => Effect.succeed({ revisions: head, complete: true }),
+        },
+      ],
+    });
+    const ticked = ["src/f0000.ts", "src/f0500.ts"];
+
+    yield* service.setFilesViewed({
+      ...GITLAB_REFERENCE,
+      files: ticked.map((path) => ({ path, viewed: true })),
+    });
+    for (const path of ticked) head.set(path, "blob-moved");
+    // Past the stale window, so the read is answered by the host rather than from what the press
+    // heard.
+    yield* TestClock.adjust("11 minutes");
+    const marked = yield* service.filesViewed(GITLAB_REFERENCE);
+
+    assert.deepStrictEqual(
+      [...marked.files].toSorted((left, right) => left.path.localeCompare(right.path)),
+      [
+        { path: "src/f0000.ts", state: "dismissed" },
+        { path: "src/f0500.ts", state: "dismissed" },
+      ],
+    );
+  }),
+);
+
 it.effect("keeps the change request being ticked through, not the one pressed first", () =>
   Effect.gen(function* () {
     // Ordered by insertion alone a hit does not renew its entry, so the review a reader is

@@ -95,7 +95,9 @@ const makeFileRevisions = (dependencies: FileRevisionsDependencies) => {
           : null;
       const revisions = new Map(carried?.revisions ?? []);
       const asked = new Set(carried?.asked ?? []);
-      const learned = answer.complete === true ? [...paths, ...answer.revisions.keys()] : paths;
+      // The paths asked for go last, so a whole-change answer wider than the cap is trimmed down
+      // to the reader's own files rather than over them.
+      const learned = answer.complete === true ? [...answer.revisions.keys(), ...paths] : paths;
       for (const path of learned) {
         // Reinserted rather than added, so what a full entry drops below is the path nobody has
         // asked about in the longest rather than one just asked for.
