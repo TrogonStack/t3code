@@ -35,7 +35,6 @@ import type {
 } from "@t3tools/contracts";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
-import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -2906,7 +2905,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
               input: {
                 projectId: pullRequestProject.id,
                 repository:
-                  sourceControlRepositorySelector(pullRequestProject.repositoryIdentity) ??
+                  pullRequestProject.repositoryIdentity?.displayName ??
                   pullRequestCandidate.repository,
                 number: pullRequestCandidate.number,
               },
