@@ -31,6 +31,7 @@ import type {
   PullRequestState,
   PullRequestThreadComment,
 } from "@t3tools/contracts";
+import { quoteGitPatchPath } from "@t3tools/shared/gitPatchPath";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 import { dedupeChecks } from "./pullRequestChecks.ts";
@@ -2497,16 +2498,21 @@ export function decodePullRequestFilesJson(
     }
     // A rename counts its hunks against the old path, which is the only place it is named.
     const oldPath =
-      status === "renamed" ? (trimmed(value.previous_filename) ?? value.filename) : value.filename;
+      status === "renamed" ? value.previous_filename || value.filename : value.filename;
     const header = [
-      `diff --git a/${oldPath} b/${value.filename}`,
+      `diff --git ${quoteGitPatchPath(`a/${oldPath}`)} ${quoteGitPatchPath(`b/${value.filename}`)}`,
       // The files API reports no file mode, so the ordinary one stands in: the viewer reads
       // these lines as "added" and "removed" rather than for the mode they carry.
       ...(status === "added" ? ["new file mode 100644"] : []),
       ...(status === "removed" ? ["deleted file mode 100644"] : []),
-      ...(status === "renamed" ? [`rename from ${oldPath}`, `rename to ${value.filename}`] : []),
-      `--- ${status === "added" ? "/dev/null" : `a/${oldPath}`}`,
-      `+++ ${status === "removed" ? "/dev/null" : `b/${value.filename}`}`,
+      ...(status === "renamed"
+        ? [
+            `rename from ${quoteGitPatchPath(oldPath)}`,
+            `rename to ${quoteGitPatchPath(value.filename)}`,
+          ]
+        : []),
+      `--- ${status === "added" ? "/dev/null" : quoteGitPatchPath(`a/${oldPath}`)}`,
+      `+++ ${status === "removed" ? "/dev/null" : quoteGitPatchPath(`b/${value.filename}`)}`,
     ].join("\n");
     sections.push(hunks.length === 0 ? `${header}\n` : `${header}\n${hunks.replace(/\n?$/, "\n")}`);
   }

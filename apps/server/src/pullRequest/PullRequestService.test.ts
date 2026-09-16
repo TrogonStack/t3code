@@ -3881,7 +3881,7 @@ it.effect("shares linked summaries and reuses them for display without asking th
 
 it.effect("keeps routed reads separate when the GitHub account changes", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff"] as const) {
+    for (const operation of ["summary", "detail", "diff", "filesViewed"] as const) {
       let failing = false;
       let calls = 0;
       const read = () =>
@@ -3897,6 +3897,14 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
         ],
         providers: [
           fakeProvider("github", {
+            capabilities: { ...fakeProvider("github").capabilities, viewedFiles: "host" },
+            getFilesViewed: () =>
+              read().pipe(
+                Effect.as({
+                  files: [{ path: "private.ts", state: "viewed" as const }],
+                  truncated: false,
+                }),
+              ),
             getChangeRequestSummary: read,
             getChangeRequest: read,
             getDiff: () =>
@@ -3927,7 +3935,7 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
 
 it.effect("isolates routed caches for two credentials belonging to the same account", () =>
   Effect.gen(function* () {
-    for (const operation of ["summary", "detail", "diff"] as const) {
+    for (const operation of ["summary", "detail", "diff", "filesViewed"] as const) {
       let credential = "broad";
       let calls = 0;
       const read = () =>
@@ -3943,6 +3951,14 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
         ],
         providers: [
           fakeProvider("github", {
+            capabilities: { ...fakeProvider("github").capabilities, viewedFiles: "host" },
+            getFilesViewed: () =>
+              read().pipe(
+                Effect.as({
+                  files: [{ path: "private.ts", state: "viewed" as const }],
+                  truncated: false,
+                }),
+              ),
             withVerifiedCredential: (_, use) =>
               Effect.suspend(() =>
                 use({
@@ -4972,6 +4988,7 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
   Effect.gen(function* () {
     let diffReads = 0;
     let viewedReads = 0;
+    let state: "viewed" | "dismissed" = "viewed";
     const service = yield* makeService({
       projects: [
         project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
@@ -4996,7 +5013,7 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
           getFilesViewed: () => {
             viewedReads += 1;
             return Effect.succeed({
-              files: [{ path: "src/a.ts", state: "viewed" as const }],
+              files: [{ path: "src/a.ts", state }],
               truncated: false,
             });
           },
@@ -5015,6 +5032,15 @@ it.effect("keeps the diff cached across a file being ticked off", () =>
     // The press forgets only the reader's own ticks: a diff of any size survives it.
     assert.strictEqual(diffReads, 1);
     assert.strictEqual(viewedReads, 2);
+
+    state = "dismissed";
+    yield* service.invalidate({ reference, filesViewedOnly: true });
+    yield* service.diff(reference);
+    assert.deepStrictEqual((yield* service.filesViewed(reference)).files, [
+      { path: "src/a.ts", state: "dismissed" },
+    ]);
+    assert.strictEqual(diffReads, 1);
+    assert.strictEqual(viewedReads, 3);
   }),
 );
 

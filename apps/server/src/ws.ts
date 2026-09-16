@@ -2740,13 +2740,15 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsFilesViewed]: (input) =>
-          observeRpcEffect(WS_METHODS.pullRequestsFilesViewed, pullRequests.filesViewed(input), {
-            "rpc.aggregate": "pull-requests",
-          }),
+          observeRpcEffect(
+            WS_METHODS.pullRequestsFilesViewed,
+            withPullRequestViewer(input, pullRequests.filesViewed(input)),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.pullRequestsSetFilesViewed]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsSetFilesViewed,
-            pullRequests.setFilesViewed(input),
+            withPullRequestViewer(input, pullRequests.setFilesViewed(input)),
             { "rpc.aggregate": "pull-requests" },
           ),
         [WS_METHODS.pullRequestsRunAction]: (input) =>

@@ -1350,6 +1350,57 @@ describe("review submission payload", () => {
 });
 
 describe("decodePullRequestFilesJson", () => {
+  it("quotes literal backslashes without interpreting them as escapes", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          {
+            filename: String.raw`src\notes.ts`,
+            status: "modified",
+            patch: "@@ -1 +1 @@\n-old\n+new",
+          },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toBe(
+      [
+        String.raw`diff --git "a/src\\notes.ts" "b/src\\notes.ts"`,
+        String.raw`--- "a/src\\notes.ts"`,
+        String.raw`+++ "b/src\\notes.ts"`,
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves spaces and literal backslashes in both rename paths", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          {
+            previous_filename: String.raw` old\name.ts `,
+            filename: String.raw` new\name.ts `,
+            status: "renamed",
+          },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toBe(
+      [
+        String.raw`diff --git "a/ old\\name.ts " "b/ new\\name.ts "`,
+        String.raw`rename from " old\\name.ts "`,
+        String.raw`rename to " new\\name.ts "`,
+        String.raw`--- "a/ old\\name.ts "`,
+        String.raw`+++ "b/ new\\name.ts "`,
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("assembles a unified patch the files API does not return", () => {
     const result = expectSuccess(
       decodePullRequestFilesJson(

@@ -2908,15 +2908,8 @@ export const make = Effect.gen(function* () {
 
   const filesViewedCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, , projectId, host, repository, number] = JSON.parse(key) as [
-        number,
-        number,
-        string,
-        string,
-        string,
-        number,
-      ];
-      return viewedFiles.filesViewed({ projectId, host, repository, number } as PullRequestRef);
+      const [referenceKey] = JSON.parse(key) as [string, number];
+      return viewedFiles.filesViewed(refOfCacheKey(referenceKey));
     },
     {
       capacity: FILES_VIEWED_CACHE_CAPACITY,
@@ -2928,17 +2921,7 @@ export const make = Effect.gen(function* () {
   const filesViewed: PullRequestService["Service"]["filesViewed"] = (input) =>
     canonicalRef(input).pipe(
       Effect.flatMap((ref) =>
-        Cache.get(
-          filesViewedCache,
-          JSON.stringify([
-            refEpoch(ref),
-            filesViewedEpoch(ref),
-            ref.projectId,
-            ref.host,
-            ref.repository,
-            ref.number,
-          ]),
-        ),
+        Cache.get(filesViewedCache, JSON.stringify([refCacheKey(ref), filesViewedEpoch(ref)])),
       ),
     );
 
@@ -3001,6 +2984,14 @@ export const make = Effect.gen(function* () {
 
   const invalidate: PullRequestService["Service"]["invalidate"] = (input) => {
     const reference = input.reference;
+    if (input.filesViewedOnly === true) {
+      return reference === undefined
+        ? Cache.invalidateAll(filesViewedCache)
+        : canonicalRef(reference).pipe(
+            Effect.flatMap((ref) => Effect.sync(() => bumpFilesViewedEpoch(ref))),
+            Effect.ignore,
+          );
+    }
     if (reference !== undefined) {
       return canonicalRef(reference).pipe(
         Effect.flatMap((ref) =>
@@ -3126,7 +3117,7 @@ export const make = Effect.gen(function* () {
     threadComments,
     diff: credentialCached(diff),
     diffFileContents,
-    filesViewed,
+    filesViewed: credentialCached(filesViewed),
     setFilesViewed,
     runAction: runActionAndInvalidate,
     update: invalidatedByMutation(update),

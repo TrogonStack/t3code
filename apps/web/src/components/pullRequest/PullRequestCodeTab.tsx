@@ -228,6 +228,8 @@ function PullRequestCodeTab({
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   /** Set once the reader has asked for every file at once, until they pick a file apart again. */
   const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
+  const effectiveFoldOverride =
+    foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded");
   const diffLayout = settings.diffLayout;
   const updateClientSettings = useUpdateClientSettings();
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
@@ -561,11 +563,7 @@ function PullRequestCodeTab({
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
       annotatedFiles.map(({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
-        const collapsed = isFileDiffCollapsed(
-          fileKey,
-          foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
-          toggledFiles,
-        );
+        const collapsed = isFileDiffCollapsed(fileKey, effectiveFoldOverride, toggledFiles);
         // Ticking a file that is already folded changes no fold, so without this the box on
         // screen would keep saying the opposite of what the count says.
         const viewedMark = filesViewedEnabled
@@ -583,10 +581,9 @@ function PullRequestCodeTab({
     [
       annotatedFiles,
       filesViewedEnabled,
-      foldOverride,
+      effectiveFoldOverride,
       isFileViewed,
       isFileViewedStale,
-      settings.diffFilesCollapsed,
       toggledFiles,
     ],
   );
@@ -658,10 +655,10 @@ function PullRequestCodeTab({
     (fileKey: string, path: string, viewed: boolean) => {
       setViewed(path, viewed);
       setToggledFiles((current) =>
-        toggleFileDiffFoldForViewed(fileKey, viewed, foldOverride, current),
+        toggleFileDiffFoldForViewed(fileKey, viewed, effectiveFoldOverride, current),
       );
     },
-    [foldOverride, setViewed],
+    [effectiveFoldOverride, setViewed],
   );
 
   const requestTreeReveal = useCodeViewFileReveal(viewer, scopeKey);

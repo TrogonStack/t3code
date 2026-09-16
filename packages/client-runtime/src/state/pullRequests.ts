@@ -273,6 +273,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     filesViewed: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:files-viewed",
       tag: WS_METHODS.pullRequestsFilesViewed,
+      execute: (input) => routedRequest(WS_METHODS.pullRequestsFilesViewed, input),
       staleTimeMs: 15_000,
     }),
     /**
@@ -282,6 +283,7 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     setFilesViewed: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:set-files-viewed",
       tag: WS_METHODS.pullRequestsSetFilesViewed,
+      execute: (input) => routedRequest(WS_METHODS.pullRequestsSetFilesViewed, input),
       scheduler: commandScheduler,
       concurrency: {
         mode: "serial",

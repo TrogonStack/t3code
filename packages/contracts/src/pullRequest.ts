@@ -795,6 +795,8 @@ export type PullRequestListStatsResult = typeof PullRequestListStatsResult.Type;
  */
 export const PullRequestInvalidateInput = Schema.Struct({
   reference: Schema.optional(PullRequestRef),
+  /** Refresh review progress across routed environments without discarding the patch. */
+  filesViewedOnly: Schema.optional(Schema.Boolean),
 });
 export type PullRequestInvalidateInput = typeof PullRequestInvalidateInput.Type;
 

@@ -19,6 +19,7 @@ import type {
   PullRequestState,
 } from "@t3tools/contracts";
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
+import { quoteGitPatchPath } from "@t3tools/shared/gitPatchPath";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -680,8 +681,8 @@ function diffHeaderPaths(raw: Schema.Schema.Type<typeof RawDiffSchema>): {
   readonly to: string;
 } {
   return {
-    from: raw.new_file === true ? "/dev/null" : `a/${raw.old_path}`,
-    to: raw.deleted_file === true ? "/dev/null" : `b/${raw.new_path}`,
+    from: raw.new_file === true ? "/dev/null" : quoteGitPatchPath(`a/${raw.old_path}`),
+    to: raw.deleted_file === true ? "/dev/null" : quoteGitPatchPath(`b/${raw.new_path}`),
   };
 }
 
@@ -718,11 +719,14 @@ export function decodeMergeRequestDiffsJson(
     }
     const { from, to } = diffHeaderPaths(value);
     const header = [
-      `diff --git a/${value.old_path} b/${value.new_path}`,
+      `diff --git ${quoteGitPatchPath(`a/${value.old_path}`)} ${quoteGitPatchPath(`b/${value.new_path}`)}`,
       ...(value.new_file === true ? [`new file mode ${value.b_mode ?? "100644"}`] : []),
       ...(value.deleted_file === true ? [`deleted file mode ${value.a_mode ?? "100644"}`] : []),
       ...(value.renamed_file === true
-        ? [`rename from ${value.old_path}`, `rename to ${value.new_path}`]
+        ? [
+            `rename from ${quoteGitPatchPath(value.old_path)}`,
+            `rename to ${quoteGitPatchPath(value.new_path)}`,
+          ]
         : []),
       `--- ${from}`,
       `+++ ${to}`,
