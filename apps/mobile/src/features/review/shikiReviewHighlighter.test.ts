@@ -5,7 +5,6 @@ import {
   highlightCodeSnippet,
   highlightReviewSelectedLines,
   highlightSourceFile,
-  type ReviewHighlightedToken,
 } from "./shikiReviewHighlighter";
 
 describe("highlightSourceFile", () => {
@@ -52,31 +51,23 @@ describe("highlightSourceFile", () => {
     vi.resetModules();
     const highlighter = await import("./shikiReviewHighlighter");
     const source = "const answer: number = 42;";
-    // Each entry point is held to the source text and to having highlighted it, rather than to
-    // the other's tokens. Both ask for the same language and theme, so comparing the two only
-    // pins how much of the grammar the engine had compiled by the time each one ran.
-    const expectHighlighted = (
-      tokenLines: ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>,
-    ) => {
-      expect(
-        tokenLines
-          .flat()
-          .map((token) => token.content)
-          .join(""),
-      ).toBe(source);
-      expect(tokenLines.flat().some((token) => token.color !== null)).toBe(true);
-    };
 
-    expectHighlighted(
-      await highlighter.highlightSourceFile({
-        path: "example.ts",
-        contents: source,
-        theme: "dark",
-      }),
-    );
-    expectHighlighted(
+    const highlighted = await highlighter.highlightSourceFile({
+      path: "example.ts",
+      contents: source,
+      theme: "dark",
+    });
+
+    expect(
+      highlighted
+        .flat()
+        .map((token) => token.content)
+        .join(""),
+    ).toBe(source);
+    expect(highlighted.flat().some((token) => token.color !== null)).toBe(true);
+    expect(
       await highlighter.highlightCodeSnippet({ code: source, language: "ts", theme: "dark" }),
-    );
+    ).toEqual(highlighted);
   });
 });
 
