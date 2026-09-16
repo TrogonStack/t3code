@@ -34,6 +34,7 @@ import type {
   ThreadPullRequestKey,
 } from "@t3tools/contracts";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
+import { githubMediaFetchUrl } from "@t3tools/shared/githubMedia";
 import { sourceControlRepositorySelector } from "@t3tools/shared/sourceControl";
 import {
   isAtomCommandInterrupted,
