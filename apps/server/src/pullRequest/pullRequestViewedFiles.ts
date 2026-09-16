@@ -61,15 +61,16 @@ const makeFileRevisions = (dependencies: FileRevisionsDependencies) => {
 
   /**
    * Carries the reference's epoch, so whatever moved the head strands what was held (or in
-   * flight) against the old one. Normalised, since a reference arrives spelled however the
-   * client spelled it while the project carries the remote's own spelling.
+   * flight) against the old one. Spelled from the project rather than the reference, since a
+   * reference arrives however the client spelled it while the epoch is bumped against the
+   * remote's own spelling.
    */
-  const fileRevisionsKey = (ref: PullRequestRef) =>
+  const fileRevisionsKey = (project: SupportedProject, ref: PullRequestRef) =>
     [
-      refEpoch(ref),
+      refEpoch({ ...ref, host: project.host, repository: project.repository }),
       fileRevisionsEpoch(),
       ref.projectId,
-      ref.repository.trim().toLowerCase(),
+      project.repository.trim().toLowerCase(),
       ref.number,
     ].join(" ");
 
@@ -160,7 +161,7 @@ const makeFileRevisions = (dependencies: FileRevisionsDependencies) => {
     // Suspended, so a held answer costs the host nothing: a provider is free to do its work as
     // the request is built rather than as the effect is run.
     const fetch = Effect.suspend(() => {
-      const key = fileRevisionsKey(ref);
+      const key = fileRevisionsKey(project, ref);
       return read({
         cwd: project.project.workspaceRoot,
         repository: project.repository,
@@ -173,7 +174,7 @@ const makeFileRevisions = (dependencies: FileRevisionsDependencies) => {
       );
     });
     return Effect.flatMap(Clock.currentTimeMillis, (now) => {
-      const key = fileRevisionsKey(ref);
+      const key = fileRevisionsKey(project, ref);
       const held = heldFileRevisionsFor(key, paths, now);
       if (held === null) return fetch;
       if (now - held.at <= Duration.toMillis(FILE_REVISIONS_CACHE_TTL))
