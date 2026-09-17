@@ -71,7 +71,7 @@ export class ProviderSecretResolver extends Context.Service<
  * they are testing resolution itself: an `op://` value stays an `op://`
  * value, and the provider reports whatever the CLI makes of it.
  */
-export const passthroughProviderSecretResolver: ProviderSecretResolverShape = {
+const passthroughProviderSecretResolver: ProviderSecretResolverShape = {
   resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
   prime: () => Effect.void,
   invalidate: Effect.void,

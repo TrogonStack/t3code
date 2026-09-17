@@ -554,7 +554,7 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
   };
 }
 
-export const BACKGROUND_WORK_LABEL_LIMIT = 2;
+const BACKGROUND_WORK_LABEL_LIMIT = 2;
 
 function pluralize(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
@@ -564,7 +564,7 @@ function pluralize(count: number, singular: string, plural: string): string {
  * One line naming the live background work, listing what fits and counting the
  * rest. The banner has a single line, and the popover carries the full list.
  */
-export function formatBackgroundWorkLabels(
+function formatBackgroundWorkLabels(
   labels: ReadonlyArray<string>,
   limit = BACKGROUND_WORK_LABEL_LIMIT,
 ): string | null {

@@ -1,5 +1,5 @@
 /**
- * ForkMigrationsLive - fork-only migration runner with its own ledger
+ * Fork-only migration runner with its own ledger
  *
  * Fork-only schema (TrogonStack additions that do not exist upstream) lives
  * in this second migration chain, tracked in its own migrations table
@@ -18,7 +18,6 @@
  */
 
 import * as Migrator from "effect/unstable/sql/Migrator";
-import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -26,11 +25,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { migrationManifest } from "./Migrations.ts";
 import Migration0001 from "./Migrations/fork/001_ProjectionThreadParent.ts";
 
-export const FORK_MIGRATIONS_TABLE = "trogonstack_fork_migrations";
+const FORK_MIGRATIONS_TABLE = "trogonstack_fork_migrations";
 
 export const forkMigrationEntries = [[1, "ProjectionThreadParent", Migration0001]] as const;
 
-export const makeForkMigrationLoader = (throughId?: number) =>
+const makeForkMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
     Object.fromEntries(
       forkMigrationEntries
@@ -195,8 +194,3 @@ export const realignSharedMigrationLedger = Effect.fn("realignSharedMigrationLed
 
   yield* Effect.log("Realigned shared migration ledger to upstream numbering");
 });
-
-/**
- * Layer that runs fork migrations when the layer is built.
- */
-export const ForkMigrationsLive = Layer.effectDiscard(runForkMigrations());

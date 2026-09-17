@@ -183,7 +183,7 @@ function apiProviderAuthMetadata(
  * `apiKeySource` is only ever set when a key was actually found, so it has no
  * "no key" sentinel to confuse with one.
  */
-export function claudeAuthStatus(
+function claudeAuthStatus(
   capabilities: Pick<
     ClaudeCapabilitiesProbe,
     "email" | "subscriptionType" | "tokenSource" | "apiKeySource" | "apiProvider"

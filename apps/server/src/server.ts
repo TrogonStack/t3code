@@ -647,7 +647,7 @@ const _assertMcpToolkitDependenciesExposed: [McpToolkitDependency] extends [
   ? true
   : never = true;
 
-export const makeRoutesLayer = makeRoutesLayerWith(McpToolkitDependenciesLive);
+const makeRoutesLayer = makeRoutesLayerWith(McpToolkitDependenciesLive);
 
 const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
