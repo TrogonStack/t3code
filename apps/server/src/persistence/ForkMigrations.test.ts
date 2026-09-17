@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it as vpIt } from "vite-plus/test";
 
-import { migrationEntries, runMigrations } from "./Migrations.ts";
+import { migrationManifest, runMigrations } from "./Migrations.ts";
 import {
   forkMigrationEntries,
   realignSharedMigrationLedger,
@@ -14,7 +14,7 @@ import {
 } from "./ForkMigrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const UPSTREAM_MAX = Math.max(...migrationEntries.map(([id]) => id));
+const UPSTREAM_MAX = Math.max(...migrationManifest.map(([id]) => id));
 
 // Highest upstream id that existed while the fork still shipped
 // ProjectionThreadParent inside the shared chain. A legacy install can only
@@ -34,8 +34,8 @@ const selectForkLedger = (sql: SqlClient.SqlClient) =>
   `;
 
 describe("forkMigrationEntries", () => {
-  vpIt("never overlaps with the shared migrationEntries names", () => {
-    const sharedNames: ReadonlySet<string> = new Set(migrationEntries.map(([, name]) => name));
+  vpIt("never overlaps with the shared migration manifest names", () => {
+    const sharedNames: ReadonlySet<string> = new Set(migrationManifest.map(([, name]) => name));
     for (const [, name] of forkMigrationEntries) {
       expect(sharedNames.has(name)).toBe(false);
     }

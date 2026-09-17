@@ -93,7 +93,7 @@ export interface VcsProcessExitFailure {
   readonly stderrTruncated: boolean;
 }
 
-export class VcsProcessSpawnError extends Schema.TaggedErrorClass<VcsProcessSpawnError>()(
+export class VcsProcessSpawnError extends Schema.TaggedError<VcsProcessSpawnError>()(
   "VcsProcessSpawnError",
   {
     operation: Schema.String,
@@ -145,7 +145,7 @@ function exitDetail(command: string, failureKind: VcsProcessExitFailureKind): st
   }
 }
 
-export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitError>()(
+export class VcsProcessExitError extends Schema.TaggedError<VcsProcessExitError>()(
   "VcsProcessExitError",
   {
     operation: Schema.String,
@@ -179,7 +179,7 @@ export class VcsProcessExitError extends Schema.TaggedErrorClass<VcsProcessExitE
   }
 }
 
-export class VcsProcessTimeoutError extends Schema.TaggedErrorClass<VcsProcessTimeoutError>()(
+export class VcsProcessTimeoutError extends Schema.TaggedError<VcsProcessTimeoutError>()(
   "VcsProcessTimeoutError",
   {
     operation: Schema.String,
@@ -208,7 +208,7 @@ const VcsProcessBoundaryErrorFields = {
   argumentCount: Schema.optional(NonNegativeInt),
 };
 
-export class VcsProcessStdinWriteError extends Schema.TaggedErrorClass<VcsProcessStdinWriteError>()(
+export class VcsProcessStdinWriteError extends Schema.TaggedError<VcsProcessStdinWriteError>()(
   "VcsProcessStdinWriteError",
   {
     ...VcsProcessBoundaryErrorFields,
@@ -221,7 +221,7 @@ export class VcsProcessStdinWriteError extends Schema.TaggedErrorClass<VcsProces
   }
 }
 
-export class VcsProcessOutputReadError extends Schema.TaggedErrorClass<VcsProcessOutputReadError>()(
+export class VcsProcessOutputReadError extends Schema.TaggedError<VcsProcessOutputReadError>()(
   "VcsProcessOutputReadError",
   {
     ...VcsProcessBoundaryErrorFields,
@@ -234,7 +234,7 @@ export class VcsProcessOutputReadError extends Schema.TaggedErrorClass<VcsProces
   }
 }
 
-export class VcsProcessOutputLimitError extends Schema.TaggedErrorClass<VcsProcessOutputLimitError>()(
+export class VcsProcessOutputLimitError extends Schema.TaggedError<VcsProcessOutputLimitError>()(
   "VcsProcessOutputLimitError",
   {
     ...VcsProcessBoundaryErrorFields,
@@ -248,7 +248,7 @@ export class VcsProcessOutputLimitError extends Schema.TaggedErrorClass<VcsProce
   }
 }
 
-export class VcsProcessMissingExitCodeError extends Schema.TaggedErrorClass<VcsProcessMissingExitCodeError>()(
+export class VcsProcessMissingExitCodeError extends Schema.TaggedError<VcsProcessMissingExitCodeError>()(
   "VcsProcessMissingExitCodeError",
   VcsProcessBoundaryErrorFields,
 ) {
@@ -265,7 +265,7 @@ export const VcsOutputDecodeError = Schema.Union([
 ]);
 export type VcsOutputDecodeError = typeof VcsOutputDecodeError.Type;
 
-export class VcsRepositoryDetectionError extends Schema.TaggedErrorClass<VcsRepositoryDetectionError>()(
+export class VcsRepositoryDetectionError extends Schema.TaggedError<VcsRepositoryDetectionError>()(
   "VcsRepositoryDetectionError",
   {
     operation: Schema.String,
@@ -279,7 +279,7 @@ export class VcsRepositoryDetectionError extends Schema.TaggedErrorClass<VcsRepo
   }
 }
 
-export class VcsUnsupportedOperationError extends Schema.TaggedErrorClass<VcsUnsupportedOperationError>()(
+export class VcsUnsupportedOperationError extends Schema.TaggedError<VcsUnsupportedOperationError>()(
   "VcsUnsupportedOperationError",
   {
     operation: Schema.String,

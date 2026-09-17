@@ -1,12 +1,15 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
-import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  otlpSerializationLayer,
+} from "@t3tools/shared/observability";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
 import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
 import * as OtlpMetrics from "effect/unstable/observability/OtlpMetrics";
-import * as OtlpSerialization from "effect/unstable/observability/OtlpSerialization";
 import * as OtlpTracer from "effect/unstable/observability/OtlpTracer";
 
 import * as ServerConfig from "../../config.ts";
@@ -43,21 +46,11 @@ export const ObservabilityLive = Layer.unwrap(
 
     // Each signal builds its own serializer, so the wire format travels with
     // the settings of the endpoint that asked for it. A signal these variables
-    // did not supply keeps the JSON T3 Code has always sent.
+    // did not supply keeps what T3CODE_OTLP_PROTOCOL asked for.
     const serializationFor = (settings: typeof otel.traces.settings) =>
-      settings?.protocol === "http/protobuf"
-        ? OtlpSerialization.layerProtobuf
-        : OtlpSerialization.layerJson;
-
-    // The proxy that forwards spans from the client encodes JSON and nothing
-    // else, so a protobuf trace exporter means the two halves of a trace
-    // arrive in different encodings. Most collectors take either, and the ones
-    // that do not drop the browser half while the server half looks healthy.
-    if (otel.traces.settings?.protocol === "http/protobuf" && config.otlpTracesUrl !== undefined) {
-      yield* Effect.logWarning(
-        "Server telemetry uses http/protobuf, but browser traces are forwarded as OTLP/HTTP JSON; a collector that accepts only protobuf will drop them",
-      );
-    }
+      otlpSerializationLayer(settings?.protocol ?? config.otlpProtocol);
+    const headersFor = (settings: typeof otel.traces.settings) =>
+      settings?.headers ?? config.otlpHeaders;
 
     const otlpResource = ServerConfig.otlpResource(config);
 
@@ -90,9 +83,7 @@ export const ObservabilityLive = Layer.unwrap(
                 url: config.otlpTracesUrl,
                 exportInterval: `${config.otlpExportIntervalMs} millis`,
                 resource: otlpResource,
-                ...(otel.traces.settings?.headers === undefined
-                  ? {}
-                  : { headers: otel.traces.settings.headers }),
+                headers: headersFor(otel.traces.settings),
                 ...(otel.traces.settings?.maxBatchSize === undefined
                   ? {}
                   : { maxBatchSize: otel.traces.settings.maxBatchSize }),
@@ -114,6 +105,9 @@ export const ObservabilityLive = Layer.unwrap(
       }),
     ).pipe(
       Layer.provide(OtlpExporter.layerFlusher),
+      // The trace serializer is also the one this layer hands out, because the
+      // proxy in http.ts re-encodes browser spans and has to reach the trace
+      // collector in the format that collector was configured for.
       Layer.provideMerge(serializationFor(otel.traces.settings)),
     );
 
@@ -124,13 +118,11 @@ export const ObservabilityLive = Layer.unwrap(
             url: config.otlpMetricsUrl,
             exportInterval: `${config.otlpMetricsExportIntervalMs} millis`,
             resource: otlpResource,
-            ...(otel.metrics.settings?.headers === undefined
-              ? {}
-              : { headers: otel.metrics.settings.headers }),
+            headers: headersFor(otel.metrics.settings),
             ...(otel.metrics.settings?.temporality === undefined
               ? {}
               : { temporality: otel.metrics.settings.temporality }),
-          }).pipe(Layer.provideMerge(serializationFor(otel.metrics.settings)));
+          }).pipe(Layer.provide(serializationFor(otel.metrics.settings)));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),

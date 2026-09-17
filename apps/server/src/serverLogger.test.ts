@@ -52,6 +52,8 @@ const configLayer = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         otlpMetricsExportIntervalMs: 10_000,
         otlpLogsExportIntervalMs: 10_000,
         otlpServiceName: "t3-server",
+        otlpHeaders: undefined,
+        otlpProtocol: "http/json",
         otelEnvironment: OtelEnvironment.none,
         cwd: baseDir,
         baseDir,
@@ -142,6 +144,20 @@ describe("ServerLoggerLive", () => {
 
       assert.lengthOf(requests, 1);
       assert.strictEqual(requests[0]?.headers["x-scope"], "logs");
+      assert.strictEqual(requests[0]?.headers["content-type"], "application/x-protobuf");
+    }),
+  );
+
+  it.effect("falls back to the headers and wire format T3 Code's own names asked for", () =>
+    Effect.gen(function* () {
+      const requests = yield* logThrough({
+        otlpLogsUrl: "https://collector.example.com/v1/logs",
+        otlpHeaders: { "x-scope": "named" },
+        otlpProtocol: "http/protobuf",
+      });
+
+      assert.lengthOf(requests, 1);
+      assert.strictEqual(requests[0]?.headers["x-scope"], "named");
       assert.strictEqual(requests[0]?.headers["content-type"], "application/x-protobuf");
     }),
   );

@@ -96,7 +96,7 @@ export const AwaitThreadResult = Schema.Struct({
 });
 export type AwaitThreadResult = typeof AwaitThreadResult.Type;
 
-export class SubagentThreadError extends Schema.TaggedErrorClass<SubagentThreadError>()(
+export class SubagentThreadError extends Schema.TaggedError<SubagentThreadError>()(
   "SubagentThreadError",
   {
     reason: Schema.Literals([

@@ -17,7 +17,10 @@ import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
  */
 export const DEFAULT_DESKTOP_EXPORT_INTERVAL_MS = 10_000;
 
-/** The wire format a `T3CODE_OTLP_*` or Settings endpoint has always been sent. */
+/**
+ * The wire format a `T3CODE_OTLP_*` or Settings endpoint is sent when
+ * `T3CODE_OTLP_PROTOCOL` does not name one.
+ */
 const DEFAULT_DESKTOP_PROTOCOL: OtelEnvironment.OtlpProtocol = "http/json";
 
 export interface DesktopOtlpSignal {
@@ -56,6 +59,10 @@ export interface DesktopOtlpExportInput {
   readonly named: DesktopNamedOtlpEndpoints;
   /** `T3CODE_OTLP_EXPORT_INTERVAL_MS`, which deliberately covers every signal. */
   readonly namedExportIntervalMs: number | undefined;
+  /** `T3CODE_OTLP_HEADERS`, which deliberately covers every signal. */
+  readonly namedHeaders: Readonly<Record<string, string>> | undefined;
+  /** `T3CODE_OTLP_PROTOCOL`, which deliberately covers every signal. */
+  readonly namedProtocol: OtelEnvironment.OtlpProtocol | undefined;
   /** What this process calls itself. The environment cannot rename it. */
   readonly serviceName: string;
   /**
@@ -85,7 +92,7 @@ const offSignal: DesktopOtlpSignal = {
 const resolveSignal = (
   named: string | undefined,
   signal: OtelEnvironment.OtlpSignal,
-  namedExportIntervalMs: number | undefined,
+  input: DesktopOtlpExportInput,
 ): DesktopOtlpSignal => {
   const settings = named === undefined ? signal.settings : undefined;
   const url = named ?? settings?.url;
@@ -95,9 +102,11 @@ const resolveSignal = (
   return {
     url,
     exportIntervalMs:
-      namedExportIntervalMs ?? settings?.exportIntervalMs ?? DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
-    protocol: settings?.protocol ?? DEFAULT_DESKTOP_PROTOCOL,
-    headers: settings?.headers,
+      input.namedExportIntervalMs ??
+      settings?.exportIntervalMs ??
+      DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
+    protocol: settings?.protocol ?? input.namedProtocol ?? DEFAULT_DESKTOP_PROTOCOL,
+    headers: settings?.headers ?? input.namedHeaders,
     maxBatchSize: settings?.maxBatchSize,
     temporality: settings?.temporality,
   };
@@ -133,9 +142,9 @@ export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): Desktop
   // One variable can decline every signal, and saying so three times reads
   // like three separate problems.
   return {
-    traces: resolveSignal(named.traces, signals.traces, input.namedExportIntervalMs),
-    metrics: resolveSignal(named.metrics, signals.metrics, input.namedExportIntervalMs),
-    logs: resolveSignal(named.logs, signals.logs, input.namedExportIntervalMs),
+    traces: resolveSignal(named.traces, signals.traces, input),
+    metrics: resolveSignal(named.metrics, signals.metrics, input),
+    logs: resolveSignal(named.logs, signals.logs, input),
     resource,
     warnings: [
       ...new Set([

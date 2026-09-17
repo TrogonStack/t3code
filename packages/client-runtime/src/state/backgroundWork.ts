@@ -108,7 +108,7 @@ export function foldLiveBackgroundTasks(
 ): ReadonlyArray<LiveBackgroundTask> {
   const tasks = new Map<string, TaskState>();
 
-  for (const activity of [...activities].toSorted(compareByOrder)) {
+  for (const activity of [...activities].sort(compareByOrder)) {
     if (!TASK_LIFECYCLE_KINDS.has(activity.kind)) continue;
     if (typeof activity.payload !== "object" || activity.payload === null) continue;
     const payload = activity.payload as Record<string, unknown>;
@@ -170,5 +170,5 @@ export function foldLiveBackgroundTasks(
       updatedAt: state.updatedAt,
     });
   }
-  return live.toSorted((left, right) => left.firstSeenAt.localeCompare(right.firstSeenAt));
+  return live.sort((left, right) => left.firstSeenAt.localeCompare(right.firstSeenAt));
 }
