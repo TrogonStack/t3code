@@ -23,14 +23,7 @@ export class GitHubGraphQlBudget extends Context.Service<
     readonly query: (
       host: string,
       document: string,
-      options?: {
-        readonly allowReserve?: boolean | undefined;
-        /**
-         * What a write is expected to spend, for the debit above. Ignored for a read, which
-         * reports its own cost. Defaults to one point, which is a mutation's floor.
-         */
-        readonly estimatedCost?: number | undefined;
-      },
+      options?: { readonly allowReserve: boolean },
     ) => Effect.Effect<string, SourceControlRateLimit.SourceControlRateLimitPausedError>;
     readonly observe: (host: string, raw: string) => Effect.Effect<void>;
   }
@@ -84,34 +77,16 @@ function withRateLimit(document: string): string {
   return `${document.slice(0, end)}\n  ${RATE_LIMIT_SELECTION}\n${document.slice(end)}`;
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const snapshots = yield* Ref.make<ReadonlyMap<string, GraphQlBudgetSnapshot>>(new Map());
 
   const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
     function* (host, document, options) {
+      if (!isReadOperation(document)) return document;
       const now = yield* Clock.currentTimeMillis;
-      // A write spends the same hourly points a read does, and `rateLimit` is a field of Query
-      // alone — so a mutation cannot report its own cost and is debited from the held snapshot
-      // instead. Never paused, only counted: a mutation is somebody pressing something, and
-      // holding it back to protect a read nobody has asked for yet is the wrong trade. The
-      // estimate only has to last until the next read, whose answer replaces the snapshot with
-      // the host's own number.
-      if (!isReadOperation(document)) {
-        yield* Ref.update(snapshots, (current) => {
-          const key = hostKey(host);
-          const snapshot = current.get(key);
-          if (snapshot === undefined || snapshot.resetAtMs <= now) return current;
-          const next = new Map(current);
-          next.set(key, {
-            ...snapshot,
-            remaining: Math.max(0, snapshot.remaining - Math.max(1, options?.estimatedCost ?? 1)),
-          });
-          return next;
-        });
-        return document;
-      }
+      const key = `${hostKey(host)}\0${yield* SourceControlRateLimit.CredentialScope}`;
       const retryAt = yield* Ref.modify(snapshots, (current) => {
-        const key = hostKey(host);
         const snapshot = current.get(key);
         if (snapshot === undefined) return [null, current] as const;
         if (snapshot.resetAtMs <= now) {
@@ -119,8 +94,11 @@ export const make = Effect.gen(function* () {
           next.delete(key);
           return [null, next] as const;
         }
-        const remaining = Math.max(0, snapshot.remaining - Math.max(1, snapshot.cost));
-        if (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO) {
+        const remaining = snapshot.remaining - Math.max(1, snapshot.cost);
+        if (
+          remaining < 0 ||
+          (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO)
+        ) {
           return [snapshot.resetAtMs, current] as const;
         }
         const next = new Map(current);
@@ -143,8 +121,8 @@ export const make = Effect.gen(function* () {
   )(function* (host, raw) {
     const snapshot = snapshotFrom(raw);
     if (snapshot === null) return;
+    const key = `${hostKey(host)}\0${yield* SourceControlRateLimit.CredentialScope}`;
     yield* Ref.update(snapshots, (current) => {
-      const key = hostKey(host);
       const previous = current.get(key);
       // Concurrent reads can finish out of order. Quota only falls within one reset window, and
       // an answer from an older window must not replace the current one.

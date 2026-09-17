@@ -1,10 +1,10 @@
+import { otlpSerializationLayer } from "@t3tools/shared/observability";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
 import * as OtlpLogger from "effect/unstable/observability/OtlpLogger";
-import * as OtlpSerialization from "effect/unstable/observability/OtlpSerialization";
 
 import * as ServerConfig from "./config.ts";
 
@@ -19,6 +19,9 @@ import * as ServerConfig from "./config.ts";
 export const ServerLoggerLive = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settings = config.otelEnvironment.logs.settings;
+  // A log endpoint these variables did not supply keeps the headers and wire
+  // format T3 Code's own names asked for.
+  const headers = settings?.headers ?? config.otlpHeaders;
   const otlpLogger =
     config.otlpLogsUrl === undefined
       ? undefined
@@ -26,7 +29,7 @@ export const ServerLoggerLive = Effect.gen(function* () {
           url: config.otlpLogsUrl,
           exportInterval: `${config.otlpLogsExportIntervalMs} millis`,
           resource: ServerConfig.otlpResource(config),
-          ...(settings?.headers === undefined ? {} : { headers: settings.headers }),
+          ...(headers === undefined ? {} : { headers }),
           ...(settings?.maxBatchSize === undefined ? {} : { maxBatchSize: settings.maxBatchSize }),
         });
 
@@ -40,11 +43,7 @@ export const ServerLoggerLive = Effect.gen(function* () {
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),
-    Layer.provide(
-      settings?.protocol === "http/protobuf"
-        ? OtlpSerialization.layerProtobuf
-        : OtlpSerialization.layerJson,
-    ),
+    Layer.provide(otlpSerializationLayer(settings?.protocol ?? config.otlpProtocol)),
   );
 
   return Layer.mergeAll(loggerLayer, minimumLogLevelLayer);

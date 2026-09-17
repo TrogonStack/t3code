@@ -248,8 +248,10 @@ For each signal, the first source that names its endpoint wins:
 Whichever source wins takes the whole signal, not just the URL. Traces sent to a
 `T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
 interval even when `OTEL_*` variables are set, because those variables describe the collector they
-named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS` is the exception, and applies to every
-signal wherever it goes.
+named rather than this one. `T3CODE_OTLP_EXPORT_INTERVAL_MS`, `T3CODE_OTLP_HEADERS`, and
+`T3CODE_OTLP_PROTOCOL` are the exceptions: they belong to no single signal and configure every
+endpoint T3 Code's own names, the desktop bootstrap envelope, or Settings placed, wherever it
+goes.
 
 The three signals are resolved separately, so traces can come from one source and metrics or logs
 from another.
@@ -274,7 +276,7 @@ Settings.
 | `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` or `delta`                                                      |
 
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
-specification, and stays `http/json` for a `T3CODE_OTLP_*` setup that never mentioned a protocol.
+specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `http/json`.
 
 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because T3 Code has no gRPC
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
@@ -302,14 +304,6 @@ Not everything in the specification is implemented. These are the ones worth kno
   deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
   shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
   the server open on every restart.
-- **Browser traces are always JSON.** The proxy that forwards traces from the client posts
-  OTLP/HTTP JSON regardless of `OTEL_EXPORTER_OTLP_PROTOCOL`. Both are valid OTLP/HTTP and most
-  collectors accept either, so this only matters against one that takes protobuf and nothing else.
-  When the trace exporter resolves to `http/protobuf`, a startup warning names the split rather
-  than letting the browser half disappear while the server half looks healthy.
-- **No protocol name of T3 Code's own.** `OTEL_EXPORTER_OTLP_PROTOCOL` describes the endpoint these
-  variables named. A `T3CODE_OTLP_*` endpoint always uses `http/json`, which is what it has always
-  used.
 - **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
   accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
@@ -715,6 +709,9 @@ OTLP export:
 - `T3CODE_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
 - `T3CODE_OTLP_SERVICE_NAME`: server service name, default `t3-server`. The Electron main process
   does not read it and is always `t3-desktop`.
+- `T3CODE_OTLP_HEADERS`: extra headers, same format as `OTEL_EXPORTER_OTLP_HEADERS`:
+  comma-separated `key=value` pairs with percent-encoded values
+- `T3CODE_OTLP_PROTOCOL`: `http/json` (default) or `http/protobuf`
 
 If the OTLP URLs are unset, local tracing still works and metrics stay in-process only.
 

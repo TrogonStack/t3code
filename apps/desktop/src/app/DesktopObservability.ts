@@ -1,5 +1,9 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
-import { makeLocalFileTracer, makeTraceSink } from "@t3tools/shared/observability";
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  otlpSerializationLayer,
+} from "@t3tools/shared/observability";
 import {
   parsePersistedServerObservabilitySettings,
   type PersistedServerObservabilitySettings,
@@ -20,13 +24,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Tracer from "effect/Tracer";
-import {
-  OtlpExporter,
-  OtlpLogger,
-  OtlpMetrics,
-  OtlpSerialization,
-  OtlpTracer,
-} from "effect/unstable/observability";
+import { OtlpExporter, OtlpLogger, OtlpMetrics, OtlpTracer } from "effect/unstable/observability";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import {
@@ -113,7 +111,7 @@ export function makeComponentLogger(component: string): DesktopComponentLogger {
   };
 }
 
-class DesktopLogFileWriterConfigurationError extends Schema.TaggedErrorClass<DesktopLogFileWriterConfigurationError>()(
+class DesktopLogFileWriterConfigurationError extends Schema.TaggedError<DesktopLogFileWriterConfigurationError>()(
   "DesktopLogFileWriterConfigurationError",
   {
     option: Schema.Literals(["maxBytes", "maxFiles"]),
@@ -372,6 +370,8 @@ const resolveOtlpExport = Effect.gen(function* () {
       logs: Option.getOrUndefined(environment.otlpLogsUrl) ?? persisted.otlpLogsUrl,
     },
     namedExportIntervalMs: Option.getOrUndefined(environment.otlpExportIntervalMs),
+    namedHeaders: Option.getOrUndefined(environment.otlpHeaders),
+    namedProtocol: Option.getOrUndefined(environment.otlpProtocol),
     serviceName: DESKTOP_SERVICE_NAME,
     runtimeAttributes: {
       "service.runtime": "desktop",
@@ -597,10 +597,7 @@ const backendOutputLogFactoryLayer = Layer.effect(
   }),
 );
 
-const serializationFor = (signal: DesktopOtlpSignal) =>
-  signal.protocol === "http/protobuf"
-    ? OtlpSerialization.layerProtobuf
-    : OtlpSerialization.layerJson;
+const serializationFor = (signal: DesktopOtlpSignal) => otlpSerializationLayer(signal.protocol);
 
 const otlpResourceFor = (resource: DesktopOtlpResource) => ({
   serviceName: resource.serviceName,

@@ -1,3 +1,4 @@
+import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Option from "effect/Option";
@@ -51,6 +52,10 @@ export const DesktopConfig = Config.all({
   // lets each signal fall back to the interval the OpenTelemetry environment
   // asked for, which the specification defines per signal.
   otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(Config.option),
+  // Options for the same reason: unset is what lets the OpenTelemetry
+  // environment supply headers and wire format instead.
+  otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(Config.option),
+  otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(Config.option),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),

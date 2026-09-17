@@ -64,7 +64,7 @@ export const runForkMigrations = Effect.fn("runForkMigrations")(function* ({
   return executedMigrations;
 });
 
-export class SharedMigrationLedgerMismatchError extends Schema.TaggedErrorClass<SharedMigrationLedgerMismatchError>()(
+export class SharedMigrationLedgerMismatchError extends Schema.TaggedError<SharedMigrationLedgerMismatchError>()(
   "SharedMigrationLedgerMismatchError",
   {
     latestLedgerId: Schema.Number,

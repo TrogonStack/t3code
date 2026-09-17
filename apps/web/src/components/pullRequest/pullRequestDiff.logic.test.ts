@@ -86,14 +86,12 @@ describe("isFileDiffCollapsed", () => {
 
 describe("toggleFileDiffFoldForViewed", () => {
   it("puts a file away when it is ticked off", () => {
-    // Files start expanded, so one the reader has not touched is the case that has somewhere
-    // to go.
+    // Files start expanded, so ticking one off is the case that has somewhere to go.
     expect([...toggleFileDiffFoldForViewed("a.ts", true, null, new Set())]).toEqual(["a.ts"]);
   });
 
   it("brings a file back when the tick is taken off", () => {
-    const folded = new Set(["a.ts"]);
-    expect([...toggleFileDiffFoldForViewed("a.ts", false, null, folded)]).toEqual([]);
+    expect([...toggleFileDiffFoldForViewed("a.ts", false, null, new Set(["a.ts"]))]).toEqual([]);
   });
 
   it("leaves the fold alone when it already says what the tick does", () => {
@@ -108,7 +106,7 @@ describe("toggleFileDiffFoldForViewed", () => {
   });
 
   it("touches only the file that was ticked", () => {
-    const toggled = new Set(["b.ts"]);
-    expect([...toggleFileDiffFoldForViewed("a.ts", true, null, toggled)]).toEqual(["b.ts", "a.ts"]);
+    const toggled = new Set(["a.ts", "b.ts"]);
+    expect([...toggleFileDiffFoldForViewed("a.ts", false, null, toggled)]).toEqual(["b.ts"]);
   });
 });

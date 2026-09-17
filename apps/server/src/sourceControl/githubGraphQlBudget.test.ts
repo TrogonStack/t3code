@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitHubGraphQlBudget from "./githubGraphQlBudget.ts";
+import { CredentialScope } from "./SourceControlRateLimit.ts";
 
 const RESET_AT = "2026-08-13T14:00:00.000Z";
 const NEXT_RESET_AT = "2026-08-13T15:00:00.000Z";
@@ -68,6 +69,23 @@ describe("GitHub GraphQL budget", () => {
       expect(yield* budget.query("github.example.com", "query { viewer { login } }")).toContain(
         "rateLimit",
       );
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("isolates query reservations and observations by credential", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      const query = budget.query("github.com", "query { viewer { login } }");
+      yield* budget
+        .observe("github.com", rateLimit(0))
+        .pipe(Effect.provideService(CredentialScope, "first"));
+      yield* budget
+        .observe("github.com", rateLimit(5000))
+        .pipe(Effect.provideService(CredentialScope, "second"));
+      yield* query.pipe(Effect.provideService(CredentialScope, "second"));
+      const error = yield* query.pipe(Effect.provideService(CredentialScope, "first"), Effect.flip);
+      expect(error.retryAt).toBe(Date.parse(RESET_AT));
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
@@ -181,6 +199,19 @@ describe("GitHub GraphQL budget", () => {
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
+  it.effect("stops interactive reads when the reserve is exhausted", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(1, 5000, RESET_AT, 1));
+      yield* budget.query("github.com", "query { viewer { login } }", { allowReserve: true });
+      const error = yield* budget
+        .query("github.com", "query { viewer { login } }", { allowReserve: true })
+        .pipe(Effect.flip);
+      expect(error.retryAt).toBe(Date.parse(RESET_AT));
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
   it.effect("ignores malformed or partial rate metadata", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
@@ -205,33 +236,6 @@ describe("GitHub GraphQL budget", () => {
       yield* budget.observe("github.com", rateLimit(0));
 
       expect(yield* budget.query("github.com", mutation)).toBe(mutation);
-    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
-  );
-
-  it.effect("charges a write for the batch it carries, since it cannot report its own cost", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(BEFORE_RESET);
-      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-      // Twenty points above the reserve, which is exactly what the mutation below spends.
-      yield* budget.observe("github.com", rateLimit(520));
-
-      yield* budget.query("github.com", "mutation { f0: markFileAsViewed { id } }", {
-        estimatedCost: 20,
-      });
-
-      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
-      expect(error).toMatchObject({ _tag: "SourceControlRateLimitPausedError" });
-    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
-  );
-
-  it.effect("lets a write through even with nothing left, rather than holding a press back", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(BEFORE_RESET);
-      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-      yield* budget.observe("github.com", rateLimit(0));
-
-      const mutation = "mutation { f0: markFileAsViewed { id } }";
-      expect(yield* budget.query("github.com", mutation, { estimatedCost: 40 })).toBe(mutation);
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 });

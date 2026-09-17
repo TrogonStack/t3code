@@ -55,6 +55,7 @@ const makeThreadShell = (
   branch: null,
   worktreePath: null,
   parentThreadId: null,
+  pullRequests: [],
   settledOverride: null,
   settledAt: null,
   latestTurn: null,

@@ -21,6 +21,8 @@ const resolve = (
   overrides: {
     readonly named?: Partial<DesktopNamedOtlpEndpoints>;
     readonly namedExportIntervalMs?: number;
+    readonly namedHeaders?: Readonly<Record<string, string>>;
+    readonly namedProtocol?: "http/json" | "http/protobuf";
   } = {},
 ) =>
   OtelEnvironment.load.pipe(
@@ -30,6 +32,8 @@ const resolve = (
         otel,
         named: { ...noNamedEndpoints, ...overrides.named },
         namedExportIntervalMs: overrides.namedExportIntervalMs,
+        namedHeaders: overrides.namedHeaders,
+        namedProtocol: overrides.namedProtocol,
         serviceName: "t3-desktop",
         runtimeAttributes: { "service.runtime": "desktop", "service.mode": "development" },
       }),
@@ -78,6 +82,30 @@ describe("resolveDesktopOtlpExport", () => {
       assert.strictEqual(resolved.metrics.url, "https://collector.example.com/v1/metrics");
       assert.strictEqual(resolved.metrics.protocol, "http/protobuf");
       assert.deepStrictEqual(resolved.metrics.headers, { authorization: "Bearer token" });
+    }),
+  );
+
+  it.effect("gives a named endpoint T3 Code's own headers and wire format", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve(
+        {
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%20ambient",
+        },
+        {
+          named: { traces: "http://127.0.0.1:4318/v1/traces" },
+          namedHeaders: { authorization: "Bearer named" },
+          namedProtocol: "http/protobuf",
+        },
+      );
+
+      assert.strictEqual(resolved.traces.protocol, "http/protobuf");
+      assert.deepStrictEqual(resolved.traces.headers, { authorization: "Bearer named" });
+
+      // The endpoint these variables named keeps what they said about it.
+      assert.strictEqual(resolved.metrics.protocol, "http/json");
+      assert.deepStrictEqual(resolved.metrics.headers, { authorization: "Bearer ambient" });
     }),
   );
 

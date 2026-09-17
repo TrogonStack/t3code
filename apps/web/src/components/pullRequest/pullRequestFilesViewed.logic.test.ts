@@ -4,6 +4,7 @@ import {
   countViewedFiles,
   isFileViewed,
   isStaleViewedState,
+  revertFileViewedOverlay,
   settleFileViewedOverlay,
   toFileViewedBatch,
   toFileViewedStates,
@@ -12,6 +13,7 @@ import {
 
 const NO_OVERLAY: FileViewedOverlay = new Map();
 const NOTHING_PENDING: ReadonlySet<string> = new Set();
+const NOTHING_ANSWERED: ReadonlySet<string> = new Set();
 
 const states = toFileViewedStates({
   files: [
@@ -56,30 +58,63 @@ describe("countViewedFiles", () => {
 
 describe("settleFileViewedOverlay", () => {
   it("drops a press the host has caught up on", () => {
-    const settled = settleFileViewedOverlay(new Map([["a.ts", true]]), states, NOTHING_PENDING);
+    const settled = settleFileViewedOverlay(
+      new Map([["a.ts", true]]),
+      states,
+      NOTHING_PENDING,
+      NOTHING_ANSWERED,
+    );
     expect(settled.size).toBe(0);
   });
 
   it("keeps a press the host still disagrees with", () => {
     const overlay = new Map([["b.ts", true]]);
-    expect(settleFileViewedOverlay(overlay, states, NOTHING_PENDING)).toBe(overlay);
+    expect(settleFileViewedOverlay(overlay, states, NOTHING_PENDING, NOTHING_ANSWERED)).toBe(
+      overlay,
+    );
   });
 
   it("keeps a press the host cannot have heard yet", () => {
     // An answer already on its way when the file was un-ticked would otherwise put the tick back.
     const overlay = new Map([["a.ts", false]]);
-    const settled = settleFileViewedOverlay(overlay, states, new Set(["a.ts"]));
+    const settled = settleFileViewedOverlay(overlay, states, new Set(["a.ts"]), NOTHING_ANSWERED);
     expect(settled.get("a.ts")).toBe(false);
   });
 
   it("settles a file pushed to since it was cleared against un-ticking it", () => {
-    const settled = settleFileViewedOverlay(new Map([["c.ts", false]]), states, NOTHING_PENDING);
+    const settled = settleFileViewedOverlay(
+      new Map([["c.ts", false]]),
+      states,
+      NOTHING_PENDING,
+      NOTHING_ANSWERED,
+    );
     expect(settled.size).toBe(0);
+  });
+
+  it("drops a tick once a read has answered for it, against what the reader pressed", () => {
+    // The tick landed, the file was pushed to before the read that followed it came back, and the
+    // host answers `dismissed`. Holding the tick would hide that push for as long as the tab
+    // stayed open, and no refresh would recover it: every later answer says `dismissed` too.
+    const settled = settleFileViewedOverlay(
+      new Map([["c.ts", true]]),
+      states,
+      NOTHING_PENDING,
+      new Set(["c.ts"]),
+    );
+    expect(settled.size).toBe(0);
+    expect(isFileViewed("c.ts", states, settled)).toBe(false);
+    expect(isStaleViewedState(states?.get("c.ts"))).toBe(true);
+  });
+
+  it("holds a press made since the read that would otherwise answer for it", () => {
+    const overlay = new Map([["c.ts", true]]);
+    const settled = settleFileViewedOverlay(overlay, states, new Set(["c.ts"]), new Set(["c.ts"]));
+    expect(settled.get("c.ts")).toBe(true);
   });
 
   it("holds everything until the host has answered at all", () => {
     const overlay = new Map([["a.ts", true]]);
-    expect(settleFileViewedOverlay(overlay, null, NOTHING_PENDING)).toBe(overlay);
+    expect(settleFileViewedOverlay(overlay, null, NOTHING_PENDING, NOTHING_ANSWERED)).toBe(overlay);
   });
 });
 
@@ -96,5 +131,44 @@ describe("toFileViewedBatch", () => {
       { path: "a.ts", viewed: false },
       { path: "b.ts", viewed: true },
     ]);
+  });
+});
+
+describe("revertFileViewedOverlay", () => {
+  const batch = [
+    { path: "a.ts", viewed: true },
+    { path: "b.ts", viewed: false },
+  ];
+  const both = new Set(["a.ts", "b.ts"]);
+
+  it("puts the checkbox back to the host's answer for everything the request answers for", () => {
+    const overlay = new Map([
+      ["a.ts", true],
+      ["b.ts", false],
+    ]);
+    expect(revertFileViewedOverlay(overlay, batch, both).size).toBe(0);
+  });
+
+  it("leaves a press the reader made after the request went out", () => {
+    // The second press is waiting on a flush of its own, so the first one failing says nothing
+    // about it.
+    const overlay = new Map([
+      ["a.ts", false],
+      ["b.ts", false],
+    ]);
+    const reverted = revertFileViewedOverlay(overlay, batch, new Set(["b.ts"]));
+    expect([...reverted]).toEqual([["a.ts", false]]);
+  });
+
+  it("leaves a path a later request took over, even pressed the same way", () => {
+    // Both requests carry `a.ts` as viewed, so the value cannot tell them apart. The later one
+    // owns the path now and is the one that answers for it.
+    const overlay = new Map([["a.ts", true]]);
+    expect(revertFileViewedOverlay(overlay, batch, new Set(["b.ts"]))).toBe(overlay);
+  });
+
+  it("leaves a path the request never carried", () => {
+    const overlay = new Map([["c.ts", true]]);
+    expect(revertFileViewedOverlay(overlay, batch, both)).toBe(overlay);
   });
 });
