@@ -32,9 +32,11 @@
 
 T3 Code has had a real OTLP exporter for a while, and it was unreachable for
 almost everyone who wanted it. You had to learn a second set of names for
-settings you had already configured once, and headers, resource attributes, and
-the wire format had no names at all, so an authenticated collector or a
-protobuf-only one simply could not be used.
+settings you had already configured once, and the standard names for headers,
+resource attributes, and the wire format reached nothing, so an authenticated
+collector or a protobuf-only one simply could not be used. T3 Code has its own
+header and protocol names now, but the standard ones still arrive through this
+divergence.
 
 The cost of that shows up as silence rather than as an error. Someone with a
 collector in their shell profile reasonably assumes the app found it, sees a
