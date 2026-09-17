@@ -5346,6 +5346,82 @@ it.effect("tracks Forgejo viewed files through its diff and refuses truncated ba
   }),
 );
 
+it.effect("keeps hosted Forgejo marks with their repository instead of the serving checkout", () =>
+  Effect.gen(function* () {
+    const projects = [
+      project({
+        id: "p1",
+        title: "first repository",
+        workspaceRoot: "/first",
+        repository: "reviewer/first",
+        provider: "forgejo",
+        host: "forge.example",
+        remoteUrl: "https://forge.example:3000/reviewer/first.git",
+      }),
+    ];
+    const service = yield* makeService({
+      projects,
+      providers: [
+        { ...environmentViewedProvider(new Map([["same.ts", "blob"]]), []), kind: "forgejo" },
+      ],
+      resolveHandle: ({ context }) =>
+        Effect.succeed({
+          context: {
+            ...context!,
+            provider: { kind: "forgejo", name: "Forgejo", baseUrl: "https://forge.example:3000" },
+          },
+          provider: undefined as never,
+        }),
+    });
+    const first = {
+      projectId: "p1" as ProjectId,
+      host: "forge.example:3000",
+      repository: "reviewer/first",
+      number: 1,
+    };
+    const second = { ...first, repository: "reviewer/second" };
+    const files = [{ path: "same.ts", viewed: true }];
+    yield* service.setFilesViewed({ ...first, files });
+    assert.deepStrictEqual((yield* service.filesViewed(second)).files, []);
+    yield* service.setFilesViewed({ ...second, files });
+    yield* service.setFilesViewed({ ...first, files: [{ path: "same.ts", viewed: false }] });
+    assert.deepStrictEqual((yield* service.filesViewed(second)).files, [
+      { path: "same.ts", state: "viewed" },
+    ]);
+
+    projects.push(
+      project({
+        id: "p2",
+        title: "second repository",
+        workspaceRoot: "/second",
+        repository: "reviewer/second",
+        provider: "forgejo",
+        host: "forge.example",
+        remoteUrl: "https://forge.example:3000/reviewer/second.git",
+      }),
+    );
+    assert.deepStrictEqual(
+      (yield* service.filesViewed({ ...second, projectId: "p2" as ProjectId })).files,
+      [{ path: "same.ts", state: "viewed" }],
+    );
+    projects.push(
+      project({
+        id: "ssh",
+        title: "second repository over SSH",
+        workspaceRoot: "/ssh",
+        repository: "reviewer/second",
+        provider: "forgejo",
+        host: "ssh.forge.example",
+        remoteUrl: "git@ssh.forge.example:reviewer/second.git",
+      }),
+    );
+    assert.deepStrictEqual(
+      (yield* service.filesViewed({ ...second, projectId: "ssh" as ProjectId })).files,
+      [{ path: "same.ts", state: "viewed" }],
+    );
+  }),
+);
+
 it.effect("keeps viewed files itself for a host that keeps none of its own", () =>
   Effect.gen(function* () {
     const asked: Array<ReadonlyArray<string>> = [];

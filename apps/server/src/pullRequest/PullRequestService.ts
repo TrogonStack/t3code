@@ -3,6 +3,7 @@ import {
   isSshRemoteUrl,
   sourceControlRepositorySelector,
 } from "@t3tools/shared/sourceControl";
+import { normalizeGitRemoteUrl } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -766,7 +767,10 @@ export const make = Effect.gen(function* () {
             api: withRateLimitBackoff(api, host, rateLimits),
             repository,
             host,
-            remote: identity.canonicalKey,
+            remote:
+              kind === "azure-devops"
+                ? identity.canonicalKey
+                : normalizeGitRemoteUrl(`https://${host}/${repository}`),
           });
         }
         return { supported, unimplemented, viewerRoots };
@@ -833,7 +837,14 @@ export const make = Effect.gen(function* () {
               );
             }
             return Effect.succeed(
-              route.api.kind === "azure-devops" ? route : { ...route, repository },
+              route.api.kind === "azure-devops" ||
+                route.repository.toLowerCase() === repository.toLowerCase()
+                ? route
+                : {
+                    ...route,
+                    repository,
+                    remote: normalizeGitRemoteUrl(`https://${host}/${repository}`),
+                  },
             );
           }),
         );
