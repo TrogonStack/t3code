@@ -16,7 +16,7 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 
 /** URI scheme 1Password uses for secret references; `op read` consumes these. */
-export const PROVIDER_SECRET_REFERENCE_PREFIX = "op://";
+const PROVIDER_SECRET_REFERENCE_PREFIX = "op://";
 
 /**
  * The secret reference an environment value names, or `undefined` when the

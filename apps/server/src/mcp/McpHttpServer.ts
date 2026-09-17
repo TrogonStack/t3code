@@ -606,7 +606,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
-export const ThreadsToolkitRegistrationLive = McpServer.toolkit(ThreadsToolkit).pipe(
+const ThreadsToolkitRegistrationLive = McpServer.toolkit(ThreadsToolkit).pipe(
   Layer.provide(ThreadsToolkitHandlersLive),
 );
 
