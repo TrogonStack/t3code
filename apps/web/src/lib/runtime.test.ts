@@ -2,13 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Tracer from "effect/Tracer";
 
-import { setClientTracerDelegate } from "../observability/clientTracer";
+import * as ClientTracer from "../observability/clientTracer";
 import { runtime } from "./runtime";
 
 describe("web runtime", () => {
   it("routes client spans to the exporter client tracing configured", async () => {
     const exported: Array<string> = [];
-    setClientTracerDelegate(
+    ClientTracer.setDelegate(
       Tracer.make({
         span(options) {
           exported.push(options.name);
@@ -20,7 +20,7 @@ describe("web runtime", () => {
     try {
       await runtime.runPromise(Effect.void.pipe(Effect.withSpan("client.work")));
     } finally {
-      setClientTracerDelegate(null);
+      ClientTracer.setDelegate(null);
     }
 
     expect(exported).toEqual(["client.work"]);
