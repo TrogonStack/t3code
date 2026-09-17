@@ -837,15 +837,19 @@ const makeThreadBootstrap = Effect.gen(function* () {
                 ),
             ).pipe(
               Effect.andThen(removeCreatedWorktree),
+              // Interruptions roll back too, tracked or not: a
+              // created-but-never-started thread must not outlive its
+              // bootstrap. Only the message is specific to a cancelled
+              // worktree setup.
               Effect.andThen(
-                tracked
-                  ? cleanupAndFail(
-                      cause,
-                      new OrchestrationDispatchCommandError({
+                cleanupAndFail(
+                  cause,
+                  tracked
+                    ? new OrchestrationDispatchCommandError({
                         message: "Worktree setup cancelled.",
-                      }),
-                    )
-                  : Effect.fail(dispatchError),
+                      })
+                    : dispatchError,
+                ),
               ),
             );
           }

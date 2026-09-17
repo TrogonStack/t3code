@@ -11979,6 +11979,108 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  // A bootstrap without prepareWorktree is not tracked, so there is no setup
+  // card to cancel from and no detached fiber: it lives and dies with the
+  // request. Losing that request must still roll the created thread back.
+  it.effect("rolls back a created thread when an untracked bootstrap is interrupted", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const setupEntered = yield* Deferred.make<void>();
+      const setupRelease = yield* Deferred.make<void>();
+      const threadDeleted = yield* Deferred.make<void>();
+      const runForThread = vi.fn(
+        (
+          _: Parameters<
+            ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
+          >[0],
+        ) =>
+          Deferred.succeed(setupEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(setupRelease)),
+            Effect.as({
+              status: "started" as const,
+              scriptId: "setup",
+              scriptName: "Setup",
+              scriptCommand: "npm install",
+              terminalId: "setup-setup",
+              cwd: "/tmp/existing-worktree",
+              async: true,
+            }),
+          ),
+      );
+
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
+          gitVcsDriver: {
+            execute: () => Effect.succeed(SUCCESSFUL_GIT_EXECUTION),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                dispatchedCommands.push(command);
+                if (command.type === "thread.delete") {
+                  yield* Deferred.succeed(threadDeleted, undefined);
+                }
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+          projectSetupScriptRunner: {
+            runForThread,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-bootstrap-untracked-interrupt");
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const dispatchFiber = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-untracked-interrupt"),
+            threadId,
+            message: {
+              messageId: MessageId.make("msg-bootstrap-untracked-interrupt"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: "/tmp/existing-worktree",
+                createdAt,
+              },
+              runSetupScript: true,
+            },
+            createdAt,
+          }),
+        ),
+      ).pipe(Effect.forkChild);
+
+      yield* Deferred.await(setupEntered);
+      yield* Fiber.interrupt(dispatchFiber);
+      yield* Deferred.await(threadDeleted);
+      yield* Deferred.succeed(setupRelease, undefined);
+
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.message.user.append", "thread.delete"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
