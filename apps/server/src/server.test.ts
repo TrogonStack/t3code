@@ -11268,12 +11268,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   );
 
   it.effect.each([
-    { caseName: "a non-repository", isRepository: false, failFetch: false },
-    { caseName: "a base without a commit", isRepository: true, failFetch: false },
-    { caseName: "a fetch failure", isRepository: true, failFetch: true },
+    { caseName: "a non-repository", isRepository: false, failFetch: false, requireWorktree: true },
+    {
+      caseName: "a base without a commit",
+      isRepository: true,
+      failFetch: false,
+      requireWorktree: true,
+    },
+    { caseName: "a fetch failure", isRepository: true, failFetch: true, requireWorktree: true },
+    // Nothing was created, so the draft goes back to the composer whether or
+    // not the worktree was the part that had to work.
+    {
+      caseName: "a fetch failure the worktree did not depend on",
+      isRepository: true,
+      failFetch: true,
+      requireWorktree: false,
+    },
   ])(
-    "rejects required worktree bootstrap before creating a thread for $caseName",
-    ({ isRepository, failFetch }) =>
+    "rejects worktree bootstrap before creating a thread for $caseName",
+    ({ isRepository, failFetch, requireWorktree }) =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
         const createWorktree = vi.fn(
@@ -11339,7 +11352,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
-                  requireWorktree: true,
+                  ...(requireWorktree ? { requireWorktree: true } : {}),
                   startFromOrigin: failFetch,
                 },
               },

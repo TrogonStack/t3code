@@ -778,10 +778,7 @@ const makeThreadBootstrap = Effect.gen(function* () {
               ),
             onSuccess: (threadDeleted) =>
               Effect.fail(
-                threadDeleted ||
-                  (bootstrap?.createThread &&
-                    bootstrap.prepareWorktree?.requireWorktree === true &&
-                    !createdThread)
+                threadDeleted || (bootstrap?.createThread && !createdThread)
                   ? new OrchestrationDispatchCommandError({
                       message: dispatchError.message,
                       ...(dispatchError.cause !== undefined ? { cause: dispatchError.cause } : {}),
