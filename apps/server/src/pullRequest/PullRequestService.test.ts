@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -22,6 +23,8 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as PullRequestFilesViewed from "../persistence/PullRequestFilesViewed.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
+import { ForgejoCli } from "../sourceControl/ForgejoCli.ts";
+import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -1105,8 +1108,13 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
 
       // Queueing succeeds while the host still reports an open PR.
       yield* service.runAction({ ...reference, action: "merge" });
+      const queuedRefresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
       confirmationFails = true;
       yield* service.runAction({ ...reference, action: "merge" });
+      assert.isAbove(
+        Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)),
+        queuedRefresh,
+      );
       confirmationFails = false;
       state = "merged";
       yield* TestClock.setTime(Date.parse(mergedAt));
@@ -1121,6 +1129,53 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
         ...reference,
         mergedAt,
       });
+    }),
+  ),
+);
+
+it.effect("refreshes every reader before a queued merge confirmation finishes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const confirmationStarted = yield* Deferred.make<void>();
+      const confirm = yield* Deferred.make<void>();
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequestSummary: () =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(confirmationStarted, undefined);
+                yield* Deferred.await(confirm);
+                return changeRequest(1, "2026-09-16T00:00:00.000Z");
+              }),
+          }),
+        ],
+      });
+      const merges = yield* service.subscribeMerges;
+      const observedMerge = yield* Stream.runHead(merges).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const readers = yield* Effect.forEach([0, 1], () =>
+        Stream.runHead(service.subscribeRefreshes).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        ),
+      );
+      const action = yield* service
+        .runAction({ ...reference, action: "merge" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(confirmationStarted);
+      const revisions = yield* Effect.forEach(readers, (reader) =>
+        Fiber.join(reader).pipe(Effect.map(Option.getOrThrow)),
+      );
+      assert.isAbove(revisions[0]!, 0);
+      assert.strictEqual(revisions[0], revisions[1]);
+      assert.isUndefined(action.pollUnsafe());
+      yield* Deferred.succeed(confirm, undefined);
+      yield* Fiber.join(action);
+      assert.isUndefined(observedMerge.pollUnsafe());
     }),
   ),
 );
@@ -2390,10 +2445,16 @@ it.effect("invalidates the cached activity after reacting, like the other mutati
       ],
     });
 
+    yield* service.refreshAfterTurn(reference.projectId);
+    const previousRefresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
     yield* service.activity(reference);
     assert.strictEqual(activityCalls, 1);
 
     yield* service.setReaction({ ...reference, content: "heart", reacted: true });
+    assert.isAbove(
+      Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)),
+      previousRefresh,
+    );
     yield* service.activity(reference);
 
     assert.strictEqual(activityCalls, 2);
@@ -3267,31 +3328,106 @@ it.effect("explicit and turn invalidations make the next listing ask the host ag
   }),
 );
 
-it.effect("a mutation makes the next listing ask the host again, with no client asking", () =>
-  Effect.gen(function* () {
-    let hostCalls = 0;
-    const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
-      providers: [
-        fakeProvider("github", {
-          listChangeRequests: () => {
-            hostCalls += 1;
-            return Effect.succeed({ items: [], truncated: false, continues: false });
-          },
-        }),
-      ],
-    });
+it.effect("close and reopen notify subscribed readers after invalidating their cached state", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let hostCalls = 0;
+      let state: "open" | "closed" = "open";
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequestSummary: () =>
+              Effect.succeed({ ...changeRequest(1, "2026-09-16T00:00:00.000Z"), state }),
+            runAction: (input) =>
+              Effect.sync(() => {
+                state = input.action === "close" ? "closed" : "open";
+              }),
+            listChangeRequests: () => {
+              hostCalls += 1;
+              return Effect.succeed({ items: [], truncated: false, continues: false });
+            },
+          }),
+        ],
+      });
 
-    yield* service.list({ state: "open" });
-    yield* service.runAction({
-      projectId: "p1" as ProjectId,
-      repository: "acme/web",
-      number: 1,
-      action: "close",
-    });
-    yield* service.list({ state: "open" });
-    assert.strictEqual(hostCalls, 2);
-  }),
+      yield* service.refreshAfterTurn(reference.projectId);
+      yield* service.list({ state: "open" });
+      assert.strictEqual((yield* service.summary(reference)).state, "open");
+      for (const action of ["close", "reopen"] as const) {
+        const refreshed = yield* service.subscribeRefreshes.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.mapEffect(() =>
+            Effect.gen(function* () {
+              yield* service.list({ state: "open" });
+              return yield* service.summary(reference);
+            }),
+          ),
+          Stream.runHead,
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* service.runAction({ ...reference, action });
+        assert.strictEqual(
+          Option.getOrThrow(yield* Fiber.join(refreshed)).state,
+          action === "close" ? "closed" : "open",
+        );
+      }
+      assert.strictEqual(hostCalls, 3);
+    }),
+  ),
+);
+
+it.effect("explicit invalidation refreshes origin readers after a routed host mutation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let state: "open" | "closed" = "open";
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequestSummary: () =>
+              Effect.succeed({ ...changeRequest(1, "2026-09-16T00:00:00.000Z"), state }),
+          }),
+        ],
+      });
+      yield* service.refreshAfterTurn(reference.projectId);
+      let revision = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
+      // The sync reactor invalidates before reading; it must not notify itself again.
+      yield* service.invalidate({ reference });
+      assert.strictEqual(
+        Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)),
+        revision,
+      );
+      assert.strictEqual((yield* service.summary(reference)).state, "open");
+
+      for (const nextState of ["closed", "open"] as const) {
+        const refreshed = yield* service.subscribeRefreshes.pipe(
+          Stream.drop(1),
+          Stream.take(1),
+          Stream.mapEffect((nextRevision) =>
+            service
+              .summary(reference)
+              .pipe(Effect.map((summary) => ({ revision: nextRevision, state: summary.state }))),
+          ),
+          Stream.runHead,
+          Effect.forkChild({ startImmediately: true }),
+        );
+        state = nextState;
+        yield* service.invalidate({ reference }, { notifyReaders: true });
+        const result = Option.getOrThrow(yield* Fiber.join(refreshed));
+        assert.strictEqual(result.state, nextState);
+        assert.isAbove(result.revision, revision);
+        revision = result.revision;
+      }
+    }),
+  ),
 );
 
 it.effect("does not cache a failed listing", () =>
@@ -5102,6 +5238,113 @@ const GITLAB_REFERENCE = {
   repository: "group/project",
   number: 1,
 };
+
+it.effect("tracks Forgejo viewed files through its diff and refuses truncated baselines", () =>
+  Effect.gen(function* () {
+    let alpha = "b485fe5";
+    let truncated = false;
+    let diffReads = 0;
+    const provider = yield* ForgejoPullRequestProvider.make.pipe(
+      Effect.provide(
+        Layer.mock(ForgejoCli)({
+          api: (input) => {
+            assert.strictEqual(input.host, "forge.example:3000");
+            const viewer = input.path === "user";
+            if (!viewer) {
+              assert.strictEqual(input.repository, "reviewer/project");
+              assert.strictEqual(input.path, "repos/reviewer/project/pulls/1.diff");
+              diffReads++;
+            }
+            return Effect.succeed({
+              exitCode: ChildProcessSpawner.ExitCode(0),
+              stdout: viewer
+                ? JSON.stringify({ login: "reviewer" })
+                : truncated
+                  ? `diff --git a/alpha.ts b/alpha.ts\nindex eb2d7c5..${alpha} 100644\n`
+                  : [
+                      "diff --git a/alpha.ts b/alpha.ts",
+                      `index eb2d7c5..${alpha} 100644`,
+                      "diff --git a/beta.ts b/beta.ts",
+                      "index b39e8b3..5851425 100644",
+                      'diff --git "a/caf\\303\\251 notes.txt" "b/caf\\303\\251 notes.txt"',
+                      "index ffd99ce..6dd9855 100644",
+                      "diff --git a/deleted.txt b/deleted.txt",
+                      "deleted file mode 100644",
+                      "index 233f5c6..0000000",
+                      "diff --git a/old.txt b/renamed.txt",
+                      "similarity index 100%",
+                      "rename from old.txt",
+                      "rename to renamed.txt",
+                      "",
+                    ].join("\n"),
+              stderr: "",
+              stdoutTruncated: !viewer && truncated,
+              stderrTruncated: false,
+            });
+          },
+        }),
+      ),
+    );
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "forgejo",
+          title: "on forgejo",
+          workspaceRoot: "/forgejo",
+          repository: "reviewer/project",
+          provider: "forgejo",
+          host: "forge.example:3000",
+          remoteUrl: "http://forge.example:3000/reviewer/project.git",
+        }),
+      ],
+      providers: [provider],
+    });
+    const reference = {
+      projectId: "forgejo" as ProjectId,
+      repository: "reviewer/project",
+      host: "forge.example:3000",
+      number: 1,
+    };
+    const paths = ["alpha.ts", "beta.ts", "café notes.txt", "deleted.txt", "renamed.txt"];
+    yield* service.setFilesViewed({
+      ...reference,
+      files: paths.map((path) => ({ path, viewed: true })),
+    });
+    assert.deepStrictEqual(
+      new Map((yield* service.filesViewed(reference)).files.map((file) => [file.path, file.state])),
+      new Map(paths.map((path) => [path, "viewed"])),
+    );
+    assert.strictEqual(diffReads, 1);
+
+    alpha = "aabbccd";
+    yield* service.invalidate({ reference });
+    assert.deepStrictEqual(
+      new Map((yield* service.filesViewed(reference)).files.map((file) => [file.path, file.state])),
+      new Map(paths.map((path) => [path, path === "alpha.ts" ? "dismissed" : "viewed"])),
+    );
+    yield* service.setFilesViewed({
+      ...reference,
+      files: [{ path: "beta.ts", viewed: false }],
+    });
+    assert.isFalse(
+      (yield* service.filesViewed(reference)).files.some((file) => file.path === "beta.ts"),
+    );
+
+    truncated = true;
+    yield* service.invalidate({ reference });
+    yield* service.setFilesViewed({
+      ...reference,
+      files: [{ path: "beta.ts", viewed: true }],
+    });
+    truncated = false;
+    yield* service.invalidate({ reference });
+    // A partial response must not stamp an empty revision and then dismiss the mark on recovery.
+    assert.deepStrictEqual(
+      (yield* service.filesViewed(reference)).files.find((file) => file.path === "beta.ts"),
+      { path: "beta.ts", state: "viewed" },
+    );
+  }),
+);
 
 it.effect("keeps viewed files itself for a host that keeps none of its own", () =>
   Effect.gen(function* () {
