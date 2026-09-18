@@ -108,7 +108,7 @@ export interface OtelEnvironment {
  * to become part of an endpoint or a service name.
  */
 const optionalString = (name: string) =>
-  Config.string(name).pipe(
+  Config.String(name).pipe(
     Config.option,
     Config.map((value) => {
       const raw = Option.getOrUndefined(value)?.trim();

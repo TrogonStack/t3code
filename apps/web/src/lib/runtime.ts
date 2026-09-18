@@ -11,7 +11,7 @@ import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import { browserCryptoLayer } from "../cloud/dpop";
 import { managedRelayClientLayer } from "../cloud/managedRelayLayer";
 import { resolveCloudPublicConfig, resolveRelayTracingConfig } from "../cloud/publicConfig";
-import { ClientTracingLive } from "../observability/clientTracer";
+import * as ClientTracer from "../observability/clientTracer";
 
 function configuredRelayUrl(): string {
   return resolveCloudPublicConfig().relayUrl ?? "http://relay.invalid";
@@ -30,7 +30,7 @@ type RuntimeLayerSource =
   | typeof browserCryptoLayer
   | typeof Socket.layerWebSocketConstructorGlobal
   | typeof relayTracingLayer
-  | typeof ClientTracingLive
+  | typeof ClientTracer.layer
   | ReturnType<typeof managedRelayClientLayer>;
 
 const primaryHttpRuntime = ManagedRuntime.make(
@@ -58,7 +58,7 @@ const runtimeLayer = Layer.mergeAll(
   httpClientLayer,
   browserCryptoLayer,
   Socket.layerWebSocketConstructorGlobal,
-  ClientTracingLive,
+  ClientTracer.layer,
   relayTracingLayer,
   managedRelayClientLayer(configuredRelayUrl()).pipe(
     Layer.provide(Layer.mergeAll(httpClientLayer, browserCryptoLayer)),

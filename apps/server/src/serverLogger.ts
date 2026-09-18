@@ -6,18 +6,12 @@ import * as References from "effect/References";
 import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
 import * as OtlpLogger from "effect/unstable/observability/OtlpLogger";
 
-import * as ServerConfig from "./config.ts";
+import { otlpResource, ServerConfig } from "./config.ts";
 
-/**
- * Every logger the server installs, built in one `Logger.layer` call because
- * that call writes the whole set at once. A second layer that also installs a
- * logger either replaces this set or merges with the one the fiber had before
- * either layer ran, depending on merge order, so the OTLP log exporter belongs
- * here next to the console and tracer loggers rather than beside them in the
- * observability layer.
- */
 export const ServerLoggerLive = Effect.gen(function* () {
-  const config = yield* ServerConfig.ServerConfig;
+  const config = yield* ServerConfig;
+  const minimumLogLevelLayer = Layer.succeed(References.MinimumLogLevel, config.logLevel);
+
   const settings = config.otelEnvironment.logs.settings;
   // A log endpoint these variables did not supply keeps the headers and wire
   // format T3 Code's own names asked for.
@@ -28,18 +22,27 @@ export const ServerLoggerLive = Effect.gen(function* () {
       : OtlpLogger.make({
           url: config.otlpLogsUrl,
           exportInterval: `${config.otlpLogsExportIntervalMs} millis`,
-          resource: ServerConfig.otlpResource(config),
+          resource: otlpResource(config),
           ...(headers === undefined ? {} : { headers }),
           ...(settings?.maxBatchSize === undefined ? {} : { maxBatchSize: settings.maxBatchSize }),
         });
 
-  const minimumLogLevelLayer = Layer.succeed(References.MinimumLogLevel, config.logLevel);
+  // `Logger.layer` writes the whole logger set rather than adding to it, so
+  // every logger the server wants has to be named in this one call.
+  //
+  // `Logger.tracerLogger` reaches a collector by attaching each message to the
+  // active span as a span event, which covers only messages logged inside a
+  // recorded span and files them under traces. The OTLP logger carries the same
+  // messages as log records stamped with their trace and span ids, so it is a
+  // superset: keeping both would export every in-span message twice.
+  //
+  // Recording events on spans is also the shape OpenTelemetry is deprecating,
+  // in favor of the log-based events this logger emits:
+  // https://opentelemetry.io/blog/2026/deprecating-span-events/
   const loggerLayer = Logger.layer(
-    [
-      Logger.consolePretty(),
-      Logger.tracerLogger,
-      ...(otlpLogger === undefined ? [] : [otlpLogger]),
-    ],
+    otlpLogger === undefined
+      ? [Logger.consolePretty(), Logger.tracerLogger]
+      : [Logger.consolePretty(), otlpLogger],
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),

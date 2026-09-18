@@ -22,12 +22,19 @@ Every log the server writes goes to stdout for humans:
 - format: `Logger.consolePretty()`
 - normal local persistence: none
 - SSH-managed launch persistence: `~/.t3/ssh-launch/<state>/server.log`
+- remote export: OTLP only, when configured
 
 When OTLP logs are configured the same records are also exported as OTLP log records, batched and
 carrying the trace and span id of whatever was running, so a log line in the backend links back to
 the span that produced it.
 
 If you want a log message to show up in the local trace file, emit it inside an active span with `Effect.log...`. `Logger.tracerLogger` will attach it as a span event.
+
+Configuring a logs endpoint takes over that job. The server then exports log records, which cover
+every message instead of only the ones inside an active span and carry the trace and span ids so
+they still line up with the trace. `Logger.tracerLogger` is dropped in that mode, so the same
+message is not exported twice and the trace file stops carrying log messages. stdout output and
+SSH-managed launch persistence stay unchanged either way.
 
 ### Traces
 
@@ -682,6 +689,7 @@ It provides:
 - local NDJSON tracer
 - optional OTLP trace exporter
 - optional OTLP metrics exporter
+- optional OTLP log exporter
 - Effect trace-level and timing refs
 
 The Electron main process assembles its own in
@@ -709,11 +717,12 @@ OTLP export:
 - `T3CODE_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
 - `T3CODE_OTLP_SERVICE_NAME`: server service name, default `t3-server`. The Electron main process
   does not read it and is always `t3-desktop`.
-- `T3CODE_OTLP_HEADERS`: extra headers, same format as `OTEL_EXPORTER_OTLP_HEADERS`:
-  comma-separated `key=value` pairs with percent-encoded values
+- `T3CODE_OTLP_HEADERS`: extra headers for all three exporters, same format as
+  `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs with percent-encoded values.
 - `T3CODE_OTLP_PROTOCOL`: `http/json` (default) or `http/protobuf`
 
-If the OTLP URLs are unset, local tracing still works and metrics stay in-process only.
+If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
+on stdout only.
 
 ### What Is Instrumented Today
 

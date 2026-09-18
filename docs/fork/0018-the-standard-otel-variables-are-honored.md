@@ -7,15 +7,23 @@
 
 - Point T3 Code at your collector the same way you point everything else at
   it. A machine that already exports `OTEL_EXPORTER_OTLP_ENDPOINT` gets T3 Code
-  traces and metrics with no extra configuration, at the per-signal paths the
-  specification defines.
+  traces, metrics, and log records with no extra configuration, at the
+  per-signal paths the specification defines.
 - Send the credentials your collector requires. `OTEL_EXPORTER_OTLP_HEADERS`
   reaches the exporter, including the proxy that forwards browser traces, so an
   authenticated endpoint stops rejecting the whole stream.
 - Tell your instances apart. `OTEL_SERVICE_VERSION` and
-  `OTEL_RESOURCE_ATTRIBUTES` are attached to every span and metric, so T3 Code
-  sits in the same dashboards as everything else. Service names themselves are
-  static, and `OTEL_SERVICE_NAME` is refused with a warning; see 0023.
+  `OTEL_RESOURCE_ATTRIBUTES` are attached to every span, metric, and log
+  record, so T3 Code sits in the same dashboards as everything else. Service
+  names themselves are static, and `OTEL_SERVICE_NAME` is refused with a
+  warning; see 0023.
+- Configure each signal on its own, logs included. A signal with its own
+  address, wire format, or credentials is honored without disturbing the other
+  two, `OTEL_LOGS_EXPORTER=none` stops log export while leaving spans and
+  metrics alone, and `OTEL_BLRP_SCHEDULE_DELAY` and
+  `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` are the batching knobs the specification
+  defines for logs, so a delay meant for spans does not decide how promptly a
+  log record arrives.
 - Turn export off from the environment. `OTEL_SDK_DISABLED=true` stops every
   export, including one configured in Settings, which is the one switch a
   shared machine needs.

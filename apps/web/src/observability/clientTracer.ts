@@ -7,11 +7,11 @@ let delegate: Tracer.Tracer | null = null;
  * Points the installed tracer at the exporter `configureClientTracing` just built,
  * or at nothing while no exporter is configured.
  */
-export function setClientTracerDelegate(next: Tracer.Tracer | null): void {
+export function setDelegate(next: Tracer.Tracer | null): void {
   delegate = next;
 }
 
-export function hasClientTracerDelegate(): boolean {
+export function hasDelegate(): boolean {
   return delegate !== null;
 }
 
@@ -19,7 +19,7 @@ export function hasClientTracerDelegate(): boolean {
  * Installed once when the client runtime is built, before any exporter exists, so
  * client spans keep flowing to whatever exporter is configured later on.
  */
-export const ClientTracingLive = Layer.succeed(
+export const layer = Layer.succeed(
   Tracer.Tracer,
   Tracer.make({
     span(options) {
