@@ -106,24 +106,25 @@ const logInSpanThrough = (overrides: Partial<ServerConfig.ServerConfig["Service"
   Effect.gen(function* () {
     const requests: Array<ExportedRequest> = [];
     const spans: Array<Tracer.NativeSpan> = [];
+    const tracerLayer = Layer.succeed(
+      Tracer.Tracer,
+      Tracer.make({
+        span: (spanOptions) => {
+          const span = new Tracer.NativeSpan(spanOptions);
+          spans.push(span);
+          return span;
+        },
+      }),
+    );
     yield* Effect.log("server logger under test").pipe(
       Effect.withSpan("server-logger-test"),
       Effect.provide(
-        ServerLoggerLive.pipe(
-          Layer.provide(configLayer(overrides)),
-          Layer.provide(collectorLayer(requests)),
-        ),
-      ),
-      Effect.provide(
-        Layer.succeed(
-          Tracer.Tracer,
-          Tracer.make({
-            span: (spanOptions) => {
-              const span = new Tracer.NativeSpan(spanOptions);
-              spans.push(span);
-              return span;
-            },
-          }),
+        Layer.mergeAll(
+          ServerLoggerLive.pipe(
+            Layer.provide(configLayer(overrides)),
+            Layer.provide(collectorLayer(requests)),
+          ),
+          tracerLayer,
         ),
       ),
     );
