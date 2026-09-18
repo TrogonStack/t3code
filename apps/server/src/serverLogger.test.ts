@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
@@ -97,6 +98,38 @@ const logThrough = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =>
     return requests;
   });
 
+/**
+ * Logs inside a span so the tracer logger has somewhere to attach an event,
+ * then reports both what the collector received and what landed on the span.
+ */
+const logInSpanThrough = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =>
+  Effect.gen(function* () {
+    const requests: Array<ExportedRequest> = [];
+    const spans: Array<Tracer.NativeSpan> = [];
+    yield* Effect.log("server logger under test").pipe(
+      Effect.withSpan("server-logger-test"),
+      Effect.provide(
+        ServerLoggerLive.pipe(
+          Layer.provide(configLayer(overrides)),
+          Layer.provide(collectorLayer(requests)),
+        ),
+      ),
+      Effect.provide(
+        Layer.succeed(
+          Tracer.Tracer,
+          Tracer.make({
+            span: (spanOptions) => {
+              const span = new Tracer.NativeSpan(spanOptions);
+              spans.push(span);
+              return span;
+            },
+          }),
+        ),
+      ),
+    );
+    return { requests, spans };
+  });
+
 describe("ServerLoggerLive", () => {
   it.effect("exports log records to the configured logs endpoint", () =>
     Effect.gen(function* () {
@@ -132,6 +165,32 @@ describe("ServerLoggerLive", () => {
       assert.lengthOf(requests, 1);
       assert.strictEqual(requests[0]?.headers["x-scope"], "logs");
       assert.strictEqual(requests[0]?.headers["content-type"], "application/x-protobuf");
+    }),
+  );
+
+  it.effect("attaches log messages to the active span when no logs endpoint is configured", () =>
+    Effect.gen(function* () {
+      const { requests, spans } = yield* logInSpanThrough({});
+
+      assert.lengthOf(requests, 0);
+      assert.lengthOf(spans, 1);
+      assert.deepEqual(
+        spans[0]?.events.map(([name]) => name),
+        ["server logger under test"],
+      );
+    }),
+  );
+
+  it.effect("stops duplicating messages onto the span once log records are exported", () =>
+    Effect.gen(function* () {
+      const { requests, spans } = yield* logInSpanThrough({
+        otlpLogsUrl: "https://collector.example.com/v1/logs",
+      });
+
+      assert.lengthOf(requests, 1);
+      assert.include(requests[0]?.body ?? "", "server logger under test");
+      assert.lengthOf(spans, 1);
+      assert.lengthOf(spans[0]?.events ?? [], 0);
     }),
   );
 });

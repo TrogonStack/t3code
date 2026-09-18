@@ -12,10 +12,6 @@ export const ServerLoggerLive = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const minimumLogLevelLayer = Layer.succeed(References.MinimumLogLevel, config.logLevel);
 
-  // `Logger.layer` replaces the whole logger set on every call, so a second
-  // call installing the OTLP logger elsewhere would silently drop whichever
-  // set lost the race instead of merging with it. The OTLP log exporter has
-  // to join console/tracer loggers in this one call for both to survive.
   const otlpLogger =
     config.otlpLogsUrl === undefined
       ? undefined
@@ -26,12 +22,18 @@ export const ServerLoggerLive = Effect.gen(function* () {
           resource: ServerConfig.otlpResource(config),
         });
 
+  // `Logger.layer` writes the whole logger set rather than adding to it, so
+  // every logger the server wants has to be named in this one call.
+  //
+  // `Logger.tracerLogger` reaches a collector by attaching each message to the
+  // active span as a span event, which covers only messages logged inside a
+  // recorded span and files them under traces. The OTLP logger carries the same
+  // messages as log records stamped with their trace and span ids, so it is a
+  // superset: keeping both would export every in-span message twice.
   const loggerLayer = Logger.layer(
-    [
-      Logger.consolePretty(),
-      Logger.tracerLogger,
-      ...(otlpLogger === undefined ? [] : [otlpLogger]),
-    ],
+    otlpLogger === undefined
+      ? [Logger.consolePretty(), Logger.tracerLogger]
+      : [Logger.consolePretty(), otlpLogger],
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),

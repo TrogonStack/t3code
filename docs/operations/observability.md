@@ -26,8 +26,11 @@ Logs are human-facing:
 
 If you want a log message to show up in the trace file, emit it inside an active span with `Effect.log...`. `Logger.tracerLogger` will attach it as a span event.
 
-OTLP log export is independent of that: it forwards every log record, not just the ones inside an
-active span, and stdout output and SSH-managed launch persistence stay unchanged either way.
+Configuring a logs endpoint takes over that job. The server then exports log records, which cover
+every message instead of only the ones inside an active span and carry the trace and span ids so
+they still line up with the trace. `Logger.tracerLogger` is dropped in that mode, so the same
+message is not exported twice and the trace file stops carrying log messages. stdout output and
+SSH-managed launch persistence stay unchanged either way.
 
 ### Traces
 
