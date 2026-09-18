@@ -30,6 +30,10 @@ export const ServerLoggerLive = Effect.gen(function* () {
   // recorded span and files them under traces. The OTLP logger carries the same
   // messages as log records stamped with their trace and span ids, so it is a
   // superset: keeping both would export every in-span message twice.
+  //
+  // Recording events on spans is also the shape OpenTelemetry is deprecating,
+  // in favor of the log-based events this logger emits:
+  // https://opentelemetry.io/blog/2026/deprecating-span-events/
   const loggerLayer = Logger.layer(
     otlpLogger === undefined
       ? [Logger.consolePretty(), Logger.tracerLogger]
