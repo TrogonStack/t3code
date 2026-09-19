@@ -250,9 +250,15 @@ main process was given.
 For each signal, the first source that names its endpoint wins:
 
 1. `T3CODE_OTLP_*`
-2. the desktop bootstrap envelope
-3. Settings, under `observability`
-4. `OTEL_*`
+2. `OTEL_*`
+3. the desktop bootstrap envelope
+4. Settings, under `observability`
+
+An exported variable outranks a stored one, and T3 Code's own spelling of a variable outranks the
+standard spelling of it. That is the same order `T3CODE_OTEL_SDK_DISABLED` and `OTEL_SDK_DISABLED`
+follow, and it means an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` overrides an endpoint saved in
+Settings. Name a `T3CODE_OTLP_*` URL when you want a stored endpoint that nothing on the machine can
+redirect.
 
 Whichever source wins takes the whole signal, not just the URL. Traces sent to a
 `T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
@@ -264,6 +270,15 @@ goes.
 
 The three signals are resolved separately, so traces can come from one source and metrics or logs
 from another.
+
+A source that wins a signal can also decide not to export it. `OTEL_{TRACES,METRICS,LOGS}_EXPORTER=none`,
+a list naming an exporter T3 Code does not have, and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL=grpc`
+each turn off the signal they describe, and an endpoint in the bootstrap envelope or Settings does not
+take it back over, because the exported variable is the more recent answer. A `T3CODE_OTLP_*` URL still
+outranks all of it, since it names a different collector than the one those variables were describing.
+The exporter list is read only for a signal the standard variables pointed somewhere, so
+`OTEL_LOGS_EXPORTER=none` on a machine that exports no `OTEL_*` endpoint says nothing about a logs
+endpoint saved in Settings.
 
 Whether anything is exported at all is one setting, read in that same order: `T3CODE_OTEL_SDK_DISABLED`
 answers it, and `OTEL_SDK_DISABLED` answers it only when T3 Code's own name is unset. Either way the
@@ -286,7 +301,7 @@ telemetry.
 | `OTEL_SERVICE_NAME`                                                                  | Refused with a warning; service names are static                             |
 | `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_BLRP_SCHEDULE_DELAY` | Export interval, one per signal                                              |
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`                  | Spans per batch, log records per batch                                       |
-| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` or `delta`                                                      |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` (default), `delta`, or `lowmemory`, which resolves to `delta`   |
 
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
 specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `http/json`.
@@ -294,7 +309,7 @@ specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `
 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because T3 Code has no gRPC
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
 exporting nothing. The refusal is logged at startup and turns off only the signal that named gRPC,
-and only when that signal had no other endpoint to go to.
+and only when these variables are the ones that named where it goes.
 
 Header and resource-attribute values are percent decoded, so
 `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space and a base64 credential keeps
@@ -308,6 +323,14 @@ Not everything in the specification is implemented. These are the ones worth kno
   has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
   harder to read than exporting nothing. The refusal is logged at startup and turns off only the
   signal that named gRPC, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc` leaves traces exporting.
+- **No exporter but OTLP.** `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` accepts `otlp` and `none`. A list
+  that names `console`, `logging`, `zipkin`, `jaeger`, or `prometheus` and not `otlp` is read as a
+  deliberate "not this one", so that signal is not exported and the name that did it is logged. A
+  list that names nothing recognizable is treated as the typo it probably is: it is reported and
+  ignored, and the signal keeps exporting, because reading `otlpp` as "not OTLP" would turn one
+  transposed letter into a signal that stops with nothing in the log to connect the two. A list that
+  names `otlp` is exported over OTLP and reported for the rest, since `otlp,otlpp` would otherwise
+  look like a list where both entries took.
 - **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
@@ -317,8 +340,21 @@ Not everything in the specification is implemented. These are the ones worth kno
   deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
   shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
   the server open on every restart.
-- **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
-  accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
+- **Only an `OTEL_*` metrics endpoint can choose its aggregation.**
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` configures the metrics signal, and by the rule
+  in Precedence above a signal is configured by whichever source named its endpoint. A metrics
+  endpoint that came from `T3CODE_OTLP_METRICS_URL`, the desktop bootstrap envelope, or Settings
+  therefore exports `cumulative`, and there is no `T3CODE_*` spelling of this preference to change
+  that. This matters for one class of backend: a receiver that accepts delta histograms only, which
+  is how Datadog's OTLP intake behaves, drops cumulative histograms without reporting an error, so
+  every `_duration` timer would go missing while the `_total` counters kept arriving. Point such a
+  backend at `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and set the preference to `delta`.
+- **`lowmemory` temporality cannot be expressed per instrument kind.** It asks for delta on
+  synchronous counters and histograms and cumulative on the rest, and one temporality is applied to
+  every instrument here. It resolves to `delta` with a warning, which is what it asks for on the
+  counters and timers T3 Code actually records. Like every variable in this group it applies only
+  to the endpoint these variables named, so the warning is silent on a machine where they named no
+  metrics endpoint at all.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.
@@ -336,12 +372,17 @@ variables, propagator variables, and the attribute and span limit variables.
 A variable T3 Code cannot act on never stops it from starting. Two things can happen instead,
 and both are logged once at startup:
 
-- **A warning, then the default.** A misspelled protocol, an unavailable temporality, a timeout or
-  batch size that is not a whole number, or a pair list that is not valid percent encoding is
-  reported and ignored, and everything else keeps exporting. One bad value never costs you the
-  other variables.
-- **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
-  T3 Code does not speak rather than a value it failed to parse.
+- **A warning, then the default.** A misspelled protocol, a temporality that is not a preference,
+  an exporter name the specification does not define, a timeout or batch size that is not a whole
+  number, a batch size of zero, or a pair list that is not valid percent encoding is reported and
+  ignored, and everything else keeps exporting. One bad value never costs you the other variables.
+  A batch size of zero is singled out because the exporter would meet that threshold on every record
+  and post one HTTP request per span, which takes a collector down rather than merely reading oddly;
+  a schedule delay of zero is a real request to drain as fast as the loop allows and is honored.
+- **Export off.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` and an `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`
+  that names a specified exporter T3 Code has no implementation of do this, because each names
+  something T3 Code does not have rather than a value it failed to parse, and reporting the request
+  and then exporting anyway would be answering a different question than the one asked.
 
 An empty value means the same thing as an unset one, so `OTEL_SERVICE_VERSION=` reads as if the
 variable were not there at all. An empty `OTEL_SERVICE_NAME` is not an attempt to rename anything,
@@ -351,14 +392,19 @@ anything else, including `yes` and `1`, leaves it on. `T3CODE_OTEL_SDK_DISABLED`
 name, so it takes `true`, `1`, `yes`, `on` and their negatives, and a value it cannot read is reported
 and then left to `OTEL_SDK_DISABLED` to answer rather than treated as either answer itself.
 
-A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
-whole rather than partly. A half-parsed credential reaches the collector as the same authentication
-error a wrong one would, which reads like a bad token instead of a bad variable.
+A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value is discarded whole rather than
+partly, whether a member fails to decode or carries no `key=value` pair at all. Keeping the members
+that did parse is what makes a bad variable read like a bad token: the collector answers a
+half-parsed credential with the same authentication error a wrong one gets, and
+`authorization=token,x-tenant` would have authenticated and then routed to the wrong tenant. A
+trailing or doubled comma is spacing, not a member, so `authorization=token,` is read as the one
+pair it contains.
 
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
-name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
-an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
-batching of an export it did not point anywhere. Traces, metrics, and logs are answered separately
+name winning the URL takes the whole signal with it, and so does the desktop bootstrap envelope or
+Settings winning it for a signal these variables said nothing about, so an ambient
+`OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or batching of an
+export it did not point anywhere. Traces, metrics, and logs are answered separately
 throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces and
 logs as they were.
 

@@ -93,6 +93,7 @@ describe("OtelEnvironment", () => {
         }),
       );
       assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("console, otlp")));
     }),
   );
 
@@ -445,17 +446,63 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("warns about a temporality this exporter cannot produce", () =>
+  it.effect("resolves lowmemory to the aggregation it asks for on these metrics", () =>
     Effect.gen(function* () {
+      // Falling back to the default here would invert the request rather than
+      // decline it, and invert it toward the value a delta-only receiver drops
+      // without an error, so the timers would vanish and the counters would not.
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
           OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
         }),
       );
-      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
-      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
       assert.isTrue(resolved.warnings.some((warning) => warning.includes("lowmemory")));
+    }),
+  );
+
+  it.effect("says nothing about an aggregation for metrics these variables did not place", () =>
+    Effect.gen(function* () {
+      // The preference travels with the endpoint that asked for it, so on a
+      // machine whose metrics endpoint comes from somewhere else this warning
+      // would claim an aggregation that never applied.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://collector.example.com/v1/traces",
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
+        }),
+      );
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.isFalse(resolved.warnings.some((warning) => warning.includes("lowmemory")));
+    }),
+  );
+
+  it.effect("ignores a temporality that is not a preference at all", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "hourly",
+        }),
+      );
+      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("hourly")));
+    }),
+  );
+
+  it.effect("asks for no aggregation when nothing names one", () =>
+    Effect.gen(function* () {
+      // Left unset on purpose. The exporter applies
+      // `DEFAULT_METRICS_TEMPORALITY`, and a value here would claim the
+      // operator chose it.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
+      );
+      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 
@@ -730,6 +777,188 @@ describe("OtelEnvironment", () => {
       );
       assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 9000);
       assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
+    }),
+  );
+
+  it.effect("keeps exporting when an exporter name is misspelled", () =>
+    Effect.gen(function* () {
+      // Reading `otlpp` as "not OTLP" would turn one transposed letter into a
+      // signal that stops exporting with nothing to connect the two.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_TRACES_EXPORTER: "otlpp",
+        }),
+      );
+      assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_TRACES_EXPORTER")));
+    }),
+  );
+
+  it.effect("stops exporting a signal that asked for an exporter this has none of", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_METRICS_EXPORTER: "prometheus",
+        }),
+      );
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_METRICS_EXPORTER")));
+    }),
+  );
+
+  it.effect("says a misspelling beside otlp did nothing rather than passing it over", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "otlp,otlpp",
+        }),
+      );
+      assert.isDefined(resolved.logs.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("otlp,otlpp")));
+    }),
+  );
+
+  it.effect("says nothing about an exporter list on a signal with nowhere to go", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_TRACES_EXPORTER: "zipkin" }),
+      );
+      assert.deepStrictEqual(resolved.warnings, []);
+    }),
+  );
+
+  it.effect("refuses a batch size of zero rather than posting one request per span", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "0",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_BSP_MAX_EXPORT_BATCH_SIZE")),
+      );
+    }),
+  );
+
+  it.effect("still drains as fast as the loop allows on a delay of zero", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_SCHEDULE_DELAY: "0",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 0);
+    }),
+  );
+
+  it.effect("discards a header list where one member carries no pair", () =>
+    Effect.gen(function* () {
+      // Keeping the readable members would authorize the stream and then route
+      // it to the wrong tenant, which reads as a collector problem rather than
+      // as the typo it is.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,x-tenant",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.headers, undefined);
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
+      );
+    }),
+  );
+
+  it.effect("keeps a stored endpoint from re-enabling a signal turned off by name", () =>
+    Effect.gen(function* () {
+      // `none` is an answer about this signal, not an absence of one, so the
+      // endpoint someone saved once does not get to give the opposite answer.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "none",
+        }),
+      );
+      assert.strictEqual(resolved.logs.off, true);
+      const logs = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.logs,
+        persistedUrl: "https://stored.example.com/v1/logs",
+      });
+      assert.strictEqual(logs.url, undefined);
+    }),
+  );
+
+  it.effect("keeps a stored endpoint from answering for a declined transport", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "grpc",
+        }),
+      );
+      assert.strictEqual(resolved.traces.off, true);
+      const traces = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.traces,
+        persistedUrl: "https://stored.example.com/v1/traces",
+      });
+      assert.strictEqual(traces.url, undefined);
+      assert.isDefined(traces.signal.declined);
+    }),
+  );
+
+  it.effect("still reaches the endpoint T3 Code's own name gave a signal turned off", () =>
+    Effect.gen(function* () {
+      // T3 Code's own name outranks the standard names, so an operator who set
+      // it is not overruled by a fleet-wide exporter list.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_METRICS_EXPORTER: "none",
+        }),
+      );
+      const metrics = OtelEnvironment.resolveSignalSource({
+        t3Url: "https://t3.example.com/v1/metrics",
+        signal: resolved.metrics,
+        persistedUrl: undefined,
+      });
+      assert.strictEqual(metrics.url, "https://t3.example.com/v1/metrics");
+    }),
+  );
+
+  it.effect("leaves a stored endpoint alone when no standard endpoint named the signal", () =>
+    Effect.gen(function* () {
+      // With nowhere for these variables to send anything, the exporter list is
+      // not read at all, so it says nothing about the signal and cannot switch
+      // off an export it was never describing.
+      const resolved = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_LOGS_EXPORTER: "none" }));
+      assert.strictEqual(resolved.logs.off, false);
+      const logs = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.logs,
+        persistedUrl: "https://stored.example.com/v1/logs",
+      });
+      assert.strictEqual(logs.url, "https://stored.example.com/v1/logs");
+    }),
+  );
+
+  it.effect("reads a trailing comma as spacing rather than as a member", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces.settings?.headers, { authorization: "token" });
     }),
   );
 });

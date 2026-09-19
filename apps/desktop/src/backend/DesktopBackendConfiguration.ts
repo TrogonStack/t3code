@@ -91,13 +91,60 @@ const DESKTOP_BACKEND_ENV_NAMES = [
 
 // Env vars that the WSL backend needs but Windows process.env won't forward
 // across the wsl.exe boundary without WSLENV. The dev-server URL is handled
-// separately via a `--dev-url` CLI flag because WSLENV translation of
-// URL-shaped values (colons / slashes) is unreliable.
+// separately via a `--dev-url` CLI flag.
+// Every name the server reads to decide what it exports and where. These cross
+// without a WSLENV flag, so their values arrive verbatim; only a `/p`, `/l`,
+// `/u`, or `/w` entry is path-translated, which is what makes URL-shaped names
+// safe to forward.
+//
+// The endpoints also reach a WSL backend through the bootstrap envelope, but the
+// bootstrap is the lowest-priority source and cannot say which variable put a
+// URL in it. Forwarding the names themselves is what keeps precedence inside
+// the distro the same as on every other platform: `T3CODE_OTLP_*_URL` has to
+// arrive under its own name to outrank an ambient `OTEL_EXPORTER_OTLP_ENDPOINT`,
+// and the `OTEL_*` knobs have to travel with their endpoint or a collector is
+// reached unauthenticated and in the wrong wire format because only the URL
+// made the trip.
+const OBSERVABILITY_FORWARDED_ENV_NAMES = [
+  "T3CODE_OTEL_SDK_DISABLED",
+  "T3CODE_OTLP_TRACES_URL",
+  "T3CODE_OTLP_METRICS_URL",
+  "T3CODE_OTLP_LOGS_URL",
+  "T3CODE_OTLP_HEADERS",
+  "T3CODE_OTLP_PROTOCOL",
+  "T3CODE_OTLP_EXPORT_INTERVAL_MS",
+  "T3CODE_OTLP_SERVICE_NAME",
+  "OTEL_SDK_DISABLED",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_BSP_SCHEDULE_DELAY",
+  "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_BLRP_SCHEDULE_DELAY",
+  "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_METRIC_EXPORT_INTERVAL",
+  "OTEL_SERVICE_NAME",
+  "OTEL_SERVICE_VERSION",
+  "OTEL_RESOURCE_ATTRIBUTES",
+] as const;
+
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
-  "T3CODE_OTLP_HEADERS",
-  "T3CODE_OTLP_PROTOCOL",
+  ...OBSERVABILITY_FORWARDED_ENV_NAMES,
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";

@@ -29,7 +29,7 @@ export interface DesktopOtlpSignal {
   readonly protocol: OtelEnvironment.OtlpProtocol;
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly maxBatchSize: number | undefined;
-  readonly temporality: OtelEnvironment.MetricsTemporality | undefined;
+  readonly temporality: OtelEnvironment.MetricsTemporality;
 }
 
 export interface DesktopOtlpResource {
@@ -47,8 +47,8 @@ export interface DesktopOtlpExport {
   readonly warnings: ReadonlyArray<string>;
 }
 
-/** An endpoint named outside the OpenTelemetry variables, per signal. */
-export interface DesktopNamedOtlpEndpoints {
+/** One endpoint per signal, from a single source. */
+export interface DesktopOtlpEndpoints {
   readonly traces: string | undefined;
   readonly metrics: string | undefined;
   readonly logs: string | undefined;
@@ -56,7 +56,10 @@ export interface DesktopNamedOtlpEndpoints {
 
 export interface DesktopOtlpExportInput {
   readonly otel: OtelEnvironment.OtelEnvironment;
-  readonly named: DesktopNamedOtlpEndpoints;
+  /** `T3CODE_OTLP_*`, which outranks everything. */
+  readonly named: DesktopOtlpEndpoints;
+  /** Settings, which answers under both sets of variables. */
+  readonly persisted: DesktopOtlpEndpoints;
   /** `T3CODE_OTLP_EXPORT_INTERVAL_MS`, which deliberately covers every signal. */
   readonly namedExportIntervalMs: number | undefined;
   /** `T3CODE_OTLP_HEADERS`, which deliberately covers every signal. */
@@ -79,41 +82,35 @@ const offSignal: DesktopOtlpSignal = {
   protocol: DEFAULT_DESKTOP_PROTOCOL,
   headers: undefined,
   maxBatchSize: undefined,
-  temporality: undefined,
+  temporality: OtelEnvironment.DEFAULT_METRICS_TEMPORALITY,
 };
 
 /**
- * A signal whose endpoint came from somewhere else is not the OpenTelemetry
- * variables' to configure. Dropping the whole signal, rather than the endpoint
- * alone, is what stops an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` from changing
- * the wire format, headers, or batching of an export a `T3CODE_OTLP_*` name or
- * Settings already answered.
+ * Turns the source that won one signal into what the exporter needs.
+ * `OtelEnvironment.resolveSignalSource` has already decided which source that
+ * is, and hands back settings only when the `OTEL_*` variables are the ones
+ * that named the endpoint.
  */
 const resolveSignal = (
-  named: string | undefined,
-  signal: OtelEnvironment.OtlpSignal,
+  resolved: { readonly url: string | undefined; readonly signal: OtelEnvironment.OtlpSignal },
   input: DesktopOtlpExportInput,
 ): DesktopOtlpSignal => {
-  const settings = named === undefined ? signal.settings : undefined;
-  const url = named ?? settings?.url;
-  if (url === undefined) {
+  if (resolved.url === undefined) {
     return offSignal;
   }
   return {
-    url,
-    exportIntervalMs:
-      input.namedExportIntervalMs ??
-      settings?.exportIntervalMs ??
-      DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
-    protocol: settings?.protocol ?? input.namedProtocol ?? DEFAULT_DESKTOP_PROTOCOL,
-    headers: settings?.headers ?? input.namedHeaders,
-    maxBatchSize: settings?.maxBatchSize,
-    temporality: settings?.temporality,
+    url: resolved.url,
+    ...OtelEnvironment.resolveSignalExport({
+      settings: resolved.signal.settings,
+      t3Protocol: input.namedProtocol ?? DEFAULT_DESKTOP_PROTOCOL,
+      t3Headers: input.namedHeaders,
+      t3ExportIntervalMs: input.namedExportIntervalMs ?? DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
+    }),
   };
 };
 
 export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): DesktopOtlpExport => {
-  const { otel, named } = input;
+  const { otel } = input;
   const resource: DesktopOtlpResource = {
     serviceName: input.serviceName,
     serviceVersion: otel.resource.serviceVersion,
@@ -130,23 +127,33 @@ export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): Desktop
     };
   }
 
-  const signals = {
-    traces: named.traces === undefined ? otel.traces : OtelEnvironment.noSignal,
-    metrics: named.metrics === undefined ? otel.metrics : OtelEnvironment.noSignal,
-    logs: named.logs === undefined ? otel.logs : OtelEnvironment.noSignal,
-  };
+  const traces = OtelEnvironment.resolveSignalSource({
+    t3Url: input.named.traces,
+    signal: otel.traces,
+    persistedUrl: input.persisted.traces,
+  });
+  const metrics = OtelEnvironment.resolveSignalSource({
+    t3Url: input.named.metrics,
+    signal: otel.metrics,
+    persistedUrl: input.persisted.metrics,
+  });
+  const logs = OtelEnvironment.resolveSignalSource({
+    t3Url: input.named.logs,
+    signal: otel.logs,
+    persistedUrl: input.persisted.logs,
+  });
 
   // One variable can decline every signal, and saying so three times reads
   // like three separate problems.
   return {
-    traces: resolveSignal(named.traces, signals.traces, input),
-    metrics: resolveSignal(named.metrics, signals.metrics, input),
-    logs: resolveSignal(named.logs, signals.logs, input),
+    traces: resolveSignal(traces, input),
+    metrics: resolveSignal(metrics, input),
+    logs: resolveSignal(logs, input),
     resource,
     warnings: [
       ...new Set([
         ...otel.warnings,
-        ...[signals.traces.declined, signals.metrics.declined, signals.logs.declined].filter(
+        ...[traces.signal.declined, metrics.signal.declined, logs.signal.declined].filter(
           (reason): reason is string => reason !== undefined,
         ),
       ]),

@@ -52,12 +52,10 @@ const configLayer = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         otlpTracesUrl: undefined,
         otlpMetricsUrl: undefined,
         otlpLogsUrl: undefined,
-        otlpExportIntervalMs: 10_000,
-        otlpMetricsExportIntervalMs: 10_000,
-        otlpLogsExportIntervalMs: 10_000,
+        otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+        otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+        otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
         otlpServiceName: "t3-server",
-        otlpHeaders: undefined,
-        otlpProtocol: "http/json",
         otelEnvironment: OtelEnvironment.none,
         cwd: baseDir,
         baseDir,
@@ -161,40 +159,22 @@ describe("ServerLoggerLive", () => {
 
   it.effect("sends the headers and wire format the log signal asked for", () =>
     Effect.gen(function* () {
+      // Which source won the log signal is settled before this point, so the
+      // logger reads the resolved export rather than pairing the URL with a
+      // header set that may belong to a different collector.
       const requests = yield* logThrough({
         otlpLogsUrl: "https://collector.example.com/v1/logs",
-        otelEnvironment: {
-          ...OtelEnvironment.none,
-          logs: {
-            settings: {
-              url: "https://collector.example.com/v1/logs",
-              protocol: "http/protobuf",
-              headers: { "x-scope": "logs" },
-              exportIntervalMs: 1_000,
-              maxBatchSize: 512,
-              temporality: undefined,
-            },
-            declined: undefined,
-          },
+        otlpLogsExport: {
+          ...OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+          protocol: "http/protobuf",
+          headers: { "x-scope": "logs" },
+          exportIntervalMs: 1_000,
+          maxBatchSize: 512,
         },
       });
 
       assert.lengthOf(requests, 1);
       assert.strictEqual(requests[0]?.headers["x-scope"], "logs");
-      assert.strictEqual(requests[0]?.headers["content-type"], "application/x-protobuf");
-    }),
-  );
-
-  it.effect("falls back to the headers and wire format T3 Code's own names asked for", () =>
-    Effect.gen(function* () {
-      const requests = yield* logThrough({
-        otlpLogsUrl: "https://collector.example.com/v1/logs",
-        otlpHeaders: { "x-scope": "named" },
-        otlpProtocol: "http/protobuf",
-      });
-
-      assert.lengthOf(requests, 1);
-      assert.strictEqual(requests[0]?.headers["x-scope"], "named");
       assert.strictEqual(requests[0]?.headers["content-type"], "application/x-protobuf");
     }),
   );

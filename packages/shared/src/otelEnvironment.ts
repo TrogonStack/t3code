@@ -40,6 +40,20 @@ export type OtlpProtocol = "http/json" | "http/protobuf";
 /** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`. */
 export type MetricsTemporality = "cumulative" | "delta";
 
+/**
+ * What metrics are aggregated as when nothing asks for anything, which is the
+ * specification's default and the one Prometheus and Mimir want. It is named
+ * here, and applied at the exporter rather than left to the exporter's own
+ * fallback, so the value that ships is decided in one place instead of tracking
+ * whatever a dependency happens to default to.
+ *
+ * Sending it to a receiver that accepts delta histograms only, which is how
+ * Datadog's OTLP intake behaves, loses every timer in silence while the
+ * counters keep arriving. That is a backend fact rather than a bad default, so
+ * the answer is to set the variable, not to invert this for everyone.
+ */
+export const DEFAULT_METRICS_TEMPORALITY: MetricsTemporality = "cumulative";
+
 /** Everything one signal's exporter needs, or `undefined` if it is off. */
 export interface OtlpSignalSettings {
   readonly url: string;
@@ -71,6 +85,14 @@ export interface OtlpSignal {
    * user is looking.
    */
   readonly declined: string | undefined;
+  /**
+   * Whether these variables named this signal's endpoint and then asked for no
+   * export from here, by naming another exporter or a transport T3 Code does
+   * not speak. Carried rather than collapsed into an absent `settings`, because
+   * an absent `settings` reads as "these variables said nothing about this
+   * signal", which is what lets a stored endpoint answer instead.
+   */
+  readonly off: boolean;
 }
 
 /**
@@ -115,13 +137,20 @@ export interface OtelEnvironment {
  * blank value is: a shell profile that padded a line did not mean the padding
  * to become part of an endpoint or a service name.
  */
+/**
+ * A set but blank value is not an answer. Taking one as an answer publishes an
+ * endpoint nothing can reach and suppresses the source under it that could
+ * have been used instead.
+ */
+export const blankAsUnset = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+};
+
 const optionalString = (name: string) =>
   Config.String(name).pipe(
     Config.option,
-    Config.map((value) => {
-      const raw = Option.getOrUndefined(value)?.trim();
-      return raw === undefined || raw === "" ? undefined : raw;
-    }),
+    Config.map((value) => blankAsUnset(Option.getOrUndefined(value))),
   );
 
 /**
@@ -184,6 +213,24 @@ const readInt = (name: string, warnings: Array<string>) =>
   );
 
 /**
+ * A batch of zero is not a smaller batch. The exporter meets a threshold of
+ * zero on every record, so it stops batching and posts one HTTP request per
+ * span or log record, which is the shape that takes a collector down rather
+ * than an unreadable value. Schedule delays keep `readInt`, where zero is a
+ * real request to drain as fast as the loop allows.
+ */
+const readPositiveInt = (name: string, warnings: Array<string>) =>
+  readInt(name, warnings).pipe(
+    Effect.map((value) => {
+      if (value === 0) {
+        warnings.push(`${name}=0 is not a batch size and was ignored`);
+        return undefined;
+      }
+      return value;
+    }),
+  );
+
+/**
  * Headers and resource attributes are a W3C Baggage string: comma separated
  * pairs, optional whitespace around each one, and percent encoded values.
  *
@@ -196,13 +243,17 @@ const readInt = (name: string, warnings: Array<string>) =>
 const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined => {
   const entries: Record<string, string> = {};
   for (const member of raw.split(",")) {
+    // Trailing and doubled commas are whitespace, not a member.
+    if (member.trim() === "") {
+      continue;
+    }
     const separator = member.indexOf("=");
     if (separator === -1) {
-      continue;
+      return undefined;
     }
     const key = member.slice(0, separator).trim();
     if (key === "") {
-      continue;
+      return undefined;
     }
     const value = member.slice(separator + 1).trim();
     try {
@@ -211,10 +262,13 @@ const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined
       return undefined;
     }
   }
-  // A value that produced no pair at all is a malformed list, not a request
-  // for no headers. Returning `{}` here would count as a supplied value and
-  // silently shadow the generic variable the signal should have fallen back
-  // to.
+  // One bad member discards the list rather than the member. Keeping the rest
+  // would send a header set nobody asked for: `authorization=token,x-tenant`
+  // would authenticate and then route to the wrong tenant, which reads as a
+  // collector problem. A list that produced no pair at all is malformed for
+  // the same reason, not a request for no headers, and returning `{}` would
+  // count as a supplied value and shadow the generic variable this signal
+  // should have fallen back to.
   return Object.keys(entries).length === 0 ? undefined : entries;
 };
 
@@ -265,19 +319,63 @@ const signalEndpoint = (signal: OtlpSignalName) =>
   });
 
 /**
+ * The exporters the specification names for these signals that T3 Code has no
+ * implementation of. Naming one is a deliberate "not OTLP", so the signal is
+ * not exported, and it is worth saying which name did it.
+ */
+const FOREIGN_EXPORTERS = new Set(["console", "logging", "zipkin", "jaeger", "prometheus"]);
+
+/**
  * `OTEL_<SIGNAL>_EXPORTER` is a list, and `otlp` is its default. A value that
  * names other exporters and not `otlp` is a deliberate "not this one".
+ *
+ * A value that names nothing recognizable is a typo, and a typo is ignored
+ * here the way every other unreadable value is, which leaves the default in
+ * place. Reading `otlpp` as "not OTLP" would turn one transposed letter into a
+ * signal that stops exporting with nothing in the log to connect the two,
+ * which is the failure this whole reader exists to avoid.
  */
-const signalWantsOtlp = (signal: OtlpSignalName) =>
+const signalWantsOtlp = (signal: OtlpSignalName, warnings: Array<string>) =>
   optionalString(`OTEL_${signal}_EXPORTER`).pipe(
-    Effect.map((value) => {
-      if (value === undefined) {
+    Effect.map((raw) => {
+      if (raw === undefined) {
         return true;
       }
-      return value
+      const name = `OTEL_${signal}_EXPORTER`;
+      const entries = raw
         .split(",")
         .map((entry) => entry.trim().toLowerCase())
-        .includes("otlp");
+        .filter((entry) => entry !== "");
+      if (entries.includes("otlp")) {
+        // A list is an ordered preference and OTLP is the only entry honored
+        // here, so anything standing beside it did nothing. Saying so is what
+        // keeps the transposed letter in `otlp,otlpp` from reading like a
+        // second exporter that took.
+        if (entries.some((entry) => entry !== "otlp")) {
+          warnings.push(
+            `${name}=${raw} names otlp, so this signal is exported over OTLP and nothing else in that list is honored`,
+          );
+        }
+        return true;
+      }
+      const recognized = entries.filter(
+        (entry) => entry === "none" || FOREIGN_EXPORTERS.has(entry),
+      );
+      if (recognized.length === 0) {
+        warnings.push(
+          `${name}=${raw} names no exporter T3 Code recognizes and was ignored, so this signal is still exported over OTLP`,
+        );
+        return true;
+      }
+      // `none` is the specification's own way to say "export nothing", so it
+      // needs no explanation. A foreign exporter does: the operator asked for
+      // an export that happens somewhere else and gets none from here.
+      if (!entries.includes("none")) {
+        warnings.push(
+          `${name}=${raw} asks for an exporter T3 Code does not have, so this signal is not exported`,
+        );
+      }
+      return false;
     }),
   );
 
@@ -321,17 +419,34 @@ const SIGNAL_BATCHING = {
   }
 >;
 
+/** One signal as these variables read it, before the transport decision. */
+interface ReadSignal extends Parsed<OtlpSignalSettings> {
+  readonly off: boolean;
+}
+
 const signalSettings = (
   signal: OtlpSignalName,
   protocol: OtlpProtocol,
-  temporality: MetricsTemporality | undefined,
+  /**
+   * Metrics only, and read here rather than in `load` so an aggregation shares
+   * its endpoint's fate. A preference says nothing when these variables named
+   * nowhere to send metrics or asked for no metrics export, and reporting it
+   * anyway would claim it took while the endpoint that won still aggregates its
+   * own way.
+   */
+  temporality: Parsed<MetricsTemporality> | undefined,
 ) =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
-    if (url === undefined || !(yield* signalWantsOtlp(signal))) {
-      return { value: undefined, warnings: [] };
+    // An exporter list is moot without an endpoint, so it is neither read nor
+    // reported until one signal has somewhere to go.
+    if (url === undefined) {
+      return { value: undefined, warnings: [], off: false } satisfies ReadSignal;
     }
     const numbers: Array<string> = [];
+    if (!(yield* signalWantsOtlp(signal, numbers))) {
+      return { value: undefined, warnings: numbers, off: true } satisfies ReadSignal;
+    }
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
     const headers = specific.value ?? generic.value;
@@ -341,7 +456,7 @@ const signalSettings = (
     const maxBatchSize =
       batching.maxExportBatchSize === undefined
         ? undefined
-        : ((yield* readInt(batching.maxExportBatchSize, numbers)) ??
+        : ((yield* readPositiveInt(batching.maxExportBatchSize, numbers)) ??
           SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE);
     return {
       value: {
@@ -350,10 +465,16 @@ const signalSettings = (
         headers,
         exportIntervalMs,
         maxBatchSize,
-        temporality: signal === "METRICS" ? temporality : undefined,
+        temporality: temporality?.value,
       },
-      warnings: [...specific.warnings, ...generic.warnings, ...numbers],
-    } satisfies Parsed<OtlpSignalSettings>;
+      warnings: [
+        ...specific.warnings,
+        ...generic.warnings,
+        ...numbers,
+        ...(temporality?.warnings ?? []),
+      ],
+      off: false,
+    } satisfies ReadSignal;
   });
 
 /** What one signal should do about its wire format. */
@@ -424,8 +545,22 @@ const resolveProtocol = Effect.gen(function* () {
 
 /**
  * `lowmemory` is a real preference in the specification that this exporter
- * cannot produce, so it warns and falls back to the default rather than
- * pretending it applied.
+ * cannot express, because one temporality is applied to every instrument here
+ * rather than chosen per instrument kind. It resolves to `delta` instead of the
+ * default, and says so.
+ *
+ * `delta` is the honest answer rather than a near-enough one. `lowmemory` asks
+ * for delta on synchronous counters and histograms and cumulative on the rest,
+ * and every metric T3 Code records is a monotonic counter or a timer, so the
+ * kinds the two preferences disagree about are kinds nothing here produces.
+ * Falling back to the default would have inverted the only part of the request
+ * that is about the data, and inverted it toward the value that loses it: a
+ * receiver that accepts delta histograms only, which is how Datadog's OTLP
+ * intake behaves, drops cumulative histograms without reporting an error, so
+ * every duration metric would disappear while the counters kept arriving.
+ *
+ * A value that is not a preference at all is a different case and stays
+ * ignored. It carries no intent to honor.
  */
 const resolveMetricsTemporality = optionalString(
   "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
@@ -438,12 +573,18 @@ const resolveMetricsTemporality = optionalString(
     if (preference === "delta" || preference === "cumulative") {
       return { value: preference, warnings: [] };
     }
+    if (preference === "lowmemory") {
+      return {
+        value: "delta",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory cannot be expressed per instrument kind here, so delta is used for every metric sent to the endpoint these variables named, which is what lowmemory asks for on the counters and timers T3 Code records",
+        ],
+      };
+    }
     return {
       value: undefined,
       warnings: [
-        preference === "lowmemory"
-          ? "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory is not supported here; cumulative is used"
-          : `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored`,
+        `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored, so metrics are exported as ${DEFAULT_METRICS_TEMPORALITY}`,
       ],
     };
   }),
@@ -495,6 +636,24 @@ const disabledBy = (name: string) =>
     : `${name} is set, so no telemetry is exported, whatever configured it`;
 
 /**
+ * One signal's whole answer, with the transport decision folded in.
+ *
+ * `value` is set only for a signal that resolved an endpoint and asked for
+ * OTLP, so it is also the test for whether a decline is worth reporting. A
+ * signal nothing pointed anywhere, one switched off by name, and every signal
+ * once the SDK is disabled were never going to export, and saying gRPC is why
+ * would name the wrong cause.
+ *
+ * A declined transport is the same kind of answer as a declined exporter, so it
+ * leaves the signal `off` too: these variables named where this signal goes and
+ * then ruled out getting it there.
+ */
+const signalOf = (read: ReadSignal, transport: SignalProtocol): OtlpSignal =>
+  read.value === undefined || transport.declined === undefined
+    ? { settings: read.value, declined: undefined, off: read.off }
+    : { settings: undefined, declined: transport.declined, off: true };
+
+/**
  * Read the environment. Never fails: a variable T3 Code cannot honor
  * leaves the corresponding setting unset and is reported through the signal's
  * `declined`, because an unparseable telemetry knob is not a reason to refuse
@@ -510,13 +669,13 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
   const traces = disabled
-    ? { value: undefined, warnings: [] }
+    ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
   const metrics = disabled
-    ? { value: undefined, warnings: [] }
-    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
+    ? { value: undefined, warnings: [], off: false }
+    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality);
   const logs = disabled
-    ? { value: undefined, warnings: [] }
+    ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("LOGS", protocolDecision.logs.protocol, undefined);
   return {
     disabled,
@@ -530,29 +689,14 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
           : []),
         ...protocolDecision.warnings,
         ...resource.warnings,
-        ...temporality.warnings,
         ...traces.warnings,
         ...metrics.warnings,
         ...logs.warnings,
       ]),
     ],
-    // `value` is set only for a signal that resolved an endpoint and asked for
-    // OTLP, so it is also the test for whether a decline is worth reporting. A
-    // signal nothing pointed anywhere, one switched off by name, and every
-    // signal once the SDK is disabled were never going to export, and saying
-    // gRPC is why would name the wrong cause.
-    traces: {
-      settings: protocolDecision.traces.declined === undefined ? traces.value : undefined,
-      declined: traces.value === undefined ? undefined : protocolDecision.traces.declined,
-    },
-    metrics: {
-      settings: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
-      declined: metrics.value === undefined ? undefined : protocolDecision.metrics.declined,
-    },
-    logs: {
-      settings: protocolDecision.logs.declined === undefined ? logs.value : undefined,
-      declined: logs.value === undefined ? undefined : protocolDecision.logs.declined,
-    },
+    traces: signalOf(traces, protocolDecision.traces),
+    metrics: signalOf(metrics, protocolDecision.metrics),
+    logs: signalOf(logs, protocolDecision.logs),
     resource: resource.value,
   };
 }).pipe(
@@ -561,9 +705,9 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       Effect.as({
         disabled: false,
         warnings: [],
-        traces: { settings: undefined, declined: UNREADABLE },
-        metrics: { settings: undefined, declined: UNREADABLE },
-        logs: { settings: undefined, declined: UNREADABLE },
+        traces: { settings: undefined, declined: UNREADABLE, off: false },
+        metrics: { settings: undefined, declined: UNREADABLE, off: false },
+        logs: { settings: undefined, declined: UNREADABLE, off: false },
         resource: { serviceVersion: undefined, attributes: {} },
       }),
     ),
@@ -571,7 +715,114 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 );
 
 /** A signal these variables said nothing usable about. */
-export const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+const noSignal: OtlpSignal = { settings: undefined, declined: undefined, off: false };
+
+/** How one signal is actually exported, after its owner has been decided. */
+export interface SignalExport {
+  readonly protocol: OtlpProtocol;
+  readonly headers: Readonly<Record<string, string>> | undefined;
+  readonly exportIntervalMs: number;
+  readonly maxBatchSize: number | undefined;
+  readonly temporality: MetricsTemporality;
+}
+
+/**
+ * What T3 Code exports with when no source configured a signal: its own wire
+ * format, its own cadence, no headers, and the specification's aggregation.
+ * Named once so the server, the Electron main process, and the fixtures that
+ * stand in for them do not each carry a copy of the same literals and drift
+ * apart from the shipped behavior.
+ */
+export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
+  protocol: "http/json",
+  headers: undefined,
+  exportIntervalMs: 10_000,
+  maxBatchSize: undefined,
+  temporality: DEFAULT_METRICS_TEMPORALITY,
+};
+
+/**
+ * Applies the whole-signal rule to the knobs, not only to the URL: the source
+ * that named a signal's endpoint configures everything about that signal, and
+ * the other source is not consulted for the parts it left unset.
+ *
+ * Written here rather than as `settings?.headers ?? t3Headers` at each call
+ * site because optional chaining collapses the two cases this has to keep
+ * apart. Settings that do not exist mean the standard variables named nothing
+ * and T3 Code's own answer applies. Settings that exist and say nothing about
+ * one knob mean the standard variables own this signal and are silent about
+ * that knob, which is an answer of its own. Borrowing T3 Code's value there
+ * sends a `T3CODE_OTLP_HEADERS` credential to a collector only
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` named, and lets `T3CODE_OTLP_EXPORT_INTERVAL_MS`
+ * set the cadence of an export it did not configure.
+ */
+export const resolveSignalExport = (input: {
+  readonly settings: OtlpSignalSettings | undefined;
+  readonly t3Protocol: OtlpProtocol;
+  readonly t3Headers: Readonly<Record<string, string>> | undefined;
+  readonly t3ExportIntervalMs: number;
+}): SignalExport =>
+  input.settings === undefined
+    ? {
+        protocol: input.t3Protocol,
+        headers: input.t3Headers,
+        exportIntervalMs: input.t3ExportIntervalMs,
+        maxBatchSize: undefined,
+        temporality: DEFAULT_METRICS_TEMPORALITY,
+      }
+    : {
+        protocol: input.settings.protocol,
+        headers: input.settings.headers,
+        exportIntervalMs: input.settings.exportIntervalMs ?? input.t3ExportIntervalMs,
+        maxBatchSize: input.settings.maxBatchSize,
+        temporality: input.settings.temporality ?? DEFAULT_METRICS_TEMPORALITY,
+      };
+
+/**
+ * Where one signal's endpoint comes from, and therefore which source
+ * configures the rest of it. Sources are asked in the order every setting
+ * here follows: T3 Code's own name, then the standard `OTEL_*` names, then
+ * whatever was persisted, meaning the desktop bootstrap envelope or Settings.
+ * An exported variable outranks a stored one, and T3 Code's own spelling of a
+ * variable outranks the standard spelling of it.
+ *
+ * Whichever source wins takes the whole signal and not the URL alone, so the
+ * signal returned here is `noSignal` unless `OTEL_*` is what won. That is what
+ * stops an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` from changing the wire
+ * format, headers, batching, or aggregation of an export it never pointed
+ * anywhere, and stops startup reporting a signal as declined while it is
+ * exporting. When nothing names an endpoint the signal is returned as it was
+ * read, because a declined transport is still worth saying when there is no
+ * export to confuse it with.
+ *
+ * A signal the standard variables switched off is not the same as one they said
+ * nothing about, so a persisted endpoint does not get to re-enable it. The
+ * exported variable is the more recent answer, and answering the opposite from
+ * a stored one would export a signal an operator just turned off.
+ *
+ * Read by every process that exports, so the server and the desktop app
+ * cannot resolve the same machine's variables differently.
+ */
+export const resolveSignalSource = (input: {
+  readonly t3Url: string | undefined;
+  readonly signal: OtlpSignal;
+  readonly persistedUrl: string | undefined;
+}): { readonly url: string | undefined; readonly signal: OtlpSignal } => {
+  const t3Url = blankAsUnset(input.t3Url);
+  if (t3Url !== undefined) {
+    return { url: t3Url, signal: noSignal };
+  }
+  if (input.signal.settings !== undefined) {
+    return { url: input.signal.settings.url, signal: input.signal };
+  }
+  if (input.signal.off) {
+    return { url: undefined, signal: input.signal };
+  }
+  const persistedUrl = blankAsUnset(input.persistedUrl);
+  return persistedUrl === undefined
+    ? { url: undefined, signal: input.signal }
+    : { url: persistedUrl, signal: noSignal };
+};
 
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {

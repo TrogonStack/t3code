@@ -946,6 +946,116 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("resolveWsl forwards the standard OTEL variables into the distro", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+
+      const previousWslEnv = process.env.WSLENV;
+      const previousEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      const previousHeaders = process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      const previousTemporality = process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE;
+      try {
+        // The bootstrap carries the resolved URLs but nothing else these
+        // variables say, and it is the lowest-priority source. Without the
+        // names crossing too, a Windows machine would reach the collector
+        // inside the distro unauthenticated, in the wrong wire format, and
+        // with an aggregation the receiver drops.
+        delete process.env.WSLENV;
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://collector.example.com";
+        process.env.OTEL_EXPORTER_OTLP_HEADERS = "authorization=Bearer%20ambient";
+        process.env.OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = "delta";
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+
+          assert.equal(config.env.OTEL_EXPORTER_OTLP_ENDPOINT, "https://collector.example.com");
+          const declared = (config.env.WSLENV ?? "").split(":");
+          assert.include(declared, "OTEL_EXPORTER_OTLP_ENDPOINT");
+          assert.include(declared, "OTEL_EXPORTER_OTLP_HEADERS");
+          assert.include(declared, "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE");
+          // A bare entry crosses verbatim. A path flag would rewrite a URL.
+          assert.notInclude(config.env.WSLENV ?? "", "OTEL_EXPORTER_OTLP_ENDPOINT/");
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("OTEL_EXPORTER_OTLP_ENDPOINT", previousEndpoint);
+        restoreEnv("OTEL_EXPORTER_OTLP_HEADERS", previousHeaders);
+        restoreEnv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", previousTemporality);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolveWsl forwards T3 Code's own endpoint under its own name", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+
+      const previousWslEnv = process.env.WSLENV;
+      const previousTracesUrl = process.env.T3CODE_OTLP_TRACES_URL;
+      const previousEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+      try {
+        // The bootstrap carries this URL too, but it cannot say which variable
+        // put it there, and the bootstrap is the lowest-priority source. Only
+        // the name crossing keeps T3 Code's own variable outranking an ambient
+        // endpoint inside the distro the way it does everywhere else.
+        delete process.env.WSLENV;
+        process.env.T3CODE_OTLP_TRACES_URL = "http://localhost:4318/v1/traces";
+        process.env.OTEL_EXPORTER_OTLP_ENDPOINT = "https://collector.example.com";
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+
+          assert.equal(config.env.T3CODE_OTLP_TRACES_URL, "http://localhost:4318/v1/traces");
+          assert.include((config.env.WSLENV ?? "").split(":"), "T3CODE_OTLP_TRACES_URL");
+          assert.notInclude(config.env.WSLENV ?? "", "T3CODE_OTLP_TRACES_URL/");
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("T3CODE_OTLP_TRACES_URL", previousTracesUrl);
+        restoreEnv("OTEL_EXPORTER_OTLP_ENDPOINT", previousEndpoint);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("resolveWsl preserves existing WSLENV entries when forwarding backend secrets", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
