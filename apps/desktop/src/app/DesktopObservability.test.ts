@@ -476,10 +476,10 @@ describe("DesktopObservability", () => {
         ),
       );
 
-      assert.deepEqual(
-        requests.map((request) => request.url).toSorted(),
-        ["https://settings.example.com/v1/logs", "https://settings.example.com/v1/metrics"],
-      );
+      assert.deepEqual(requests.map((request) => request.url).toSorted(), [
+        "https://settings.example.com/v1/logs",
+        "https://settings.example.com/v1/metrics",
+      ]);
       assert.include(
         requests.find((request) => request.url.endsWith("/v1/logs"))?.body ?? "",
         "desktop log export from settings",
