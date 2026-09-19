@@ -85,6 +85,14 @@ export interface OtlpSignal {
    * user is looking.
    */
   readonly declined: string | undefined;
+  /**
+   * Whether these variables named this signal's endpoint and then asked for no
+   * export from here, by naming another exporter or a transport T3 Code does
+   * not speak. Carried rather than collapsed into an absent `settings`, because
+   * an absent `settings` reads as "these variables said nothing about this
+   * signal", which is what lets a stored endpoint answer instead.
+   */
+  readonly off: boolean;
 }
 
 /**
@@ -402,6 +410,11 @@ const SIGNAL_BATCHING = {
   }
 >;
 
+/** One signal as these variables read it, before the transport decision. */
+interface ReadSignal extends Parsed<OtlpSignalSettings> {
+  readonly off: boolean;
+}
+
 const signalSettings = (
   signal: OtlpSignalName,
   protocol: OtlpProtocol,
@@ -412,11 +425,11 @@ const signalSettings = (
     // An exporter list is moot without an endpoint, so it is neither read nor
     // reported until one signal has somewhere to go.
     if (url === undefined) {
-      return { value: undefined, warnings: [] };
+      return { value: undefined, warnings: [], off: false } satisfies ReadSignal;
     }
     const numbers: Array<string> = [];
     if (!(yield* signalWantsOtlp(signal, numbers))) {
-      return { value: undefined, warnings: numbers };
+      return { value: undefined, warnings: numbers, off: true } satisfies ReadSignal;
     }
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
@@ -439,7 +452,8 @@ const signalSettings = (
         temporality: signal === "METRICS" ? temporality : undefined,
       },
       warnings: [...specific.warnings, ...generic.warnings, ...numbers],
-    } satisfies Parsed<OtlpSignalSettings>;
+      off: false,
+    } satisfies ReadSignal;
   });
 
 /** What one signal should do about its wire format. */
@@ -601,6 +615,24 @@ const disabledBy = (name: string) =>
     : `${name} is set, so no telemetry is exported, whatever configured it`;
 
 /**
+ * One signal's whole answer, with the transport decision folded in.
+ *
+ * `value` is set only for a signal that resolved an endpoint and asked for
+ * OTLP, so it is also the test for whether a decline is worth reporting. A
+ * signal nothing pointed anywhere, one switched off by name, and every signal
+ * once the SDK is disabled were never going to export, and saying gRPC is why
+ * would name the wrong cause.
+ *
+ * A declined transport is the same kind of answer as a declined exporter, so it
+ * leaves the signal `off` too: these variables named where this signal goes and
+ * then ruled out getting it there.
+ */
+const signalOf = (read: ReadSignal, transport: SignalProtocol): OtlpSignal =>
+  read.value === undefined || transport.declined === undefined
+    ? { settings: read.value, declined: undefined, off: read.off }
+    : { settings: undefined, declined: transport.declined, off: true };
+
+/**
  * Read the environment. Never fails: a variable T3 Code cannot honor
  * leaves the corresponding setting unset and is reported through the signal's
  * `declined`, because an unparseable telemetry knob is not a reason to refuse
@@ -616,13 +648,13 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
   const traces = disabled
-    ? { value: undefined, warnings: [] }
+    ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
   const metrics = disabled
-    ? { value: undefined, warnings: [] }
+    ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
   const logs = disabled
-    ? { value: undefined, warnings: [] }
+    ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("LOGS", protocolDecision.logs.protocol, undefined);
   return {
     disabled,
@@ -642,23 +674,9 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         ...logs.warnings,
       ]),
     ],
-    // `value` is set only for a signal that resolved an endpoint and asked for
-    // OTLP, so it is also the test for whether a decline is worth reporting. A
-    // signal nothing pointed anywhere, one switched off by name, and every
-    // signal once the SDK is disabled were never going to export, and saying
-    // gRPC is why would name the wrong cause.
-    traces: {
-      settings: protocolDecision.traces.declined === undefined ? traces.value : undefined,
-      declined: traces.value === undefined ? undefined : protocolDecision.traces.declined,
-    },
-    metrics: {
-      settings: protocolDecision.metrics.declined === undefined ? metrics.value : undefined,
-      declined: metrics.value === undefined ? undefined : protocolDecision.metrics.declined,
-    },
-    logs: {
-      settings: protocolDecision.logs.declined === undefined ? logs.value : undefined,
-      declined: logs.value === undefined ? undefined : protocolDecision.logs.declined,
-    },
+    traces: signalOf(traces, protocolDecision.traces),
+    metrics: signalOf(metrics, protocolDecision.metrics),
+    logs: signalOf(logs, protocolDecision.logs),
     resource: resource.value,
   };
 }).pipe(
@@ -667,9 +685,9 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
       Effect.as({
         disabled: false,
         warnings: [],
-        traces: { settings: undefined, declined: UNREADABLE },
-        metrics: { settings: undefined, declined: UNREADABLE },
-        logs: { settings: undefined, declined: UNREADABLE },
+        traces: { settings: undefined, declined: UNREADABLE, off: false },
+        metrics: { settings: undefined, declined: UNREADABLE, off: false },
+        logs: { settings: undefined, declined: UNREADABLE, off: false },
         resource: { serviceVersion: undefined, attributes: {} },
       }),
     ),
@@ -677,7 +695,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 );
 
 /** A signal these variables said nothing usable about. */
-const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+const noSignal: OtlpSignal = { settings: undefined, declined: undefined, off: false };
 
 /** How one signal is actually exported, after its owner has been decided. */
 export interface SignalExport {
@@ -757,6 +775,11 @@ export const resolveSignalExport = (input: {
  * read, because a declined transport is still worth saying when there is no
  * export to confuse it with.
  *
+ * A signal the standard variables switched off is not the same as one they said
+ * nothing about, so a persisted endpoint does not get to re-enable it. The
+ * exported variable is the more recent answer, and answering the opposite from
+ * a stored one would export a signal an operator just turned off.
+ *
  * Read by every process that exports, so the server and the desktop app
  * cannot resolve the same machine's variables differently.
  */
@@ -771,6 +794,9 @@ export const resolveSignalSource = (input: {
   }
   if (input.signal.settings !== undefined) {
     return { url: input.signal.settings.url, signal: input.signal };
+  }
+  if (input.signal.off) {
+    return { url: undefined, signal: input.signal };
   }
   const persistedUrl = blankAsUnset(input.persistedUrl);
   return persistedUrl === undefined

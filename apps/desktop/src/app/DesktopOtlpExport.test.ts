@@ -227,6 +227,23 @@ describe("resolveDesktopOtlpExport", () => {
     }),
   );
 
+  it.effect("keeps a stored endpoint from re-enabling a signal turned off by name", () =>
+    Effect.gen(function* () {
+      // The main process reads the same sources in the same order as the
+      // server, so a signal an exported variable switched off must not come
+      // back here from the endpoint Settings remembers.
+      const resolved = yield* resolve(
+        {
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "none",
+        },
+        { persisted: { logs: "https://stored.example.com/v1/logs" } },
+      );
+      assert.strictEqual(resolved.logs.url, undefined);
+      assert.strictEqual(resolved.traces.url, "https://collector.example.com/v1/traces");
+    }),
+  );
+
   it.effect("keeps one T3 Code interval off the endpoints it did not name", () =>
     Effect.gen(function* () {
       // The source that named an endpoint sets the cadence of the export it

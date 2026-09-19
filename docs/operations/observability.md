@@ -271,6 +271,15 @@ goes.
 The three signals are resolved separately, so traces can come from one source and metrics or logs
 from another.
 
+A source that wins a signal can also decide not to export it. `OTEL_{TRACES,METRICS,LOGS}_EXPORTER=none`,
+a list naming an exporter T3 Code does not have, and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL=grpc`
+each turn off the signal they describe, and an endpoint in the bootstrap envelope or Settings does not
+take it back over, because the exported variable is the more recent answer. A `T3CODE_OTLP_*` URL still
+outranks all of it, since it names a different collector than the one those variables were describing.
+The exporter list is read only for a signal the standard variables pointed somewhere, so
+`OTEL_LOGS_EXPORTER=none` on a machine that exports no `OTEL_*` endpoint says nothing about a logs
+endpoint saved in Settings.
+
 Whether anything is exported at all is one setting, read in that same order: `T3CODE_OTEL_SDK_DISABLED`
 answers it, and `OTEL_SDK_DISABLED` answers it only when T3 Code's own name is unset. Either way the
 answer stops every export, including one configured through Settings, which is the one switch a shared
@@ -300,7 +309,7 @@ specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `
 `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, because T3 Code has no gRPC
 transport and posting an HTTP body to a gRPC endpoint fails in a way that is harder to read than
 exporting nothing. The refusal is logged at startup and turns off only the signal that named gRPC,
-and only when that signal had no other endpoint to go to.
+and only when these variables are the ones that named where it goes.
 
 Header and resource-attribute values are percent decoded, so
 `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space and a base64 credential keeps

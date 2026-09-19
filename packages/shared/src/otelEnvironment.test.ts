@@ -858,6 +858,80 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("keeps a stored endpoint from re-enabling a signal turned off by name", () =>
+    Effect.gen(function* () {
+      // `none` is an answer about this signal, not an absence of one, so the
+      // endpoint someone saved once does not get to give the opposite answer.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "none",
+        }),
+      );
+      assert.strictEqual(resolved.logs.off, true);
+      const logs = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.logs,
+        persistedUrl: "https://stored.example.com/v1/logs",
+      });
+      assert.strictEqual(logs.url, undefined);
+    }),
+  );
+
+  it.effect("keeps a stored endpoint from answering for a declined transport", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "grpc",
+        }),
+      );
+      assert.strictEqual(resolved.traces.off, true);
+      const traces = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.traces,
+        persistedUrl: "https://stored.example.com/v1/traces",
+      });
+      assert.strictEqual(traces.url, undefined);
+      assert.isDefined(traces.signal.declined);
+    }),
+  );
+
+  it.effect("still reaches the endpoint T3 Code's own name gave a signal turned off", () =>
+    Effect.gen(function* () {
+      // T3 Code's own name outranks the standard names, so an operator who set
+      // it is not overruled by a fleet-wide exporter list.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_METRICS_EXPORTER: "none",
+        }),
+      );
+      const metrics = OtelEnvironment.resolveSignalSource({
+        t3Url: "https://t3.example.com/v1/metrics",
+        signal: resolved.metrics,
+        persistedUrl: undefined,
+      });
+      assert.strictEqual(metrics.url, "https://t3.example.com/v1/metrics");
+    }),
+  );
+
+  it.effect("leaves a stored endpoint alone when no standard endpoint named the signal", () =>
+    Effect.gen(function* () {
+      // With nowhere for these variables to send anything, the exporter list is
+      // not read at all, so it says nothing about the signal and cannot switch
+      // off an export it was never describing.
+      const resolved = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_LOGS_EXPORTER: "none" }));
+      assert.strictEqual(resolved.logs.off, false);
+      const logs = OtelEnvironment.resolveSignalSource({
+        t3Url: undefined,
+        signal: resolved.logs,
+        persistedUrl: "https://stored.example.com/v1/logs",
+      });
+      assert.strictEqual(logs.url, "https://stored.example.com/v1/logs");
+    }),
+  );
+
   it.effect("reads a trailing comma as spacing rather than as a member", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(

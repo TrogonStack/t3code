@@ -79,5 +79,6 @@ The rebase burden is small. The reading lives in one module with no dependencies
 on the rest of the server, and the wiring is one call per signal inside existing
 precedence chains. A sync that rewrites those chains must keep the standard
 names directly under the `T3CODE_OTLP_*` ones and above the desktop bootstrap
-envelope and Settings. `resolveSignalSource` is where that order lives, so both
-processes move together.
+envelope and Settings, and must keep a signal those names switched off from
+falling through to the stored endpoint underneath it. `resolveSignalSource` is
+where that order lives, so both processes move together.

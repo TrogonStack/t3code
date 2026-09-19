@@ -1020,6 +1020,64 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("keeps a stored endpoint from re-enabling a signal turned off by name", () =>
+    Effect.gen(function* () {
+      // Turning one signal off is the most common reason to touch an exporter
+      // list, and a Settings endpoint underneath used to quietly keep sending
+      // it, which is the failure the operator was trying to prevent.
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-off-" });
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({
+          observability: {
+            otlpTracesUrl: "http://stored.example.com/v1/traces",
+            otlpLogsUrl: "http://stored.example.com/v1/logs",
+          },
+        })}\n`,
+      );
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+                  OTEL_LOGS_EXPORTER: "none",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.otlpLogsUrl).toBeUndefined();
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+    }),
+  );
+
   it.effect("falls back to a stored endpoint for the signals nothing exported", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
