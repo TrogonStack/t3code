@@ -134,7 +134,7 @@ export interface OtelEnvironment {
  * endpoint nothing can reach and suppresses the source under it that could
  * have been used instead.
  */
-const blankAsUnset = (value: string | undefined) => {
+export const blankAsUnset = (value: string | undefined) => {
   const trimmed = value?.trim();
   return trimmed === undefined || trimmed === "" ? undefined : trimmed;
 };
@@ -205,6 +205,24 @@ const readInt = (name: string, warnings: Array<string>) =>
   );
 
 /**
+ * A batch of zero is not a smaller batch. The exporter meets a threshold of
+ * zero on every record, so it stops batching and posts one HTTP request per
+ * span or log record, which is the shape that takes a collector down rather
+ * than an unreadable value. Schedule delays keep `readInt`, where zero is a
+ * real request to drain as fast as the loop allows.
+ */
+const readPositiveInt = (name: string, warnings: Array<string>) =>
+  readInt(name, warnings).pipe(
+    Effect.map((value) => {
+      if (value === 0) {
+        warnings.push(`${name}=0 is not a batch size and was ignored`);
+        return undefined;
+      }
+      return value;
+    }),
+  );
+
+/**
  * Headers and resource attributes are a W3C Baggage string: comma separated
  * pairs, optional whitespace around each one, and percent encoded values.
  *
@@ -217,13 +235,17 @@ const readInt = (name: string, warnings: Array<string>) =>
 const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined => {
   const entries: Record<string, string> = {};
   for (const member of raw.split(",")) {
+    // Trailing and doubled commas are whitespace, not a member.
+    if (member.trim() === "") {
+      continue;
+    }
     const separator = member.indexOf("=");
     if (separator === -1) {
-      continue;
+      return undefined;
     }
     const key = member.slice(0, separator).trim();
     if (key === "") {
-      continue;
+      return undefined;
     }
     const value = member.slice(separator + 1).trim();
     try {
@@ -232,10 +254,13 @@ const parseBaggage = (raw: string): Readonly<Record<string, string>> | undefined
       return undefined;
     }
   }
-  // A value that produced no pair at all is a malformed list, not a request
-  // for no headers. Returning `{}` here would count as a supplied value and
-  // silently shadow the generic variable the signal should have fallen back
-  // to.
+  // One bad member discards the list rather than the member. Keeping the rest
+  // would send a header set nobody asked for: `authorization=token,x-tenant`
+  // would authenticate and then route to the wrong tenant, which reads as a
+  // collector problem. A list that produced no pair at all is malformed for
+  // the same reason, not a request for no headers, and returning `{}` would
+  // count as a supplied value and shadow the generic variable this signal
+  // should have fallen back to.
   return Object.keys(entries).length === 0 ? undefined : entries;
 };
 
@@ -286,19 +311,54 @@ const signalEndpoint = (signal: OtlpSignalName) =>
   });
 
 /**
+ * The exporters the specification names for these signals that T3 Code has no
+ * implementation of. Naming one is a deliberate "not OTLP", so the signal is
+ * not exported, and it is worth saying which name did it.
+ */
+const FOREIGN_EXPORTERS = new Set(["console", "logging", "zipkin", "jaeger", "prometheus"]);
+
+/**
  * `OTEL_<SIGNAL>_EXPORTER` is a list, and `otlp` is its default. A value that
  * names other exporters and not `otlp` is a deliberate "not this one".
+ *
+ * A value that names nothing recognizable is a typo, and a typo is ignored
+ * here the way every other unreadable value is, which leaves the default in
+ * place. Reading `otlpp` as "not OTLP" would turn one transposed letter into a
+ * signal that stops exporting with nothing in the log to connect the two,
+ * which is the failure this whole reader exists to avoid.
  */
-const signalWantsOtlp = (signal: OtlpSignalName) =>
+const signalWantsOtlp = (signal: OtlpSignalName, warnings: Array<string>) =>
   optionalString(`OTEL_${signal}_EXPORTER`).pipe(
-    Effect.map((value) => {
-      if (value === undefined) {
+    Effect.map((raw) => {
+      if (raw === undefined) {
         return true;
       }
-      return value
+      const name = `OTEL_${signal}_EXPORTER`;
+      const entries = raw
         .split(",")
         .map((entry) => entry.trim().toLowerCase())
-        .includes("otlp");
+        .filter((entry) => entry !== "");
+      if (entries.includes("otlp")) {
+        return true;
+      }
+      const recognized = entries.filter(
+        (entry) => entry === "none" || FOREIGN_EXPORTERS.has(entry),
+      );
+      if (recognized.length === 0) {
+        warnings.push(
+          `${name}=${raw} names no exporter T3 Code recognizes and was ignored, so this signal is still exported over OTLP`,
+        );
+        return true;
+      }
+      // `none` is the specification's own way to say "export nothing", so it
+      // needs no explanation. A foreign exporter does: the operator asked for
+      // an export that happens somewhere else and gets none from here.
+      if (!entries.includes("none")) {
+        warnings.push(
+          `${name}=${raw} asks for an exporter T3 Code does not have, so this signal is not exported`,
+        );
+      }
+      return false;
     }),
   );
 
@@ -349,10 +409,15 @@ const signalSettings = (
 ) =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
-    if (url === undefined || !(yield* signalWantsOtlp(signal))) {
+    // An exporter list is moot without an endpoint, so it is neither read nor
+    // reported until one signal has somewhere to go.
+    if (url === undefined) {
       return { value: undefined, warnings: [] };
     }
     const numbers: Array<string> = [];
+    if (!(yield* signalWantsOtlp(signal, numbers))) {
+      return { value: undefined, warnings: numbers };
+    }
     const specific = yield* optionalRecord(`OTEL_EXPORTER_OTLP_${signal}_HEADERS`);
     const generic = yield* optionalRecord("OTEL_EXPORTER_OTLP_HEADERS");
     const headers = specific.value ?? generic.value;
@@ -362,7 +427,7 @@ const signalSettings = (
     const maxBatchSize =
       batching.maxExportBatchSize === undefined
         ? undefined
-        : ((yield* readInt(batching.maxExportBatchSize, numbers)) ??
+        : ((yield* readPositiveInt(batching.maxExportBatchSize, numbers)) ??
           SPEC_DEFAULT_MAX_EXPORT_BATCH_SIZE);
     return {
       value: {
@@ -613,6 +678,67 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 
 /** A signal these variables said nothing usable about. */
 const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+
+/** How one signal is actually exported, after its owner has been decided. */
+export interface SignalExport {
+  readonly protocol: OtlpProtocol;
+  readonly headers: Readonly<Record<string, string>> | undefined;
+  readonly exportIntervalMs: number;
+  readonly maxBatchSize: number | undefined;
+  readonly temporality: MetricsTemporality;
+}
+
+/**
+ * What T3 Code exports with when no source configured a signal: its own wire
+ * format, its own cadence, no headers, and the specification's aggregation.
+ * Named once so the server, the Electron main process, and the fixtures that
+ * stand in for them do not each carry a copy of the same literals and drift
+ * apart from the shipped behavior.
+ */
+export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
+  protocol: "http/json",
+  headers: undefined,
+  exportIntervalMs: 10_000,
+  maxBatchSize: undefined,
+  temporality: DEFAULT_METRICS_TEMPORALITY,
+};
+
+/**
+ * Applies the whole-signal rule to the knobs, not only to the URL: the source
+ * that named a signal's endpoint configures everything about that signal, and
+ * the other source is not consulted for the parts it left unset.
+ *
+ * Written here rather than as `settings?.headers ?? t3Headers` at each call
+ * site because optional chaining collapses the two cases this has to keep
+ * apart. Settings that do not exist mean the standard variables named nothing
+ * and T3 Code's own answer applies. Settings that exist and say nothing about
+ * one knob mean the standard variables own this signal and are silent about
+ * that knob, which is an answer of its own. Borrowing T3 Code's value there
+ * sends a `T3CODE_OTLP_HEADERS` credential to a collector only
+ * `OTEL_EXPORTER_OTLP_ENDPOINT` named, and lets `T3CODE_OTLP_EXPORT_INTERVAL_MS`
+ * set the cadence of an export it did not configure.
+ */
+export const resolveSignalExport = (input: {
+  readonly settings: OtlpSignalSettings | undefined;
+  readonly t3Protocol: OtlpProtocol;
+  readonly t3Headers: Readonly<Record<string, string>> | undefined;
+  readonly t3ExportIntervalMs: number;
+}): SignalExport =>
+  input.settings === undefined
+    ? {
+        protocol: input.t3Protocol,
+        headers: input.t3Headers,
+        exportIntervalMs: input.t3ExportIntervalMs,
+        maxBatchSize: undefined,
+        temporality: DEFAULT_METRICS_TEMPORALITY,
+      }
+    : {
+        protocol: input.settings.protocol,
+        headers: input.settings.headers,
+        exportIntervalMs: input.settings.exportIntervalMs ?? input.t3ExportIntervalMs,
+        maxBatchSize: input.settings.maxBatchSize,
+        temporality: input.settings.temporality ?? DEFAULT_METRICS_TEMPORALITY,
+      };
 
 /**
  * Where one signal's endpoint comes from, and therefore which source

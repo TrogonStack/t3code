@@ -397,20 +397,38 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // A blank bootstrap value is not an endpoint, so it must not stand in
+    // front of the Settings endpoint underneath it. `??` alone keeps the empty
+    // string and would discard both.
+    const persistedUrl = (
+      bootstrapUrl: string | undefined,
+      settingsUrl: string | undefined,
+    ): string | undefined =>
+      OtelEnvironment.blankAsUnset(bootstrapUrl) ?? OtelEnvironment.blankAsUnset(settingsUrl);
+
     const traces = OtelEnvironment.resolveSignalSource({
       t3Url: env.otlpTracesUrl,
       signal: otel.traces,
-      persistedUrl: bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpTracesUrl,
+        persistedObservabilitySettings.otlpTracesUrl,
+      ),
     });
     const metrics = OtelEnvironment.resolveSignalSource({
       t3Url: env.otlpMetricsUrl,
       signal: otel.metrics,
-      persistedUrl: bootstrap?.otlpMetricsUrl ?? persistedObservabilitySettings.otlpMetricsUrl,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpMetricsUrl,
+        persistedObservabilitySettings.otlpMetricsUrl,
+      ),
     });
     const logs = OtelEnvironment.resolveSignalSource({
       t3Url: env.otlpLogsUrl,
       signal: otel.logs,
-      persistedUrl: bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpLogsUrl,
+        persistedObservabilitySettings.otlpLogsUrl,
+      ),
     });
     const otelEnvironment = {
       ...otel,
@@ -418,6 +436,19 @@ export const resolveServerConfig = (
       metrics: metrics.signal,
       logs: logs.signal,
     } satisfies OtelEnvironment.OtelEnvironment;
+
+    // T3 Code has one interval, one header set, and one wire format, and they
+    // deliberately cover every signal. They apply to the signals the standard
+    // variables did not claim; the standard variables bring their own
+    // per-signal defaults for the ones they did.
+    const signalExport = (settings: OtelEnvironment.OtlpSignalSettings | undefined) =>
+      OtelEnvironment.resolveSignalExport({
+        settings,
+        t3Protocol: env.otlpProtocol,
+        t3Headers: env.otlpHeaders,
+        t3ExportIntervalMs:
+          env.otlpExportIntervalMs ?? OtelEnvironment.DEFAULT_SIGNAL_EXPORT.exportIntervalMs,
+      });
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -429,21 +460,11 @@ export const resolveServerConfig = (
       otlpTracesUrl: otelEnvironment.disabled ? undefined : traces.url,
       otlpMetricsUrl: otelEnvironment.disabled ? undefined : metrics.url,
       otlpLogsUrl: otelEnvironment.disabled ? undefined : logs.url,
-      // T3 Code has one interval variable and it deliberately covers every
-      // signal. The per-signal part is the fallback under it: the environment
-      // names a span delay, a metric interval, and a log record delay
-      // separately, so a signal that took its endpoint elsewhere must not
-      // inherit another one's.
-      otlpExportIntervalMs:
-        env.otlpExportIntervalMs ?? otelEnvironment.traces.settings?.exportIntervalMs ?? 10_000,
-      otlpMetricsExportIntervalMs:
-        env.otlpExportIntervalMs ?? otelEnvironment.metrics.settings?.exportIntervalMs ?? 10_000,
-      otlpLogsExportIntervalMs:
-        env.otlpExportIntervalMs ?? otelEnvironment.logs.settings?.exportIntervalMs ?? 10_000,
+      otlpTracesExport: signalExport(otelEnvironment.traces.settings),
+      otlpMetricsExport: signalExport(otelEnvironment.metrics.settings),
+      otlpLogsExport: signalExport(otelEnvironment.logs.settings),
       otlpServiceName: named(env.otlpServiceName) ?? "t3-server",
       otelEnvironment,
-      otlpHeaders: env.otlpHeaders,
-      otlpProtocol: env.otlpProtocol,
       mode,
       port,
       cwd,

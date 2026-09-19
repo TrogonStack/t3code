@@ -93,11 +93,53 @@ const DESKTOP_BACKEND_ENV_NAMES = [
 // across the wsl.exe boundary without WSLENV. The dev-server URL is handled
 // separately via a `--dev-url` CLI flag because WSLENV translation of
 // URL-shaped values (colons / slashes) is unreliable.
+// Every name `@t3tools/shared/otelEnvironment` reads. The endpoints reach a WSL
+// backend through the bootstrap envelope, but the rest of what these variables
+// say does not travel with them, and the bootstrap is the lowest-priority
+// source: a machine exporting `OTEL_EXPORTER_OTLP_ENDPOINT` with
+// `OTEL_EXPORTER_OTLP_HEADERS` would reach the collector inside the distro
+// unauthenticated and in the wrong wire format, which is a Windows-only
+// difference in behavior from the same variables on every other platform.
+//
+// Forwarded without a WSLENV flag, so values cross verbatim rather than being
+// path-translated. That is why the URL-shaped names are safe to name here while
+// `T3CODE_OTLP_*_URL` is not: those are resolved on this side and handed over
+// in the bootstrap instead.
+const OTEL_FORWARDED_ENV_NAMES = [
+  "OTEL_SDK_DISABLED",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_BSP_SCHEDULE_DELAY",
+  "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_BLRP_SCHEDULE_DELAY",
+  "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_METRIC_EXPORT_INTERVAL",
+  "OTEL_SERVICE_NAME",
+  "OTEL_SERVICE_VERSION",
+  "OTEL_RESOURCE_ATTRIBUTES",
+] as const;
+
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "T3CODE_OTLP_HEADERS",
   "T3CODE_OTLP_PROTOCOL",
+  "T3CODE_OTEL_SDK_DISABLED",
+  ...OTEL_FORWARDED_ENV_NAMES,
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";

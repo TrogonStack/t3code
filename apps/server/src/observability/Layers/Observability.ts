@@ -40,12 +40,9 @@ export const ObservabilityLive = Layer.unwrap(
     }
 
     // Each signal builds its own serializer, so the wire format travels with
-    // the settings of the endpoint that asked for it. A signal these variables
-    // did not supply keeps what T3CODE_OTLP_PROTOCOL asked for.
-    const serializationFor = (settings: typeof otel.traces.settings) =>
-      otlpSerializationLayer(settings?.protocol ?? config.otlpProtocol);
-    const headersFor = (settings: typeof otel.traces.settings) =>
-      settings?.headers ?? config.otlpHeaders;
+    // the endpoint that asked for it rather than with this process.
+    const serializationFor = (signal: OtelEnvironment.SignalExport) =>
+      otlpSerializationLayer(signal.protocol);
 
     const otlpResource = ServerConfig.otlpResource(config);
 
@@ -76,12 +73,12 @@ export const ObservabilityLive = Layer.unwrap(
             ? undefined
             : yield* OtlpTracer.make({
                 url: config.otlpTracesUrl,
-                exportInterval: `${config.otlpExportIntervalMs} millis`,
+                exportInterval: `${config.otlpTracesExport.exportIntervalMs} millis`,
                 resource: otlpResource,
-                headers: headersFor(otel.traces.settings),
-                ...(otel.traces.settings?.maxBatchSize === undefined
+                headers: config.otlpTracesExport.headers,
+                ...(config.otlpTracesExport.maxBatchSize === undefined
                   ? {}
-                  : { maxBatchSize: otel.traces.settings.maxBatchSize }),
+                  : { maxBatchSize: config.otlpTracesExport.maxBatchSize }),
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -103,7 +100,7 @@ export const ObservabilityLive = Layer.unwrap(
       // The trace serializer is also the one this layer hands out, because the
       // proxy in http.ts re-encodes browser spans and has to reach the trace
       // collector in the format that collector was configured for.
-      Layer.provideMerge(serializationFor(otel.traces.settings)),
+      Layer.provideMerge(serializationFor(config.otlpTracesExport)),
     );
 
     const metricsLayer =
@@ -111,12 +108,11 @@ export const ObservabilityLive = Layer.unwrap(
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${config.otlpMetricsExportIntervalMs} millis`,
+            exportInterval: `${config.otlpMetricsExport.exportIntervalMs} millis`,
             resource: otlpResource,
-            headers: headersFor(otel.metrics.settings),
-            temporality:
-              otel.metrics.settings?.temporality ?? OtelEnvironment.DEFAULT_METRICS_TEMPORALITY,
-          }).pipe(Layer.provide(serializationFor(otel.metrics.settings)));
+            headers: config.otlpMetricsExport.headers,
+            temporality: config.otlpMetricsExport.temporality,
+          }).pipe(Layer.provide(serializationFor(config.otlpMetricsExport)));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),

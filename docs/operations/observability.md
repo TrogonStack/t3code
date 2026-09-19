@@ -314,6 +314,12 @@ Not everything in the specification is implemented. These are the ones worth kno
   has no gRPC transport and posting an HTTP body to a gRPC endpoint fails in a way that is
   harder to read than exporting nothing. The refusal is logged at startup and turns off only the
   signal that named gRPC, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL=grpc` leaves traces exporting.
+- **No exporter but OTLP.** `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` accepts `otlp` and `none`. A list
+  that names `console`, `logging`, `zipkin`, `jaeger`, or `prometheus` and not `otlp` is read as a
+  deliberate "not this one", so that signal is not exported and the name that did it is logged. A
+  list that names nothing recognizable is treated as the typo it probably is: it is reported and
+  ignored, and the signal keeps exporting, because reading `otlpp` as "not OTLP" would turn one
+  transposed letter into a signal that stops with nothing in the log to connect the two.
 - **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
@@ -354,11 +360,16 @@ A variable T3 Code cannot act on never stops it from starting. Two things can ha
 and both are logged once at startup:
 
 - **A warning, then the default.** A misspelled protocol, a temporality that is not a preference,
-  a timeout or batch size that is not a whole number, or a pair list that is not valid percent
-  encoding is reported and ignored, and everything else keeps exporting. One bad value never costs
-  you the other variables.
-- **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
-  T3 Code does not speak rather than a value it failed to parse.
+  an exporter name T3 Code does not recognize, a timeout or batch size that is not a whole number,
+  a batch size of zero, or a pair list that is not valid percent encoding is reported and ignored,
+  and everything else keeps exporting. One bad value never costs you the other variables. A batch
+  size of zero is singled out because the exporter would meet that threshold on every record and
+  post one HTTP request per span, which takes a collector down rather than merely reading oddly; a
+  schedule delay of zero is a real request to drain as fast as the loop allows and is honored.
+- **Export off.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` and an `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`
+  that names a foreign exporter do this, because each names something T3 Code does not have rather
+  than a value it failed to parse, and reporting the request and then exporting anyway would be
+  answering a different question than the one asked.
 
 An empty value means the same thing as an unset one, so `OTEL_SERVICE_VERSION=` reads as if the
 variable were not there at all. An empty `OTEL_SERVICE_NAME` is not an attempt to rename anything,
@@ -368,9 +379,12 @@ anything else, including `yes` and `1`, leaves it on. `T3CODE_OTEL_SDK_DISABLED`
 name, so it takes `true`, `1`, `yes`, `on` and their negatives, and a value it cannot read is reported
 and then left to `OTEL_SDK_DISABLED` to answer rather than treated as either answer itself.
 
-A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
-whole rather than partly. A half-parsed credential reaches the collector as the same authentication
-error a wrong one would, which reads like a bad token instead of a bad variable.
+A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value is discarded whole rather than
+partly, whether a member fails to decode or carries no `key=value` pair at all. A half-parsed
+credential reaches the collector as the same authentication error a wrong one would, which reads
+like a bad token instead of a bad variable, and `authorization=token,x-tenant` would authenticate
+and then route to the wrong tenant. A trailing or doubled comma is spacing, not a member, so
+`authorization=token,` is read as the one pair it contains.
 
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
 name winning the URL takes the whole signal with it, and so does the desktop bootstrap envelope or

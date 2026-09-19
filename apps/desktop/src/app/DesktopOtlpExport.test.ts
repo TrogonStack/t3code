@@ -208,8 +208,31 @@ describe("resolveDesktopOtlpExport", () => {
     }),
   );
 
-  it.effect("honors one T3 Code interval across every signal", () =>
+  it.effect("honors one T3 Code interval across every signal it named", () =>
     Effect.gen(function* () {
+      const resolved = yield* resolve(
+        {},
+        {
+          named: {
+            traces: "http://127.0.0.1:4318/v1/traces",
+            metrics: "http://127.0.0.1:4318/v1/metrics",
+            logs: "http://127.0.0.1:4318/v1/logs",
+          },
+          namedExportIntervalMs: 2500,
+        },
+      );
+      assert.strictEqual(resolved.traces.exportIntervalMs, 2500);
+      assert.strictEqual(resolved.metrics.exportIntervalMs, 2500);
+      assert.strictEqual(resolved.logs.exportIntervalMs, 2500);
+    }),
+  );
+
+  it.effect("keeps one T3 Code interval off the endpoints it did not name", () =>
+    Effect.gen(function* () {
+      // The source that named an endpoint sets the cadence of the export it
+      // configured. Letting `T3CODE_OTLP_EXPORT_INTERVAL_MS` reach across
+      // would have it pace an export it knows nothing about, and would
+      // discard the per-signal number standing right next to that endpoint.
       const resolved = yield* resolve(
         {
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
@@ -217,9 +240,9 @@ describe("resolveDesktopOtlpExport", () => {
         },
         { namedExportIntervalMs: 2500 },
       );
-      assert.strictEqual(resolved.traces.exportIntervalMs, 2500);
-      assert.strictEqual(resolved.metrics.exportIntervalMs, 2500);
-      assert.strictEqual(resolved.logs.exportIntervalMs, 2500);
+      assert.strictEqual(resolved.metrics.exportIntervalMs, 30_000);
+      assert.strictEqual(resolved.traces.exportIntervalMs, 5_000);
+      assert.strictEqual(resolved.logs.exportIntervalMs, 1_000);
     }),
   );
 

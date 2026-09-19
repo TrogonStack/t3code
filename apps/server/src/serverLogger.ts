@@ -12,19 +12,16 @@ export const ServerLoggerLive = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const minimumLogLevelLayer = Layer.succeed(References.MinimumLogLevel, config.logLevel);
 
-  const settings = config.otelEnvironment.logs.settings;
-  // A log endpoint these variables did not supply keeps the headers and wire
-  // format T3 Code's own names asked for.
-  const headers = settings?.headers ?? config.otlpHeaders;
+  const logs = config.otlpLogsExport;
   const otlpLogger =
     config.otlpLogsUrl === undefined
       ? undefined
       : OtlpLogger.make({
           url: config.otlpLogsUrl,
-          exportInterval: `${config.otlpLogsExportIntervalMs} millis`,
+          exportInterval: `${logs.exportIntervalMs} millis`,
           resource: otlpResource(config),
-          ...(headers === undefined ? {} : { headers }),
-          ...(settings?.maxBatchSize === undefined ? {} : { maxBatchSize: settings.maxBatchSize }),
+          ...(logs.headers === undefined ? {} : { headers: logs.headers }),
+          ...(logs.maxBatchSize === undefined ? {} : { maxBatchSize: logs.maxBatchSize }),
         });
 
   // `Logger.layer` writes the whole logger set rather than adding to it, so
@@ -46,7 +43,7 @@ export const ServerLoggerLive = Effect.gen(function* () {
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),
-    Layer.provide(otlpSerializationLayer(settings?.protocol ?? config.otlpProtocol)),
+    Layer.provide(otlpSerializationLayer(logs.protocol)),
   );
 
   return Layer.mergeAll(loggerLayer, minimumLogLevelLayer);

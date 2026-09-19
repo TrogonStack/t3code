@@ -53,12 +53,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpExportIntervalMs: 10_000,
-    otlpMetricsExportIntervalMs: 10_000,
-    otlpLogsExportIntervalMs: 10_000,
+    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
-    otlpHeaders: undefined,
-    otlpProtocol: "http/json",
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
   } as const;
@@ -711,7 +709,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otelEnvironment.metrics.settings?.url).toBe(
         "https://collector.example.com/v1/metrics",
       );
-      expect(resolved.otlpExportIntervalMs).toBe(10_000);
+      expect(resolved.otlpTracesExport.exportIntervalMs).toBe(10_000);
     }),
   );
 
@@ -738,8 +736,38 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         T3CODE_OTLP_METRICS_URL: "http://localhost:4318/v1/metrics",
       });
 
-      expect(resolved.otlpExportIntervalMs).toBe(5_000);
-      expect(resolved.otlpMetricsExportIntervalMs).toBe(10_000);
+      expect(resolved.otlpTracesExport.exportIntervalMs).toBe(5_000);
+      expect(resolved.otlpMetricsExport.exportIntervalMs).toBe(10_000);
+    }),
+  );
+
+  it.effect("keeps a T3 Code credential off an endpoint the standard variables named", () =>
+    Effect.gen(function* () {
+      // The source that named the endpoint configures the whole signal. An
+      // `OTEL_*` endpoint that says nothing about headers is asking for none,
+      // not asking to borrow the token T3 Code's own variable carries.
+      const resolved = yield* resolveWithEnv({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTLP_HEADERS: "authorization=Bearer%20t3-token",
+        T3CODE_OTLP_PROTOCOL: "http/json",
+      });
+
+      expect(resolved.otlpTracesExport.headers).toBeUndefined();
+      expect(resolved.otlpTracesExport.protocol).toBe("http/protobuf");
+    }),
+  );
+
+  it.effect("carries a T3 Code credential to the endpoint T3 Code named", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+        T3CODE_OTLP_HEADERS: "authorization=Bearer%20t3-token",
+      });
+
+      expect(resolved.otlpTracesExport.headers).toEqual({
+        authorization: "Bearer t3-token",
+      });
+      expect(resolved.otlpTracesExport.protocol).toBe("http/json");
     }),
   );
 
@@ -755,8 +783,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       });
 
       expect(resolved.otelEnvironment.logs.settings).toBeUndefined();
-      expect(resolved.otlpExportIntervalMs).toBe(7_000);
-      expect(resolved.otlpLogsExportIntervalMs).toBe(10_000);
+      expect(resolved.otlpTracesExport.exportIntervalMs).toBe(7_000);
+      expect(resolved.otlpLogsExport.exportIntervalMs).toBe(10_000);
     }),
   );
 
@@ -872,6 +900,58 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+    }),
+  );
+
+  it.effect("does not let a blank bootstrap endpoint hide the stored one", () =>
+    Effect.gen(function* () {
+      // The desktop sends the envelope whether or not it resolved an endpoint,
+      // so an empty string means "I found nothing", not "export nowhere". It
+      // must not stand in front of the Settings endpoint underneath it.
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-blank-" });
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({
+          observability: { otlpTracesUrl: "http://stored.example.com/v1/traces" },
+        })}\n`,
+      );
+      const fd = yield* openBootstrapFd(
+        makeDesktopBootstrap({ t3Home: baseDir, otlpTracesUrl: "" }),
+      );
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.none(),
+          port: Option.none(),
+          host: Option.none(),
+          baseDir: Option.none(),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { T3CODE_BOOTSTRAP_FD: String(fd) } }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.otlpTracesUrl).toBe("http://stored.example.com/v1/traces");
     }),
   );
 
@@ -1094,7 +1174,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      expect(resolved.otlpHeaders).toEqual({
+      expect(resolved.otlpTracesExport.headers).toEqual({
         authorization: "Basic abc==",
         "x-tenant": "t3",
       });
@@ -1138,7 +1218,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      expect(resolved.otlpHeaders).toEqual({
+      expect(resolved.otlpTracesExport.headers).toEqual({
         authorization: "Bearer abc==",
         "x-tenant": "t3",
       });
@@ -1178,7 +1258,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      expect(resolved.otlpProtocol).toBe("http/protobuf");
+      expect(resolved.otlpTracesExport.protocol).toBe("http/protobuf");
     }),
   );
 

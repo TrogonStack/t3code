@@ -583,12 +583,10 @@ const buildAppUnderTest = (options?: {
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpLogsUrl: undefined,
-      otlpExportIntervalMs: 10_000,
-      otlpMetricsExportIntervalMs: 10_000,
-      otlpLogsExportIntervalMs: 10_000,
+      otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+      otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
-      otlpHeaders: undefined,
-      otlpProtocol: "http/json",
       otelEnvironment: OtelEnvironment.none,
       mode: "desktop",
       port: 0,
@@ -1116,7 +1114,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.browserTraceCollector,
         }),
       ),
-      Layer.provide(otlpSerializationLayer(config.otlpProtocol)),
+      Layer.provide(otlpSerializationLayer(config.otlpTracesExport.protocol)),
       Layer.provide(
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) => Effect.succeed({ ...(event as any), sequence: 1 }),
@@ -5377,7 +5375,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         config: {
           otlpTracesUrl: collector.url,
-          otlpProtocol: "http/protobuf",
+          otlpTracesExport: {
+            ...OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+            protocol: "http/protobuf",
+          },
         },
         layers: {
           browserTraceCollector: {

@@ -18,7 +18,6 @@ import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
-import { OtlpProtocol } from "@t3tools/shared/observability";
 
 export const DEFAULT_PORT = 3773;
 
@@ -74,14 +73,16 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpLogsUrl: string | undefined;
-    readonly otlpExportIntervalMs: number;
-    readonly otlpMetricsExportIntervalMs: number;
-    readonly otlpLogsExportIntervalMs: number;
+    /**
+     * How each signal is exported, already resolved to the source that named
+     * that signal's endpoint. This is the only place the wire format, headers,
+     * batching, and aggregation are read from, so a setting cannot be paired
+     * by hand with an endpoint that came from somewhere else.
+     */
+    readonly otlpTracesExport: OtelEnvironment.SignalExport;
+    readonly otlpMetricsExport: OtelEnvironment.SignalExport;
+    readonly otlpLogsExport: OtelEnvironment.SignalExport;
     readonly otlpServiceName: string;
-    /** `T3CODE_OTLP_HEADERS`, which deliberately covers every signal. */
-    readonly otlpHeaders: Readonly<Record<string, string>> | undefined;
-    /** `T3CODE_OTLP_PROTOCOL`, the wire format a named endpoint is sent. */
-    readonly otlpProtocol: OtlpProtocol;
     /**
      * What the standard `OTEL_*` variables asked for. The endpoints above are
      * already resolved from it; this carries the rest, which T3 Code has no
@@ -229,12 +230,10 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpExportIntervalMs: 10_000,
-    otlpMetricsExportIntervalMs: 10_000,
-    otlpLogsExportIntervalMs: 10_000,
+    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
-    otlpHeaders: undefined,
-    otlpProtocol: "http/json",
     otelEnvironment: OtelEnvironment.none,
     cwd,
     baseDir,

@@ -762,4 +762,111 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
     }),
   );
+
+  it.effect("keeps exporting when an exporter name is misspelled", () =>
+    Effect.gen(function* () {
+      // Reading `otlpp` as "not OTLP" would turn one transposed letter into a
+      // signal that stops exporting with nothing to connect the two.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_TRACES_EXPORTER: "otlpp",
+        }),
+      );
+      assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_TRACES_EXPORTER")));
+    }),
+  );
+
+  it.effect("stops exporting a signal that asked for an exporter this has none of", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_METRICS_EXPORTER: "prometheus",
+        }),
+      );
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_METRICS_EXPORTER")));
+    }),
+  );
+
+  it.effect("exports over OTLP when the list names it alongside another", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_LOGS_EXPORTER: "console,otlp",
+        }),
+      );
+      assert.isDefined(resolved.logs.settings);
+    }),
+  );
+
+  it.effect("says nothing about an exporter list on a signal with nowhere to go", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_TRACES_EXPORTER: "zipkin" }),
+      );
+      assert.deepStrictEqual(resolved.warnings, []);
+    }),
+  );
+
+  it.effect("refuses a batch size of zero rather than posting one request per span", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "0",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_BSP_MAX_EXPORT_BATCH_SIZE")),
+      );
+    }),
+  );
+
+  it.effect("still drains as fast as the loop allows on a delay of zero", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_BSP_SCHEDULE_DELAY: "0",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 0);
+    }),
+  );
+
+  it.effect("discards a header list where one member carries no pair", () =>
+    Effect.gen(function* () {
+      // Keeping the readable members would authorize the stream and then route
+      // it to the wrong tenant, which reads as a collector problem rather than
+      // as the typo it is.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,x-tenant",
+        }),
+      );
+      assert.strictEqual(resolved.traces.settings?.headers, undefined);
+      assert.isTrue(
+        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
+      );
+    }),
+  );
+
+  it.effect("reads a trailing comma as spacing rather than as a member", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,",
+        }),
+      );
+      assert.deepStrictEqual(resolved.traces.settings?.headers, { authorization: "token" });
+    }),
+  );
 });

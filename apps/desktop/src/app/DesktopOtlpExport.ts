@@ -29,7 +29,7 @@ export interface DesktopOtlpSignal {
   readonly protocol: OtelEnvironment.OtlpProtocol;
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly maxBatchSize: number | undefined;
-  readonly temporality: OtelEnvironment.MetricsTemporality | undefined;
+  readonly temporality: OtelEnvironment.MetricsTemporality;
 }
 
 export interface DesktopOtlpResource {
@@ -82,7 +82,7 @@ const offSignal: DesktopOtlpSignal = {
   protocol: DEFAULT_DESKTOP_PROTOCOL,
   headers: undefined,
   maxBatchSize: undefined,
-  temporality: undefined,
+  temporality: OtelEnvironment.DEFAULT_METRICS_TEMPORALITY,
 };
 
 /**
@@ -95,20 +95,17 @@ const resolveSignal = (
   resolved: { readonly url: string | undefined; readonly signal: OtelEnvironment.OtlpSignal },
   input: DesktopOtlpExportInput,
 ): DesktopOtlpSignal => {
-  const settings = resolved.signal.settings;
   if (resolved.url === undefined) {
     return offSignal;
   }
   return {
     url: resolved.url,
-    exportIntervalMs:
-      input.namedExportIntervalMs ??
-      settings?.exportIntervalMs ??
-      DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
-    protocol: settings?.protocol ?? input.namedProtocol ?? DEFAULT_DESKTOP_PROTOCOL,
-    headers: settings?.headers ?? input.namedHeaders,
-    maxBatchSize: settings?.maxBatchSize,
-    temporality: settings?.temporality,
+    ...OtelEnvironment.resolveSignalExport({
+      settings: resolved.signal.settings,
+      t3Protocol: input.namedProtocol ?? DEFAULT_DESKTOP_PROTOCOL,
+      t3Headers: input.namedHeaders,
+      t3ExportIntervalMs: input.namedExportIntervalMs ?? DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
+    }),
   };
 };
 
