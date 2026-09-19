@@ -91,21 +91,29 @@ const DESKTOP_BACKEND_ENV_NAMES = [
 
 // Env vars that the WSL backend needs but Windows process.env won't forward
 // across the wsl.exe boundary without WSLENV. The dev-server URL is handled
-// separately via a `--dev-url` CLI flag because WSLENV translation of
-// URL-shaped values (colons / slashes) is unreliable.
-// Every name `@t3tools/shared/otelEnvironment` reads. The endpoints reach a WSL
-// backend through the bootstrap envelope, but the rest of what these variables
-// say does not travel with them, and the bootstrap is the lowest-priority
-// source: a machine exporting `OTEL_EXPORTER_OTLP_ENDPOINT` with
-// `OTEL_EXPORTER_OTLP_HEADERS` would reach the collector inside the distro
-// unauthenticated and in the wrong wire format, which is a Windows-only
-// difference in behavior from the same variables on every other platform.
+// separately via a `--dev-url` CLI flag.
+// Every name the server reads to decide what it exports and where. These cross
+// without a WSLENV flag, so their values arrive verbatim; only a `/p`, `/l`,
+// `/u`, or `/w` entry is path-translated, which is what makes URL-shaped names
+// safe to forward.
 //
-// Forwarded without a WSLENV flag, so values cross verbatim rather than being
-// path-translated. That is why the URL-shaped names are safe to name here while
-// `T3CODE_OTLP_*_URL` is not: those are resolved on this side and handed over
-// in the bootstrap instead.
-const OTEL_FORWARDED_ENV_NAMES = [
+// The endpoints also reach a WSL backend through the bootstrap envelope, but the
+// bootstrap is the lowest-priority source and cannot say which variable put a
+// URL in it. Forwarding the names themselves is what keeps precedence inside
+// the distro the same as on every other platform: `T3CODE_OTLP_*_URL` has to
+// arrive under its own name to outrank an ambient `OTEL_EXPORTER_OTLP_ENDPOINT`,
+// and the `OTEL_*` knobs have to travel with their endpoint or a collector is
+// reached unauthenticated and in the wrong wire format because only the URL
+// made the trip.
+const OBSERVABILITY_FORWARDED_ENV_NAMES = [
+  "T3CODE_OTEL_SDK_DISABLED",
+  "T3CODE_OTLP_TRACES_URL",
+  "T3CODE_OTLP_METRICS_URL",
+  "T3CODE_OTLP_LOGS_URL",
+  "T3CODE_OTLP_HEADERS",
+  "T3CODE_OTLP_PROTOCOL",
+  "T3CODE_OTLP_EXPORT_INTERVAL_MS",
+  "T3CODE_OTLP_SERVICE_NAME",
   "OTEL_SDK_DISABLED",
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -136,10 +144,7 @@ const OTEL_FORWARDED_ENV_NAMES = [
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
-  "T3CODE_OTLP_HEADERS",
-  "T3CODE_OTLP_PROTOCOL",
-  "T3CODE_OTEL_SDK_DISABLED",
-  ...OTEL_FORWARDED_ENV_NAMES,
+  ...OBSERVABILITY_FORWARDED_ENV_NAMES,
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
