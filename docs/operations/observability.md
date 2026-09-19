@@ -189,6 +189,163 @@ Do not rely on launching from Finder, Spotlight, the dock, or the Start menu aft
 
 The backend reads observability config at process start. If you change OTLP env vars, stop the app completely and start it again.
 
+### Option 3: The Standard `OTEL_*` Variables
+
+If your machine already exports the OpenTelemetry environment variables for everything else running
+on it, the server joins in without being told twice. Nothing above is required:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment=lab
+```
+
+The base endpoint is a base and not a full URL: traces go to `<endpoint>/v1/traces`, metrics to
+`<endpoint>/v1/metrics`, and log records to `<endpoint>/v1/logs`. Set
+`OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` when a signal needs a full URL of its own.
+
+Ambient `OTEL_*` variables turn export on by themselves, so a work collector in your shell profile
+means T3 Code exports to it, and `OTEL_SDK_DISABLED=true` is how you stop that. For the reverse, a
+profile that disables every other SDK on the machine, `T3CODE_OTEL_SDK_DISABLED=false` keeps T3 Code
+exporting.
+
+Only the server reads these. The desktop app passes its environment to the backend it spawns, so a
+variable exported before launching it reaches the server, but the Electron main process is a second
+producer that still configures itself from `T3CODE_OTLP_*` and Settings. Wiring it to the same
+reader is follow-up work.
+
+#### Precedence
+
+For each signal, the first source that names its endpoint wins:
+
+1. `T3CODE_OTLP_*`
+2. `OTEL_*`
+3. the desktop bootstrap envelope
+4. Settings, under `observability`
+
+An exported variable is what the operator asked for now and a stored one is what somebody asked for
+once, and T3 Code's own spelling of a variable outranks the standard spelling of it. So an ambient
+`OTEL_EXPORTER_OTLP_ENDPOINT` overrides an endpoint saved in Settings, and a `T3CODE_OTLP_*` URL is
+the endpoint nothing on the machine can redirect.
+
+Whichever source wins takes the whole signal and not the URL alone, because a variable describes the
+collector it named rather than some other one. Traces sent to a `T3CODE_OTLP_TRACES_URL` endpoint
+keep T3 Code's own wire format, headers, batching, and interval even when `OTEL_*` variables are
+set. The same rule runs inside the `OTEL_*` group: a signal's own variable owns that signal once it
+is set at all, so an unreadable `OTEL_EXPORTER_OTLP_TRACES_HEADERS` leaves traces without headers
+rather than sending them the generic collector's credential. `T3CODE_OTLP_HEADERS`,
+`T3CODE_OTLP_PROTOCOL`, and `T3CODE_OTLP_EXPORT_INTERVAL_MS` belong to no single signal and
+configure every endpoint T3 Code's own names, the bootstrap envelope, or Settings placed.
+
+The three signals are resolved separately, so traces can come from one source and metrics or logs
+from another.
+
+A source that wins a signal can also decide not to export it:
+`OTEL_{TRACES,METRICS,LOGS}_EXPORTER=none`, a list naming an exporter T3 Code does not have, and
+`OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL=grpc` each turn off the signal they describe, and
+a stored endpoint does not take it back over. The exporter list is read only for a signal these
+variables pointed somewhere, so on a machine that exports no `OTEL_*` endpoint,
+`OTEL_LOGS_EXPORTER=none` says nothing about a logs endpoint saved in Settings.
+
+Whether anything is exported at all is one setting read in that same order.
+`T3CODE_OTEL_SDK_DISABLED` answers it, `OTEL_SDK_DISABLED` answers it only when ours is unset, and
+either answer stops every server export, including one configured through Settings.
+
+#### What Is Read
+
+| Variable                                                                             | Effect                                                                       |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| `OTEL_SDK_DISABLED`                                                                  | Stops all export, unless `T3CODE_OTEL_SDK_DISABLED` answered first           |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                        | Base URL for every signal                                                    |
+| `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`                                  | Full URL for one signal                                                      |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_HEADERS`     | Export headers, per signal overriding the shared ones                        |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_PROTOCOL`   | `http/protobuf` (default) or `http/json`                                     |
+| `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`                                                | A list; the signal is exported when it contains `otlp`, which is the default |
+| `OTEL_SERVICE_VERSION`, `OTEL_RESOURCE_ATTRIBUTES`                                   | Resource identity attached to every span, metric, and log record             |
+| `OTEL_SERVICE_NAME`                                                                  | Refused with a warning; see below                                            |
+| `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_BLRP_SCHEDULE_DELAY` | Export interval, one per signal                                              |
+| `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`                  | Spans per batch, log records per batch                                       |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` (default), `delta`, or `lowmemory`, which resolves to `delta`   |
+
+The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
+specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `http/json`. Once
+these variables are the ones configuring the exporter, the specification's own defaults apply:
+`OTEL_BSP_SCHEDULE_DELAY` 5s, `OTEL_METRIC_EXPORT_INTERVAL` 60s, `OTEL_BLRP_SCHEDULE_DELAY` 1s, and
+512 records per batch. A `T3CODE_OTLP_*` setup keeps the numbers T3 Code has always used.
+
+Header and resource-attribute pairs are percent decoded on both sides, so
+`OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20abc` sends the space, a base64 credential keeps
+its `=` padding, and `OTEL_RESOURCE_ATTRIBUTES=team%2Fname=blue` becomes the attribute `team/name`.
+
+#### The Service Name Is Not Read
+
+`OTEL_SERVICE_NAME` and a `service.name` inside `OTEL_RESOURCE_ATTRIBUTES` are both refused, with a
+warning naming the one you set, and the attribute is dropped rather than passed through. Every T3
+Code process names itself, so a shell profile written for another app cannot rename it and merge two
+services in every dashboard built on them. `service.runtime` and `service.mode` are fixed for the
+same reason. Use `OTEL_RESOURCE_ATTRIBUTES` to tell instances apart:
+
+```bash
+export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=laptop-01,deployment.environment=lab
+```
+
+#### Known Gaps
+
+- **No gRPC.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` is refused rather than downgraded, since posting
+  an HTTP body to a gRPC endpoint fails in a way that is harder to read than exporting nothing. It
+  turns off only the signal that named it, and only when these variables named where that signal
+  goes.
+- **No exporter but OTLP.** `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` honors `otlp` and `none`. A list
+  naming an exporter the specification defines for that signal and not `otlp` reads as a deliberate
+  "not this one" and the signal is not exported. The names are read per signal, so
+  `OTEL_LOGS_EXPORTER=prometheus` is the mistake it is rather than a choice, and a list naming
+  nothing recognizable is reported as a typo while the signal keeps exporting.
+- **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
+  `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
+  `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
+  proxy in front of it.
+- **No export timeouts.** `OTEL_EXPORTER_OTLP_TIMEOUT`,
+  `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_TIMEOUT`, and `OTEL_METRIC_EXPORT_TIMEOUT` are
+  per-request deadlines and this exporter has no per-request knob, so they are ignored. Spending
+  them on the shutdown flush instead would let a generous collector timeout hold the server open on
+  every restart.
+- **Only an `OTEL_*` metrics endpoint can choose its aggregation.** A signal is configured by
+  whichever source named its endpoint, so a metrics endpoint from `T3CODE_OTLP_METRICS_URL`, the
+  bootstrap envelope, or Settings exports `cumulative`, and there is no `T3CODE_*` spelling of
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` to change that. It matters for a receiver that
+  accepts delta histograms only, which drops the cumulative ones without an error, so every
+  `_duration` timer goes missing while the `_total` counters keep arriving. Point such a backend at
+  `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and set the preference to `delta`. `lowmemory` asks for a
+  choice per instrument kind that this exporter cannot express and resolves to `delta` with a
+  warning, which is what it asks for on the counters and timers T3 Code records.
+- **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read because the exporter
+  library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable spelling.
+
+Everything else is ignored, including `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BLRP_MAX_QUEUE_SIZE`,
+`OTEL_BSP_EXPORT_TIMEOUT`, `OTEL_BLRP_EXPORT_TIMEOUT`, sampler variables, propagator variables, and
+the attribute and span limit variables.
+
+#### When A Value Cannot Be Used
+
+A variable T3 Code cannot act on never stops it from starting. The value is reported once at startup
+and the default applies, so one bad value never costs you the other variables. Zero is refused for
+an interval or a batch size because the exporter acts on it every time around the loop: a batch size
+of zero posts one HTTP request per span, and an interval of zero exports continuously.
+
+An empty value means the same as an unset one, so `OTEL_SERVICE_VERSION=` reads as absent and an
+empty `OTEL_SERVICE_NAME` is not an attempt to rename anything. `OTEL_SDK_DISABLED` follows the
+specification's one rule for booleans, where the case-insensitive string `true` is the only value
+that switches export off and anything else, `yes` and `1` included, leaves it on and is reported.
+`T3CODE_OTEL_SDK_DISABLED` is T3 Code's own name, so it takes `true`, `1`, `yes`, `on` and their
+negatives, and a value it cannot read is left to `OTEL_SDK_DISABLED` to answer.
+
+An `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value is discarded whole rather than
+partly, whether a member fails to decode or carries no `key=value` pair at all. Keeping the members
+that did parse is what makes a bad variable read like a bad token: the collector answers a
+half-parsed credential with the authentication error a wrong one gets, and
+`authorization=token,x-tenant` would have authenticated and then routed to the wrong tenant. A
+trailing or doubled comma is spacing rather than a member, so `authorization=token,` is read as the
+one pair it contains.
+
 ## How To Use Traces And Metrics To Debug The Server
 
 ### Start With The Local Trace File
@@ -551,6 +708,9 @@ OTLP export:
 - `T3CODE_OTLP_HEADERS`: extra headers for all three exporters, same format as
   `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs with percent-encoded values.
 - `T3CODE_OTLP_PROTOCOL`: `http/json` (default) or `http/protobuf`
+- `T3CODE_OTEL_SDK_DISABLED`: stops every server export, whatever configured it, including Settings.
+  Read before `OTEL_SDK_DISABLED`, so `false` here keeps T3 Code exporting on a machine that sets
+  the standard name.
 
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.

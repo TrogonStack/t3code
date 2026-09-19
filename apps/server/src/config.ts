@@ -6,6 +6,7 @@
  *
  * @module ServerConfig
  */
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -17,7 +18,6 @@ import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
-import { OtlpProtocol } from "@t3tools/shared/observability";
 
 export const DEFAULT_PORT = 3773;
 
@@ -73,10 +73,23 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesUrl: string | undefined;
     readonly otlpMetricsUrl: string | undefined;
     readonly otlpLogsUrl: string | undefined;
-    readonly otlpExportIntervalMs: number;
+    /**
+     * How each signal is exported, already resolved to the source that named
+     * that signal's endpoint. This is the only place the wire format, headers,
+     * batching, and aggregation are read from, so a setting cannot be paired
+     * by hand with an endpoint that came from somewhere else.
+     */
+    readonly otlpTracesExport: OtelEnvironment.SignalExport;
+    readonly otlpMetricsExport: OtelEnvironment.SignalExport;
+    readonly otlpLogsExport: OtelEnvironment.SignalExport;
     readonly otlpServiceName: string;
-    readonly otlpHeaders: Readonly<Record<string, string>> | undefined;
-    readonly otlpProtocol: OtlpProtocol;
+    /**
+     * What the standard `OTEL_*` variables asked for. The endpoints above are
+     * already resolved from it; this carries the rest, which T3 Code has no
+     * names of its own for per signal: headers, wire format, resource
+     * attributes, and the batching knobs.
+     */
+    readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
     readonly port: number;
     readonly host: string | undefined;
@@ -113,7 +126,11 @@ export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config)
  */
 export const otlpResource = (config: ServerConfig["Service"]) => ({
   serviceName: config.otlpServiceName,
+  ...(config.otelEnvironment.resource.serviceVersion === undefined
+    ? {}
+    : { serviceVersion: config.otelEnvironment.resource.serviceVersion }),
   attributes: {
+    ...config.otelEnvironment.resource.attributes,
     "service.runtime": "t3-server",
     "service.mode": config.mode,
   },
@@ -212,10 +229,11 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpExportIntervalMs: 10_000,
+    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
-    otlpHeaders: undefined,
-    otlpProtocol: "http/json",
+    otelEnvironment: OtelEnvironment.none,
     cwd,
     baseDir,
     ...derivedPaths,

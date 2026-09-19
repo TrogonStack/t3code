@@ -1,9 +1,11 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   makeLocalFileTracer,
   makeTraceSink,
   otlpSerializationLayer,
 } from "@t3tools/shared/observability";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -20,9 +22,48 @@ import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 export const ObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    const serializationLayer = otlpSerializationLayer(config.otlpProtocol);
-    const resource = ServerConfig.otlpResource(config);
     const attribution = yield* ResourceAttribution.ResourceAttribution;
+    const otel = config.otelEnvironment;
+
+    for (const warning of otel.warnings) {
+      yield* Effect.logWarning(warning);
+    }
+
+    // One variable can decline every signal, and saying so three times reads
+    // like three separate problems.
+    const declined = new Set(
+      [otel.traces.declined, otel.metrics.declined, otel.logs.declined].filter(
+        (reason) => reason !== undefined,
+      ),
+    );
+    for (const reason of declined) {
+      yield* Effect.logWarning(reason);
+    }
+
+    // Each signal builds its own serializer, so the wire format travels with
+    // the endpoint that asked for it rather than with this process.
+    const serializationFor = (signal: OtelEnvironment.SignalExport) =>
+      otlpSerializationLayer(signal.protocol);
+
+    const otlpResource = ServerConfig.otlpResource(config);
+
+    // Every exporter builds its resource through `OtlpResource.fromConfig`,
+    // which reads `OTEL_RESOURCE_ATTRIBUTES` for itself and turns a value it
+    // cannot percent-decode into a defect, so a list this reader reported and
+    // dropped would still stop the server from starting. The exporters are
+    // shown the list it validated instead. Only that one name is answered here
+    // and every other variable still comes from the environment.
+    const resourceAttributesLayer = ConfigProvider.layerAdd(
+      ConfigProvider.fromEnv({
+        env: {
+          OTEL_RESOURCE_ATTRIBUTES: OtelEnvironment.encodeResourceAttributes(
+            otel.resource.attributes,
+          ),
+        },
+        preserveEmptyStrings: true,
+      }),
+      { asPrimary: true },
+    );
 
     const traceReferencesLayer = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),
@@ -51,9 +92,12 @@ export const ObservabilityLive = Layer.unwrap(
             ? undefined
             : yield* OtlpTracer.make({
                 url: config.otlpTracesUrl,
-                exportInterval: `${config.otlpExportIntervalMs} millis`,
-                headers: config.otlpHeaders,
-                resource,
+                exportInterval: `${config.otlpTracesExport.exportIntervalMs} millis`,
+                resource: otlpResource,
+                headers: config.otlpTracesExport.headers,
+                ...(config.otlpTracesExport.maxBatchSize === undefined
+                  ? {}
+                  : { maxBatchSize: config.otlpTracesExport.maxBatchSize }),
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -70,18 +114,27 @@ export const ObservabilityLive = Layer.unwrap(
           BrowserTraceCollector.layer(sink),
         );
       }),
-    ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(serializationLayer));
+    ).pipe(
+      Layer.provide(OtlpExporter.layerFlusher),
+      // The trace serializer is also the one this layer hands out, because the
+      // proxy in http.ts re-encodes browser spans and has to reach the trace
+      // collector in the format that collector was configured for.
+      Layer.provideMerge(serializationFor(config.otlpTracesExport)),
+    );
 
     const metricsLayer =
       config.otlpMetricsUrl === undefined
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${config.otlpExportIntervalMs} millis`,
-            headers: config.otlpHeaders,
-            resource,
-          }).pipe(Layer.provideMerge(serializationLayer));
+            exportInterval: `${config.otlpMetricsExport.exportIntervalMs} millis`,
+            resource: otlpResource,
+            headers: config.otlpMetricsExport.headers,
+            temporality: config.otlpMetricsExport.temporality,
+          }).pipe(Layer.provide(serializationFor(config.otlpMetricsExport)));
 
-    return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
+    return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer).pipe(
+      Layer.provide(resourceAttributesLayer),
+    );
   }),
 );

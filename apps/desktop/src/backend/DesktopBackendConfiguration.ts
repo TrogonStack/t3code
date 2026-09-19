@@ -89,15 +89,55 @@ const DESKTOP_BACKEND_ENV_NAMES = [
   "T3CODE_TAILSCALE_SERVE_PORT",
 ] as const;
 
+// Every name the server reads to decide what it exports and where. Forwarded
+// under their own names, not folded into the bootstrap envelope, so precedence
+// inside a WSL distro is the same as on every other platform and a collector's
+// headers and wire format travel with its endpoint. Declared in WSLENV without
+// a flag, which is what makes URL-shaped values safe: only a `/p`, `/l`, `/u`,
+// or `/w` entry is path-translated.
+const OBSERVABILITY_FORWARDED_ENV_NAMES = [
+  "T3CODE_OTEL_SDK_DISABLED",
+  "T3CODE_OTLP_TRACES_URL",
+  "T3CODE_OTLP_METRICS_URL",
+  "T3CODE_OTLP_LOGS_URL",
+  "T3CODE_OTLP_HEADERS",
+  "T3CODE_OTLP_PROTOCOL",
+  "T3CODE_OTLP_EXPORT_INTERVAL_MS",
+  "T3CODE_OTLP_SERVICE_NAME",
+  "OTEL_SDK_DISABLED",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_BSP_SCHEDULE_DELAY",
+  "OTEL_BSP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_BLRP_SCHEDULE_DELAY",
+  "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE",
+  "OTEL_METRIC_EXPORT_INTERVAL",
+  "OTEL_SERVICE_NAME",
+  "OTEL_SERVICE_VERSION",
+  "OTEL_RESOURCE_ATTRIBUTES",
+] as const;
+
 // Env vars that the WSL backend needs but Windows process.env won't forward
 // across the wsl.exe boundary without WSLENV. The dev-server URL is handled
-// separately via a `--dev-url` CLI flag because WSLENV translation of
-// URL-shaped values (colons / slashes) is unreliable.
+// separately via a `--dev-url` CLI flag.
 const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
-  "T3CODE_OTLP_HEADERS",
-  "T3CODE_OTLP_PROTOCOL",
+  ...OBSERVABILITY_FORWARDED_ENV_NAMES,
 ] as const;
 
 const WSL_SERVER_SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -218,12 +258,12 @@ const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
   };
 });
 
-// The bootstrap is the only channel that carries an OTLP endpoint to every
-// backend. A Windows-native child inherits the desktop process's env, but a
-// WSL child gets nothing across wsl.exe that WSLENV does not declare, and
-// WSLENV translation of URL-shaped values is unreliable, so the endpoints are
-// deliberately not forwarded that way. Env beats the persisted settings file,
-// matching the precedence resolveServerConfig and DesktopObservability apply.
+// The bootstrap envelope is the channel that carries an endpoint to every
+// backend whatever its platform, and it is the lowest-priority source the
+// server consults. Env beats the persisted settings file here, matching the
+// precedence resolveServerConfig and DesktopObservability apply. The variables
+// themselves reach a WSL backend under their own names through WSLENV, which is
+// what keeps that precedence identical inside the distro.
 const readBackendObservabilitySettings = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const persisted = yield* readPersistedBackendObservabilitySettings;
@@ -730,10 +770,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   };
 
   // Forward the dev-server URL as an explicit CLI flag so the WSL backend's
-  // config resolution lands in dev/ instead of userdata/. Inheriting through
-  // WSLENV is unreliable in practice (URL-shaped values with colons /
-  // slashes get translated unpredictably depending on flags), and the
-  // packaged build leaves devServerUrl as None anyway.
+  // config resolution lands in dev/ instead of userdata/. The packaged build
+  // leaves devServerUrl as None anyway.
   const devUrlArgs = Option.match(environment.devServerUrl, {
     onNone: () => [] as ReadonlyArray<string>,
     onSome: (url) => ["--dev-url", url.href],

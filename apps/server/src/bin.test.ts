@@ -50,6 +50,7 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 import packageJson from "../package.json" with { type: "json" };
 
@@ -101,10 +102,11 @@ const makeCliTestServerConfig = (baseDir: string) =>
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpLogsUrl: undefined,
-      otlpExportIntervalMs: 10_000,
+      otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+      otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
       otlpServiceName: "t3-server",
-      otlpHeaders: undefined,
-      otlpProtocol: "http/json",
+      otelEnvironment: OtelEnvironment.none,
       mode: "web",
       port: 0,
       host: "127.0.0.1",

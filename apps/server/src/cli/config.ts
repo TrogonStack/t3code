@@ -1,5 +1,6 @@
 import * as NetService from "@t3tools/shared/Net";
 import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -101,9 +102,13 @@ const EnvServerConfig = Config.all({
     Config.map(Option.getOrUndefined),
   ),
   otlpExportIntervalMs: Config.Int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
-    Config.withDefault(10_000),
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
-  otlpServiceName: Config.String("T3CODE_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
+  otlpServiceName: Config.String("T3CODE_OTLP_SERVICE_NAME").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -251,6 +256,7 @@ export const resolveServerConfig = (
     const path = yield* Path.Path;
     const fs = yield* FileSystem.FileSystem;
     const env = yield* EnvServerConfig;
+    const otel = yield* OtelEnvironment.load;
     const normalizedFlags = {
       mode: flags.mode ?? Option.none(),
       port: flags.port ?? Option.none(),
@@ -382,6 +388,59 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    // A blank bootstrap value is not an endpoint, so it must not stand in
+    // front of the Settings endpoint underneath it. `??` alone keeps the empty
+    // string and would discard both.
+    const persistedUrl = (
+      bootstrapUrl: string | undefined,
+      settingsUrl: string | undefined,
+    ): string | undefined =>
+      OtelEnvironment.blankAsUnset(bootstrapUrl) ?? OtelEnvironment.blankAsUnset(settingsUrl);
+
+    const traces = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpTracesUrl,
+      signal: otel.traces,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpTracesUrl,
+        persistedObservabilitySettings.otlpTracesUrl,
+      ),
+    });
+    const metrics = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpMetricsUrl,
+      signal: otel.metrics,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpMetricsUrl,
+        persistedObservabilitySettings.otlpMetricsUrl,
+      ),
+    });
+    const logs = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpLogsUrl,
+      signal: otel.logs,
+      persistedUrl: persistedUrl(
+        bootstrap?.otlpLogsUrl,
+        persistedObservabilitySettings.otlpLogsUrl,
+      ),
+    });
+    const otelEnvironment = {
+      ...otel,
+      traces: traces.signal,
+      metrics: metrics.signal,
+      logs: logs.signal,
+    } satisfies OtelEnvironment.OtelEnvironment;
+
+    // T3 Code has one interval, one header set, and one wire format, and they
+    // deliberately cover every signal. They apply to the signals the standard
+    // variables did not claim; the standard variables bring their own
+    // per-signal defaults for the ones they did.
+    const signalExport = (settings: OtelEnvironment.OtlpSignalSettings | undefined) =>
+      OtelEnvironment.resolveSignalExport({
+        settings,
+        t3Protocol: env.otlpProtocol,
+        t3Headers: env.otlpHeaders,
+        t3ExportIntervalMs:
+          env.otlpExportIntervalMs ?? OtelEnvironment.DEFAULT_SIGNAL_EXPORT.exportIntervalMs,
+      });
+
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
       traceMinLevel: env.traceMinLevel,
@@ -389,20 +448,14 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl:
-        env.otlpTracesUrl ??
-        bootstrap?.otlpTracesUrl ??
-        persistedObservabilitySettings.otlpTracesUrl,
-      otlpMetricsUrl:
-        env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
-      otlpLogsUrl:
-        env.otlpLogsUrl ?? bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
-      otlpExportIntervalMs: env.otlpExportIntervalMs,
-      otlpServiceName: env.otlpServiceName,
-      otlpHeaders: env.otlpHeaders,
-      otlpProtocol: env.otlpProtocol,
+      otlpTracesUrl: otelEnvironment.disabled ? undefined : traces.url,
+      otlpMetricsUrl: otelEnvironment.disabled ? undefined : metrics.url,
+      otlpLogsUrl: otelEnvironment.disabled ? undefined : logs.url,
+      otlpTracesExport: signalExport(otelEnvironment.traces.settings),
+      otlpMetricsExport: signalExport(otelEnvironment.metrics.settings),
+      otlpLogsExport: signalExport(otelEnvironment.logs.settings),
+      otlpServiceName: OtelEnvironment.blankAsUnset(env.otlpServiceName) ?? "t3-server",
+      otelEnvironment,
       mode,
       port,
       cwd,
