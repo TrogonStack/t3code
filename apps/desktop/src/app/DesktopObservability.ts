@@ -24,7 +24,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Tracer from "effect/Tracer";
-import { OtlpExporter, OtlpLogger, OtlpMetrics, OtlpTracer } from "effect/unstable/observability";
+import { OtlpExporter, OtlpLogger, OtlpTracer } from "effect/unstable/observability";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import {
@@ -606,9 +606,9 @@ const otlpResourceFor = (resource: DesktopOtlpResource) => ({
 });
 
 /**
- * Logs, traces, and metrics for the main process, built together because they
- * share one read of the environment and Settings, and because a process gets
- * exactly one logger set.
+ * Logs and traces for the main process, built together because they share one
+ * read of the environment and Settings, and because a process gets exactly one
+ * logger set.
  */
 const telemetryLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -621,25 +621,32 @@ const telemetryLayer = Layer.unwrap(
 
     const otlpResource = otlpResourceFor(resolved.resource);
 
-    const otlpLogger =
-      resolved.logs.url === undefined
-        ? undefined
-        : OtlpLogger.make({
-            url: resolved.logs.url,
-            exportInterval: `${resolved.logs.exportIntervalMs} millis`,
-            resource: otlpResource,
-            ...(resolved.logs.headers === undefined ? {} : { headers: resolved.logs.headers }),
-            ...(resolved.logs.maxBatchSize === undefined
-              ? {}
-              : { maxBatchSize: resolved.logs.maxBatchSize }),
-          });
-
+    // `Logger.layer` writes the whole logger set rather than adding to it, so
+    // every logger the main process wants has to be named in this one call.
+    // Splitting the OTLP logger back out into a layer of its own silently
+    // drops either it or the console output.
+    //
+    // Swapping `Logger.tracerLogger` out for the OTLP logger matches the
+    // server: both reach a collector, but the tracer logger covers only
+    // messages logged inside a recorded span and files them under traces,
+    // while the OTLP logger carries every message as a log record stamped
+    // with its trace and span ids. Keeping both would export every in-span
+    // message twice.
     const loggerLayer = Logger.layer(
-      [
-        Logger.consolePretty(),
-        Logger.tracerLogger,
-        ...(otlpLogger === undefined ? [] : [otlpLogger]),
-      ],
+      resolved.logs.url === undefined
+        ? [Logger.consolePretty(), Logger.tracerLogger]
+        : [
+            Logger.consolePretty(),
+            OtlpLogger.make({
+              url: resolved.logs.url,
+              exportInterval: `${resolved.logs.exportIntervalMs} millis`,
+              resource: otlpResource,
+              ...(resolved.logs.headers === undefined ? {} : { headers: resolved.logs.headers }),
+              ...(resolved.logs.maxBatchSize === undefined
+                ? {}
+                : { maxBatchSize: resolved.logs.maxBatchSize }),
+            }),
+          ],
       { mergeWithExisting: false },
     ).pipe(
       Layer.provide(OtlpExporter.layerFlusher),
@@ -685,22 +692,28 @@ const telemetryLayer = Layer.unwrap(
       Layer.provide(serializationFor(resolved.traces)),
     );
 
-    const metricsLayer =
-      resolved.metrics.url === undefined
-        ? Layer.empty
-        : OtlpMetrics.layer({
-            url: resolved.metrics.url,
-            exportInterval: `${resolved.metrics.exportIntervalMs} millis`,
-            resource: otlpResource,
-            ...(resolved.metrics.headers === undefined
-              ? {}
-              : { headers: resolved.metrics.headers }),
-            ...(resolved.metrics.temporality === undefined
-              ? {}
-              : { temporality: resolved.metrics.temporality }),
-          }).pipe(Layer.provide(serializationFor(resolved.metrics)));
+    // Metrics stay off until the main process records one. `OtlpMetrics`
+    // exports on every interval even when the registry is empty, so wiring it
+    // up today would post an empty payload every interval to every collector
+    // the environment points at. Restore this when a desktop metric exists,
+    // and add it to the `Layer.mergeAll` below.
+    //
+    // const metricsLayer =
+    //   resolved.metrics.url === undefined
+    //     ? Layer.empty
+    //     : OtlpMetrics.layer({
+    //         url: resolved.metrics.url,
+    //         exportInterval: `${resolved.metrics.exportIntervalMs} millis`,
+    //         resource: otlpResource,
+    //         ...(resolved.metrics.headers === undefined
+    //           ? {}
+    //           : { headers: resolved.metrics.headers }),
+    //         ...(resolved.metrics.temporality === undefined
+    //           ? {}
+    //           : { temporality: resolved.metrics.temporality }),
+    //       }).pipe(Layer.provide(serializationFor(resolved.metrics)));
 
-    return Layer.mergeAll(loggerLayer, tracerLayer, metricsLayer);
+    return Layer.mergeAll(loggerLayer, tracerLayer);
   }),
 );
 
