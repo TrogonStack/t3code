@@ -10,8 +10,8 @@
  *
  * Read by every T3 Code process that exports telemetry, so the server and the
  * desktop app cannot disagree about what a variable means. That is also why
- * the one switch that outranks every route, `T3CODE_OTEL_SDK_DISABLED`, is
- * read here rather than per process.
+ * `T3CODE_OTEL_SDK_DISABLED` is read here: it is the same setting as
+ * `OTEL_SDK_DISABLED`, asked of T3 Code's own name first.
  *
  * Only the variables T3 Code can act on are read. The exporter speaks
  * OTLP over HTTP, so `grpc` is declined loudly rather than answered with a
@@ -88,16 +88,11 @@ export interface OtlpResourceSettings {
 
 export interface OtelEnvironment {
   /**
-   * `T3CODE_OTEL_SDK_DISABLED`. T3 Code's own switch, and the only one that
-   * outranks every route: nothing is exported, whoever named the endpoint.
-   * It is a `T3CODE_*` name because a switch that overrides a choice made in
-   * Settings has to be one the app owns.
-   */
-  readonly forceDisabled: boolean;
-  /**
-   * `OTEL_SDK_DISABLED`. Scoped to the variables read here, like every other
-   * name in this module: it stops these variables from exporting and leaves an
-   * endpoint named by `T3CODE_OTLP_*` or set in Settings alone.
+   * Whether anything is exported at all, by any route. `T3CODE_OTEL_SDK_DISABLED`
+   * answers it, and `OTEL_SDK_DISABLED` answers it only when T3 Code's own name
+   * is unset, which is the source order every other setting here follows. So
+   * `T3CODE_OTEL_SDK_DISABLED=false` is how a machine that exports
+   * `OTEL_SDK_DISABLED` for everything else keeps T3 Code exporting.
    */
   readonly disabled: boolean;
   /**
@@ -140,25 +135,31 @@ const specBoolean = (name: string) =>
 
 /**
  * A `T3CODE_*` name is ours, so it answers to the affirmatives people actually
- * type rather than the single value the specification allows. Anything else is
- * named and ignored: one typo should neither stop every export nor take the
- * rest of the environment down with it.
+ * type rather than the single value the specification allows. `undefined` means
+ * the name did not answer, either because it is unset or because its value was
+ * unreadable, and the source under it decides instead. A typo therefore costs
+ * that variable and nothing else, the same as everywhere else here.
  */
 const forkBoolean = (name: string) =>
   optionalString(name).pipe(
-    Effect.map((raw): { readonly value: boolean; readonly warnings: ReadonlyArray<string> } => {
-      if (raw === undefined) {
-        return { value: false, warnings: [] };
-      }
-      const value = raw.toLowerCase();
-      if (["true", "1", "yes", "on"].includes(value)) {
-        return { value: true, warnings: [] };
-      }
-      if (["false", "0", "no", "off"].includes(value)) {
-        return { value: false, warnings: [] };
-      }
-      return { value: false, warnings: [`${name}=${raw} is not a yes or a no and was ignored`] };
-    }),
+    Effect.map(
+      (raw): { readonly value: boolean | undefined; readonly warnings: ReadonlyArray<string> } => {
+        if (raw === undefined) {
+          return { value: undefined, warnings: [] };
+        }
+        const value = raw.toLowerCase();
+        if (["true", "1", "yes", "on"].includes(value)) {
+          return { value: true, warnings: [] };
+        }
+        if (["false", "0", "no", "off"].includes(value)) {
+          return { value: false, warnings: [] };
+        }
+        return {
+          value: undefined,
+          warnings: [`${name}=${raw} is not a yes or a no and was ignored`],
+        };
+      },
+    ),
   );
 
 /**
@@ -483,19 +484,15 @@ const resolveResource = Effect.gen(function* () {
 const UNREADABLE = "the OpenTelemetry environment could not be read";
 
 /**
- * `OTEL_SDK_DISABLED` switches off the route these variables configure and
- * nothing else, the same way every other name here is a fallback rather than
- * an override. An endpoint that a `T3CODE_OTLP_*` name or Settings already
- * answered is not this variable's to turn off, and saying so is the whole
- * point of the message: someone who set it expecting silence needs to know
- * which half of the configuration it reached.
+ * Whichever name switched export off is the one worth naming, because it is
+ * the one the reader has to go and unset. An ambient `OTEL_SDK_DISABLED` is
+ * the case where that is not obvious and where the answer is not to unset
+ * anything, so the message carries the override with it.
  */
-const SDK_DISABLED =
-  "OTEL_SDK_DISABLED is set, so the OpenTelemetry environment variables export nothing; a T3CODE_OTLP_* endpoint or one set in Settings still exports, and T3CODE_OTEL_SDK_DISABLED=true stops that too";
-
-/** The one switch a shared machine needs, and the reason it is a `T3CODE_*` name. */
-const FORCE_DISABLED =
-  "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever named the endpoint";
+const disabledBy = (name: string) =>
+  name === "OTEL_SDK_DISABLED"
+    ? "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway"
+    : `${name} is set, so no telemetry is exported, whatever configured it`;
 
 /**
  * Read the environment. Never fails: a variable T3 Code cannot honor
@@ -504,34 +501,33 @@ const FORCE_DISABLED =
  * to start.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
-  const force = yield* forkBoolean("T3CODE_OTEL_SDK_DISABLED");
-  const disabled = yield* specBoolean("OTEL_SDK_DISABLED");
-  // Either switch silences this route. Only the `T3CODE_*` one reaches the
-  // endpoints these variables did not supply, and that is the caller's to act
-  // on through `forceDisabled`.
-  const off = force.value || disabled;
+  const fork = yield* forkBoolean("T3CODE_OTEL_SDK_DISABLED");
+  const spec = yield* specBoolean("OTEL_SDK_DISABLED");
+  // One setting, read the way every other setting here is read: T3 Code's own
+  // name answers it, and the standard name answers it only when ours is unset.
+  const disabled = fork.value ?? spec;
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
-  const traces = off
+  const traces = disabled
     ? { value: undefined, warnings: [] }
     : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
-  const metrics = off
+  const metrics = disabled
     ? { value: undefined, warnings: [] }
     : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
-  const logs = off
+  const logs = disabled
     ? { value: undefined, warnings: [] }
     : yield* signalSettings("LOGS", protocolDecision.logs.protocol, undefined);
   return {
-    forceDisabled: force.value,
     disabled,
     // Every signal reads the generic `OTEL_EXPORTER_OTLP_*` variables, so one
     // bad value arrives here once per signal and would be logged that often.
     warnings: [
       ...new Set([
-        ...force.warnings,
-        ...(force.value ? [FORCE_DISABLED] : []),
-        ...(disabled && !force.value ? [SDK_DISABLED] : []),
+        ...fork.warnings,
+        ...(disabled
+          ? [disabledBy(fork.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
+          : []),
         ...protocolDecision.warnings,
         ...resource.warnings,
         ...temporality.warnings,
@@ -563,7 +559,6 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   Effect.catchCause((cause) =>
     Effect.logWarning("Could not read the OpenTelemetry environment", cause).pipe(
       Effect.as({
-        forceDisabled: false,
         disabled: false,
         warnings: [],
         traces: { settings: undefined, declined: UNREADABLE },
@@ -580,7 +575,6 @@ export const noSignal: OtlpSignal = { settings: undefined, declined: undefined }
 
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {
-  forceDisabled: false,
   disabled: false,
   warnings: [],
   traces: noSignal,

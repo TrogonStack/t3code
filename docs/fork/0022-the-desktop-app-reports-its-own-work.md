@@ -18,7 +18,8 @@
   Metrics stay off while the main process records none, so a configured metrics
   endpoint hears from the server and nobody else rather than receiving an empty
   payload every interval.
-- Turn it off the same way. `T3CODE_OTEL_SDK_DISABLED=true` stops both processes.
+- Turn it off the same way. `OTEL_SDK_DISABLED=true` stops both processes, and
+  so does `T3CODE_OTEL_SDK_DISABLED=true`, which is read first.
 - Tell the two apart without trusting the environment. The main process reports
   as `t3-desktop`, joining `t3-server` and `t3-web`, and `service.runtime` on it
   is always `desktop`, so an ambient

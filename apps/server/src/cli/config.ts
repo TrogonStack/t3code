@@ -430,13 +430,13 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl: otelEnvironment.forceDisabled
+      otlpTracesUrl: otelEnvironment.disabled
         ? undefined
         : (namedTracesUrl ?? otelEnvironment.traces.settings?.url),
-      otlpMetricsUrl: otelEnvironment.forceDisabled
+      otlpMetricsUrl: otelEnvironment.disabled
         ? undefined
         : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
-      otlpLogsUrl: otelEnvironment.forceDisabled
+      otlpLogsUrl: otelEnvironment.disabled
         ? undefined
         : (namedLogsUrl ?? otelEnvironment.logs.settings?.url),
       // T3 Code has one interval variable and it deliberately covers every

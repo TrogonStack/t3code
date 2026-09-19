@@ -24,11 +24,11 @@
   `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` are the batching knobs the specification
   defines for logs, so a delay meant for spans does not decide how promptly a
   log record arrives.
-- Turn export off from the environment. `T3CODE_OTEL_SDK_DISABLED=true` stops
-  every export, including one configured in Settings, which is the one switch a
-  shared machine needs. `OTEL_SDK_DISABLED=true` is scoped the way every other
-  standard name here is: it switches off what these variables configured and
-  leaves an endpoint you named yourself alone.
+- Turn export off from the environment. `OTEL_SDK_DISABLED=true` stops every
+  export, including one configured in Settings, which is the one switch a
+  shared machine needs. `T3CODE_OTEL_SDK_DISABLED` is the same setting asked of
+  T3 Code's own name first, so `false` there keeps T3 Code exporting on a
+  machine whose profile disables every other SDK.
 - Keep whatever you have. The `T3CODE_OTLP_*` names, the desktop bootstrap
   envelope, and Settings all still win over the environment, and a setup that
   never mentioned OpenTelemetry keeps the wire format it always used.
@@ -59,12 +59,12 @@ OpenTelemetry SDK behaves this way, and a telemetry variable that some processes
 honor and others quietly ignore is worse than either answer, so
 `OTEL_SDK_DISABLED` is the way out rather than a requirement to opt in.
 
-That switch stops the route it belongs to and no more, which is the same rule
-the rest of these variables follow. A name the environment supplied should not
-be able to countermand a choice someone made in Settings, so the switch that
-can is `T3CODE_OTEL_SDK_DISABLED`, a name T3 Code owns. Two switches is one more
-than the specification describes, and it is the only honest way to have both an
-opt-out for the ambient case and a kill switch for the machine.
+Turning export off is one setting with two names, not two switches, and it is
+read in the same order as everything else here: ours, then the standard one.
+The ordering is the whole point. Inheriting `OTEL_SDK_DISABLED` from a shell
+profile is common, and without a name of our own the only way to get T3 Code's
+telemetry back would be to unset a variable the rest of the machine depends
+on.
 
 ## Upstream considerations
 

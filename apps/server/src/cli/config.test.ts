@@ -777,7 +777,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("switches off the OpenTelemetry variables without touching the named endpoint", () =>
+  it.effect("exports nothing at all once the SDK is switched off", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveWithEnv({
         OTEL_SDK_DISABLED: "true",
@@ -785,23 +785,21 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
       });
 
-      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+      expect(resolved.otlpTracesUrl).toBeUndefined();
       expect(resolved.otlpMetricsUrl).toBeUndefined();
       expect(resolved.otlpLogsUrl).toBeUndefined();
     }),
   );
 
-  it.effect("exports nothing at all once T3 Code's own switch is set", () =>
+  it.effect("keeps exporting when T3 Code's own name says to, whatever the standard one says", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveWithEnv({
-        T3CODE_OTEL_SDK_DISABLED: "true",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        T3CODE_OTEL_SDK_DISABLED: "false",
+        OTEL_SDK_DISABLED: "true",
         T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
       });
 
-      expect(resolved.otlpTracesUrl).toBeUndefined();
-      expect(resolved.otlpMetricsUrl).toBeUndefined();
-      expect(resolved.otlpLogsUrl).toBeUndefined();
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
     }),
   );
 

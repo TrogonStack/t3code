@@ -120,9 +120,7 @@ export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): Desktop
     attributes: { ...otel.resource.attributes, ...input.runtimeAttributes },
   };
 
-  // `OTEL_SDK_DISABLED` is already scoped to the OpenTelemetry variables by
-  // the reader, so only T3 Code's own switch reaches an endpoint named here.
-  if (otel.forceDisabled) {
+  if (otel.disabled) {
     return {
       traces: offSignal,
       metrics: offSignal,

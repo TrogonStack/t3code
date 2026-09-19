@@ -109,7 +109,7 @@ describe("resolveDesktopOtlpExport", () => {
     }),
   );
 
-  it.effect("keeps the named endpoint when the OpenTelemetry SDK is disabled", () =>
+  it.effect("stops every export when the OpenTelemetry SDK is disabled", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve(
         {
@@ -118,26 +118,24 @@ describe("resolveDesktopOtlpExport", () => {
         },
         { named: { traces: "http://127.0.0.1:4318/v1/traces" } },
       );
-      assert.strictEqual(resolved.traces.url, "http://127.0.0.1:4318/v1/traces");
+      assert.strictEqual(resolved.traces.url, undefined);
       assert.strictEqual(resolved.metrics.url, undefined);
       assert.strictEqual(resolved.logs.url, undefined);
       assert.include(resolved.warnings.join("\n"), "OTEL_SDK_DISABLED");
     }),
   );
 
-  it.effect("stops every export once T3 Code's own switch is set", () =>
+  it.effect("keeps exporting when T3 Code's own name says to", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve(
         {
-          T3CODE_OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          T3CODE_OTEL_SDK_DISABLED: "false",
+          OTEL_SDK_DISABLED: "true",
         },
         { named: { traces: "http://127.0.0.1:4318/v1/traces" } },
       );
-      assert.strictEqual(resolved.traces.url, undefined);
-      assert.strictEqual(resolved.metrics.url, undefined);
-      assert.strictEqual(resolved.logs.url, undefined);
-      assert.include(resolved.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED");
+      assert.strictEqual(resolved.traces.url, "http://127.0.0.1:4318/v1/traces");
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 
