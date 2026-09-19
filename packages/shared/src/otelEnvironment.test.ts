@@ -445,17 +445,47 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("warns about a temporality this exporter cannot produce", () =>
+  it.effect("resolves lowmemory to the aggregation it asks for on these metrics", () =>
     Effect.gen(function* () {
+      // Falling back to the default here would invert the request rather than
+      // decline it, and invert it toward the value a delta-only receiver drops
+      // without an error, so the timers would vanish and the counters would not.
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
           OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
         }),
       );
-      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
-      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
       assert.isTrue(resolved.warnings.some((warning) => warning.includes("lowmemory")));
+    }),
+  );
+
+  it.effect("ignores a temporality that is not a preference at all", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "hourly",
+        }),
+      );
+      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("hourly")));
+    }),
+  );
+
+  it.effect("asks for no aggregation when nothing names one", () =>
+    Effect.gen(function* () {
+      // Left unset on purpose. The exporter applies
+      // `DEFAULT_METRICS_TEMPORALITY`, and a value here would claim the
+      // operator chose it.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
+      );
+      assert.isDefined(resolved.metrics.settings);
+      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
+      assert.deepStrictEqual(resolved.warnings, []);
     }),
   );
 

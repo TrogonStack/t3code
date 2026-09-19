@@ -292,7 +292,7 @@ telemetry.
 | `OTEL_SERVICE_NAME`                                                                  | Refused with a warning; service names are static                             |
 | `OTEL_BSP_SCHEDULE_DELAY`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_BLRP_SCHEDULE_DELAY` | Export interval, one per signal                                              |
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE`                  | Spans per batch, log records per batch                                       |
-| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` or `delta`                                                      |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`                                  | `cumulative` (default), `delta`, or `lowmemory`, which resolves to `delta`   |
 
 The wire format defaults to `http/protobuf` when the endpoint came from `OTEL_*`, matching the
 specification, and follows `T3CODE_OTLP_PROTOCOL` otherwise, which defaults to `http/json`.
@@ -323,8 +323,19 @@ Not everything in the specification is implemented. These are the ones worth kno
   deadlines, and this exporter has no per-request knob, so they are ignored. Spending them on the
   shutdown flush instead would be the wrong meaning and would let a generous collector timeout hold
   the server open on every restart.
-- **`lowmemory` temporality is not available.** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`
-  accepts `cumulative` and `delta`. `lowmemory` logs a warning and falls back to `cumulative`.
+- **Only an `OTEL_*` metrics endpoint can choose its aggregation.**
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` configures the metrics signal, and by the rule
+  in Precedence above a signal is configured by whichever source named its endpoint. A metrics
+  endpoint that came from `T3CODE_OTLP_METRICS_URL`, the desktop bootstrap envelope, or Settings
+  therefore exports `cumulative`, and there is no `T3CODE_*` spelling of this preference to change
+  that. This matters for one class of backend: a receiver that accepts delta histograms only, which
+  is how Datadog's OTLP intake behaves, drops cumulative histograms without reporting an error, so
+  every `_duration` timer would go missing while the `_total` counters kept arriving. Point such a
+  backend at `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` and set the preference to `delta`.
+- **`lowmemory` temporality cannot be expressed per instrument kind.** It asks for delta on
+  synchronous counters and histograms and cumulative on the rest, and one temporality is applied to
+  every instrument here. It resolves to `delta` with a warning, which is what it asks for on the
+  counters and timers T3 Code actually records.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.
@@ -342,10 +353,10 @@ variables, propagator variables, and the attribute and span limit variables.
 A variable T3 Code cannot act on never stops it from starting. Two things can happen instead,
 and both are logged once at startup:
 
-- **A warning, then the default.** A misspelled protocol, an unavailable temporality, a timeout or
-  batch size that is not a whole number, or a pair list that is not valid percent encoding is
-  reported and ignored, and everything else keeps exporting. One bad value never costs you the
-  other variables.
+- **A warning, then the default.** A misspelled protocol, a temporality that is not a preference,
+  a timeout or batch size that is not a whole number, or a pair list that is not valid percent
+  encoding is reported and ignored, and everything else keeps exporting. One bad value never costs
+  you the other variables.
 - **Export off.** Only `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` does this, because it names a transport
   T3 Code does not speak rather than a value it failed to parse.
 

@@ -40,6 +40,20 @@ export type OtlpProtocol = "http/json" | "http/protobuf";
 /** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`. */
 export type MetricsTemporality = "cumulative" | "delta";
 
+/**
+ * What metrics are aggregated as when nothing asks for anything, which is the
+ * specification's default and the one Prometheus and Mimir want. It is named
+ * here, and applied at the exporter rather than left to the exporter's own
+ * fallback, so the value that ships is decided in one place instead of tracking
+ * whatever a dependency happens to default to.
+ *
+ * Sending it to a receiver that accepts delta histograms only, which is how
+ * Datadog's OTLP intake behaves, loses every timer in silence while the
+ * counters keep arriving. That is a backend fact rather than a bad default, so
+ * the answer is to set the variable, not to invert this for everyone.
+ */
+export const DEFAULT_METRICS_TEMPORALITY: MetricsTemporality = "cumulative";
+
 /** Everything one signal's exporter needs, or `undefined` if it is off. */
 export interface OtlpSignalSettings {
   readonly url: string;
@@ -431,8 +445,22 @@ const resolveProtocol = Effect.gen(function* () {
 
 /**
  * `lowmemory` is a real preference in the specification that this exporter
- * cannot produce, so it warns and falls back to the default rather than
- * pretending it applied.
+ * cannot express, because one temporality is applied to every instrument here
+ * rather than chosen per instrument kind. It resolves to `delta` instead of the
+ * default, and says so.
+ *
+ * `delta` is the honest answer rather than a near-enough one. `lowmemory` asks
+ * for delta on synchronous counters and histograms and cumulative on the rest,
+ * and every metric T3 Code records is a monotonic counter or a timer, so the
+ * kinds the two preferences disagree about are kinds nothing here produces.
+ * Falling back to the default would have inverted the only part of the request
+ * that is about the data, and inverted it toward the value that loses it: a
+ * receiver that accepts delta histograms only, which is how Datadog's OTLP
+ * intake behaves, drops cumulative histograms without reporting an error, so
+ * every duration metric would disappear while the counters kept arriving.
+ *
+ * A value that is not a preference at all is a different case and stays
+ * ignored. It carries no intent to honor.
  */
 const resolveMetricsTemporality = optionalString(
   "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
@@ -445,12 +473,18 @@ const resolveMetricsTemporality = optionalString(
     if (preference === "delta" || preference === "cumulative") {
       return { value: preference, warnings: [] };
     }
+    if (preference === "lowmemory") {
+      return {
+        value: "delta",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory cannot be expressed per instrument kind here, so delta is used for every metric, which is what lowmemory asks for on the counters and timers T3 Code records",
+        ],
+      };
+    }
     return {
       value: undefined,
       warnings: [
-        preference === "lowmemory"
-          ? "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory is not supported here; cumulative is used"
-          : `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored`,
+        `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=${raw} is not a known preference and was ignored, so metrics are exported as ${DEFAULT_METRICS_TEMPORALITY}`,
       ],
     };
   }),

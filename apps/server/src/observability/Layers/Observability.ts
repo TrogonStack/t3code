@@ -1,4 +1,5 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   makeLocalFileTracer,
   makeTraceSink,
@@ -113,9 +114,8 @@ export const ObservabilityLive = Layer.unwrap(
             exportInterval: `${config.otlpMetricsExportIntervalMs} millis`,
             resource: otlpResource,
             headers: headersFor(otel.metrics.settings),
-            ...(otel.metrics.settings?.temporality === undefined
-              ? {}
-              : { temporality: otel.metrics.settings.temporality }),
+            temporality:
+              otel.metrics.settings?.temporality ?? OtelEnvironment.DEFAULT_METRICS_TEMPORALITY,
           }).pipe(Layer.provide(serializationFor(otel.metrics.settings)));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
