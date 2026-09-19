@@ -352,7 +352,9 @@ Not everything in the specification is implemented. These are the ones worth kno
 - **`lowmemory` temporality cannot be expressed per instrument kind.** It asks for delta on
   synchronous counters and histograms and cumulative on the rest, and one temporality is applied to
   every instrument here. It resolves to `delta` with a warning, which is what it asks for on the
-  counters and timers T3 Code actually records.
+  counters and timers T3 Code actually records. Like every variable in this group it applies only
+  to the endpoint these variables named, so the warning is silent on a machine where they named no
+  metrics endpoint at all.
 - **`OTEL_SERVICE_VERSION` is not a specification variable.** It is read as a convenience because
   the exporter library reads it too. `OTEL_RESOURCE_ATTRIBUTES=service.version=...` is the portable
   spelling.

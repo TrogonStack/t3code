@@ -462,6 +462,22 @@ describe("OtelEnvironment", () => {
     }),
   );
 
+  it.effect("says nothing about an aggregation for metrics these variables did not place", () =>
+    Effect.gen(function* () {
+      // The preference travels with the endpoint that asked for it, so on a
+      // machine whose metrics endpoint comes from somewhere else this warning
+      // would claim an aggregation that never applied.
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://collector.example.com/v1/traces",
+          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
+        }),
+      );
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.isFalse(resolved.warnings.some((warning) => warning.includes("lowmemory")));
+    }),
+  );
+
   it.effect("ignores a temporality that is not a preference at all", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(

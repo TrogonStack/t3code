@@ -427,7 +427,14 @@ interface ReadSignal extends Parsed<OtlpSignalSettings> {
 const signalSettings = (
   signal: OtlpSignalName,
   protocol: OtlpProtocol,
-  temporality: MetricsTemporality | undefined,
+  /**
+   * Metrics only, and read here rather than in `load` so an aggregation shares
+   * its endpoint's fate. A preference says nothing when these variables named
+   * nowhere to send metrics or asked for no metrics export, and reporting it
+   * anyway would claim it took while the endpoint that won still aggregates its
+   * own way.
+   */
+  temporality: Parsed<MetricsTemporality> | undefined,
 ) =>
   Effect.gen(function* () {
     const url = yield* signalEndpoint(signal);
@@ -458,9 +465,14 @@ const signalSettings = (
         headers,
         exportIntervalMs,
         maxBatchSize,
-        temporality: signal === "METRICS" ? temporality : undefined,
+        temporality: temporality?.value,
       },
-      warnings: [...specific.warnings, ...generic.warnings, ...numbers],
+      warnings: [
+        ...specific.warnings,
+        ...generic.warnings,
+        ...numbers,
+        ...(temporality?.warnings ?? []),
+      ],
       off: false,
     } satisfies ReadSignal;
   });
@@ -565,7 +577,7 @@ const resolveMetricsTemporality = optionalString(
       return {
         value: "delta",
         warnings: [
-          "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory cannot be expressed per instrument kind here, so delta is used for every metric, which is what lowmemory asks for on the counters and timers T3 Code records",
+          "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=lowmemory cannot be expressed per instrument kind here, so delta is used for every metric sent to the endpoint these variables named, which is what lowmemory asks for on the counters and timers T3 Code records",
         ],
       };
     }
@@ -661,7 +673,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     : yield* signalSettings("TRACES", protocolDecision.traces.protocol, undefined);
   const metrics = disabled
     ? { value: undefined, warnings: [], off: false }
-    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality.value);
+    : yield* signalSettings("METRICS", protocolDecision.metrics.protocol, temporality);
   const logs = disabled
     ? { value: undefined, warnings: [], off: false }
     : yield* signalSettings("LOGS", protocolDecision.logs.protocol, undefined);
@@ -677,7 +689,6 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
           : []),
         ...protocolDecision.warnings,
         ...resource.warnings,
-        ...temporality.warnings,
         ...traces.warnings,
         ...metrics.warnings,
         ...logs.warnings,
