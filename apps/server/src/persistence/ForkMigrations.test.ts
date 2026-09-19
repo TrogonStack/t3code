@@ -48,7 +48,7 @@ describe("forkMigrationEntries", () => {
   });
 });
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("fresh install", (it) => {
   it.effect("runs the fork chain on its own ledger without touching shared numbering", () =>
