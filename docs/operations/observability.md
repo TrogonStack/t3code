@@ -692,11 +692,16 @@ It provides:
 - optional OTLP log exporter
 - Effect trace-level and timing refs
 
-The Electron main process assembles its own in
-`apps/desktop/src/app/DesktopObservability.ts`, with the same pieces plus an optional OTLP log
-exporter, and resolves its endpoints in `apps/desktop/src/app/DesktopOtlpExport.ts`. Both processes
-read the `OTEL_*` variables through `packages/shared/src/otelEnvironment.ts`, so neither can disagree
-with the other about what a variable means.
+The desktop main process is a second producer, assembled in
+`apps/desktop/src/app/DesktopObservability.ts`, and covers work the backend cannot see: app startup,
+window and menu handling, backend supervision, and updates. It resolves its endpoints in
+`apps/desktop/src/app/DesktopOtlpExport.ts`, reading the same `T3CODE_OTLP_*` names and Settings
+entries as the backend it supervises, and the `OTEL_*` variables through the same
+`packages/shared/src/otelEnvironment.ts` the server uses, so neither process can disagree with the
+other about what a variable means. It reports as service `t3-desktop`, which no variable can change
+(see `docs/fork/0023-a-service-name-is-not-an-environment-variable.md`), so a collector shows it
+alongside the backend rather than mixed into it. It exports traces and logs only; the main process
+records no metrics, so the metrics endpoint applies to the backend alone.
 
 ### Env Vars
 
