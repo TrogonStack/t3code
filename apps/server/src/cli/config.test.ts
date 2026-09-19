@@ -875,6 +875,126 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("reads an exported endpoint before a stored one", () =>
+    Effect.gen(function* () {
+      // An exported variable is what the operator asked for now; Settings is
+      // what somebody asked for once. The standard names sit directly under
+      // T3 Code's own, not under the file, which is the order every setting
+      // here follows.
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-order-" });
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({
+          observability: {
+            otlpTracesUrl: "http://stored.example.com/v1/traces",
+            otlpMetricsUrl: "http://stored.example.com/v1/metrics",
+            otlpLogsUrl: "http://stored.example.com/v1/logs",
+          },
+        })}\n`,
+      );
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("desktop"),
+          port: Option.some(4888),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+                  T3CODE_OTLP_LOGS_URL: "http://localhost:4318/v1/logs",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
+      // T3 Code's own name still outranks both, and taking the signal with it
+      // leaves the ambient wire format on the endpoint that asked for it.
+      expect(resolved.otlpLogsUrl).toBe("http://localhost:4318/v1/logs");
+      expect(resolved.otelEnvironment.traces.settings?.protocol).toBe("http/protobuf");
+      expect(resolved.otelEnvironment.logs.settings).toBeUndefined();
+    }),
+  );
+
+  it.effect("falls back to a stored endpoint for the signals nothing exported", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-order-signal-" });
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({
+          observability: { otlpMetricsUrl: "http://stored.example.com/v1/metrics" },
+        })}\n`,
+      );
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("desktop"),
+          port: Option.some(4888),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://collector.example.com/v1/traces",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      // The three signals are answered separately, so a variable that named
+      // one endpoint does not decide where the others go.
+      expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
+      expect(resolved.otlpMetricsUrl).toBe("http://stored.example.com/v1/metrics");
+      expect(resolved.otlpLogsUrl).toBeUndefined();
+      expect(resolved.otelEnvironment.metrics.settings).toBeUndefined();
+    }),
+  );
+
   it.effect("forces noBrowser and disables auto-bootstrap for headless startup presentation", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;

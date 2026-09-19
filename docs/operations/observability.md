@@ -250,9 +250,15 @@ main process was given.
 For each signal, the first source that names its endpoint wins:
 
 1. `T3CODE_OTLP_*`
-2. the desktop bootstrap envelope
-3. Settings, under `observability`
-4. `OTEL_*`
+2. `OTEL_*`
+3. the desktop bootstrap envelope
+4. Settings, under `observability`
+
+An exported variable outranks a stored one, and T3 Code's own spelling of a variable outranks the
+standard spelling of it. That is the same order `T3CODE_OTEL_SDK_DISABLED` and `OTEL_SDK_DISABLED`
+follow, and it means an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` overrides an endpoint saved in
+Settings. Name a `T3CODE_OTLP_*` URL when you want a stored endpoint that nothing on the machine can
+redirect.
 
 Whichever source wins takes the whole signal, not just the URL. Traces sent to a
 `T3CODE_OTLP_TRACES_URL` endpoint keep T3 Code's own wire format, headers, batching, and export
@@ -356,9 +362,10 @@ whole rather than partly. A half-parsed credential reaches the collector as the 
 error a wrong one would, which reads like a bad token instead of a bad variable.
 
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
-name, the desktop bootstrap envelope, or Settings winning the URL takes the whole signal with it, so
-an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or
-batching of an export it did not point anywhere. Traces, metrics, and logs are answered separately
+name winning the URL takes the whole signal with it, and so does the desktop bootstrap envelope or
+Settings winning it for a signal these variables said nothing about, so an ambient
+`OTEL_EXPORTER_OTLP_ENDPOINT` cannot reach in and change the wire format, headers, or batching of an
+export it did not point anywhere. Traces, metrics, and logs are answered separately
 throughout, so `OTEL_EXPORTER_OTLP_METRICS_PROTOCOL` applies to metrics alone and leaves traces and
 logs as they were.
 

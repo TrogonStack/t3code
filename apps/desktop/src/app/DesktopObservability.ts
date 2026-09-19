@@ -365,9 +365,14 @@ const resolveOtlpExport = Effect.gen(function* () {
   return resolveDesktopOtlpExport({
     otel: environment.otelEnvironment,
     named: {
-      traces: Option.getOrUndefined(environment.otlpTracesUrl) ?? persisted.otlpTracesUrl,
-      metrics: Option.getOrUndefined(environment.otlpMetricsUrl) ?? persisted.otlpMetricsUrl,
-      logs: Option.getOrUndefined(environment.otlpLogsUrl) ?? persisted.otlpLogsUrl,
+      traces: Option.getOrUndefined(environment.otlpTracesUrl),
+      metrics: Option.getOrUndefined(environment.otlpMetricsUrl),
+      logs: Option.getOrUndefined(environment.otlpLogsUrl),
+    },
+    persisted: {
+      traces: persisted.otlpTracesUrl,
+      metrics: persisted.otlpMetricsUrl,
+      logs: persisted.otlpLogsUrl,
     },
     namedExportIntervalMs: Option.getOrUndefined(environment.otlpExportIntervalMs),
     namedHeaders: Option.getOrUndefined(environment.otlpHeaders),

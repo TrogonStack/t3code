@@ -115,13 +115,20 @@ export interface OtelEnvironment {
  * blank value is: a shell profile that padded a line did not mean the padding
  * to become part of an endpoint or a service name.
  */
+/**
+ * A set but blank value is not an answer. Taking one as an answer publishes an
+ * endpoint nothing can reach and suppresses the source under it that could
+ * have been used instead.
+ */
+const blankAsUnset = (value: string | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+};
+
 const optionalString = (name: string) =>
   Config.String(name).pipe(
     Config.option,
-    Config.map((value) => {
-      const raw = Option.getOrUndefined(value)?.trim();
-      return raw === undefined || raw === "" ? undefined : raw;
-    }),
+    Config.map((value) => blankAsUnset(Option.getOrUndefined(value))),
   );
 
 /**
@@ -571,7 +578,45 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 );
 
 /** A signal these variables said nothing usable about. */
-export const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+const noSignal: OtlpSignal = { settings: undefined, declined: undefined };
+
+/**
+ * Where one signal's endpoint comes from, and therefore which source
+ * configures the rest of it. Sources are asked in the order every setting
+ * here follows: T3 Code's own name, then the standard `OTEL_*` names, then
+ * whatever was persisted, meaning the desktop bootstrap envelope or Settings.
+ * An exported variable outranks a stored one, and T3 Code's own spelling of a
+ * variable outranks the standard spelling of it.
+ *
+ * Whichever source wins takes the whole signal and not the URL alone, so the
+ * signal returned here is `noSignal` unless `OTEL_*` is what won. That is what
+ * stops an ambient `OTEL_EXPORTER_OTLP_ENDPOINT` from changing the wire
+ * format, headers, batching, or aggregation of an export it never pointed
+ * anywhere, and stops startup reporting a signal as declined while it is
+ * exporting. When nothing names an endpoint the signal is returned as it was
+ * read, because a declined transport is still worth saying when there is no
+ * export to confuse it with.
+ *
+ * Read by every process that exports, so the server and the desktop app
+ * cannot resolve the same machine's variables differently.
+ */
+export const resolveSignalSource = (input: {
+  readonly t3Url: string | undefined;
+  readonly signal: OtlpSignal;
+  readonly persistedUrl: string | undefined;
+}): { readonly url: string | undefined; readonly signal: OtlpSignal } => {
+  const t3Url = blankAsUnset(input.t3Url);
+  if (t3Url !== undefined) {
+    return { url: t3Url, signal: noSignal };
+  }
+  if (input.signal.settings !== undefined) {
+    return { url: input.signal.settings.url, signal: input.signal };
+  }
+  const persistedUrl = blankAsUnset(input.persistedUrl);
+  return persistedUrl === undefined
+    ? { url: undefined, signal: input.signal }
+    : { url: persistedUrl, signal: noSignal };
+};
 
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {

@@ -233,10 +233,8 @@ const resolveOptionPrecedence = <Value>(
 ): Option.Option<Value> => Option.firstSomeOf(values);
 
 /**
- * Reads a source that names an OTLP destination, treating a blank one as
- * nobody having named it. An empty variable is set in the environment but is
- * not an answer, and taking it as one both publishes an endpoint that cannot
- * be reached and suppresses the ambient variable that could have been.
+ * A set but blank `T3CODE_OTLP_SERVICE_NAME` is not a name. Taking one as an
+ * answer would file every span under the empty string.
  */
 const named = (value: string | undefined) => {
   const trimmed = value?.trim();
@@ -399,28 +397,26 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
-    // A signal whose endpoint came from somewhere else is not this route's to
-    // configure. Dropping the whole signal, rather than the endpoint alone,
-    // is what stops an ambient OTEL_EXPORTER_OTLP_ENDPOINT from changing the
-    // wire format, headers, batching, or aggregation of an export that a
-    // T3CODE_OTLP_* name or Settings already answered, and stops startup from
-    // reporting that signal as declined while it is exporting.
-    const namedTracesUrl = named(
-      env.otlpTracesUrl ?? bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl,
-    );
-    const namedMetricsUrl = named(
-      env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
-    );
-    const namedLogsUrl = named(
-      env.otlpLogsUrl ?? bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
-    );
+    const traces = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpTracesUrl,
+      signal: otel.traces,
+      persistedUrl: bootstrap?.otlpTracesUrl ?? persistedObservabilitySettings.otlpTracesUrl,
+    });
+    const metrics = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpMetricsUrl,
+      signal: otel.metrics,
+      persistedUrl: bootstrap?.otlpMetricsUrl ?? persistedObservabilitySettings.otlpMetricsUrl,
+    });
+    const logs = OtelEnvironment.resolveSignalSource({
+      t3Url: env.otlpLogsUrl,
+      signal: otel.logs,
+      persistedUrl: bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
+    });
     const otelEnvironment = {
       ...otel,
-      traces: namedTracesUrl === undefined ? otel.traces : OtelEnvironment.noSignal,
-      metrics: namedMetricsUrl === undefined ? otel.metrics : OtelEnvironment.noSignal,
-      logs: namedLogsUrl === undefined ? otel.logs : OtelEnvironment.noSignal,
+      traces: traces.signal,
+      metrics: metrics.signal,
+      logs: logs.signal,
     } satisfies OtelEnvironment.OtelEnvironment;
 
     const config: ServerConfig.ServerConfig["Service"] = {
@@ -430,15 +426,9 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl: otelEnvironment.disabled
-        ? undefined
-        : (namedTracesUrl ?? otelEnvironment.traces.settings?.url),
-      otlpMetricsUrl: otelEnvironment.disabled
-        ? undefined
-        : (namedMetricsUrl ?? otelEnvironment.metrics.settings?.url),
-      otlpLogsUrl: otelEnvironment.disabled
-        ? undefined
-        : (namedLogsUrl ?? otelEnvironment.logs.settings?.url),
+      otlpTracesUrl: otelEnvironment.disabled ? undefined : traces.url,
+      otlpMetricsUrl: otelEnvironment.disabled ? undefined : metrics.url,
+      otlpLogsUrl: otelEnvironment.disabled ? undefined : logs.url,
       // T3 Code has one interval variable and it deliberately covers every
       // signal. The per-signal part is the fallback under it: the environment
       // names a span delay, a metric interval, and a log record delay

@@ -6,11 +6,11 @@ import * as Layer from "effect/Layer";
 
 import {
   DEFAULT_DESKTOP_EXPORT_INTERVAL_MS,
-  type DesktopNamedOtlpEndpoints,
+  type DesktopOtlpEndpoints,
   resolveDesktopOtlpExport,
 } from "./DesktopOtlpExport.ts";
 
-const noNamedEndpoints: DesktopNamedOtlpEndpoints = {
+const noEndpoints: DesktopOtlpEndpoints = {
   traces: undefined,
   metrics: undefined,
   logs: undefined,
@@ -19,7 +19,8 @@ const noNamedEndpoints: DesktopNamedOtlpEndpoints = {
 const resolve = (
   env: Record<string, string>,
   overrides: {
-    readonly named?: Partial<DesktopNamedOtlpEndpoints>;
+    readonly named?: Partial<DesktopOtlpEndpoints>;
+    readonly persisted?: Partial<DesktopOtlpEndpoints>;
     readonly namedExportIntervalMs?: number;
     readonly namedHeaders?: Readonly<Record<string, string>>;
     readonly namedProtocol?: "http/json" | "http/protobuf";
@@ -30,7 +31,8 @@ const resolve = (
     Effect.map((otel) =>
       resolveDesktopOtlpExport({
         otel,
-        named: { ...noNamedEndpoints, ...overrides.named },
+        named: { ...noEndpoints, ...overrides.named },
+        persisted: { ...noEndpoints, ...overrides.persisted },
         namedExportIntervalMs: overrides.namedExportIntervalMs,
         namedHeaders: overrides.namedHeaders,
         namedProtocol: overrides.namedProtocol,
@@ -60,6 +62,45 @@ describe("resolveDesktopOtlpExport", () => {
       assert.strictEqual(resolved.metrics.url, "https://collector.example.com/v1/metrics");
       assert.strictEqual(resolved.logs.url, "https://collector.example.com/v1/logs");
       assert.strictEqual(resolved.traces.protocol, "http/protobuf");
+    }),
+  );
+
+  it.effect("reads an exported endpoint before a stored one", () =>
+    Effect.gen(function* () {
+      // Same order the server uses, because a machine's variables must not
+      // resolve differently in the two processes reading them.
+      const resolved = yield* resolve(
+        { OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" },
+        {
+          named: { logs: "http://localhost:4318/v1/logs" },
+          persisted: {
+            traces: "http://stored.example.com/v1/traces",
+            metrics: "http://stored.example.com/v1/metrics",
+            logs: "http://stored.example.com/v1/logs",
+          },
+        },
+      );
+      assert.strictEqual(resolved.traces.url, "https://collector.example.com/v1/traces");
+      assert.strictEqual(resolved.traces.protocol, "http/protobuf");
+      assert.strictEqual(resolved.metrics.url, "https://collector.example.com/v1/metrics");
+      // T3 Code's own name outranks both, and keeps T3 Code's wire format.
+      assert.strictEqual(resolved.logs.url, "http://localhost:4318/v1/logs");
+      assert.strictEqual(resolved.logs.protocol, "http/json");
+    }),
+  );
+
+  it.effect("falls back to a stored endpoint for the signals nothing exported", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve(
+        { OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://collector.example.com/v1/traces" },
+        { persisted: { metrics: "http://stored.example.com/v1/metrics" } },
+      );
+      assert.strictEqual(resolved.traces.url, "https://collector.example.com/v1/traces");
+      assert.strictEqual(resolved.metrics.url, "http://stored.example.com/v1/metrics");
+      // A stored endpoint keeps the interval T3 Code has always used, because
+      // the variables that name one did not name this endpoint.
+      assert.strictEqual(resolved.metrics.exportIntervalMs, DEFAULT_DESKTOP_EXPORT_INTERVAL_MS);
+      assert.strictEqual(resolved.logs.url, undefined);
     }),
   );
 

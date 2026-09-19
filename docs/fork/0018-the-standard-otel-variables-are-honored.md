@@ -29,9 +29,11 @@
   shared machine needs. `T3CODE_OTEL_SDK_DISABLED` is the same setting asked of
   T3 Code's own name first, so `false` there keeps T3 Code exporting on a
   machine whose profile disables every other SDK.
-- Keep whatever you have. The `T3CODE_OTLP_*` names, the desktop bootstrap
-  envelope, and Settings all still win over the environment, and a setup that
-  never mentioned OpenTelemetry keeps the wire format it always used.
+- Keep whatever you have. The `T3CODE_OTLP_*` names still win, and a setup that
+  never mentioned OpenTelemetry keeps the wire format it always used. The
+  standard names are read directly under T3 Code's own and above the desktop
+  bootstrap envelope and Settings, because an exported variable is what the
+  operator asked for now and a stored one is what somebody asked for once.
 - Find out when a variable did not take. A misspelled protocol, a temporality
   this exporter cannot produce, a batch size that is not a number, or a header
   list that is not valid percent encoding is named in the startup log and then
@@ -74,6 +76,8 @@ that includes thread ids, turn ids, and workspace paths, and upstream may prefer
 an explicit opt-in for a product with this many users.
 
 The rebase burden is small. The reading lives in one module with no dependencies
-on the rest of the server, and the wiring is a handful of fallbacks at the end of
-existing precedence chains. A sync that rewrites those chains must keep the
-environment as their last entry.
+on the rest of the server, and the wiring is one call per signal inside existing
+precedence chains. A sync that rewrites those chains must keep the standard
+names directly under the `T3CODE_OTLP_*` ones and above the desktop bootstrap
+envelope and Settings. `resolveSignalSource` is where that order lives, so both
+processes move together.
