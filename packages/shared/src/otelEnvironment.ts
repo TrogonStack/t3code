@@ -140,7 +140,7 @@ const specBoolean = (name: string) =>
  * unreadable, and the source under it decides instead. A typo therefore costs
  * that variable and nothing else, the same as everywhere else here.
  */
-const forkBoolean = (name: string) =>
+const t3Boolean = (name: string) =>
   optionalString(name).pipe(
     Effect.map(
       (raw): { readonly value: boolean | undefined; readonly warnings: ReadonlyArray<string> } => {
@@ -501,11 +501,11 @@ const disabledBy = (name: string) =>
  * to start.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
-  const fork = yield* forkBoolean("T3CODE_OTEL_SDK_DISABLED");
+  const t3 = yield* t3Boolean("T3CODE_OTEL_SDK_DISABLED");
   const spec = yield* specBoolean("OTEL_SDK_DISABLED");
   // One setting, read the way every other setting here is read: T3 Code's own
   // name answers it, and the standard name answers it only when ours is unset.
-  const disabled = fork.value ?? spec;
+  const disabled = t3.value ?? spec;
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
@@ -524,9 +524,9 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     // bad value arrives here once per signal and would be logged that often.
     warnings: [
       ...new Set([
-        ...fork.warnings,
+        ...t3.warnings,
         ...(disabled
-          ? [disabledBy(fork.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
+          ? [disabledBy(t3.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
           : []),
         ...protocolDecision.warnings,
         ...resource.warnings,
