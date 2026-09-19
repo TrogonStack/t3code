@@ -9,7 +9,9 @@
  * told twice.
  *
  * Read by every T3 Code process that exports telemetry, so the server and the
- * desktop app cannot disagree about what a variable means.
+ * desktop app cannot disagree about what a variable means. That is also why
+ * `T3CODE_OTEL_SDK_DISABLED` is read here: it is the same setting as
+ * `OTEL_SDK_DISABLED`, asked of T3 Code's own name first.
  *
  * Only the variables T3 Code can act on are read. The exporter speaks
  * OTLP over HTTP, so `grpc` is declined loudly rather than answered with a
@@ -85,7 +87,13 @@ export interface OtlpResourceSettings {
 }
 
 export interface OtelEnvironment {
-  /** `OTEL_SDK_DISABLED`. When set, nothing is exported by any route. */
+  /**
+   * Whether anything is exported at all, by any route. `T3CODE_OTEL_SDK_DISABLED`
+   * answers it, and `OTEL_SDK_DISABLED` answers it only when T3 Code's own name
+   * is unset, which is the source order every other setting here follows. So
+   * `T3CODE_OTEL_SDK_DISABLED=false` is how a machine that exports
+   * `OTEL_SDK_DISABLED` for everything else keeps T3 Code exporting.
+   */
   readonly disabled: boolean;
   /**
    * Settings that were named but could not be used, each already phrased for a
@@ -124,6 +132,35 @@ const optionalString = (name: string) =>
  */
 const specBoolean = (name: string) =>
   optionalString(name).pipe(Effect.map((raw) => raw?.toLowerCase() === "true"));
+
+/**
+ * A `T3CODE_*` name is ours, so it answers to the affirmatives people actually
+ * type rather than the single value the specification allows. `undefined` means
+ * the name did not answer, either because it is unset or because its value was
+ * unreadable, and the source under it decides instead. A typo therefore costs
+ * that variable and nothing else, the same as everywhere else here.
+ */
+const t3Boolean = (name: string) =>
+  optionalString(name).pipe(
+    Effect.map(
+      (raw): { readonly value: boolean | undefined; readonly warnings: ReadonlyArray<string> } => {
+        if (raw === undefined) {
+          return { value: undefined, warnings: [] };
+        }
+        const value = raw.toLowerCase();
+        if (["true", "1", "yes", "on"].includes(value)) {
+          return { value: true, warnings: [] };
+        }
+        if (["false", "0", "no", "off"].includes(value)) {
+          return { value: false, warnings: [] };
+        }
+        return {
+          value: undefined,
+          warnings: [`${name}=${raw} is not a yes or a no and was ignored`],
+        };
+      },
+    ),
+  );
 
 /**
  * A number that is not a number is warned about and dropped, which is what the
@@ -447,13 +484,28 @@ const resolveResource = Effect.gen(function* () {
 const UNREADABLE = "the OpenTelemetry environment could not be read";
 
 /**
+ * Whichever name switched export off is the one worth naming, because it is
+ * the one the reader has to go and unset. An ambient `OTEL_SDK_DISABLED` is
+ * the case where that is not obvious and where the answer is not to unset
+ * anything, so the message carries the override with it.
+ */
+const disabledBy = (name: string) =>
+  name === "OTEL_SDK_DISABLED"
+    ? "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway"
+    : `${name} is set, so no telemetry is exported, whatever configured it`;
+
+/**
  * Read the environment. Never fails: a variable T3 Code cannot honor
  * leaves the corresponding setting unset and is reported through the signal's
  * `declined`, because an unparseable telemetry knob is not a reason to refuse
  * to start.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
-  const disabled = yield* specBoolean("OTEL_SDK_DISABLED");
+  const t3 = yield* t3Boolean("T3CODE_OTEL_SDK_DISABLED");
+  const spec = yield* specBoolean("OTEL_SDK_DISABLED");
+  // One setting, read the way every other setting here is read: T3 Code's own
+  // name answers it, and the standard name answers it only when ours is unset.
+  const disabled = t3.value ?? spec;
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
@@ -472,6 +524,10 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     // bad value arrives here once per signal and would be logged that often.
     warnings: [
       ...new Set([
+        ...t3.warnings,
+        ...(disabled
+          ? [disabledBy(t3.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
+          : []),
         ...protocolDecision.warnings,
         ...resource.warnings,
         ...temporality.warnings,

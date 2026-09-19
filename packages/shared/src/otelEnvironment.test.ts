@@ -107,6 +107,57 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(resolved.disabled, true);
       assert.strictEqual(resolved.traces.settings, undefined);
       assert.strictEqual(resolved.metrics.settings, undefined);
+      // Someone who inherited this from a shell profile has somewhere to go.
+      assert.include(resolved.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=false");
+    }),
+  );
+
+  it.effect("lets T3 Code's own name answer before the standard one", () =>
+    Effect.gen(function* () {
+      const off = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          T3CODE_OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.isTrue(off.disabled);
+      assert.strictEqual(off.traces.settings, undefined);
+      assert.deepStrictEqual(off.warnings, [
+        "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it",
+      ]);
+
+      // The point of reading ours first: a machine that disables every other
+      // SDK in its shell profile can still ask for T3 Code's telemetry.
+      const on = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          T3CODE_OTEL_SDK_DISABLED: "false",
+          OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.isFalse(on.disabled);
+      assert.isDefined(on.traces.settings);
+      assert.deepStrictEqual(on.warnings, []);
+    }),
+  );
+
+  it.effect("reads T3 Code's own name the way T3 Code reads a boolean", () =>
+    Effect.gen(function* () {
+      // Ours to define, so it takes the affirmatives people type. The
+      // specification's single-value rule stays with the OTEL_* name.
+      const numeric = yield* OtelEnvironment.load.pipe(withEnv({ T3CODE_OTEL_SDK_DISABLED: "1" }));
+      assert.isTrue(numeric.disabled);
+
+      // A value that answers nothing leaves the source under it to answer.
+      const nonsense = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          T3CODE_OTEL_SDK_DISABLED: "maybe",
+          OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.isTrue(nonsense.disabled);
+      assert.include(nonsense.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=maybe");
     }),
   );
 

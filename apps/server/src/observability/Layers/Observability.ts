@@ -27,12 +27,6 @@ export const ObservabilityLive = Layer.unwrap(
       yield* Effect.logWarning(warning);
     }
 
-    if (otel.disabled) {
-      yield* Effect.logWarning(
-        "OTEL_SDK_DISABLED is set, so no telemetry is exported; this overrides T3CODE_OTLP_* and Settings too",
-      );
-    }
-
     // One variable can decline every signal, and saying so three times reads
     // like three separate problems.
     const declined = new Set(

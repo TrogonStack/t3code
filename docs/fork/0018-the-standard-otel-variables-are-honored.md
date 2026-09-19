@@ -26,7 +26,9 @@
   log record arrives.
 - Turn export off from the environment. `OTEL_SDK_DISABLED=true` stops every
   export, including one configured in Settings, which is the one switch a
-  shared machine needs.
+  shared machine needs. `T3CODE_OTEL_SDK_DISABLED` is the same setting asked of
+  T3 Code's own name first, so `false` there keeps T3 Code exporting on a
+  machine whose profile disables every other SDK.
 - Keep whatever you have. The `T3CODE_OTLP_*` names, the desktop bootstrap
   envelope, and Settings all still win over the environment, and a setup that
   never mentioned OpenTelemetry keeps the wire format it always used.
@@ -54,8 +56,15 @@ people can actually reach.
 
 Auto-enabling from an ambient endpoint is the deliberate part. Every other
 OpenTelemetry SDK behaves this way, and a telemetry variable that some processes
-honor and others quietly ignore is worse than either answer, so `OTEL_SDK_DISABLED`
-is the way out rather than a requirement to opt in.
+honor and others quietly ignore is worse than either answer, so
+`OTEL_SDK_DISABLED` is the way out rather than a requirement to opt in.
+
+Turning export off is one setting with two names, not two switches, and it is
+read in the same order as everything else here: ours, then the standard one.
+The ordering is the whole point. Inheriting `OTEL_SDK_DISABLED` from a shell
+profile is common, and without a name of our own the only way to get T3 Code's
+telemetry back would be to unset a variable the rest of the machine depends
+on.
 
 ## Upstream considerations
 

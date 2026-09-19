@@ -791,6 +791,18 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("keeps exporting when T3 Code's own name says to, whatever the standard one says", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolveWithEnv({
+        T3CODE_OTEL_SDK_DISABLED: "false",
+        OTEL_SDK_DISABLED: "true",
+        T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
+      });
+
+      expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
+    }),
+  );
+
   it.effect("falls back to persisted observability settings when env vars are absent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -125,6 +125,20 @@ describe("resolveDesktopOtlpExport", () => {
     }),
   );
 
+  it.effect("keeps exporting when T3 Code's own name says to", () =>
+    Effect.gen(function* () {
+      const resolved = yield* resolve(
+        {
+          T3CODE_OTEL_SDK_DISABLED: "false",
+          OTEL_SDK_DISABLED: "true",
+        },
+        { named: { traces: "http://127.0.0.1:4318/v1/traces" } },
+      );
+      assert.strictEqual(resolved.traces.url, "http://127.0.0.1:4318/v1/traces");
+      assert.deepStrictEqual(resolved.warnings, []);
+    }),
+  );
+
   it.effect("declines only the signal that asked for a protocol T3 Code cannot speak", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve({

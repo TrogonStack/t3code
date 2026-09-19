@@ -126,10 +126,7 @@ export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): Desktop
       metrics: offSignal,
       logs: offSignal,
       resource,
-      warnings: [
-        ...otel.warnings,
-        "OTEL_SDK_DISABLED is set, so the desktop app exports no telemetry; this overrides T3CODE_OTLP_* and Settings too",
-      ],
+      warnings: [...otel.warnings],
     };
   }
 
