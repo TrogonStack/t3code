@@ -328,7 +328,9 @@ Not everything in the specification is implemented. These are the ones worth kno
   deliberate "not this one", so that signal is not exported and the name that did it is logged. A
   list that names nothing recognizable is treated as the typo it probably is: it is reported and
   ignored, and the signal keeps exporting, because reading `otlpp` as "not OTLP" would turn one
-  transposed letter into a signal that stops with nothing in the log to connect the two.
+  transposed letter into a signal that stops with nothing in the log to connect the two. A list that
+  names `otlp` is exported over OTLP and reported for the rest, since `otlp,otlpp` would otherwise
+  look like a list where both entries took.
 - **No compression and no client TLS.** `OTEL_EXPORTER_OTLP_COMPRESSION`,
   `OTEL_EXPORTER_OTLP_CERTIFICATE`, `OTEL_EXPORTER_OTLP_CLIENT_KEY`, and
   `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` are ignored. A collector that requires mutual TLS needs a
@@ -369,16 +371,16 @@ A variable T3 Code cannot act on never stops it from starting. Two things can ha
 and both are logged once at startup:
 
 - **A warning, then the default.** A misspelled protocol, a temporality that is not a preference,
-  an exporter name T3 Code does not recognize, a timeout or batch size that is not a whole number,
-  a batch size of zero, or a pair list that is not valid percent encoding is reported and ignored,
-  and everything else keeps exporting. One bad value never costs you the other variables. A batch
-  size of zero is singled out because the exporter would meet that threshold on every record and
-  post one HTTP request per span, which takes a collector down rather than merely reading oddly; a
-  schedule delay of zero is a real request to drain as fast as the loop allows and is honored.
+  an exporter name the specification does not define, a timeout or batch size that is not a whole
+  number, a batch size of zero, or a pair list that is not valid percent encoding is reported and
+  ignored, and everything else keeps exporting. One bad value never costs you the other variables.
+  A batch size of zero is singled out because the exporter would meet that threshold on every record
+  and post one HTTP request per span, which takes a collector down rather than merely reading oddly;
+  a schedule delay of zero is a real request to drain as fast as the loop allows and is honored.
 - **Export off.** `OTEL_EXPORTER_OTLP_PROTOCOL=grpc` and an `OTEL_{TRACES,METRICS,LOGS}_EXPORTER`
-  that names a foreign exporter do this, because each names something T3 Code does not have rather
-  than a value it failed to parse, and reporting the request and then exporting anyway would be
-  answering a different question than the one asked.
+  that names a specified exporter T3 Code has no implementation of do this, because each names
+  something T3 Code does not have rather than a value it failed to parse, and reporting the request
+  and then exporting anyway would be answering a different question than the one asked.
 
 An empty value means the same thing as an unset one, so `OTEL_SERVICE_VERSION=` reads as if the
 variable were not there at all. An empty `OTEL_SERVICE_NAME` is not an attempt to rename anything,
@@ -389,11 +391,12 @@ name, so it takes `true`, `1`, `yes`, `on` and their negatives, and a value it c
 and then left to `OTEL_SDK_DISABLED` to answer rather than treated as either answer itself.
 
 A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value is discarded whole rather than
-partly, whether a member fails to decode or carries no `key=value` pair at all. A half-parsed
-credential reaches the collector as the same authentication error a wrong one would, which reads
-like a bad token instead of a bad variable, and `authorization=token,x-tenant` would authenticate
-and then route to the wrong tenant. A trailing or doubled comma is spacing, not a member, so
-`authorization=token,` is read as the one pair it contains.
+partly, whether a member fails to decode or carries no `key=value` pair at all. Keeping the members
+that did parse is what makes a bad variable read like a bad token: the collector answers a
+half-parsed credential with the same authentication error a wrong one gets, and
+`authorization=token,x-tenant` would have authenticated and then routed to the wrong tenant. A
+trailing or doubled comma is spacing, not a member, so `authorization=token,` is read as the one
+pair it contains.
 
 These variables configure a signal only when they also supplied its endpoint. A `T3CODE_OTLP_*`
 name winning the URL takes the whole signal with it, and so does the desktop bootstrap envelope or

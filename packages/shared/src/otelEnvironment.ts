@@ -347,6 +347,15 @@ const signalWantsOtlp = (signal: OtlpSignalName, warnings: Array<string>) =>
         .map((entry) => entry.trim().toLowerCase())
         .filter((entry) => entry !== "");
       if (entries.includes("otlp")) {
+        // A list is an ordered preference and OTLP is the only entry honored
+        // here, so anything standing beside it did nothing. Saying so is what
+        // keeps the transposed letter in `otlp,otlpp` from reading like a
+        // second exporter that took.
+        if (entries.some((entry) => entry !== "otlp")) {
+          warnings.push(
+            `${name}=${raw} names otlp, so this signal is exported over OTLP and nothing else in that list is honored`,
+          );
+        }
         return true;
       }
       const recognized = entries.filter(

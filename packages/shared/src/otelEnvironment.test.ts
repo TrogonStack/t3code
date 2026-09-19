@@ -93,6 +93,7 @@ describe("OtelEnvironment", () => {
         }),
       );
       assert.isDefined(resolved.traces.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("console, otlp")));
     }),
   );
 
@@ -792,15 +793,16 @@ describe("OtelEnvironment", () => {
     }),
   );
 
-  it.effect("exports over OTLP when the list names it alongside another", () =>
+  it.effect("says a misspelling beside otlp did nothing rather than passing it over", () =>
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
           OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_LOGS_EXPORTER: "console,otlp",
+          OTEL_LOGS_EXPORTER: "otlp,otlpp",
         }),
       );
       assert.isDefined(resolved.logs.settings);
+      assert.isTrue(resolved.warnings.some((warning) => warning.includes("otlp,otlpp")));
     }),
   );
 
