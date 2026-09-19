@@ -24,9 +24,11 @@
   `OTEL_BLRP_MAX_EXPORT_BATCH_SIZE` are the batching knobs the specification
   defines for logs, so a delay meant for spans does not decide how promptly a
   log record arrives.
-- Turn export off from the environment. `OTEL_SDK_DISABLED=true` stops every
-  export, including one configured in Settings, which is the one switch a
-  shared machine needs.
+- Turn export off from the environment. `T3CODE_OTEL_SDK_DISABLED=true` stops
+  every export, including one configured in Settings, which is the one switch a
+  shared machine needs. `OTEL_SDK_DISABLED=true` is scoped the way every other
+  standard name here is: it switches off what these variables configured and
+  leaves an endpoint you named yourself alone.
 - Keep whatever you have. The `T3CODE_OTLP_*` names, the desktop bootstrap
   envelope, and Settings all still win over the environment, and a setup that
   never mentioned OpenTelemetry keeps the wire format it always used.
@@ -54,8 +56,15 @@ people can actually reach.
 
 Auto-enabling from an ambient endpoint is the deliberate part. Every other
 OpenTelemetry SDK behaves this way, and a telemetry variable that some processes
-honor and others quietly ignore is worse than either answer, so `OTEL_SDK_DISABLED`
-is the way out rather than a requirement to opt in.
+honor and others quietly ignore is worse than either answer, so
+`OTEL_SDK_DISABLED` is the way out rather than a requirement to opt in.
+
+That switch stops the route it belongs to and no more, which is the same rule
+the rest of these variables follow. A name the environment supplied should not
+be able to countermand a choice someone made in Settings, so the switch that
+can is `T3CODE_OTEL_SDK_DISABLED`, a name T3 Code owns. Two switches is one more
+than the specification describes, and it is the only honest way to have both an
+opt-out for the ambient case and a kill switch for the machine.
 
 ## Upstream considerations
 

@@ -208,7 +208,9 @@ The base endpoint is a base, not a full URL: traces go to `<endpoint>/v1/traces`
 Set `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT` when a signal needs a full URL of its own.
 
 Ambient `OTEL_*` variables turn export on by themselves. A work collector in your shell profile means
-T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want.
+T3 Code exports to it, so use `OTEL_SDK_DISABLED=true` if that is not what you want. It switches off
+the variables in this section and nothing else: an endpoint you named with `T3CODE_OTLP_*` or set in
+Settings keeps exporting, and `T3CODE_OTEL_SDK_DISABLED=true` is the switch that stops those too.
 
 #### Which Processes Export
 
@@ -263,14 +265,16 @@ goes.
 The three signals are resolved separately, so traces can come from one source and metrics or logs
 from another.
 
-`OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured through
-Settings.
+Each switch stops the sources it belongs to. `OTEL_SDK_DISABLED=true` stops source 4, the way every
+other `OTEL_*` variable reaches source 4 alone, so a signal configured above it keeps exporting.
+`T3CODE_OTEL_SDK_DISABLED=true` outranks all four and stops every export, including one configured
+through Settings, which is the one switch a shared machine needs.
 
 #### What Is Read
 
 | Variable                                                                             | Effect                                                                       |
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| `OTEL_SDK_DISABLED`                                                                  | Stops all export                                                             |
+| `OTEL_SDK_DISABLED`                                                                  | Stops export configured by the variables below                               |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                        | Base URL for every signal                                                    |
 | `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`                                  | Full URL for one signal                                                      |
 | `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_HEADERS`     | Export headers, per signal overriding the shared ones                        |
@@ -341,7 +345,9 @@ An empty value means the same thing as an unset one, so `OTEL_SERVICE_VERSION=` 
 variable were not there at all. An empty `OTEL_SERVICE_NAME` is not an attempt to rename anything,
 so it is not warned about either. `OTEL_SDK_DISABLED` follows the specification's one rule for
 booleans: the case-insensitive string `true` is the only value that switches export off, and
-anything else, including `yes` and `1`, leaves it on.
+anything else, including `yes` and `1`, leaves it on. `T3CODE_OTEL_SDK_DISABLED` is T3 Code's own
+name, so it takes `true`, `1`, `yes`, and `on`, and a value it cannot read is reported and ignored
+rather than treated as either answer.
 
 A `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_RESOURCE_ATTRIBUTES` value that fails to decode is discarded
 whole rather than partly. A half-parsed credential reaches the collector as the same authentication
@@ -725,6 +731,7 @@ OTLP export:
 - `T3CODE_OTLP_HEADERS`: extra headers for all three exporters, same format as
   `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs with percent-encoded values.
 - `T3CODE_OTLP_PROTOCOL`: `http/json` (default) or `http/protobuf`
+- `T3CODE_OTEL_SDK_DISABLED`: stops every export, whatever configured it, including Settings
 
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.

@@ -107,6 +107,47 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(resolved.disabled, true);
       assert.strictEqual(resolved.traces.settings, undefined);
       assert.strictEqual(resolved.metrics.settings, undefined);
+      // Scoped to these variables, so the caller's own endpoints survive, and
+      // the warning names the switch that does reach them.
+      assert.strictEqual(resolved.forceDisabled, false);
+      assert.include(resolved.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=true");
+    }),
+  );
+
+  it.effect("stops every route when T3 Code's own switch is set", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          T3CODE_OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.strictEqual(resolved.forceDisabled, true);
+      assert.strictEqual(resolved.traces.settings, undefined);
+      assert.strictEqual(resolved.metrics.settings, undefined);
+      assert.strictEqual(resolved.logs.settings, undefined);
+      assert.deepStrictEqual(resolved.warnings, [
+        "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever named the endpoint",
+      ]);
+    }),
+  );
+
+  it.effect("reads T3 Code's own switch the way T3 Code reads a boolean", () =>
+    Effect.gen(function* () {
+      // Ours to define, so it takes the affirmatives people type. The
+      // specification's single-value rule stays with the OTEL_* name.
+      const numeric = yield* OtelEnvironment.load.pipe(withEnv({ T3CODE_OTEL_SDK_DISABLED: "1" }));
+      assert.isTrue(numeric.forceDisabled);
+
+      const nonsense = yield* OtelEnvironment.load.pipe(
+        withEnv({
+          T3CODE_OTEL_SDK_DISABLED: "maybe",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+        }),
+      );
+      assert.isFalse(nonsense.forceDisabled);
+      assert.isDefined(nonsense.traces.settings);
+      assert.include(nonsense.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=maybe");
     }),
   );
 
