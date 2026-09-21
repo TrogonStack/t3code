@@ -363,6 +363,8 @@ import {
   useThread,
   useThreadRefs,
   useThreadShell,
+  readThreadShells,
+  readEnvironmentSupportsSettlement,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
@@ -6105,6 +6107,35 @@ export default function ChatView(props: ChatViewProps) {
       setUnsettlingThreadKey((current) => (current === threadKey ? null : current));
     }
   }, [activeThreadRef, unsettleThreadMutation]);
+  const handleUnsettleLastThread = useCallback(async () => {
+    const latest = readThreadShells()
+      .filter((thread) => {
+        if (
+          thread.archivedAt !== null ||
+          !readEnvironmentSupportsSettlement(thread.environmentId) ||
+          thread.settledOverride !== "settled" ||
+          thread.settledAt === null
+        )
+          return false;
+        return Number.isFinite(Date.parse(thread.settledAt));
+      })
+      .toSorted((left, right) => Date.parse(right.settledAt!) - Date.parse(left.settledAt!))[0];
+    if (!latest) return;
+    const result = await unsettleThreadMutation({
+      environmentId: latest.environmentId,
+      input: { threadId: latest.id, reason: "user" },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to un-settle thread",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [unsettleThreadMutation]);
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
     reportFailure: false,
   });
@@ -6762,6 +6793,13 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.unsettleLast") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) void handleUnsettleLastThread();
+        return;
+      }
+
       if (command === "thread.pin") {
         event.preventDefault();
         event.stopPropagation();
@@ -6962,6 +7000,7 @@ export default function ChatView(props: ChatViewProps) {
     splitPanelTerminal,
     keybindings,
     handleUnsettleActiveThread,
+    handleUnsettleLastThread,
     isServerThread,
     onInterrupt,
     onToggleDiff,
