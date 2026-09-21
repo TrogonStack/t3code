@@ -1,10 +1,11 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   makeLocalFileTracer,
   makeTraceSink,
   otlpSerializationLayer,
+  type SignalExport,
 } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -42,8 +43,7 @@ export const ObservabilityLive = Layer.unwrap(
 
     // Each signal builds its own serializer, so the wire format travels with
     // the endpoint that asked for it rather than with this process.
-    const serializationFor = (signal: OtelEnvironment.SignalExport) =>
-      otlpSerializationLayer(signal.protocol);
+    const serializationFor = (signal: SignalExport) => otlpSerializationLayer(signal.protocol);
 
     const otlpResource = ServerConfig.otlpResource(config);
 

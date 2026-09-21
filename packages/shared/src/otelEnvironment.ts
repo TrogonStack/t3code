@@ -24,17 +24,15 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
+import {
+  DEFAULT_METRICS_TEMPORALITY,
+  type MetricsTemporality,
+  type OtlpProtocol,
+  type SignalExport,
+} from "./observability.ts";
+
 /** The signals T3 Code exports, spelled as the variable names spell them. */
 export type OtlpSignalName = "TRACES" | "METRICS" | "LOGS";
-
-/** The wire formats T3 Code can produce. `grpc` is not one of them. */
-export type OtlpProtocol = "http/json" | "http/protobuf";
-
-/** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`. */
-export type MetricsTemporality = "cumulative" | "delta";
-
-/** What metrics are aggregated as when nothing asks for anything. */
-const DEFAULT_METRICS_TEMPORALITY: MetricsTemporality = "cumulative";
 
 /** Everything one signal's exporter needs, or `undefined` if it is off. */
 export interface OtlpSignalSettings {
@@ -660,24 +658,6 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
 
 /** A signal these variables said nothing usable about. */
 const noSignal: OtlpSignal = { settings: undefined, declined: undefined, off: false };
-
-/** How one signal is actually exported, after its owner has been decided. */
-export interface SignalExport {
-  readonly protocol: OtlpProtocol;
-  readonly headers: Readonly<Record<string, string>> | undefined;
-  readonly exportIntervalMs: number;
-  readonly maxBatchSize: number | undefined;
-  readonly temporality: MetricsTemporality;
-}
-
-/** What T3 Code exports with when no source configured a signal. */
-export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
-  protocol: "http/json",
-  headers: undefined,
-  exportIntervalMs: 10_000,
-  maxBatchSize: undefined,
-  temporality: DEFAULT_METRICS_TEMPORALITY,
-};
 
 /**
  * Applies the whole-signal rule to the knobs and not only to the URL. Call this

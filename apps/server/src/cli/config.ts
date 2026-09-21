@@ -1,5 +1,9 @@
 import * as NetService from "@t3tools/shared/Net";
-import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
+import {
+  DEFAULT_SIGNAL_EXPORT,
+  OtlpHeadersFromString,
+  OtlpProtocol,
+} from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
@@ -437,8 +441,7 @@ export const resolveServerConfig = (
         settings,
         t3Protocol: env.otlpProtocol,
         t3Headers: env.otlpHeaders,
-        t3ExportIntervalMs:
-          env.otlpExportIntervalMs ?? OtelEnvironment.DEFAULT_SIGNAL_EXPORT.exportIntervalMs,
+        t3ExportIntervalMs: env.otlpExportIntervalMs ?? DEFAULT_SIGNAL_EXPORT.exportIntervalMs,
       });
 
     const config: ServerConfig.ServerConfig["Service"] = {

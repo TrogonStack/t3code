@@ -8,8 +8,10 @@ import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import * as ServerConfig from "./config.ts";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+
+import * as ServerConfig from "./config.ts";
 import { ServerLoggerLive } from "./serverLogger.ts";
 
 interface ExportedRequest {
@@ -52,9 +54,9 @@ const configLayer = (overrides: Partial<ServerConfig.ServerConfig["Service"]>) =
         otlpTracesUrl: undefined,
         otlpMetricsUrl: undefined,
         otlpLogsUrl: undefined,
-        otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-        otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-        otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+        otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+        otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+        otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
         otlpServiceName: "t3-server",
         otelEnvironment: OtelEnvironment.none,
         cwd: baseDir,
@@ -165,7 +167,7 @@ describe("ServerLoggerLive", () => {
       const requests = yield* logThrough({
         otlpLogsUrl: "https://collector.example.com/v1/logs",
         otlpLogsExport: {
-          ...OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+          ...DEFAULT_SIGNAL_EXPORT,
           protocol: "http/protobuf",
           headers: { "x-scope": "logs" },
           exportIntervalMs: 1_000,

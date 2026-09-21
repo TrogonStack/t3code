@@ -18,6 +18,7 @@ import {
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
@@ -53,9 +54,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
@@ -1266,7 +1267,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("reads the OTLP protocol from env", () =>
+  it.effect("gives every signal the protocol named without one", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-otlp-protocol-base");
@@ -1298,7 +1299,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
 
-      expect(resolved.otlpTracesExport.protocol).toBe("http/protobuf");
+      expect([
+        resolved.otlpTracesExport.protocol,
+        resolved.otlpMetricsExport.protocol,
+        resolved.otlpLogsExport.protocol,
+      ]).toEqual(["http/protobuf", "http/protobuf", "http/protobuf"]);
     }),
   );
 

@@ -16,6 +16,36 @@ export type OtlpProtocol = typeof OtlpProtocol.Type;
 export const otlpSerializationLayer = (protocol: OtlpProtocol) =>
   protocol === "http/protobuf" ? OtlpSerialization.layerProtobuf : OtlpSerialization.layerJson;
 
+/** `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`. */
+export type MetricsTemporality = "cumulative" | "delta";
+
+/** What metrics are aggregated as when nothing asks for anything. */
+export const DEFAULT_METRICS_TEMPORALITY: MetricsTemporality = "cumulative";
+
+/**
+ * How one signal is exported, once whichever source named that signal's
+ * endpoint has been resolved, and after its owner has been decided. Held per
+ * signal rather than per process, so a wire format or a credential cannot be
+ * paired by hand with an endpoint that came from somewhere else.
+ */
+export interface SignalExport {
+  readonly protocol: OtlpProtocol;
+  readonly headers: Readonly<Record<string, string>> | undefined;
+  readonly exportIntervalMs: number;
+  readonly maxBatchSize: number | undefined;
+  /** Metrics only. Spans and log records have no aggregation to prefer. */
+  readonly temporality: MetricsTemporality;
+}
+
+/** What T3 Code exports with when nothing configured a signal. */
+export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
+  protocol: "http/json",
+  headers: undefined,
+  exportIntervalMs: 10_000,
+  maxBatchSize: undefined,
+  temporality: DEFAULT_METRICS_TEMPORALITY,
+};
+
 const FLUSH_BUFFER_THRESHOLD = 256;
 const textEncoder = new TextEncoder();
 

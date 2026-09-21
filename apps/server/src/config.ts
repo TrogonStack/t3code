@@ -6,6 +6,7 @@
  *
  * @module ServerConfig
  */
+import { DEFAULT_SIGNAL_EXPORT, type SignalExport } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
@@ -79,9 +80,9 @@ export class ServerConfig extends Context.Service<
      * batching, and aggregation are read from, so a setting cannot be paired
      * by hand with an endpoint that came from somewhere else.
      */
-    readonly otlpTracesExport: OtelEnvironment.SignalExport;
-    readonly otlpMetricsExport: OtelEnvironment.SignalExport;
-    readonly otlpLogsExport: OtelEnvironment.SignalExport;
+    readonly otlpTracesExport: SignalExport;
+    readonly otlpMetricsExport: SignalExport;
+    readonly otlpLogsExport: SignalExport;
     readonly otlpServiceName: string;
     /**
      * What the standard `OTEL_*` variables asked for. The endpoints above are
@@ -229,9 +230,9 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
     otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,
