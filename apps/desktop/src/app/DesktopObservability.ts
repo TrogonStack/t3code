@@ -4,6 +4,7 @@ import {
   makeTraceSink,
   otlpSerializationLayer,
 } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   parsePersistedServerObservabilitySettings,
   type PersistedServerObservabilitySettings,
