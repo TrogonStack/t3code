@@ -7,6 +7,9 @@
  * Parsing is the Config algebra's. What this module adds on top of it, and the
  * only reasoning that crosses the functions below, is:
  *
+ * - `T3CODE_OTEL_SDK_DISABLED` is read before `OTEL_SDK_DISABLED`, so a machine
+ *   that sets `OTEL_SDK_DISABLED` for everything else can still opt T3 Code
+ *   back in.
  * - An unusable value is a warning and the default, never a refusal to start,
  *   which is `ignoring`.
  * - A signal's own variable owns that signal once it is set, which is `owned`.
@@ -173,37 +176,41 @@ const optionalString = (name: string) =>
     Config.map((value) => blankAsUnset(Option.getOrUndefined(value))),
   );
 
-/**
- * An `OTEL_*` boolean, which the specification spells `true` or `false` and
- * nothing else. Anything else is reported rather than quietly answered.
- */
-const specBoolean = (name: string) =>
-  ignoring(
-    name,
-    "true or false",
-    Config.schema(folded(Schema.Literals(["true", "false"])), name),
-  ).pipe(Config.map((parsed) => ({ value: parsed.value === "true", warnings: parsed.warnings })));
+/** `undefined` when the variable is unset, blank, or unreadable. */
+interface Flag {
+  readonly value: boolean | undefined;
+  readonly warning?: string;
+}
 
 /**
- * A `T3CODE_*` boolean, which is ours and takes the affirmatives people type.
- * `undefined` leaves the source under it to answer.
+ * Reads a boolean that accepts an operator-chosen set of truthy and falsy
+ * spellings, ignoring case and padding. Any other value is ignored with a
+ * warning rather than failing startup.
  */
-const AFFIRMATIVE: ReadonlySet<string> = new Set(["true", "1", "yes", "on"]);
-
-const t3Boolean = (name: string) =>
-  ignoring(
-    name,
-    "a yes or a no",
-    Config.schema(
-      folded(Schema.Literals(["true", "1", "yes", "on", "false", "0", "no", "off"])),
-      name,
+const flag = (
+  name: string,
+  truthy: ReadonlyArray<string>,
+  falsy: ReadonlyArray<string>,
+  invalid: (value: string) => string,
+) =>
+  Config.schema(folded(Schema.Literals([...truthy, ...falsy])), name).pipe(
+    Config.map((value): Flag => ({ value: truthy.includes(value) })),
+    Config.orElse(() =>
+      Config.String(name).pipe(
+        Config.map((raw): Flag => {
+          const value = raw.trim();
+          return value === ""
+            ? { value: undefined }
+            : { value: undefined, warning: invalid(value) };
+        }),
+      ),
     ),
-  ).pipe(
-    Config.map((parsed) => ({
-      value: parsed.value === undefined ? undefined : AFFIRMATIVE.has(parsed.value),
-      warnings: parsed.warnings,
-    })),
+    Config.withDefault<Flag>({ value: undefined }),
   );
+
+// `Config.Boolean`'s literals, which effect does not export on their own.
+const T3CODE_TRUE = ["true", "yes", "on", "1", "y"];
+const T3CODE_FALSE = ["false", "no", "off", "0", "n"];
 
 /** Intervals and batch sizes, where zero is a busy loop rather than a number. */
 const positiveInt = (name: string, subject: string) =>
@@ -603,9 +610,23 @@ const signalOf = (signal: ReadSignal, transport: SignalProtocol): OtlpSignal =>
  * setting unset and is reported through `warnings`.
  */
 export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
-  const t3 = yield* t3Boolean("T3CODE_OTEL_SDK_DISABLED");
-  const spec = yield* specBoolean("OTEL_SDK_DISABLED");
-  const disabled = t3.value ?? spec.value;
+  const t3 = yield* flag(
+    "T3CODE_OTEL_SDK_DISABLED",
+    T3CODE_TRUE,
+    T3CODE_FALSE,
+    (value) => `T3CODE_OTEL_SDK_DISABLED=${value} is not a yes or a no and was ignored`,
+  );
+  // The specification: a boolean it defines is true "only by the
+  // case-insensitive string `true`", implementations "MUST NOT" accept other
+  // values as true, and should warn about unrecognized ones.
+  const spec = yield* flag(
+    "OTEL_SDK_DISABLED",
+    ["true"],
+    ["false"],
+    (value) =>
+      `OTEL_SDK_DISABLED=${value} was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way`,
+  );
+  const disabled = t3.value ?? spec.value ?? false;
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
@@ -624,8 +645,8 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     // Every signal reads the generic variables, so one bad value arrives thrice.
     warnings: [
       ...new Set([
-        ...t3.warnings,
-        ...spec.warnings,
+        ...(t3.warning === undefined ? [] : [t3.warning]),
+        ...(spec.warning === undefined ? [] : [spec.warning]),
         ...(disabled
           ? [disabledBy(t3.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
           : []),

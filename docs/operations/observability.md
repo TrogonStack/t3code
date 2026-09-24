@@ -715,6 +715,13 @@ OTLP export:
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.
 
+### The Kill Switch
+
+`T3CODE_OTEL_SDK_DISABLED` and `OTEL_SDK_DISABLED` turn off every OTLP export in both the server and
+the desktop main process, overriding any endpoint from the environment or Settings; see
+[precedence](#precedence) above for how the two names and their accepted values are read. Local
+trace files and stdout logs are unaffected.
+
 ### What Is Instrumented Today
 
 Current high-value span and metric boundaries include:
