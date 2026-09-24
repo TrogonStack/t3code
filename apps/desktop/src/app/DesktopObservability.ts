@@ -719,7 +719,10 @@ const telemetryLayer = Layer.unwrap(
       Effect.forEach(resolved.warnings, (warning) => Effect.logWarning(warning)),
     );
 
-    return otelWarningsLayer.pipe(Layer.provideMerge(Layer.mergeAll(loggerLayer, tracerLayer)));
+    return otelWarningsLayer.pipe(
+      Layer.provideMerge(Layer.mergeAll(loggerLayer, tracerLayer)),
+      Layer.provide(OtelEnvironment.layerResourceAttributes(resolved.resource.attributes)),
+    );
   }),
 );
 

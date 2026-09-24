@@ -129,11 +129,11 @@ export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerCo
  */
 export const otlpResource = (config: ServerConfig["Service"]) => ({
   serviceName: config.otlpServiceName,
-  ...(config.otelEnvironment.resource.serviceVersion === undefined
+  ...(config.otelEnvironment.serviceVersion === undefined
     ? {}
-    : { serviceVersion: config.otelEnvironment.resource.serviceVersion }),
+    : { serviceVersion: config.otelEnvironment.serviceVersion }),
   attributes: {
-    ...config.otelEnvironment.resource.attributes,
+    ...config.otelEnvironment.resourceAttributes,
     "service.runtime": "t3-server",
     "service.mode": config.mode,
   },
