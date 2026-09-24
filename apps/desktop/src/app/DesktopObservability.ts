@@ -620,10 +620,6 @@ const telemetryLayer = Layer.unwrap(
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const resolved = yield* resolveOtlpExport;
 
-    for (const warning of resolved.warnings) {
-      yield* Effect.logWarning(warning);
-    }
-
     const otlpResource = otlpResourceFor(resolved.resource);
 
     // `Logger.layer` writes the whole logger set rather than adding to it, so
@@ -718,7 +714,12 @@ const telemetryLayer = Layer.unwrap(
     //           : { temporality: resolved.metrics.temporality }),
     //       }).pipe(Layer.provide(serializationFor(resolved.metrics)));
 
-    return Layer.mergeAll(loggerLayer, tracerLayer);
+    // Logged once the loggers above are installed, so the warnings use them.
+    const otelWarningsLayer = Layer.effectDiscard(
+      Effect.forEach(resolved.warnings, (warning) => Effect.logWarning(warning)),
+    );
+
+    return otelWarningsLayer.pipe(Layer.provideMerge(Layer.mergeAll(loggerLayer, tracerLayer)));
   }),
 );
 

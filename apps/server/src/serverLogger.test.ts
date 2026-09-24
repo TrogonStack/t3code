@@ -8,8 +8,9 @@ import * as Tracer from "effect/Tracer";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import * as ServerConfig from "./config.ts";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+
+import * as ServerConfig from "./config.ts";
 import { ServerLoggerLive } from "./serverLogger.ts";
 
 interface ExportedRequest {

@@ -93,7 +93,14 @@ export function SubagentThreadLinks({
   ).length;
   return (
     <Menu>
-      <MenuTrigger className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/60 px-2 py-0.5 text-muted-foreground text-xs transition-colors hover:border-border hover:text-foreground">
+      <MenuTrigger
+        render={
+          <button
+            type="button"
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border/60 px-2 py-0.5 text-muted-foreground text-xs transition-colors hover:border-border hover:text-foreground"
+          />
+        }
+      >
         <BotIcon className="size-3" />
         {children.length} subagent{children.length === 1 ? "" : "s"}
         {runningCount > 0 ? (

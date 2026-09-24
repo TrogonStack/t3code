@@ -2,26 +2,31 @@ import {
   CommandId,
   EventId,
   OrchestrationDispatchCommandError,
+  type ProjectId,
   type ThreadId,
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadBootstrapService, type ThreadBootstrapShape } from "../Services/ThreadBootstrap.ts";
 
@@ -75,6 +80,8 @@ const makeThreadBootstrap = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const crypto = yield* Crypto.Crypto;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
 
   const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
     isOrchestrationDispatchCommandError(cause)
@@ -185,6 +192,34 @@ const makeThreadBootstrap = Effect.gen(function* () {
           cause,
         });
   };
+
+  // Project setting > environment setting; null when neither is set so
+  // the driver reads the freshly created checkout's own t3.json (the
+  // branch being checked out may declare something the project root does
+  // not). Settings that fail to load fall through the same way.
+  const resolveBootstrapWorktreeSubmodules = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly projectId: ProjectId | null;
+  }) {
+    const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+    if (!settings) return null;
+    // A worktree can also be prepared for an existing thread, whose
+    // project is only known through its shell.
+    const resolvedProjectId =
+      input.projectId ??
+      (yield* projectionSnapshotQuery.getThreadShellById(input.threadId).pipe(
+        Effect.map((thread) => Option.getOrNull(thread)?.projectId ?? null),
+        Effect.orElseSucceed(() => null),
+      ));
+    const project =
+      resolvedProjectId === null
+        ? null
+        : yield* projectionSnapshotQuery.getProjectShellById(resolvedProjectId).pipe(
+            Effect.map(Option.getOrNull),
+            Effect.orElseSucceed(() => null),
+          );
+    return resolveProjectSettings(settings, resolvedProjectId, project).settings.worktreeSubmodules;
+  });
 
   const dispatchBootstrapTurnStart: ThreadBootstrapShape["dispatchBootstrapTurnStart"] = (
     command,
@@ -625,6 +660,10 @@ const makeThreadBootstrap = Effect.gen(function* () {
           }
           yield* worktreeSetupTracker.stageStatus(threadId, "checkout", "running");
           let checkoutTotal: number | null = null;
+          const submodules = yield* resolveBootstrapWorktreeSubmodules({
+            threadId,
+            projectId: targetProjectId ?? null,
+          });
           const worktree = yield* gitWorkflow.createWorktree(
             {
               cwd: prepareWorktree.projectCwd,
@@ -634,6 +673,7 @@ const makeThreadBootstrap = Effect.gen(function* () {
               path: null,
             },
             {
+              submodules,
               progress: {
                 // Git has registered the directory at this point, so a
                 // cancel during the submodule step can still remove it.
@@ -663,6 +703,13 @@ const makeThreadBootstrap = Effect.gen(function* () {
                         worktreeSetupTracker.stageStatus(threadId, "submodules", "running"),
                       ),
                     ),
+                onSubmodulesDisabled: ({ source }) =>
+                  worktreeSetupTracker.stageStatus(
+                    threadId,
+                    "submodules",
+                    "skipped",
+                    `disabled in ${source}`,
+                  ),
                 onSubmoduleLine: (line) => {
                   const submodulePath = /Submodule path '([^']+)'/.exec(line)?.[1];
                   return submodulePath === undefined

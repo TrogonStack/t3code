@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -50,7 +51,6 @@ import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { environmentAuthenticatedAuthLayer } from "./auth/http.ts";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 import packageJson from "../package.json" with { type: "json" };
 

@@ -70,7 +70,10 @@ on.
 
 ## Upstream considerations
 
-Nothing here is fork-specific and it belongs upstream. The riskiest part for
+Nothing here is fork-specific and it belongs upstream. Upstream has taken the
+kill switch: `T3CODE_OTEL_SDK_DISABLED` and `OTEL_SDK_DISABLED` now stop export
+there too, read in the same order, so the sync keeps upstream's reading and the
+fork carries everything else on this page. The riskiest part for
 them is the same part that makes it useful: an ambient endpoint starts an export
 that includes thread ids, turn ids, and workspace paths, and upstream may prefer
 an explicit opt-in for a product with this many users.
