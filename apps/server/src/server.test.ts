@@ -784,14 +784,6 @@ const buildAppUnderTest = (options?: {
       streamChanges: Stream.empty,
       ...options?.layers?.serverSettings,
     });
-    const threadBootstrapLayer = ThreadBootstrapLive.pipe(
-      Layer.provide(serverSettingsLayer),
-      Layer.provide(orchestrationEngineLayer),
-      Layer.provide(gitWorkflowLayer),
-      Layer.provide(projectSetupScriptRunnerLayer),
-      Layer.provide(vcsStatusBroadcasterLayer),
-      Layer.provide(threadDeletionReactorLayer),
-    );
     const resourceTelemetryLayer = ResourceTelemetry.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -856,6 +848,15 @@ const buildAppUnderTest = (options?: {
         } as never),
       ...options?.layers?.providerAdapterRegistry,
     });
+    const threadBootstrapLayer = ThreadBootstrapLive.pipe(
+      Layer.provide(serverSettingsLayer),
+      Layer.provide(projectionSnapshotQueryLayer),
+      Layer.provide(orchestrationEngineLayer),
+      Layer.provide(gitWorkflowLayer),
+      Layer.provide(projectSetupScriptRunnerLayer),
+      Layer.provide(vcsStatusBroadcasterLayer),
+      Layer.provide(threadDeletionReactorLayer),
+    );
     const mcpToolkitDependenciesLayer = Layer.mergeAll(
       orchestrationEngineLayer,
       projectionSnapshotQueryLayer,
