@@ -24,10 +24,6 @@ export const ObservabilityLive = Layer.unwrap(
     const attribution = yield* ResourceAttribution.ResourceAttribution;
     const otel = config.otelEnvironment;
 
-    for (const warning of otel.warnings) {
-      yield* Effect.logWarning(warning);
-    }
-
     // One variable can decline every signal, and saying so three times reads
     // like three separate problems.
     const declined = new Set(
@@ -35,9 +31,6 @@ export const ObservabilityLive = Layer.unwrap(
         (reason) => reason !== undefined,
       ),
     );
-    for (const reason of declined) {
-      yield* Effect.logWarning(reason);
-    }
 
     // Each signal builds its own serializer, so the wire format travels with
     // the endpoint that asked for it rather than with this process.
@@ -114,6 +107,15 @@ export const ObservabilityLive = Layer.unwrap(
             temporality: config.otlpMetricsExport.temporality,
           }).pipe(Layer.provide(serializationFor(config.otlpMetricsExport)));
 
-    return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
+    // Logged once the server's loggers are installed, so the warnings use them.
+    const otelWarningsLayer = Layer.effectDiscard(
+      Effect.forEach([...otel.warnings, ...declined], (warning) => Effect.logWarning(warning)),
+    );
+
+    return otelWarningsLayer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer),
+      ),
+    );
   }),
 );

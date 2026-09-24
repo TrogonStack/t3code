@@ -961,4 +961,36 @@ describe("OtelEnvironment", () => {
       assert.deepStrictEqual(resolved.traces.settings?.headers, { authorization: "token" });
     }),
   );
+
+  it.effect("warns about a spec value the specification does not recognize", () =>
+    Effect.gen(function* () {
+      const numeric = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_SDK_DISABLED: "1" }));
+      assert.isFalse(numeric.disabled);
+      assert.deepStrictEqual(numeric.warnings, [
+        "OTEL_SDK_DISABLED=1 was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way",
+      ]);
+
+      // T3 Code's own name already answered, so the standard one is moot for
+      // `disabled`, but a value nobody can read is still worth a warning.
+      const answered = yield* OtelEnvironment.load.pipe(
+        withEnv({ T3CODE_OTEL_SDK_DISABLED: "false", OTEL_SDK_DISABLED: "yes" }),
+      );
+      assert.isFalse(answered.disabled);
+      assert.deepStrictEqual(answered.warnings, [
+        "OTEL_SDK_DISABLED=yes was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way",
+      ]);
+    }),
+  );
+
+  it.effect("treats a blank T3CODE_OTEL_SDK_DISABLED as unset and falls through", () =>
+    Effect.gen(function* () {
+      const resolved = yield* OtelEnvironment.load.pipe(
+        withEnv({ T3CODE_OTEL_SDK_DISABLED: "  ", OTEL_SDK_DISABLED: "true" }),
+      );
+      assert.isTrue(resolved.disabled);
+      assert.deepStrictEqual(resolved.warnings, [
+        "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway",
+      ]);
+    }),
+  );
 });

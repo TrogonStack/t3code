@@ -160,7 +160,23 @@ const optionalString = (name: string) =>
  * list.
  */
 const specBoolean = (name: string) =>
-  optionalString(name).pipe(Effect.map((raw) => raw?.toLowerCase() === "true"));
+  optionalString(name).pipe(
+    Effect.map((raw): { readonly value: boolean; readonly warnings: ReadonlyArray<string> } => {
+      if (raw === undefined) {
+        return { value: false, warnings: [] };
+      }
+      const value = raw.toLowerCase();
+      if (value === "true" || value === "false") {
+        return { value: value === "true", warnings: [] };
+      }
+      return {
+        value: false,
+        warnings: [
+          `${name}=${raw} was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way`,
+        ],
+      };
+    }),
+  );
 
 /**
  * A `T3CODE_*` name is ours, so it answers to the affirmatives people actually
@@ -664,7 +680,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
   const spec = yield* specBoolean("OTEL_SDK_DISABLED");
   // One setting, read the way every other setting here is read: T3 Code's own
   // name answers it, and the standard name answers it only when ours is unset.
-  const disabled = t3.value ?? spec;
+  const disabled = t3.value ?? spec.value;
   const protocolDecision = yield* resolveProtocol;
   const resource = yield* resolveResource;
   const temporality = yield* resolveMetricsTemporality;
@@ -684,6 +700,7 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     warnings: [
       ...new Set([
         ...t3.warnings,
+        ...spec.warnings,
         ...(disabled
           ? [disabledBy(t3.value === true ? "T3CODE_OTEL_SDK_DISABLED" : "OTEL_SDK_DISABLED")]
           : []),
