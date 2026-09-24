@@ -49,8 +49,8 @@ environment reading applied to the other process, which is why the reading moved
 into a shared package instead of being copied. Upstream taking 0018 gets this
 almost for free.
 
-Upstream has since shipped its own desktop exporter, so what remains here is
-the environment reading, the static service name, and the per-signal protocol,
+Upstream has since shipped its own desktop exporter and the kill switch for it,
+so what remains here is the rest of the environment reading, the static service name, and the per-signal protocol,
 headers, and batching. Upstream's version settled two questions this one had
 answered differently, and both of its answers were adopted: metrics stay off
 until a desktop metric exists, and the OTLP log exporter replaces
