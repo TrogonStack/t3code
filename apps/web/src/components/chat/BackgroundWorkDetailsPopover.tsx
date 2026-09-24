@@ -23,10 +23,10 @@ export function BackgroundWorkDetailsPopover({
             {tasks.map((task) => (
               <li key={task.taskId} className="flex flex-col gap-0.5">
                 <div className="flex items-baseline gap-2">
-                  <span className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                  <span className="text-2xs text-muted-foreground uppercase tracking-wide">
                     {taskFlavorLabel(task)}
                   </span>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     {formatRelativeTimeLabel(task.updatedAt)}
                   </span>
                 </div>

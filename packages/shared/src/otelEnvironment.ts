@@ -24,8 +24,10 @@
  * @module otelEnvironment
  */
 import * as Config from "effect/Config";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 /**
  * The signals T3 Code exports. Each one is configured independently, and
@@ -95,19 +97,6 @@ export interface OtlpSignal {
   readonly off: boolean;
 }
 
-/**
- * What the environment may contribute to the resource. `service.name` is
- * deliberately absent: each T3 Code process names itself and nothing here can
- * rename it, so a fleet-wide `OTEL_SERVICE_NAME` cannot quietly merge two
- * processes into one service or file T3 Code under some other app's name. An
- * attempt to set it is reported through `warnings` rather than ignored in
- * silence.
- */
-export interface OtlpResourceSettings {
-  readonly serviceVersion: string | undefined;
-  readonly attributes: Readonly<Record<string, string>>;
-}
-
 export interface OtelEnvironment {
   /**
    * Whether anything is exported at all, by any route. `T3CODE_OTEL_SDK_DISABLED`
@@ -127,7 +116,16 @@ export interface OtelEnvironment {
   readonly traces: OtlpSignal;
   readonly metrics: OtlpSignal;
   readonly logs: OtlpSignal;
-  readonly resource: OtlpResourceSettings;
+  /**
+   * `OTEL_RESOURCE_ATTRIBUTES`, or nothing when it could not be read.
+   * `service.name` is deliberately absent: each T3 Code process names itself
+   * and nothing here can rename it, so a fleet-wide `OTEL_SERVICE_NAME`
+   * cannot quietly merge two processes into one service or file T3 Code
+   * under some other app's name. An attempt to set it is reported through
+   * `warnings` rather than ignored in silence.
+   */
+  readonly resourceAttributes: Readonly<Record<string, string>>;
+  readonly serviceVersion: string | undefined;
 }
 
 /**
@@ -606,36 +604,62 @@ const resolveMetricsTemporality = optionalString(
   }),
 );
 
+const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
+
+interface ResourceAttributes {
+  readonly value: Readonly<Record<string, string>>;
+  readonly warning?: string;
+}
+
+// The schema Effect's OTLP exporters read this variable with.
+const resourceAttributes = Config.Record(
+  Schema.StringFromUriComponent,
+  Schema.StringFromUriComponent,
+  RESOURCE_ATTRIBUTES,
+).pipe(
+  Config.map((value): ResourceAttributes => ({ value })),
+  Config.orElse(() =>
+    Config.String(RESOURCE_ATTRIBUTES).pipe(
+      // The value is left out because attributes can carry credentials.
+      Config.map((): ResourceAttributes => ({
+        value: {},
+        warning: `${RESOURCE_ATTRIBUTES} is not a list of percent-encoded key=value pairs and was ignored`,
+      })),
+    ),
+  ),
+  Config.withDefault<ResourceAttributes>({ value: {} }),
+);
+
+/**
+ * `OTEL_SERVICE_VERSION` becomes `serviceVersion`, and `service.name` is
+ * refused, from either variable, because every T3 Code process names itself.
+ */
 const resolveResource = Effect.gen(function* () {
-  const parsed = yield* optionalRecord("OTEL_RESOURCE_ATTRIBUTES");
-  const {
-    "service.name": attributeName,
-    "service.version": attributeVersion,
-    ...rest
-  } = parsed.value ?? {};
+  const resource = yield* resourceAttributes;
+  const { "service.name": attributeName, ...attributes } = resource.value;
+  const serviceName = yield* optionalString("OTEL_SERVICE_NAME");
+  const serviceVersion = yield* optionalString("OTEL_SERVICE_VERSION");
   // Named here only to say it was refused. Dropping it without a word is the
   // failure this variable is prone to: the name never changes, the dashboards
   // stay empty, and nothing in the log connects the two.
   const declinedName =
-    (yield* optionalString("OTEL_SERVICE_NAME")) === undefined
-      ? attributeName === undefined
+    serviceName !== undefined
+      ? "OTEL_SERVICE_NAME"
+      : attributeName === undefined
         ? undefined
-        : "OTEL_RESOURCE_ATTRIBUTES=service.name"
-      : "OTEL_SERVICE_NAME";
+        : `${RESOURCE_ATTRIBUTES}=service.name`;
   return {
-    value: {
-      serviceVersion: (yield* optionalString("OTEL_SERVICE_VERSION")) ?? attributeVersion,
-      attributes: rest,
-    },
+    attributes,
+    serviceVersion,
     warnings: [
-      ...parsed.warnings,
+      ...(resource.warning === undefined ? [] : [resource.warning]),
       ...(declinedName === undefined
         ? []
         : [
             `${declinedName} was ignored; every T3 Code process names itself, so use OTEL_RESOURCE_ATTRIBUTES to tell instances apart instead`,
           ]),
     ],
-  } satisfies Parsed<OtlpResourceSettings>;
+  };
 });
 
 const UNREADABLE = "the OpenTelemetry environment could not be read";
@@ -714,7 +738,8 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
     traces: signalOf(traces, protocolDecision.traces),
     metrics: signalOf(metrics, protocolDecision.metrics),
     logs: signalOf(logs, protocolDecision.logs),
-    resource: resource.value,
+    resourceAttributes: resource.attributes,
+    serviceVersion: resource.serviceVersion,
   };
 }).pipe(
   Effect.catchCause((cause) =>
@@ -725,7 +750,8 @@ export const load: Effect.Effect<OtelEnvironment> = Effect.gen(function* () {
         traces: { settings: undefined, declined: UNREADABLE, off: false },
         metrics: { settings: undefined, declined: UNREADABLE, off: false },
         logs: { settings: undefined, declined: UNREADABLE, off: false },
-        resource: { serviceVersion: undefined, attributes: {} },
+        resourceAttributes: {},
+        serviceVersion: undefined,
       }),
     ),
   ),
@@ -841,6 +867,25 @@ export const resolveSignalSource = (input: {
     : { url: persistedUrl, signal: noSignal };
 };
 
+/**
+ * Provide this around Effect's OTLP exporters, which read
+ * `OTEL_RESOURCE_ATTRIBUTES` for themselves and die when it does not decode,
+ * so they see what `load` accepted instead.
+ */
+export const layerResourceAttributes = (attributes: Readonly<Record<string, string>>) =>
+  ConfigProvider.layerAdd(
+    ConfigProvider.fromEnv({
+      env: {
+        [RESOURCE_ATTRIBUTES]: Object.entries(attributes)
+          .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+          .join(","),
+      },
+      // Keeps an emptied list from falling through to the raw value.
+      preserveEmptyStrings: true,
+    }),
+    { asPrimary: true },
+  );
+
 /** An environment that asked for nothing, for tests and for the pairing CLI. */
 export const none: OtelEnvironment = {
   disabled: false,
@@ -848,5 +893,6 @@ export const none: OtelEnvironment = {
   traces: noSignal,
   metrics: noSignal,
   logs: noSignal,
-  resource: { serviceVersion: undefined, attributes: {} },
+  resourceAttributes: {},
+  serviceVersion: undefined,
 };

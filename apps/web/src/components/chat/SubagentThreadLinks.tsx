@@ -104,7 +104,7 @@ export function SubagentThreadLinks({
         <BotIcon className="size-3" />
         {children.length} subagent{children.length === 1 ? "" : "s"}
         {runningCount > 0 ? (
-          <span className="size-1.5 animate-pulse rounded-full bg-blue-500" aria-hidden="true" />
+          <span className="size-1.5 animate-pulse rounded-full bg-info" aria-hidden="true" />
         ) : null}
       </MenuTrigger>
       <MenuPopup align="start" className="w-72">
@@ -126,7 +126,7 @@ export function SubagentThreadLinks({
                 />
                 <span className="min-w-0 flex-1 truncate">{shell.title}</span>
                 {pill !== null && (
-                  <span className={cn("shrink-0 text-[10px]", pill.colorClass)}>{pill.label}</span>
+                  <span className={cn("shrink-0 text-3xs", pill.colorClass)}>{pill.label}</span>
                 )}
               </span>
             </MenuItem>

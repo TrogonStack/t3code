@@ -113,8 +113,8 @@ export const resolveDesktopOtlpExport = (input: DesktopOtlpExportInput): Desktop
   const { otel } = input;
   const resource: DesktopOtlpResource = {
     serviceName: input.serviceName,
-    serviceVersion: otel.resource.serviceVersion,
-    attributes: { ...otel.resource.attributes, ...input.runtimeAttributes },
+    serviceVersion: otel.serviceVersion,
+    attributes: { ...otel.resourceAttributes, ...input.runtimeAttributes },
   };
 
   if (otel.disabled) {
