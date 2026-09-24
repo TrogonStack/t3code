@@ -6,7 +6,6 @@ import {
   type SignalExport,
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -39,24 +38,6 @@ export const ObservabilityLive = Layer.unwrap(
     const serializationFor = (signal: SignalExport) => otlpSerializationLayer(signal.protocol);
 
     const otlpResource = ServerConfig.otlpResource(config);
-
-    // Every exporter builds its resource through `OtlpResource.fromConfig`,
-    // which reads `OTEL_RESOURCE_ATTRIBUTES` for itself and turns a value it
-    // cannot percent-decode into a defect, so a list this reader reported and
-    // dropped would still stop the server from starting. The exporters are
-    // shown the list it validated instead. Only that one name is answered here
-    // and every other variable still comes from the environment.
-    const resourceAttributesLayer = ConfigProvider.layerAdd(
-      ConfigProvider.fromEnv({
-        env: {
-          OTEL_RESOURCE_ATTRIBUTES: OtelEnvironment.encodeResourceAttributes(
-            otel.resource.attributes,
-          ),
-        },
-        preserveEmptyStrings: true,
-      }),
-      { asPrimary: true },
-    );
 
     const traceReferencesLayer = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),
@@ -135,7 +116,9 @@ export const ObservabilityLive = Layer.unwrap(
       Layer.provideMerge(
         Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer),
       ),
-      Layer.provide(resourceAttributesLayer),
+      Layer.provide(
+        OtelEnvironment.layerResourceAttributes(config.otelEnvironment.resourceAttributes),
+      ),
     );
   }),
 );

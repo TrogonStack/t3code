@@ -1,9 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
+import * as OtlpResource from "effect/unstable/observability/OtlpResource";
 
 import * as OtelEnvironment from "./otelEnvironment.ts";
 
@@ -138,7 +137,7 @@ describe("OtelEnvironment", () => {
       env: { OTEL_RESOURCE_ATTRIBUTES: "team=100%zz,deployment=prod" },
       named: "OTEL_RESOURCE_ATTRIBUTES",
       check: (resolved: OtelEnvironment.OtelEnvironment) =>
-        assert.deepStrictEqual(resolved.resource.attributes, {}),
+        assert.deepStrictEqual(resolved.resourceAttributes, {}),
     },
   ];
 
@@ -195,14 +194,14 @@ describe("OtelEnvironment", () => {
     Effect.gen(function* () {
       const resolved = yield* OtelEnvironment.load.pipe(
         withEnv({
-          OTEL_RESOURCE_ATTRIBUTES: "team=platform%20eng, deployment.environment=prod",
+          OTEL_RESOURCE_ATTRIBUTES: "team=platform%20eng,deployment.environment=prod",
           OTEL_SERVICE_VERSION: "  1.2.3  ",
         }),
       );
-      assert.strictEqual(resolved.resource.serviceVersion, "1.2.3");
+      assert.strictEqual(resolved.serviceVersion, "1.2.3");
       // service.version becomes a named field, so leaving it in the attribute
       // bag too would send it twice.
-      assert.deepStrictEqual(resolved.resource.attributes, {
+      assert.deepStrictEqual(resolved.resourceAttributes, {
         team: "platform eng",
         "deployment.environment": "prod",
       });
@@ -246,7 +245,7 @@ describe("OtelEnvironment", () => {
         // two of them into one service, and passing the attribute through would
         // send a second service.name beside the one the process chose.
         const resolved = yield* OtelEnvironment.load.pipe(withEnv(refusal.env));
-        assert.deepStrictEqual(resolved.resource.attributes, refusal.attributes);
+        assert.deepStrictEqual(resolved.resourceAttributes, refusal.attributes);
         assert.lengthOf(resolved.warnings, 1);
         assert.include(resolved.warnings[0] ?? "", refusal.named);
       }),
@@ -594,51 +593,6 @@ describe("OtelEnvironment", () => {
       assert.strictEqual(logs.signal.settings, undefined);
     }),
   );
-
-  it.effect("hands an exporter a resource attribute list it can decode for itself", () =>
-    Effect.gen(function* () {
-      // The exporters read `OTEL_RESOURCE_ATTRIBUTES` again through
-      // `OtlpResource.fromConfig` and turn a value they cannot percent-decode
-      // into a defect, so whatever this reader passes on has to survive the
-      // library's own decoding, including when it passes on nothing.
-      const readBack = (value: string) =>
-        Config.Record(
-          Schema.StringFromUriComponent,
-          Schema.StringFromUriComponent,
-          "OTEL_RESOURCE_ATTRIBUTES",
-        ).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              ConfigProvider.layer(
-                // The same reading the server's provider gives the exporters,
-                // where an empty list has to read as no attributes rather than
-                // as a variable nobody set.
-                ConfigProvider.fromEnv({
-                  env: { OTEL_RESOURCE_ATTRIBUTES: value },
-                  preserveEmptyStrings: true,
-                }),
-              ),
-            ),
-          ),
-        );
-
-      const decoded = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=a%2Fb,deployment.environment=lab" }),
-      );
-      assert.deepStrictEqual(
-        yield* readBack(OtelEnvironment.encodeResourceAttributes(decoded.resource.attributes)),
-        { team: "a/b", "deployment.environment": "lab" },
-      );
-
-      const malformed = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=%zz" }),
-      );
-      assert.deepStrictEqual(
-        yield* readBack(OtelEnvironment.encodeResourceAttributes(malformed.resource.attributes)),
-        {},
-      );
-    }),
-  );
 });
 
 describe("OtelEnvironment kill switch", () => {
@@ -718,4 +672,51 @@ describe("OtelEnvironment kill switch", () => {
       assert.deepStrictEqual(resolved.warnings, warnings);
     }),
   );
+
+  it.effect.each([
+    { name: "unset", env: {}, resourceAttributes: {}, warnings: [] },
+    {
+      name: "a percent-encoded list",
+      env: { OTEL_RESOURCE_ATTRIBUTES: "team=core,message=hello%20world" },
+      resourceAttributes: { team: "core", message: "hello world" },
+      warnings: [],
+    },
+    {
+      name: "a list that does not decode",
+      env: { OTEL_RESOURCE_ATTRIBUTES: "team=core,broken=%zz" },
+      resourceAttributes: {},
+      warnings: [
+        "OTEL_RESOURCE_ATTRIBUTES is not a list of percent-encoded key=value pairs and was ignored",
+      ],
+    },
+  ])("resource attributes: $name", ({ env, resourceAttributes, warnings }) =>
+    Effect.gen(function* () {
+      const resolved = yield* load(env);
+      assert.deepStrictEqual(resolved.resourceAttributes, resourceAttributes);
+      assert.deepStrictEqual(resolved.warnings, warnings);
+    }),
+  );
+
+  describe("layerResourceAttributes", () => {
+    it.effect.each([
+      { name: "a list that does not decode", raw: "team=%zz", attributes: [] },
+      { name: "encoded separators", raw: "a%2Cb=x%3Dy", attributes: ["a,b"] },
+    ])("lets the exporters' own read succeed with $name", ({ raw, attributes }) =>
+      Effect.gen(function* () {
+        const env = ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { OTEL_RESOURCE_ATTRIBUTES: raw } }),
+        );
+        const otel = yield* OtelEnvironment.load.pipe(Effect.provide(env));
+        const resource = yield* OtlpResource.fromConfig({ serviceName: "t3" }).pipe(
+          Effect.provide(
+            Layer.provide(OtelEnvironment.layerResourceAttributes(otel.resourceAttributes), env),
+          ),
+        );
+        assert.deepStrictEqual(
+          resource.attributes.map((attribute) => attribute.key),
+          [...attributes, "service.name"],
+        );
+      }),
+    );
+  });
 });
