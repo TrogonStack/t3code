@@ -22,6 +22,7 @@ import {
   ProviderCompatibilityPolicy,
   resolveProviderCompatibility,
 } from "./providerCompatibility.ts";
+import { ProviderSecretResolverPassthroughLayer } from "./Services/ProviderSecretResolver.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const policy: ProviderCompatibilityPolicy = {
@@ -261,7 +262,10 @@ it.effect("a remote policy refresh preserves a newer health result on the regist
         listUnavailable: Effect.succeed([]),
         streamChanges: Stream.empty,
         subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+        rebuildInstanceWhen: () => Effect.succeed(false),
+        listEnvironments: Effect.succeed(new Map()),
       }),
+      ProviderSecretResolverPassthroughLayer,
       ServerConfig.layerTest(process.cwd(), { prefix: "compatibility-registry-test" }).pipe(
         Layer.provideMerge(NodeServices.layer),
       ),

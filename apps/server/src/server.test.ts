@@ -776,7 +776,16 @@ const buildAppUnderTest = (options?: {
       drainThrough: () => Effect.void,
       ...options?.layers?.threadDeletionReactor,
     });
+    const serverSettingsLayer = Layer.mock(ServerSettings.ServerSettingsService)({
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      streamChanges: Stream.empty,
+      ...options?.layers?.serverSettings,
+    });
     const threadBootstrapLayer = ThreadBootstrapLive.pipe(
+      Layer.provide(serverSettingsLayer),
       Layer.provide(orchestrationEngineLayer),
       Layer.provide(gitWorkflowLayer),
       Layer.provide(projectSetupScriptRunnerLayer),
@@ -938,16 +947,7 @@ const buildAppUnderTest = (options?: {
           }),
         ),
       ),
-      Layer.provide(
-        Layer.mock(ServerSettings.ServerSettingsService)({
-          start: Effect.void,
-          ready: Effect.void,
-          getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
-          streamChanges: Stream.empty,
-          ...options?.layers?.serverSettings,
-        }),
-      ),
+      Layer.provide(serverSettingsLayer),
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ExternalLauncher.ExternalLauncher)({
