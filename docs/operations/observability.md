@@ -133,7 +133,7 @@ Default Grafana login:
 export T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces
 export T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics
 export T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs
-export T3CODE_OTLP_SERVICE_NAME=t3-local
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development
 ```
 
 Optional:
@@ -173,7 +173,6 @@ macOS app bundle example:
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
 T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
 "/Applications/T3 Code.app/Contents/MacOS/T3 Code"
 ```
 
@@ -183,7 +182,6 @@ Direct binary example:
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
 T3CODE_OTLP_LOGS_URL=http://localhost:4318/v1/logs \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
 ./path/to/your/desktop-app-binary
 ```
 
@@ -216,14 +214,14 @@ keeps T3 Code exporting.
 
 The desktop app is two processes, and each is its own OpenTelemetry producer:
 
-- **The server**, under service name `t3-server`.
-- **The Electron main process**, under service name `t3-desktop`. It owns app startup, window and
+- **The server**, under service name `t3code-server`.
+- **The Electron main process**, under service name `t3code-desktop`. It owns app startup, window and
   menu work, backend supervision, and updates, none of which the server can see. It reads the same
   sources in the same order as the server, so a machine that points one of them at a collector
   points both.
 
-The web client reports as `t3-web`, so the three service names are `t3-server`, `t3-desktop`, and
-`t3-web`.
+The web client reports as `t3code-web`, so the three service names are `t3code-server`,
+`t3code-desktop`, and `t3code-web`, all in `service.namespace` `t3code`.
 
 **Service names are static and the environment cannot change them.** `OTEL_SERVICE_NAME` and a
 `service.name` inside `OTEL_RESOURCE_ATTRIBUTES` are both refused, with a warning naming the one you
@@ -236,8 +234,8 @@ T3 Code. Use `OTEL_RESOURCE_ATTRIBUTES` to tell instances apart, which is what i
 export OTEL_RESOURCE_ATTRIBUTES=service.instance.id=laptop-01,deployment.environment=lab
 ```
 
-`T3CODE_OTLP_SERVICE_NAME` still renames the server, because it is T3 Code's own variable and nobody
-sets it across a fleet by accident. There is no equivalent for the main process.
+A `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` is overridden the same way, since it is part of
+the same identity.
 
 On macOS, ambient variables reach the desktop app only when it is launched from a shell. Opening it
 from the Dock, Finder, or Spotlight inherits `launchd`'s environment instead, which is why the
@@ -535,11 +533,13 @@ Recommended flow in Grafana:
 2. Pick the `Tempo` data source.
 3. Set the time range to something recent like `Last 15 minutes`.
 4. Start broad. Do not begin with a very narrow query.
-5. Look for spans from your configured service name, then narrow by span name or attributes.
+5. Look for spans from the `t3code-server` or `t3code-desktop` service, then narrow by span name or
+   attributes.
 
 Good first searches:
 
-- service name such as `t3-local`, `t3-dev`, or `t3-desktop`
+- service name `t3code-server` or `t3code-desktop`, plus a resource attribute such as
+  `deployment.environment.name`
 - span names like `sendTurn` or a Git operation such as `GitVcsDriver.statusDetails.status`
 - Git spans whose `git.operation` attribute identifies the operation
 - orchestration spans with attributes like `orchestration.command_type`
@@ -752,9 +752,8 @@ window and menu handling, backend supervision, and updates. It resolves its endp
 `apps/desktop/src/app/DesktopOtlpExport.ts`, reading the same `T3CODE_OTLP_*` names and Settings
 entries as the backend it supervises, and the `OTEL_*` variables through the same
 `packages/shared/src/otelEnvironment.ts` the server uses, so neither process can disagree with the
-other about what a variable means. It reports as service `t3-desktop`, which no variable can change
-(see `docs/fork/0023-a-service-name-is-not-an-environment-variable.md`), so a collector shows it
-alongside the backend rather than mixed into it. It exports traces and logs only; the main process
+other about what a variable means. It reports as service `t3code-desktop`, which no variable can change, so a
+collector shows it alongside the backend rather than mixed into it. It exports traces and logs only; the main process
 records no metrics, so the metrics endpoint applies to the backend alone.
 
 ### Env Vars
@@ -774,8 +773,6 @@ OTLP export:
 - `T3CODE_OTLP_METRICS_URL`: OTLP metric endpoint
 - `T3CODE_OTLP_LOGS_URL`: OTLP log endpoint
 - `T3CODE_OTLP_EXPORT_INTERVAL_MS`: export interval, default `10000`
-- `T3CODE_OTLP_SERVICE_NAME`: server service name, default `t3-server`. The Electron main process
-  does not read it and is always `t3-desktop`.
 - `T3CODE_OTLP_HEADERS`: extra headers for all three exporters, same format as
   `OTEL_EXPORTER_OTLP_HEADERS`: comma-separated `key=value` pairs with percent-encoded values.
 - `T3CODE_OTLP_PROTOCOL`: `http/json` (default) or `http/protobuf`

@@ -20,6 +20,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as ServerConfig from "../config.ts";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
@@ -56,7 +57,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     devAllowedOrigins: [],
   } as const;
@@ -640,7 +640,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
       expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
       // The endpoint is the machine's to name. The service is not.
-      expect(resolved.otlpServiceName).toBe("t3-server");
+      expect(ServerConfig.otlpResource(resolved).serviceName).toBe("t3code-server");
     }),
   );
 
@@ -653,7 +653,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app",
       });
 
-      expect(resolved.otlpServiceName).toBe("t3-server");
+      expect(ServerConfig.otlpResource(resolved).serviceName).toBe("t3code-server");
     }),
   );
 
@@ -668,13 +668,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         T3CODE_OTLP_TRACES_URL: "",
         T3CODE_OTLP_METRICS_URL: "   ",
         T3CODE_OTLP_LOGS_URL: "",
-        T3CODE_OTLP_SERVICE_NAME: "",
       });
 
       expect(resolved.otlpTracesUrl).toBe("https://collector.example.com/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
       expect(resolved.otlpLogsUrl).toBe("https://collector.example.com/v1/logs");
-      expect(resolved.otlpServiceName).toBe("t3-server");
+      expect(ServerConfig.otlpResource(resolved).serviceName).toBe("t3code-server");
     }),
   );
 
@@ -685,13 +684,12 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         OTEL_SERVICE_NAME: "t3",
         T3CODE_OTLP_TRACES_URL: "http://localhost:4318/v1/traces",
         T3CODE_OTLP_LOGS_URL: "http://localhost:4318/v1/logs",
-        T3CODE_OTLP_SERVICE_NAME: "t3-local",
       });
 
       expect(resolved.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
       expect(resolved.otlpMetricsUrl).toBe("https://collector.example.com/v1/metrics");
       expect(resolved.otlpLogsUrl).toBe("http://localhost:4318/v1/logs");
-      expect(resolved.otlpServiceName).toBe("t3-local");
+      expect(ServerConfig.otlpResource(resolved).serviceName).toBe("t3code-server");
     }),
   );
 
@@ -1462,6 +1460,147 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       );
 
       expect(resolved.otlpLogsUrl).toBe("http://collector.internal:4318/v1/logs");
+    }),
+  );
+
+  const minimalWebFlags = (baseDir: string) => ({
+    mode: Option.some("web" as const),
+    port: Option.some(3773),
+    host: Option.none<string>(),
+    baseDir: Option.some(baseDir),
+    cwd: Option.none<string>(),
+    devUrl: Option.none<URL>(),
+    noBrowser: Option.none<boolean>(),
+    bootstrapFd: Option.none<number>(),
+    autoBootstrapProjectFromCwd: Option.none<boolean>(),
+    logWebSocketEvents: Option.none<boolean>(),
+    tailscaleServeEnabled: Option.none<boolean>(),
+    tailscaleServePort: Option.none<number>(),
+  });
+
+  it.effect(
+    "resolves each signal's endpoint through T3CODE_OTLP_*_URL, an OTEL endpoint, the bootstrap envelope, and persisted Settings, in that order",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-cli-config-otel-precedence-",
+        });
+        const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+        yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+        yield* fs.writeFileString(
+          derivedPaths.settingsPath,
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          `${JSON.stringify({ observability: { otlpLogsUrl: "http://settings:4318/v1/logs" } })}\n`,
+        );
+
+        const fd = yield* openBootstrapFd(
+          makeDesktopBootstrap({
+            otlpMetricsUrl: "http://bootstrap:4318/v1/metrics",
+            // Blank, not an endpoint: it must not stand in front of Settings.
+            otlpLogsUrl: "",
+          }),
+        );
+
+        const resolved = yield* resolveServerConfig(
+          {
+            ...minimalWebFlags(baseDir),
+            mode: Option.some("desktop"),
+            port: Option.some(4888),
+            bootstrapFd: Option.some(fd),
+          },
+          Option.none(),
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              ConfigProvider.layer(
+                ConfigProvider.fromEnv({
+                  env: {
+                    T3CODE_OTLP_TRACES_URL: "http://t3:4318/v1/traces",
+                    T3CODE_OTLP_HEADERS: "x-key=secret",
+                    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://otel-traces:4318/custom",
+                    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://otel-metrics:4318/custom",
+                    OTEL_EXPORTER_OTLP_HEADERS: "x-key=otel",
+                  },
+                }),
+              ),
+              NetService.layer,
+            ),
+          ),
+        );
+
+        // T3CODE_OTLP_TRACES_URL wins over the OTEL variable for the same
+        // signal, and keeps T3 Code's own headers since T3 Code still owns it.
+        expect(resolved.otlpTracesUrl).toBe("http://t3:4318/v1/traces");
+        expect(resolved.otlpTracesExport.headers).toEqual({ "x-key": "secret" });
+        // Metrics named no T3CODE_OTLP_METRICS_URL, so the OTEL endpoint wins
+        // over the bootstrap envelope and brings the OTEL headers and protocol.
+        expect(resolved.otlpMetricsUrl).toBe("http://otel-metrics:4318/custom");
+        expect(resolved.otlpMetricsExport).toMatchObject({
+          protocol: "http/protobuf",
+          headers: { "x-key": "otel" },
+        });
+        // Logs named no T3 or OTEL endpoint and a blank bootstrap value, so
+        // Settings answers, and logs keep the shared headers since no OTEL
+        // endpoint claimed them.
+        expect(resolved.otlpLogsUrl).toBe("http://settings:4318/v1/logs");
+        expect(resolved.otlpLogsExport.headers).toEqual({ "x-key": "secret" });
+      }),
+  );
+
+  it.effect("keeps an OTEL endpoint's claim on a signal when only its headers do not read", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-otel-off-",
+      });
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
+      yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
+      yield* fs.writeFileString(
+        derivedPaths.settingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        `${JSON.stringify({ observability: { otlpLogsUrl: "http://settings:4318/v1/logs" } })}\n`,
+      );
+
+      const fd = yield* openBootstrapFd(
+        makeDesktopBootstrap({ otlpMetricsUrl: "http://bootstrap:4318/v1/metrics" }),
+      );
+
+      const resolved = yield* resolveServerConfig(
+        {
+          ...minimalWebFlags(baseDir),
+          mode: Option.some("desktop"),
+          port: Option.some(4888),
+          bootstrapFd: Option.some(fd),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_OTLP_TRACES_URL: "http://t3:4318/v1/traces",
+                  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel:4318",
+                  OTEL_EXPORTER_OTLP_HEADERS: "x-key=%zz",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      // T3CODE_OTLP_TRACES_URL still wins outright.
+      expect(resolved.otlpTracesUrl).toBe("http://t3:4318/v1/traces");
+      // A bad header list costs only the headers: the OTEL endpoint still
+      // claims metrics and logs over the bootstrap envelope and Settings.
+      expect(resolved.otlpMetricsUrl).toBe("http://otel:4318/v1/metrics");
+      expect(resolved.otlpMetricsExport.headers).toBeUndefined();
+      expect(resolved.otlpLogsUrl).toBe("http://otel:4318/v1/logs");
+      expect(resolved.otlpLogsExport.headers).toBeUndefined();
     }),
   );
 });

@@ -3382,13 +3382,13 @@ it.effect("shares one cold viewer lookup across distinct concurrent lists", () =
       ],
     });
 
-    yield* Effect.all(
-      ["all", "authored", "reviewing"].map((involvement) =>
+    yield* Effect.forEach(
+      ["all", "authored", "reviewing"],
+      (involvement) =>
         service.list({
           state: "open",
           involvement: involvement as "all" | "authored" | "reviewing",
         }),
-      ),
       { concurrency: "unbounded" },
     );
 
@@ -4459,6 +4459,7 @@ it.effect("keeps routed reads separate when the GitHub account changes", () =>
         ],
       });
       const readOperation = (input: Parameters<typeof service.diff>[0]) =>
+        // @effect-diagnostics-next-line unnecessaryEffectGen:off - the generator unifies the per-operation union of Effect types, which Effect.asVoid cannot infer through.
         Effect.gen(function* () {
           yield* service[operation](input);
         });
@@ -4522,6 +4523,7 @@ it.effect("isolates routed caches for two credentials belonging to the same acco
         ],
       });
       const readOperation = (input: Parameters<typeof service.diff>[0]) =>
+        // @effect-diagnostics-next-line unnecessaryEffectGen:off - the generator unifies the per-operation union of Effect types, which Effect.asVoid cannot infer through.
         Effect.gen(function* () {
           yield* service[operation](input);
         });

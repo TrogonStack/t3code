@@ -105,7 +105,6 @@ const makeCliTestServerConfig = (baseDir: string) =>
       otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
       otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
       otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-      otlpServiceName: "t3-server",
       otelEnvironment: OtelEnvironment.none,
       mode: "web",
       port: 0,

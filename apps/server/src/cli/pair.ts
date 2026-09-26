@@ -325,7 +325,6 @@ const makePairServerConfig = Effect.fn(function* (input: {
     otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     mode: "web",
     port: state.port,

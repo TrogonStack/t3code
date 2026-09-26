@@ -82,7 +82,6 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesExport: OtelEnvironment.SignalExport;
     readonly otlpMetricsExport: OtelEnvironment.SignalExport;
     readonly otlpLogsExport: OtelEnvironment.SignalExport;
-    readonly otlpServiceName: string;
     /**
      * What the standard `OTEL_*` variables asked for. The endpoints above are
      * already resolved from it; this carries the rest, which T3 Code has no
@@ -128,12 +127,13 @@ export const layer = (config: ServerConfig["Service"]) => Layer.succeed(ServerCo
  * produced them.
  */
 export const otlpResource = (config: ServerConfig["Service"]) => ({
-  serviceName: config.otlpServiceName,
+  serviceName: "t3code-server",
   ...(config.otelEnvironment.serviceVersion === undefined
     ? {}
     : { serviceVersion: config.otelEnvironment.serviceVersion }),
   attributes: {
     ...config.otelEnvironment.resourceAttributes,
+    "service.namespace": "t3code",
     "service.runtime": "t3-server",
     "service.mode": config.mode,
   },
@@ -233,7 +233,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
     otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpServiceName: "t3-server",
     otelEnvironment: OtelEnvironment.none,
     cwd,
     baseDir,
