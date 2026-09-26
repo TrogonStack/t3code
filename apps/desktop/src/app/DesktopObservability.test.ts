@@ -1,6 +1,7 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -92,6 +93,9 @@ const collectorLayer = (requests: Array<ExportedRequest>) =>
     ),
   );
 
+// A developer's own OTEL_* variables would otherwise pick the endpoints.
+const emptyEnv = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
+
 const encodeObservabilitySettingsFile = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({ observability: Schema.Record(Schema.String, Schema.String) }),
@@ -181,7 +185,7 @@ describe("DesktopObservability", () => {
       assert.isFalse(yield* fileSystem.exists(logPath));
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, emptyEnv)),
     ),
   );
 
@@ -259,7 +263,7 @@ describe("DesktopObservability", () => {
       );
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, emptyEnv)),
     ),
   );
 
@@ -299,7 +303,7 @@ describe("DesktopObservability", () => {
       assert.equal(records.at(-1)?.annotations.details, "code=1");
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, emptyEnv)),
     ),
   );
 
@@ -343,7 +347,7 @@ describe("DesktopObservability", () => {
       assert.isFalse(text.includes("y"));
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, emptyEnv)),
     ),
   );
 
@@ -377,7 +381,7 @@ describe("DesktopObservability", () => {
       assert.equal(lines.length, 258);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, emptyEnv)),
     ),
   );
 
@@ -423,7 +427,7 @@ describe("DesktopObservability", () => {
       assert.lengthOf(record?.events ?? [], 0);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests), emptyEnv)),
     );
   });
 
@@ -436,9 +440,6 @@ describe("DesktopObservability", () => {
       });
       const environmentLayer = makeEnvironmentLayer(baseDir, true, {
         T3CODE_OTLP_HEADERS: "x-scope=desktop",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        OTEL_EXPORTER_OTLP_HEADERS: "x-otel=desktop",
-        OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
       });
       yield* writeObservabilitySettings(environmentLayer, {
         otlpLogsUrl: "https://settings.example.com/v1/logs",
@@ -458,7 +459,21 @@ describe("DesktopObservability", () => {
       assert.strictEqual(request?.headers["content-type"], "application/json");
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+                OTEL_EXPORTER_OTLP_HEADERS: "x-otel=desktop",
+                OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
+              },
+            }),
+          ),
+        ),
+      ),
     );
   });
 
@@ -471,9 +486,6 @@ describe("DesktopObservability", () => {
       });
       const environmentLayer = makeEnvironmentLayer(baseDir, true, {
         T3CODE_OTLP_LOGS_URL: "https://collector.example.com/v1/logs",
-        OTEL_SERVICE_NAME: "renamed",
-        OTEL_RESOURCE_ATTRIBUTES:
-          "service.name=renamed,service.namespace=renamed,deployment.environment.name=development",
       });
 
       yield* Effect.scoped(
@@ -490,7 +502,21 @@ describe("DesktopObservability", () => {
       assert.notInclude(body, "renamed");
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                OTEL_SERVICE_NAME: "renamed",
+                OTEL_RESOURCE_ATTRIBUTES:
+                  "service.name=renamed,service.namespace=renamed,deployment.environment.name=development",
+              },
+            }),
+          ),
+        ),
+      ),
     );
   });
 
@@ -503,8 +529,6 @@ describe("DesktopObservability", () => {
       });
       const environmentLayer = makeEnvironmentLayer(baseDir, true, {
         T3CODE_OTLP_HEADERS: "x-scope=desktop",
-        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "grpc",
       });
       yield* writeObservabilitySettings(environmentLayer, {
         otlpLogsUrl: "https://settings.example.com/v1/logs",
@@ -519,7 +543,20 @@ describe("DesktopObservability", () => {
       assert.lengthOf(requests, 0);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
+                OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "grpc",
+              },
+            }),
+          ),
+        ),
+      ),
     );
   });
 
@@ -532,7 +569,6 @@ describe("DesktopObservability", () => {
       });
       const environmentLayer = makeEnvironmentLayer(baseDir, true, {
         T3CODE_OTLP_LOGS_URL: "https://collector.example.com/v1/logs",
-        OTEL_SDK_DISABLED: "1",
       });
 
       yield* Effect.scoped(
@@ -544,7 +580,13 @@ describe("DesktopObservability", () => {
       assert.include(requests[0]?.body ?? "", "OTEL_SDK_DISABLED=1 was read as false");
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { OTEL_SDK_DISABLED: "1" } })),
+        ),
+      ),
     );
   });
 
@@ -585,7 +627,7 @@ describe("DesktopObservability", () => {
       );
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests), emptyEnv)),
     );
   });
 
@@ -609,7 +651,7 @@ describe("DesktopObservability", () => {
       assert.lengthOf(requests, 0);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests), emptyEnv)),
     );
   });
 
@@ -620,9 +662,7 @@ describe("DesktopObservability", () => {
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-desktop-observability-test-",
       });
-      const environmentLayer = makeEnvironmentLayer(baseDir, true, {
-        OTEL_SDK_DISABLED: "true",
-      });
+      const environmentLayer = makeEnvironmentLayer(baseDir);
       yield* writeObservabilitySettings(environmentLayer, {
         otlpTracesUrl: "https://settings.example.com/v1/traces",
         otlpLogsUrl: "https://settings.example.com/v1/logs",
@@ -638,7 +678,13 @@ describe("DesktopObservability", () => {
       assert.lengthOf(requests, 0);
     }).pipe(
       Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, collectorLayer(requests))),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          collectorLayer(requests),
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: { OTEL_SDK_DISABLED: "true" } })),
+        ),
+      ),
     );
   });
 });

@@ -9,6 +9,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -55,9 +56,9 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
-    otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-    otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+    otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+    otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+    otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
     otelEnvironment: OtelEnvironment.none,
     cwd: process.cwd(),
     baseDir,
