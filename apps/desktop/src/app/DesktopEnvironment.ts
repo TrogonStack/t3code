@@ -4,7 +4,6 @@ import type {
   DesktopRuntimeArch,
   DesktopRuntimeInfo,
 } from "@t3tools/contracts";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -77,16 +76,9 @@ export class DesktopEnvironment extends Context.Service<
     readonly otlpTracesUrl: Option.Option<string>;
     readonly otlpMetricsUrl: Option.Option<string>;
     readonly otlpLogsUrl: Option.Option<string>;
-    readonly otlpExportIntervalMs: Option.Option<number>;
+    readonly otlpExportIntervalMs: number;
     readonly otlpHeaders: Option.Option<Record<string, string>>;
-    readonly otlpProtocol: Option.Option<OtlpProtocol>;
-    /**
-     * What the standard `OTEL_*` variables asked for. The `T3CODE_OTLP_*`
-     * values above still win per signal; this is what the main process
-     * falls back to, and it carries the headers, wire format, resource, and
-     * batching that T3 Code has no names of its own for.
-     */
-    readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
+    readonly otlpProtocol: OtlpProtocol;
     readonly branding: DesktopAppBranding;
     readonly displayName: string;
     readonly appUserModelId: string;
@@ -163,7 +155,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
 ): Effect.fn.Return<DesktopEnvironment["Service"], Config.ConfigError, Path.Path> {
   const path = yield* Path.Path;
   const config = yield* DesktopConfig.DesktopConfig;
-  const otelEnvironment = yield* OtelEnvironment.load;
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
@@ -246,7 +237,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpExportIntervalMs: config.otlpExportIntervalMs,
     otlpHeaders: config.otlpHeaders,
     otlpProtocol: config.otlpProtocol,
-    otelEnvironment,
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>

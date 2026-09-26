@@ -1,10 +1,10 @@
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
-import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   makeLocalFileTracer,
   makeTraceSink,
   otlpSerializationLayer,
 } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
@@ -21,23 +21,14 @@ import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 export const ObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+
+    const traces = config.otlpTracesExport;
+    const metrics = config.otlpMetricsExport;
+    // The trace serializer stays in the returned context because the browser
+    // trace forwarder exports on the same signal.
+    const serializationLayer = otlpSerializationLayer(traces.protocol);
+    const resource = ServerConfig.otlpResource(config);
     const attribution = yield* ResourceAttribution.ResourceAttribution;
-    const otel = config.otelEnvironment;
-
-    // One variable can decline every signal, and saying so three times reads
-    // like three separate problems.
-    const declined = new Set(
-      [otel.traces.declined, otel.metrics.declined, otel.logs.declined].filter(
-        (reason) => reason !== undefined,
-      ),
-    );
-
-    // Each signal builds its own serializer, so the wire format travels with
-    // the endpoint that asked for it rather than with this process.
-    const serializationFor = (signal: OtelEnvironment.SignalExport) =>
-      otlpSerializationLayer(signal.protocol);
-
-    const otlpResource = ServerConfig.otlpResource(config);
 
     const traceReferencesLayer = Layer.mergeAll(
       Layer.succeed(Tracer.MinimumTraceLevel, config.traceMinLevel),
@@ -66,12 +57,9 @@ export const ObservabilityLive = Layer.unwrap(
             ? undefined
             : yield* OtlpTracer.make({
                 url: config.otlpTracesUrl,
-                exportInterval: `${config.otlpTracesExport.exportIntervalMs} millis`,
-                resource: otlpResource,
-                headers: config.otlpTracesExport.headers,
-                ...(config.otlpTracesExport.maxBatchSize === undefined
-                  ? {}
-                  : { maxBatchSize: config.otlpTracesExport.maxBatchSize }),
+                exportInterval: `${traces.exportIntervalMs} millis`,
+                headers: traces.headers,
+                resource,
               });
 
         const tracer = yield* makeLocalFileTracer({
@@ -88,28 +76,21 @@ export const ObservabilityLive = Layer.unwrap(
           BrowserTraceCollector.layer(sink),
         );
       }),
-    ).pipe(
-      Layer.provide(OtlpExporter.layerFlusher),
-      // The trace serializer is also the one this layer hands out, because the
-      // proxy in http.ts re-encodes browser spans and has to reach the trace
-      // collector in the format that collector was configured for.
-      Layer.provideMerge(serializationFor(config.otlpTracesExport)),
-    );
+    ).pipe(Layer.provide(OtlpExporter.layerFlusher), Layer.provideMerge(serializationLayer));
 
     const metricsLayer =
       config.otlpMetricsUrl === undefined
         ? Layer.empty
         : OtlpMetrics.layer({
             url: config.otlpMetricsUrl,
-            exportInterval: `${config.otlpMetricsExport.exportIntervalMs} millis`,
-            resource: otlpResource,
-            headers: config.otlpMetricsExport.headers,
-            temporality: config.otlpMetricsExport.temporality,
-          }).pipe(Layer.provide(serializationFor(config.otlpMetricsExport)));
+            exportInterval: `${metrics.exportIntervalMs} millis`,
+            headers: metrics.headers,
+            resource,
+          }).pipe(Layer.provide(otlpSerializationLayer(metrics.protocol)));
 
     // Logged once the server's loggers are installed, so the warnings use them.
     const otelWarningsLayer = Layer.effectDiscard(
-      Effect.forEach([...otel.warnings, ...declined], (warning) => Effect.logWarning(warning)),
+      Effect.forEach(config.otelEnvironment.warnings, (warning) => Effect.logWarning(warning)),
     );
 
     return otelWarningsLayer.pipe(

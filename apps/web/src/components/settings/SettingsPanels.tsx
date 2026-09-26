@@ -147,7 +147,6 @@ import {
   backgroundActivityOverrideSettings,
   backgroundActivitySharedPolicySettings,
   durationToSeconds,
-  formatDiagnosticsDescription,
   getChangedBrowserSettingLabels,
   getChangedTypographySettingLabels,
   normalizeIntervalSeconds,
@@ -2135,7 +2134,6 @@ export function GeneralSettingsPanel() {
     connectedEnvironments.every(
       (target) => target.serverConfig?.environment.capabilities.threadRestartContinuation === true,
     );
-  const observability = environment?.serverConfig?.observability;
 
   const textGenerationProviders = serverProviders.filter(
     (provider) => provider.supportsTextGeneration !== false,
@@ -3204,17 +3202,7 @@ export function GeneralSettingsPanel() {
           {...searchableSetting("diagnostics")}
           description={
             isEnvironmentScope
-              ? `Inspect processes, resource use, and logs on this environment. ${formatDiagnosticsDescription(
-                  {
-                    localTracingEnabled: observability?.localTracingEnabled ?? false,
-                    otlpTracesEnabled: observability?.otlpTracesEnabled ?? false,
-                    otlpTracesUrl: observability?.otlpTracesUrl,
-                    otlpMetricsEnabled: observability?.otlpMetricsEnabled ?? false,
-                    otlpMetricsUrl: observability?.otlpMetricsUrl,
-                    otlpLogsEnabled: observability?.otlpLogsEnabled ?? false,
-                    otlpLogsUrl: observability?.otlpLogsUrl,
-                  },
-                )}`
+              ? "Inspect processes, resource use, and logs on this environment."
               : "Inspect processes, resource use, and logs on one environment at a time."
           }
           control={

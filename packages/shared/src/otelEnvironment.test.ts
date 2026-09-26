@@ -6,994 +6,79 @@ import * as OtlpResource from "effect/unstable/observability/OtlpResource";
 
 import * as OtelEnvironment from "./otelEnvironment.ts";
 
-const withEnv = (env: Record<string, string>) =>
-  Effect.provide(Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));
+const load = (env: Record<string, string>) =>
+  OtelEnvironment.load.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))));
 
-const load = (env: Record<string, string>) => OtelEnvironment.load.pipe(withEnv(env));
+const SPEC_OFF =
+  "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway";
+const T3_OFF =
+  "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it";
+const specIgnored = (value: string) =>
+  `OTEL_SDK_DISABLED=${value} was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way`;
 
 describe("OtelEnvironment", () => {
-  it.effect("stays off when nothing is configured", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(withEnv({}));
-      assert.strictEqual(resolved.traces.settings, undefined);
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      assert.strictEqual(resolved.logs.settings, undefined);
-      assert.strictEqual(resolved.disabled, false);
-    }),
-  );
-
-  it.effect("appends the signal path to the generic endpoint", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
-      );
-      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
-      assert.strictEqual(
-        resolved.metrics.settings?.url,
-        "https://collector.example.com/v1/metrics",
-      );
-      assert.strictEqual(resolved.logs.settings?.url, "https://collector.example.com/v1/logs");
-    }),
-  );
-
-  it.effect("does not double the slash on a generic endpoint that has one", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com/" }),
-      );
-      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
-    }),
-  );
-
-  it.effect("takes a signal endpoint exactly as written", () =>
-    Effect.gen(function* () {
-      // The per-signal variable is a whole URL. Appending to it would send
-      // traces to a path the collector does not serve.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://generic.example.com",
-          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://traces.example.com/ingest",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.url, "https://traces.example.com/ingest");
-      assert.strictEqual(resolved.metrics.settings?.url, "https://generic.example.com/v1/metrics");
-    }),
-  );
-
-  it.effect("exports without OTEL_TRACES_EXPORTER, because otlp is its default", () =>
-    Effect.gen(function* () {
-      // A machine that sets OTEL_METRICS_EXPORTER and leaves the traces one
-      // alone still wants traces; the spec default is otlp, not none.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_METRICS_EXPORTER: "otlp",
-        }),
-      );
-      assert.isDefined(resolved.traces.settings);
-    }),
-  );
-
-  it.effect("honors a signal turned off by name", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_TRACES_EXPORTER: "none",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings, undefined);
-      assert.isDefined(resolved.metrics.settings);
-    }),
-  );
-
-  it.effect("finds otlp in a list of exporters", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_TRACES_EXPORTER: "console, otlp",
-        }),
-      );
-      assert.isDefined(resolved.traces.settings);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("console, otlp")));
-    }),
-  );
-
-  it.effect("exports nothing when the SDK is disabled", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        }),
-      );
-      assert.strictEqual(resolved.disabled, true);
-      assert.strictEqual(resolved.traces.settings, undefined);
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      // Someone who inherited this from a shell profile has somewhere to go.
-      assert.include(resolved.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=false");
-    }),
-  );
-
-  it.effect("lets T3 Code's own name answer before the standard one", () =>
-    Effect.gen(function* () {
-      const off = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          T3CODE_OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        }),
-      );
-      assert.isTrue(off.disabled);
-      assert.strictEqual(off.traces.settings, undefined);
-      assert.deepStrictEqual(off.warnings, [
-        "T3CODE_OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it",
-      ]);
-
-      // The point of reading ours first: a machine that disables every other
-      // SDK in its shell profile can still ask for T3 Code's telemetry.
-      const on = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          T3CODE_OTEL_SDK_DISABLED: "false",
-          OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        }),
-      );
-      assert.isFalse(on.disabled);
-      assert.isDefined(on.traces.settings);
-      assert.deepStrictEqual(on.warnings, []);
-    }),
-  );
-
-  it.effect("reads T3 Code's own name the way T3 Code reads a boolean", () =>
-    Effect.gen(function* () {
-      // Ours to define, so it takes the affirmatives people type. The
-      // specification's single-value rule stays with the OTEL_* name.
-      const numeric = yield* OtelEnvironment.load.pipe(withEnv({ T3CODE_OTEL_SDK_DISABLED: "1" }));
-      assert.isTrue(numeric.disabled);
-
-      // A value that answers nothing leaves the source under it to answer.
-      const nonsense = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          T3CODE_OTEL_SDK_DISABLED: "maybe",
-          OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        }),
-      );
-      assert.isTrue(nonsense.disabled);
-      assert.include(nonsense.warnings.join("\n"), "T3CODE_OTEL_SDK_DISABLED=maybe");
-    }),
-  );
-
-  it.effect("carries the headers a collector needs to accept the request", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "api-key=abc123,x-tenant=acme",
-          OTEL_EXPORTER_OTLP_TRACES_HEADERS: "api-key=traces-only",
-        }),
-      );
-      // The per-signal header set replaces the generic one rather than
-      // merging with it, which is what the spec says and what a collector
-      // with two different keys depends on.
-      assert.deepStrictEqual(resolved.traces.settings?.headers, { "api-key": "traces-only" });
-      assert.deepStrictEqual(resolved.metrics.settings?.headers, {
-        "api-key": "abc123",
-        "x-tenant": "acme",
-      });
-    }),
-  );
-
-  it.effect("reads the service version and the leftover resource attributes", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_RESOURCE_ATTRIBUTES: "org.name=Example,deployment=prod",
-          OTEL_SERVICE_VERSION: "1.2.3",
-        }),
-      );
-      assert.strictEqual(resolved.serviceVersion, "1.2.3");
-      // service.version becomes a named field, so leaving it in the attribute
-      // bag too would send it twice.
-      assert.deepStrictEqual(resolved.resourceAttributes, {
-        "org.name": "Example",
-        deployment: "prod",
-      });
-    }),
-  );
-
-  it.effect("refuses to rename the service, and says so", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_SERVICE_NAME: "some-other-app" }),
-      );
-      assert.deepStrictEqual(resolved.resourceAttributes, {});
-      assert.lengthOf(resolved.warnings, 1);
-      assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
-    }),
-  );
-
-  it.effect("drops a service.name hidden in the resource attributes", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app,host.name=lab-01" }),
-      );
-      // Dropped rather than passed through, or the exporter would receive a
-      // second service.name beside the one the process chose.
-      assert.deepStrictEqual(resolved.resourceAttributes, { "host.name": "lab-01" });
-      assert.include(resolved.warnings[0] ?? "", "service.name was ignored");
-    }),
-  );
-
-  it.effect("names OTEL_SERVICE_NAME rather than the attribute when both are set", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_SERVICE_NAME: "explicit",
-          OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes",
-        }),
-      );
-      assert.lengthOf(resolved.warnings, 1);
-      assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
-    }),
-  );
-
-  it.effect("declines grpc instead of posting a body it cannot frame", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings, undefined);
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      assert.include(resolved.traces.declined ?? "", "grpc");
-    }),
-  );
-
-  it.effect("declines only the signal that asked for grpc", () =>
-    Effect.gen(function* () {
-      // A metric endpoint that speaks gRPC says nothing about where traces go,
-      // and turning traces off over it loses telemetry nobody asked to lose.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "grpc",
-        }),
-      );
-      assert.isDefined(resolved.traces.settings);
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      assert.include(resolved.metrics.declined ?? "", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL");
-    }),
-  );
-
-  it.effect("defaults each signal to the specification's wire format", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
-      );
-      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
-      assert.strictEqual(resolved.metrics.settings?.protocol, "http/protobuf");
-      assert.strictEqual(resolved.logs.settings?.protocol, "http/protobuf");
-    }),
-  );
-
-  it.effect("keeps the wire format on the signal that named an endpoint", () =>
-    Effect.gen(function* () {
-      // A protocol with no endpoint of its own describes nothing, so it must
-      // not reach an export configured by some other name.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf" }),
-      );
-      assert.strictEqual(resolved.traces.settings, undefined);
-      assert.strictEqual(resolved.metrics.settings, undefined);
-    }),
-  );
-
-  it.effect("takes the batch knobs the exporter can act on", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_BSP_SCHEDULE_DELAY: "2500",
-          OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "128",
-          OTEL_METRIC_EXPORT_INTERVAL: "15000",
-          OTEL_BLRP_SCHEDULE_DELAY: "3500",
-          OTEL_BLRP_MAX_EXPORT_BATCH_SIZE: "64",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 2500);
-      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 128);
-      assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 15000);
-      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 3500);
-      assert.strictEqual(resolved.logs.settings?.maxBatchSize, 64);
-    }),
-  );
-
-  it.effect("leaves the request timeouts alone rather than spending them on shutdown", () =>
-    Effect.gen(function* () {
-      // These name a per-request deadline and the exporter has no such knob.
-      // Bounding the final flush with them instead would hold a restart open
-      // for as long as the collector was allowed to be slow.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_TIMEOUT: "600000",
-          OTEL_EXPORTER_OTLP_TRACES_TIMEOUT: "600000",
-          OTEL_METRIC_EXPORT_TIMEOUT: "600000",
-        }),
-      );
-      assert.deepStrictEqual(Object.keys(resolved.traces.settings ?? {}).sort(), [
-        "exportIntervalMs",
-        "headers",
-        "maxBatchSize",
-        "protocol",
-        "temporality",
-        "url",
-      ]);
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("falls back to the specification's own batching defaults", () =>
-    Effect.gen(function* () {
-      // Once this route is the one configuring the exporter, the numbers that
-      // apply are the specification's, not the ones T3 Code picked for itself.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
-      );
-      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 5000);
-      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
-      assert.strictEqual(resolved.metrics.settings?.exportIntervalMs, 60000);
-      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
-      assert.strictEqual(resolved.logs.settings?.maxBatchSize, 512);
-    }),
-  );
-
-  it.effect("lets the metric signal name its own aggregation", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "delta",
-        }),
-      );
-      assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
-      assert.strictEqual(resolved.traces.settings?.temporality, undefined);
-      assert.strictEqual(resolved.logs.settings?.temporality, undefined);
-    }),
-  );
-
-  it.effect("decodes a header the way the specification encodes it", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20abc123, x-scope=team%2Fplatform",
-        }),
-      );
-      assert.deepStrictEqual(resolved.traces.settings?.headers, {
-        Authorization: "Bearer abc123",
-        "x-scope": "team/platform",
-      });
-    }),
-  );
-
-  it.effect("keeps a credential that contains its own separator", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Basic YWJjOmRlZg==",
-        }),
-      );
-      assert.deepStrictEqual(resolved.traces.settings?.headers, {
-        Authorization: "Basic YWJjOmRlZg==",
-      });
-    }),
-  );
-
-  it.effect("decodes resource attributes too", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=platform%20eng,deployment.environment=prod" }),
-      );
-      assert.deepStrictEqual(resolved.resourceAttributes, {
-        team: "platform eng",
-        "deployment.environment": "prod",
-      });
-    }),
-  );
-
-  it.effect("discards a pair list that is not valid percent encoding", () =>
-    Effect.gen(function* () {
-      // Half a header set is worse than none: the collector answers a partial
-      // credential with the same 401 it gives a wrong one, and nothing says
-      // the variable was the problem.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz,x-other=100%25",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.headers, undefined);
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
-      );
-    }),
-  );
-
-  it.effect("discards resource attributes that do not decode", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_RESOURCE_ATTRIBUTES: "team=100%zz,deployment=prod" }),
-      );
-      assert.deepStrictEqual(resolved.resourceAttributes, {});
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_RESOURCE_ATTRIBUTES")),
-      );
-    }),
-  );
-
-  it.effect("appends the signal path after a base that already has one", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com/otel" }),
-      );
-      assert.strictEqual(
-        resolved.traces.settings?.url,
-        "https://collector.example.com/otel/v1/traces",
-      );
-    }),
-  );
-
-  it.effect("resolves lowmemory to the aggregation it asks for on these metrics", () =>
-    Effect.gen(function* () {
-      // Falling back to the default here would invert the request rather than
-      // decline it, and invert it toward the value a delta-only receiver drops
-      // without an error, so the timers would vanish and the counters would not.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
-        }),
-      );
-      assert.strictEqual(resolved.metrics.settings?.temporality, "delta");
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("lowmemory")));
-    }),
-  );
-
-  it.effect("says nothing about an aggregation for metrics these variables did not place", () =>
-    Effect.gen(function* () {
-      // The preference travels with the endpoint that asked for it, so on a
-      // machine whose metrics endpoint comes from somewhere else this warning
-      // would claim an aggregation that never applied.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://collector.example.com/v1/traces",
-          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "lowmemory",
-        }),
-      );
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      assert.isFalse(resolved.warnings.some((warning) => warning.includes("lowmemory")));
-    }),
-  );
-
-  it.effect("ignores a temporality that is not a preference at all", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE: "hourly",
-        }),
-      );
-      assert.isDefined(resolved.metrics.settings);
-      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("hourly")));
-    }),
-  );
-
-  it.effect("asks for no aggregation when nothing names one", () =>
-    Effect.gen(function* () {
-      // Left unset on purpose. The exporter applies
-      // `DEFAULT_METRICS_TEMPORALITY`, and a value here would claim the
-      // operator chose it.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com" }),
-      );
-      assert.isDefined(resolved.metrics.settings);
-      assert.strictEqual(resolved.metrics.settings?.temporality, undefined);
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("warns about a misspelled protocol and keeps exporting", () =>
-    Effect.gen(function* () {
-      // The specification is explicit here: a value the implementation does
-      // not recognize gets a warning and is ignored. Switching export off over
-      // a typo loses the telemetry the typo was not about.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "htp/json",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
-      assert.strictEqual(resolved.traces.declined, undefined);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("htp/json")));
-    }),
-  );
-
-  it.effect("lets the two signals use different wire formats", () =>
-    Effect.gen(function* () {
-      // Each signal builds its own serializer, so the metric protocol is
-      // honored on its own rather than losing to the trace one.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
-          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.protocol, "http/json");
-      assert.strictEqual(resolved.metrics.settings?.protocol, "http/protobuf");
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("keeps exporting when a number is not a number", () =>
-    Effect.gen(function* () {
-      // A typo on one knob must not take the rest of the telemetry with it.
-      // Before this, the read failed outright and nothing was exported.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_BSP_SCHEDULE_DELAY: "abc",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 5000);
-      assert.strictEqual(
-        resolved.metrics.settings?.url,
-        "https://collector.example.com/v1/metrics",
-      );
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_BSP_SCHEDULE_DELAY")),
-      );
-    }),
-  );
-
-  it.effect("reads a boolean the way the specification defines one", () =>
-    Effect.gen(function* () {
-      // Case insensitive `true` and nothing else. `yes` is affirmative in
-      // other config systems and false here, which the specification is
-      // explicit about.
-      const upper = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_SDK_DISABLED: "True" }));
-      assert.isTrue(upper.disabled);
-
-      const affirmative = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_SDK_DISABLED: "yes",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-        }),
-      );
-      assert.isFalse(affirmative.disabled);
-      assert.isDefined(affirmative.traces.settings);
-    }),
-  );
-
-  it.effect("treats an empty value as an unset one", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_SERVICE_NAME: "",
-          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "",
-        }),
-      );
-      // An empty rename is not a rename, so it is not worth a warning either.
-      assert.deepStrictEqual(resolved.warnings, []);
-      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
-    }),
-  );
-
-  it.effect("falls back to the generic headers when the signal's own list is junk", () =>
-    Effect.gen(function* () {
-      // A list with no pair in it is malformed, not a request for no headers.
-      // Reading it as an answer would shadow the generic variable and send an
-      // unauthenticated stream to a collector that was told how to authorize.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_TRACES_HEADERS: "junk",
-          OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Bearer%20abc123",
-        }),
-      );
-      assert.deepStrictEqual(resolved.traces.settings?.headers, {
-        Authorization: "Bearer abc123",
-      });
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_TRACES_HEADERS")),
-      );
-    }),
-  );
-
-  it.effect("names a shared variable once even though both signals read it", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "x-token=100%zz",
-        }),
-      );
-      assert.strictEqual(
-        resolved.warnings.filter((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS"))
-          .length,
-        1,
-      );
-    }),
-  );
-
-  it.effect("does not blame gRPC for a signal that was never going to export", () =>
-    Effect.gen(function* () {
-      // Nothing named an endpoint, so the protocol is beside the point and
-      // reporting it would send someone looking for a collector problem.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_EXPORTER_OTLP_PROTOCOL: "grpc" }),
-      );
-      assert.strictEqual(resolved.traces.declined, undefined);
-      assert.strictEqual(resolved.metrics.declined, undefined);
-    }),
-  );
-
-  it.effect("stays quiet about the protocol once the SDK is off", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
-        }),
-      );
-      assert.isTrue(resolved.disabled);
-      assert.strictEqual(resolved.traces.declined, undefined);
-      assert.strictEqual(resolved.metrics.declined, undefined);
-    }),
-  );
-
-  it.effect("does not carry a padded variable into the URL it builds", () =>
-    Effect.gen(function* () {
-      // A shell profile that lined up its exports did not mean the padding to
-      // become part of the endpoint, and the appended signal path would put it
-      // in the middle of the URL where nothing would report it.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "  https://collector.example.com/  ",
-          OTEL_SERVICE_VERSION: "  1.2.3  ",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.url, "https://collector.example.com/v1/traces");
-      assert.strictEqual(resolved.serviceVersion, "1.2.3");
-    }),
-  );
-
-  it.effect("reads the metric protocol when it is the only one named", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/json",
-        }),
-      );
-      assert.strictEqual(resolved.metrics.settings?.protocol, "http/json");
-      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("takes a log endpoint exactly as written", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://generic.example.com",
-          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://logs.example.com/ingest",
-        }),
-      );
-      assert.strictEqual(resolved.logs.settings?.url, "https://logs.example.com/ingest");
-      assert.strictEqual(resolved.traces.settings?.url, "https://generic.example.com/v1/traces");
-    }),
-  );
-
-  it.effect("honors the log signal turned off by name", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_LOGS_EXPORTER: "none",
-        }),
-      );
-      assert.strictEqual(resolved.logs.settings, undefined);
-      assert.isDefined(resolved.traces.settings);
-      assert.isDefined(resolved.metrics.settings);
-    }),
-  );
-
-  it.effect("lets the log signal name its own wire format and headers", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
-          OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
-          OTEL_EXPORTER_OTLP_LOGS_HEADERS: "x-scope=logs%2Fonly",
-          OTEL_EXPORTER_OTLP_HEADERS: "x-scope=everything",
-        }),
-      );
-      assert.strictEqual(resolved.logs.settings?.protocol, "http/json");
-      assert.deepStrictEqual(resolved.logs.settings?.headers, { "x-scope": "logs/only" });
-      assert.strictEqual(resolved.traces.settings?.protocol, "http/protobuf");
-      assert.deepStrictEqual(resolved.traces.settings?.headers, { "x-scope": "everything" });
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("declines only the log signal that asked for grpc", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "grpc",
-        }),
-      );
-      assert.strictEqual(resolved.logs.settings, undefined);
-      assert.include(resolved.logs.declined ?? "", "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL");
-      assert.isDefined(resolved.traces.settings);
-      assert.isDefined(resolved.metrics.settings);
-    }),
-  );
-
-  it.effect("exports no log records once the SDK is disabled", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_SDK_DISABLED: "true",
-          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://logs.example.com/ingest",
-        }),
-      );
-      assert.isTrue(resolved.disabled);
-      assert.strictEqual(resolved.logs.settings, undefined);
-      assert.strictEqual(resolved.logs.declined, undefined);
-    }),
-  );
-
-  it.effect("keeps a log record delay separate from the span one", () =>
-    Effect.gen(function* () {
-      // The two are different variables with different defaults, and reading
-      // one for the other would export log records five times slower than the
-      // specification says to.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_BSP_SCHEDULE_DELAY: "9000",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 9000);
-      assert.strictEqual(resolved.logs.settings?.exportIntervalMs, 1000);
-    }),
-  );
-
-  it.effect("keeps exporting when an exporter name is misspelled", () =>
-    Effect.gen(function* () {
-      // Reading `otlpp` as "not OTLP" would turn one transposed letter into a
-      // signal that stops exporting with nothing to connect the two.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_TRACES_EXPORTER: "otlpp",
-        }),
-      );
-      assert.isDefined(resolved.traces.settings);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_TRACES_EXPORTER")));
-    }),
-  );
-
-  it.effect("stops exporting a signal that asked for an exporter this has none of", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_METRICS_EXPORTER: "prometheus",
-        }),
-      );
-      assert.strictEqual(resolved.metrics.settings, undefined);
-      assert.isDefined(resolved.traces.settings);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("OTEL_METRICS_EXPORTER")));
-    }),
-  );
-
-  it.effect("says a misspelling beside otlp did nothing rather than passing it over", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_LOGS_EXPORTER: "otlp,otlpp",
-        }),
-      );
-      assert.isDefined(resolved.logs.settings);
-      assert.isTrue(resolved.warnings.some((warning) => warning.includes("otlp,otlpp")));
-    }),
-  );
-
-  it.effect("says nothing about an exporter list on a signal with nowhere to go", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ OTEL_TRACES_EXPORTER: "zipkin" }),
-      );
-      assert.deepStrictEqual(resolved.warnings, []);
-    }),
-  );
-
-  it.effect("refuses a batch size of zero rather than posting one request per span", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_BSP_MAX_EXPORT_BATCH_SIZE: "0",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.maxBatchSize, 512);
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_BSP_MAX_EXPORT_BATCH_SIZE")),
-      );
-    }),
-  );
-
-  it.effect("still drains as fast as the loop allows on a delay of zero", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_BSP_SCHEDULE_DELAY: "0",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.exportIntervalMs, 0);
-    }),
-  );
-
-  it.effect("discards a header list where one member carries no pair", () =>
-    Effect.gen(function* () {
-      // Keeping the readable members would authorize the stream and then route
-      // it to the wrong tenant, which reads as a collector problem rather than
-      // as the typo it is.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,x-tenant",
-        }),
-      );
-      assert.strictEqual(resolved.traces.settings?.headers, undefined);
-      assert.isTrue(
-        resolved.warnings.some((warning) => warning.includes("OTEL_EXPORTER_OTLP_HEADERS")),
-      );
-    }),
-  );
-
-  it.effect("keeps a stored endpoint from re-enabling a signal turned off by name", () =>
-    Effect.gen(function* () {
-      // `none` is an answer about this signal, not an absence of one, so the
-      // endpoint someone saved once does not get to give the opposite answer.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_LOGS_EXPORTER: "none",
-        }),
-      );
-      assert.strictEqual(resolved.logs.off, true);
-      const logs = OtelEnvironment.resolveSignalSource({
-        t3Url: undefined,
-        signal: resolved.logs,
-        persistedUrl: "https://stored.example.com/v1/logs",
-      });
-      assert.strictEqual(logs.url, undefined);
-    }),
-  );
-
-  it.effect("keeps a stored endpoint from answering for a declined transport", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "grpc",
-        }),
-      );
-      assert.strictEqual(resolved.traces.off, true);
-      const traces = OtelEnvironment.resolveSignalSource({
-        t3Url: undefined,
-        signal: resolved.traces,
-        persistedUrl: "https://stored.example.com/v1/traces",
-      });
-      assert.strictEqual(traces.url, undefined);
-      assert.isDefined(traces.signal.declined);
-    }),
-  );
-
-  it.effect("still reaches the endpoint T3 Code's own name gave a signal turned off", () =>
-    Effect.gen(function* () {
-      // T3 Code's own name outranks the standard names, so an operator who set
-      // it is not overruled by a fleet-wide exporter list.
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_METRICS_EXPORTER: "none",
-        }),
-      );
-      const metrics = OtelEnvironment.resolveSignalSource({
-        t3Url: "https://t3.example.com/v1/metrics",
-        signal: resolved.metrics,
-        persistedUrl: undefined,
-      });
-      assert.strictEqual(metrics.url, "https://t3.example.com/v1/metrics");
-    }),
-  );
-
-  it.effect("leaves a stored endpoint alone when no standard endpoint named the signal", () =>
-    Effect.gen(function* () {
-      // With nowhere for these variables to send anything, the exporter list is
-      // not read at all, so it says nothing about the signal and cannot switch
-      // off an export it was never describing.
-      const resolved = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_LOGS_EXPORTER: "none" }));
-      assert.strictEqual(resolved.logs.off, false);
-      const logs = OtelEnvironment.resolveSignalSource({
-        t3Url: undefined,
-        signal: resolved.logs,
-        persistedUrl: "https://stored.example.com/v1/logs",
-      });
-      assert.strictEqual(logs.url, "https://stored.example.com/v1/logs");
-    }),
-  );
-
-  it.effect("reads a trailing comma as spacing rather than as a member", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({
-          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
-          OTEL_EXPORTER_OTLP_HEADERS: "authorization=token,",
-        }),
-      );
-      assert.deepStrictEqual(resolved.traces.settings?.headers, { authorization: "token" });
-    }),
-  );
-
-  it.effect("warns about a spec value the specification does not recognize", () =>
-    Effect.gen(function* () {
-      const numeric = yield* OtelEnvironment.load.pipe(withEnv({ OTEL_SDK_DISABLED: "1" }));
-      assert.isFalse(numeric.disabled);
-      assert.deepStrictEqual(numeric.warnings, [
-        "OTEL_SDK_DISABLED=1 was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way",
-      ]);
-
-      // T3 Code's own name already answered, so the standard one is moot for
-      // `disabled`, but a value nobody can read is still worth a warning.
-      const answered = yield* OtelEnvironment.load.pipe(
-        withEnv({ T3CODE_OTEL_SDK_DISABLED: "false", OTEL_SDK_DISABLED: "yes" }),
-      );
-      assert.isFalse(answered.disabled);
-      assert.deepStrictEqual(answered.warnings, [
-        "OTEL_SDK_DISABLED=yes was read as false; the OpenTelemetry specification recognizes only the string true, so use OTEL_SDK_DISABLED=true or T3CODE_OTEL_SDK_DISABLED to say it any other way",
-      ]);
-    }),
-  );
-
-  it.effect("treats a blank T3CODE_OTEL_SDK_DISABLED as unset and falls through", () =>
-    Effect.gen(function* () {
-      const resolved = yield* OtelEnvironment.load.pipe(
-        withEnv({ T3CODE_OTEL_SDK_DISABLED: "  ", OTEL_SDK_DISABLED: "true" }),
-      );
-      assert.isTrue(resolved.disabled);
-      assert.deepStrictEqual(resolved.warnings, [
-        "OTEL_SDK_DISABLED is set, so no telemetry is exported, whatever configured it; set T3CODE_OTEL_SDK_DISABLED=false to export anyway",
-      ]);
+  it.effect.each([
+    { name: "nothing set", env: {}, disabled: false, warnings: [] },
+    // OTEL_SDK_DISABLED follows the specification: only `true`, case-insensitively.
+    { name: "spec true", env: { OTEL_SDK_DISABLED: "true" }, disabled: true, warnings: [SPEC_OFF] },
+    { name: "spec True", env: { OTEL_SDK_DISABLED: "True" }, disabled: true, warnings: [SPEC_OFF] },
+    {
+      name: "spec padded",
+      env: { OTEL_SDK_DISABLED: " true " },
+      disabled: true,
+      warnings: [SPEC_OFF],
+    },
+    { name: "spec false", env: { OTEL_SDK_DISABLED: "false" }, disabled: false, warnings: [] },
+    {
+      name: "spec 1",
+      env: { OTEL_SDK_DISABLED: "1" },
+      disabled: false,
+      warnings: [specIgnored("1")],
+    },
+    {
+      name: "spec padded yes",
+      env: { OTEL_SDK_DISABLED: " yes " },
+      disabled: false,
+      warnings: [specIgnored("yes")],
+    },
+    // T3CODE_OTEL_SDK_DISABLED takes Config.Boolean's values, case-insensitively.
+    { name: "t3 1", env: { T3CODE_OTEL_SDK_DISABLED: "1" }, disabled: true, warnings: [T3_OFF] },
+    {
+      name: "t3 TRUE",
+      env: { T3CODE_OTEL_SDK_DISABLED: "TRUE" },
+      disabled: true,
+      warnings: [T3_OFF],
+    },
+    { name: "t3 n", env: { T3CODE_OTEL_SDK_DISABLED: "n" }, disabled: false, warnings: [] },
+    {
+      name: "t3 false overrides spec true",
+      env: { T3CODE_OTEL_SDK_DISABLED: "false", OTEL_SDK_DISABLED: "true" },
+      disabled: false,
+      warnings: [],
+    },
+    {
+      name: "blank t3 falls through",
+      env: { T3CODE_OTEL_SDK_DISABLED: "  ", OTEL_SDK_DISABLED: "true" },
+      disabled: true,
+      warnings: [SPEC_OFF],
+    },
+    {
+      name: "unreadable t3 warns and falls through",
+      env: { T3CODE_OTEL_SDK_DISABLED: "maybe", OTEL_SDK_DISABLED: "true" },
+      disabled: true,
+      warnings: ["T3CODE_OTEL_SDK_DISABLED=maybe is not a yes or a no and was ignored", SPEC_OFF],
+    },
+    {
+      name: "bad spec value still warns when t3 answered",
+      env: { T3CODE_OTEL_SDK_DISABLED: "false", OTEL_SDK_DISABLED: "yes" },
+      disabled: false,
+      warnings: [specIgnored("yes")],
+    },
+  ])("$name", ({ env, disabled, warnings }) =>
+    Effect.gen(function* () {
+      const resolved = yield* load(env);
+      assert.strictEqual(resolved.disabled, disabled);
+      assert.deepStrictEqual(resolved.warnings, warnings);
     }),
   );
 
@@ -1020,6 +105,296 @@ describe("OtelEnvironment", () => {
       assert.deepStrictEqual(resolved.warnings, warnings);
     }),
   );
+
+  describe("endpoints", () => {
+    const urlOf = (signal: OtelEnvironment.OtelSignal) =>
+      OtelEnvironment.OtelSignal.$match(signal, {
+        Export: ({ url }) => url,
+        Off: () => "Off",
+        Unset: () => "Unset",
+      });
+    it.effect.each([
+      {
+        name: "nothing set",
+        env: {},
+        traces: "Unset",
+        metrics: "Unset",
+        logs: "Unset",
+        warnings: [],
+      },
+      {
+        name: "generic endpoint appends each signal's path, keeping the query",
+        env: { OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318/base?api_key=secret" },
+        traces: "https://collector:4318/base/v1/traces?api_key=secret",
+        metrics: "https://collector:4318/base/v1/metrics?api_key=secret",
+        logs: "https://collector:4318/base/v1/logs?api_key=secret",
+        warnings: [],
+      },
+      {
+        name: "a per-signal endpoint is used verbatim",
+        env: { OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://tempo:4318/custom" },
+        traces: "https://tempo:4318/custom",
+        metrics: "Unset",
+        logs: "Unset",
+        warnings: [],
+      },
+      {
+        name: "a per-signal endpoint beats the generic one",
+        env: {
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://tempo:4318/custom",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318/base",
+        },
+        traces: "https://tempo:4318/custom",
+        metrics: "https://collector:4318/base/v1/metrics",
+        logs: "https://collector:4318/base/v1/logs",
+        warnings: [],
+      },
+      {
+        name: "a blank per-signal endpoint falls through to the generic one",
+        env: {
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "  ",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318/base",
+        },
+        traces: "https://collector:4318/base/v1/traces",
+        metrics: "https://collector:4318/base/v1/metrics",
+        logs: "https://collector:4318/base/v1/logs",
+        warnings: [],
+      },
+      {
+        name: "an invalid per-signal endpoint warns and does not fall through",
+        env: {
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "not-a-url",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318/base",
+        },
+        traces: "Off",
+        metrics: "https://collector:4318/base/v1/metrics",
+        logs: "https://collector:4318/base/v1/logs",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT is not an http or https URL, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "an invalid generic endpoint warns without leaking its query",
+        env: { OTEL_EXPORTER_OTLP_ENDPOINT: "not-a-url?api_key=secret" },
+        traces: "Off",
+        metrics: "Off",
+        logs: "Off",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_ENDPOINT is not an http or https URL, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "an endpoint without a scheme is not an http URL",
+        env: { OTEL_EXPORTER_OTLP_ENDPOINT: "localhost:4318" },
+        traces: "Off",
+        metrics: "Off",
+        logs: "Off",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_ENDPOINT is not an http or https URL, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "the kill switch wins outright over a valid endpoint",
+        env: {
+          T3CODE_OTEL_SDK_DISABLED: "true",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318/base",
+        },
+        traces: "Unset",
+        metrics: "Unset",
+        logs: "Unset",
+        warnings: [T3_OFF],
+      },
+    ])("$name", ({ env, traces, metrics, logs, warnings }) =>
+      Effect.gen(function* () {
+        const resolved = yield* load(env);
+        assert.strictEqual(urlOf(resolved.traces), traces);
+        assert.strictEqual(urlOf(resolved.metrics), metrics);
+        assert.strictEqual(urlOf(resolved.logs), logs);
+        assert.deepStrictEqual(resolved.warnings, warnings);
+      }),
+    );
+
+    const ENDPOINT = { OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318" };
+    const exportOf = (signal: OtelEnvironment.OtelSignal): unknown =>
+      OtelEnvironment.OtelSignal.$match(signal, {
+        Export: ({ protocol, headers }) => ({ protocol, headers }),
+        Off: () => "Off",
+        Unset: () => "Unset",
+      });
+    it.effect.each([
+      {
+        name: "nothing else set takes the specification's default protocol",
+        env: ENDPOINT,
+        traces: { protocol: "http/protobuf", headers: undefined },
+        logs: { protocol: "http/protobuf", headers: undefined },
+        warnings: [],
+      },
+      {
+        name: "headers are comma-separated pairs with percent-encoded values",
+        env: { ...ENDPOINT, OTEL_EXPORTER_OTLP_HEADERS: "api-key=a%20b,tenant=t3" },
+        traces: { protocol: "http/protobuf", headers: { "api-key": "a b", tenant: "t3" } },
+        logs: { protocol: "http/protobuf", headers: { "api-key": "a b", tenant: "t3" } },
+        warnings: [],
+      },
+      {
+        name: "a per-signal protocol and headers beat the generic ones",
+        env: {
+          ...ENDPOINT,
+          OTEL_EXPORTER_OTLP_PROTOCOL: "http/json",
+          OTEL_EXPORTER_OTLP_HEADERS: "api-key=shared",
+          OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
+          OTEL_EXPORTER_OTLP_TRACES_HEADERS: "api-key=traces%20only",
+        },
+        traces: { protocol: "http/protobuf", headers: { "api-key": "traces only" } },
+        logs: { protocol: "http/json", headers: { "api-key": "shared" } },
+        warnings: [],
+      },
+      {
+        name: "an unsupported protocol turns off the signals it configures",
+        env: { ...ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "grpc" },
+        traces: { protocol: "http/protobuf", headers: undefined },
+        logs: "Off",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL is not http/protobuf or http/json, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "a protocol reads case-insensitively",
+        env: { ...ENDPOINT, OTEL_EXPORTER_OTLP_PROTOCOL: "HTTP/JSON" },
+        traces: { protocol: "http/json", headers: undefined },
+        logs: { protocol: "http/json", headers: undefined },
+        warnings: [],
+      },
+      {
+        name: "undecodable headers turn off every signal once, without leaking them",
+        env: { ...ENDPOINT, OTEL_EXPORTER_OTLP_HEADERS: "api-key=%zz" },
+        traces: "Off",
+        logs: "Off",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_HEADERS is not a list of key=value pairs with percent-encoded values, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "a header without a value separator turns its signal off",
+        env: { ...ENDPOINT, OTEL_EXPORTER_OTLP_LOGS_HEADERS: "Authorization" },
+        traces: { protocol: "http/protobuf", headers: undefined },
+        logs: "Off",
+        warnings: [
+          "OTEL_EXPORTER_OTLP_LOGS_HEADERS is not a list of key=value pairs with percent-encoded values, so the signals it configures are not exported",
+        ],
+      },
+      {
+        name: "blank per-signal headers leave the generic ones in charge",
+        env: {
+          ...ENDPOINT,
+          OTEL_EXPORTER_OTLP_HEADERS: "api-key=shared",
+          OTEL_EXPORTER_OTLP_LOGS_HEADERS: "  ",
+        },
+        traces: { protocol: "http/protobuf", headers: { "api-key": "shared" } },
+        logs: { protocol: "http/protobuf", headers: { "api-key": "shared" } },
+        warnings: [],
+      },
+      {
+        name: "generic headers every signal overrides say nothing",
+        env: {
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://tempo:4318/v1/traces",
+          OTEL_EXPORTER_OTLP_TRACES_HEADERS: "api-key=traces",
+          OTEL_EXPORTER_OTLP_HEADERS: "api-key=%zz",
+        },
+        traces: { protocol: "http/protobuf", headers: { "api-key": "traces" } },
+        logs: "Unset",
+        warnings: [],
+      },
+      {
+        name: "protocol and headers say nothing for a signal no endpoint names",
+        env: { OTEL_EXPORTER_OTLP_PROTOCOL: "grpc", OTEL_EXPORTER_OTLP_HEADERS: "api-key=%zz" },
+        traces: "Unset",
+        logs: "Unset",
+        warnings: [],
+      },
+    ])("$name", ({ env, traces, logs, warnings }) =>
+      Effect.gen(function* () {
+        const resolved = yield* load(env);
+        assert.deepStrictEqual(exportOf(resolved.traces), traces);
+        assert.deepStrictEqual(exportOf(resolved.logs), logs);
+        assert.deepStrictEqual(resolved.warnings, warnings);
+      }),
+    );
+  });
+
+  describe("resolveSignalEndpoint", () => {
+    const t3Export = {
+      protocol: "http/json",
+      headers: { "x-key": "t3" },
+      exportIntervalMs: 5_000,
+    } as const;
+    const withLogs = (logs: OtelEnvironment.OtelSignal, disabled = false) => ({
+      ...OtelEnvironment.none,
+      disabled,
+      logs,
+    });
+    const otelExport = OtelEnvironment.OtelSignal.Export({
+      url: "http://otel:4318/v1/logs",
+      protocol: "http/protobuf",
+      headers: { "x-key": "otel" },
+    });
+    it.each([
+      {
+        name: "T3CODE_OTLP_*_URL wins over an OTEL endpoint",
+        otel: withLogs(otelExport),
+        t3Url: "http://t3:4318/v1/logs",
+        expected: { url: "http://t3:4318/v1/logs", export: t3Export },
+      },
+      {
+        name: "T3CODE_OTLP_*_URL wins over a signal the OTEL variables turned off",
+        otel: withLogs(OtelEnvironment.OtelSignal.Off()),
+        t3Url: "http://t3:4318/v1/logs",
+        expected: { url: "http://t3:4318/v1/logs", export: t3Export },
+      },
+      {
+        name: "an OTEL endpoint brings its headers and protocol over the fallback",
+        otel: withLogs(otelExport),
+        t3Url: " ",
+        expected: {
+          url: "http://otel:4318/v1/logs",
+          export: {
+            protocol: "http/protobuf" as const,
+            headers: { "x-key": "otel" },
+            exportIntervalMs: 5_000,
+          },
+        },
+      },
+      {
+        name: "a signal the OTEL variables turned off does not fall through",
+        otel: withLogs(OtelEnvironment.OtelSignal.Off()),
+        t3Url: undefined,
+        expected: undefined,
+      },
+      {
+        name: "an unset signal takes the first non-blank fallback",
+        otel: withLogs(OtelEnvironment.OtelSignal.Unset()),
+        t3Url: undefined,
+        expected: { url: "http://settings:4318/v1/logs", export: t3Export },
+      },
+      {
+        name: "the kill switch wins over everything",
+        otel: withLogs(otelExport, true),
+        t3Url: "http://t3:4318/v1/logs",
+        expected: undefined,
+      },
+    ])("$name", ({ otel, t3Url, expected }) => {
+      assert.deepStrictEqual(
+        OtelEnvironment.resolveSignalEndpoint(
+          otel,
+          "logs",
+          { url: t3Url, export: t3Export },
+          "",
+          "http://settings:4318/v1/logs",
+        ),
+        expected,
+      );
+    });
+  });
 
   describe("layerResourceAttributes", () => {
     it.effect.each([

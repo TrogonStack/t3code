@@ -90,7 +90,7 @@ describe("DesktopEnvironment", () => {
       assert.deepEqual(environment.otlpTracesUrl, Option.some("http://127.0.0.1:4318/v1/traces"));
       assert.deepEqual(environment.otlpMetricsUrl, Option.some("http://127.0.0.1:4318/v1/metrics"));
       assert.deepEqual(environment.otlpLogsUrl, Option.some("http://127.0.0.1:4318/v1/logs"));
-      assert.deepEqual(environment.otlpExportIntervalMs, Option.some(2500));
+      assert.equal(environment.otlpExportIntervalMs, 2500);
       assert.deepEqual(
         environment.otlpHeaders,
         Option.some({
@@ -98,7 +98,7 @@ describe("DesktopEnvironment", () => {
           "x-tenant": "t3",
         }),
       );
-      assert.deepEqual(environment.otlpProtocol, Option.some("http/protobuf"));
+      assert.equal(environment.otlpProtocol, "http/protobuf");
     }),
   );
 
@@ -116,7 +116,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
       assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
-      assert.deepEqual(environment.otlpProtocol, Option.none());
+      assert.equal(environment.otlpProtocol, "http/json");
     }),
   );
 

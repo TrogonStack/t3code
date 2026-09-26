@@ -15,6 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -102,9 +103,9 @@ const makeCliTestServerConfig = (baseDir: string) =>
       otlpTracesUrl: undefined,
       otlpMetricsUrl: undefined,
       otlpLogsUrl: undefined,
-      otlpTracesExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-      otlpMetricsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
-      otlpLogsExport: OtelEnvironment.DEFAULT_SIGNAL_EXPORT,
+      otlpTracesExport: DEFAULT_SIGNAL_EXPORT,
+      otlpMetricsExport: DEFAULT_SIGNAL_EXPORT,
+      otlpLogsExport: DEFAULT_SIGNAL_EXPORT,
       otelEnvironment: OtelEnvironment.none,
       mode: "web",
       port: 0,

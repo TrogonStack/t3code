@@ -19,9 +19,8 @@ export const ServerLoggerLive = Effect.gen(function* () {
       : OtlpLogger.make({
           url: config.otlpLogsUrl,
           exportInterval: `${logs.exportIntervalMs} millis`,
+          headers: logs.headers,
           resource: otlpResource(config),
-          ...(logs.headers === undefined ? {} : { headers: logs.headers }),
-          ...(logs.maxBatchSize === undefined ? {} : { maxBatchSize: logs.maxBatchSize }),
         });
 
   // `Logger.layer` writes the whole logger set rather than adding to it, so

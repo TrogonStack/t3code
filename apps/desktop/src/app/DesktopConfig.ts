@@ -48,14 +48,13 @@ export const DesktopConfig = Config.all({
   otlpTracesUrl: trimmedString("T3CODE_OTLP_TRACES_URL"),
   otlpMetricsUrl: trimmedString("T3CODE_OTLP_METRICS_URL"),
   otlpLogsUrl: trimmedString("T3CODE_OTLP_LOGS_URL"),
-  // Left as an Option rather than defaulted here: an unset variable is what
-  // lets each signal fall back to the interval the OpenTelemetry environment
-  // asked for, which the specification defines per signal.
-  otlpExportIntervalMs: Config.Int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(Config.option),
-  // Options for the same reason: unset is what lets the OpenTelemetry
-  // environment supply headers and wire format instead.
+  otlpExportIntervalMs: Config.Int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
+    Config.withDefault(10_000),
+  ),
   otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(Config.option),
-  otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(Config.option),
+  otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(
+    Config.withDefault("http/json"),
+  ),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),
   mockUpdates: optionalBoolean("T3CODE_DESKTOP_MOCK_UPDATES"),
