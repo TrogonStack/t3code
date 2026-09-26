@@ -105,10 +105,6 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  otlpServiceName: Config.String("T3CODE_OTLP_SERVICE_NAME").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
   otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -231,15 +227,6 @@ export const sharedServerCommandFlags = {
 const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
 ): Option.Option<Value> => Option.firstSomeOf(values);
-
-/**
- * A set but blank `T3CODE_OTLP_SERVICE_NAME` is not a name. Taking one as an
- * answer would file every span under the empty string.
- */
-const named = (value: string | undefined) => {
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed === "" ? undefined : trimmed;
-};
 
 const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -463,7 +450,6 @@ export const resolveServerConfig = (
       otlpTracesExport: signalExport(otelEnvironment.traces.settings),
       otlpMetricsExport: signalExport(otelEnvironment.metrics.settings),
       otlpLogsExport: signalExport(otelEnvironment.logs.settings),
-      otlpServiceName: named(env.otlpServiceName) ?? "t3-server",
       otelEnvironment,
       mode,
       port,

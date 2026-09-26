@@ -36,7 +36,7 @@ const resolve = (
         namedExportIntervalMs: overrides.namedExportIntervalMs,
         namedHeaders: overrides.namedHeaders,
         namedProtocol: overrides.namedProtocol,
-        serviceName: "t3-desktop",
+        serviceName: "t3code-desktop",
         runtimeAttributes: { "service.runtime": "desktop", "service.mode": "development" },
       }),
     ),
@@ -280,7 +280,7 @@ describe("resolveDesktopOtlpExport", () => {
         OTEL_SERVICE_VERSION: "1.2.3",
         OTEL_RESOURCE_ATTRIBUTES: "deployment.environment=lab,service.runtime=t3-server",
       });
-      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.strictEqual(resolved.resource.serviceName, "t3code-desktop");
       assert.strictEqual(resolved.resource.serviceVersion, "1.2.3");
       assert.strictEqual(resolved.resource.attributes["deployment.environment"], "lab");
       assert.strictEqual(resolved.resource.attributes["service.runtime"], "desktop");
@@ -293,7 +293,7 @@ describe("resolveDesktopOtlpExport", () => {
         OTEL_SERVICE_NAME: "some-other-app",
         OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example.com",
       });
-      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.strictEqual(resolved.resource.serviceName, "t3code-desktop");
       assert.lengthOf(resolved.warnings, 1);
       assert.include(resolved.warnings[0] ?? "", "OTEL_SERVICE_NAME was ignored");
     }),
@@ -304,7 +304,7 @@ describe("resolveDesktopOtlpExport", () => {
       const resolved = yield* resolve({
         OTEL_RESOURCE_ATTRIBUTES: "service.name=some-other-app,host.name=lab-01",
       });
-      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.strictEqual(resolved.resource.serviceName, "t3code-desktop");
       assert.strictEqual(resolved.resource.attributes["service.name"], undefined);
       assert.strictEqual(resolved.resource.attributes["host.name"], "lab-01");
       assert.include(resolved.warnings[0] ?? "", "service.name was ignored");
@@ -314,7 +314,7 @@ describe("resolveDesktopOtlpExport", () => {
   it.effect("names itself even when the environment says nothing", () =>
     Effect.gen(function* () {
       const resolved = yield* resolve({});
-      assert.strictEqual(resolved.resource.serviceName, "t3-desktop");
+      assert.strictEqual(resolved.resource.serviceName, "t3code-desktop");
       assert.strictEqual(resolved.resource.serviceVersion, undefined);
     }),
   );

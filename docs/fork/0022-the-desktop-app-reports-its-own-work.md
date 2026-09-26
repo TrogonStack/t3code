@@ -7,7 +7,7 @@
 
 - See what the desktop app itself is doing. App startup, window and menu work,
   backend supervision, and updates now reach your collector as traces and logs
-  under the service name `t3-desktop`, alongside the server work they cause.
+  under the service name `t3code-desktop`, alongside the server work they cause.
 - Configure it the way you configure everything else. The Electron main process
   reads the same `OTEL_*` endpoint variables as the server, in the same order,
   so a machine that points one of them at a collector points both. It had a
@@ -20,11 +20,10 @@
   payload every interval.
 - Turn it off the same way. `OTEL_SDK_DISABLED=true` stops both processes, and
   so does `T3CODE_OTEL_SDK_DISABLED=true`, which is read first.
-- Tell the two apart without trusting the environment. The main process reports
-  as `t3-desktop`, joining `t3-server` and `t3-web`, and `service.runtime` on it
-  is always `desktop`, so an ambient
+- Tell the two apart without trusting the environment. `service.runtime` on
+  the main process is always `desktop`, so an ambient
   `OTEL_RESOURCE_ATTRIBUTES=service.runtime=t3-server` cannot make it file its
-  work under the server's name. See 0023 for why names are static.
+  work under the server's name.
 
 ## Why
 
@@ -50,8 +49,8 @@ into a shared package instead of being copied. Upstream taking 0018 gets this
 almost for free.
 
 Upstream has since shipped its own desktop exporter and the kill switch for it,
-so what remains here is the rest of the environment reading, the static service name, and the per-signal protocol,
-headers, and batching. Upstream's version settled two questions this one had
+so what remains here is the rest of the environment reading from 0018, applied to
+the main process. Upstream's version settled two questions this one had
 answered differently, and both of its answers were adopted: metrics stay off
 until a desktop metric exists, and the OTLP log exporter replaces
 `Logger.tracerLogger` instead of joining it, which is what the fork's own

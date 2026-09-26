@@ -34,6 +34,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -265,13 +266,13 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
           bootstrapThreadId = existingThreadId.value;
         }
       }).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("startup thread auto-bootstrap failed", {
-                bootstrapProjectId: nextProjectId,
-                cause,
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) =>
+            Effect.logWarning("startup thread auto-bootstrap failed", {
+              bootstrapProjectId: nextProjectId,
+              cause,
+            }),
         ),
       );
     });
@@ -313,11 +314,9 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
       ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
       : localUrl;
   const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
-  return yield* Effect.succeed(serverConfig.mode === "desktop" ? baseTarget : undefined).pipe(
-    Effect.flatMap((target) =>
-      target ? Effect.succeed(target) : serverAuth.issueStartupPairingUrl(baseTarget),
-    ),
-  );
+  return serverConfig.mode === "desktop"
+    ? baseTarget
+    : yield* serverAuth.issueStartupPairingUrl(baseTarget);
 });
 
 const DEV_BROWSER_OPEN_MARKER_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -523,7 +522,7 @@ export const reconcileProviderSessions = Effect.gen(function* () {
   const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const settings = yield* ServerSettings.ServerSettingsService;
   const restartSettings = yield* settings.getSettings.pipe(
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.catch((cause) =>
       Effect.logWarning("could not read restart continuation preference", { cause }).pipe(
         Effect.as(Option.none()),
@@ -585,13 +584,13 @@ export const reconcileProviderSessions = Effect.gen(function* () {
       continue;
     }
     const binding = yield* directory.getBinding(thread.id).pipe(
-      Effect.catchCause((cause) =>
-        Cause.hasInterrupts(cause)
-          ? Effect.failCause(cause)
-          : Effect.logWarning("failed to read orphaned provider session directory binding", {
-              threadId: thread.id,
-              cause,
-            }).pipe(Effect.as(Option.none())),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) =>
+          Effect.logWarning("failed to read orphaned provider session directory binding", {
+            threadId: thread.id,
+            cause,
+          }).pipe(Effect.as(Option.none())),
       ),
     );
     const continuationMarkerPresent =
@@ -642,13 +641,13 @@ export const reconcileProviderSessions = Effect.gen(function* () {
             });
           }
         }).pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning(
-                  "failed to reconcile orphaned provider session directory binding",
-                  { threadId: thread.id, cause },
-                ),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) =>
+              Effect.logWarning("failed to reconcile orphaned provider session directory binding", {
+                threadId: thread.id,
+                cause,
+              }),
           ),
         );
 
@@ -669,13 +668,13 @@ export const reconcileProviderSessions = Effect.gen(function* () {
           });
         }).pipe(
           Effect.retry({ times: 1 }),
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("failed to settle orphaned provider session projection", {
-                  threadId: thread.id,
-                  cause,
-                }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) =>
+              Effect.logWarning("failed to settle orphaned provider session projection", {
+                threadId: thread.id,
+                cause,
+              }),
           ),
         );
       });
@@ -775,10 +774,9 @@ export const reconcileProviderSessions = Effect.gen(function* () {
     yield* settleAsError(ORPHANED_PROVIDER_SESSION_ERROR);
   }
 }).pipe(
-  Effect.catchCause((cause) =>
-    Cause.hasInterrupts(cause)
-      ? Effect.failCause(cause)
-      : Effect.logWarning("provider session startup reconciliation failed", { cause }),
+  Effect.catchCauseIf(
+    (cause) => !Cause.hasInterrupts(cause),
+    (cause) => Effect.logWarning("provider session startup reconciliation failed", { cause }),
   ),
 );
 
@@ -849,21 +847,20 @@ export const reconcileWorktreeSetups = Effect.gen(function* () {
         createdAt: interruptedAt,
       })
       .pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.failCause(cause)
-            : Effect.logWarning("failed to settle interrupted worktree setup", {
-                threadId,
-                cause,
-              }),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) =>
+            Effect.logWarning("failed to settle interrupted worktree setup", {
+              threadId,
+              cause,
+            }),
         ),
       );
   }
 }).pipe(
-  Effect.catchCause((cause) =>
-    Cause.hasInterrupts(cause)
-      ? Effect.failCause(cause)
-      : Effect.logWarning("worktree setup startup reconciliation failed", { cause }),
+  Effect.catchCauseIf(
+    (cause) => !Cause.hasInterrupts(cause),
+    (cause) => Effect.logWarning("worktree setup startup reconciliation failed", { cause }),
   ),
 );
 
@@ -1114,6 +1111,7 @@ export const make = (options?: StartupOptions) =>
         }),
       );
       yield* Effect.logDebug("startup phase: complete");
+      yield* flushCompileCache;
     }).pipe(
       Effect.annotateSpans({
         "server.mode": serverConfig.mode,

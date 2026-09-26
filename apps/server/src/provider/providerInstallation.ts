@@ -118,7 +118,7 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
         env: mergeProviderInstanceEnvironment({ variables: entry.environment, unresolved: [] }),
       }).pipe(
         Effect.map((resolved) => [binaryPath, resolved]),
-        Effect.catch(() => Effect.succeed([binaryPath])),
+        Effect.orElseSucceed(() => [binaryPath]),
       );
     });
     yield* installation

@@ -55,8 +55,6 @@ Each entry uses these sections:
   active, [#32](https://github.com/TrogonStack/t3code/pull/32)
 - **0022** [The desktop app reports its own work](./0022-the-desktop-app-reports-its-own-work.md)
   active, [#35](https://github.com/TrogonStack/t3code/pull/35)
-- **0023** [A service name is not an environment variable](./0023-a-service-name-is-not-an-environment-variable.md)
-  active, [#36](https://github.com/TrogonStack/t3code/pull/36)
 - **0024** [A refused merge says why, and an administrator can merge anyway](./0024-a-refused-merge-says-why.md)
   active, [#38](https://github.com/TrogonStack/t3code/pull/38)
 - **0025** [A test run leaves no processes behind](./0025-a-test-run-leaves-no-processes-behind.md)

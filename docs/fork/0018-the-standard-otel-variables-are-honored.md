@@ -15,8 +15,9 @@
 - Tell your instances apart. `OTEL_SERVICE_VERSION` and
   `OTEL_RESOURCE_ATTRIBUTES` are attached to every span, metric, and log
   record, so T3 Code sits in the same dashboards as everything else. Service
-  names themselves are static, and `OTEL_SERVICE_NAME` is refused with a
-  warning; see 0023.
+  names themselves are static, and `OTEL_SERVICE_NAME` or a `service.name` in
+  `OTEL_RESOURCE_ATTRIBUTES` is refused with a startup warning instead of being
+  dropped in silence.
 - Configure each signal on its own, logs included. A signal with its own
   address, wire format, or credentials is honored without disturbing the other
   two, `OTEL_LOGS_EXPORTER=none` stops log export while leaving spans and
@@ -71,9 +72,12 @@ on.
 ## Upstream considerations
 
 Nothing here is fork-specific and it belongs upstream. Upstream has taken the
-kill switch: `T3CODE_OTEL_SDK_DISABLED` and `OTEL_SDK_DISABLED` now stop export
-there too, read in the same order, so the sync keeps upstream's reading and the
-fork carries everything else on this page. The riskiest part for
+kill switch, the standard endpoint, header, and protocol variables, resource
+attributes, and static service names. Its reader is a subset of this one, so the
+sync keeps this reader and the fork carries the rest of this page: exporter
+selection, the batching and temporality knobs, `OTEL_SERVICE_VERSION`, the
+refusal warning for a service name, and a bad value costing that value rather
+than the whole signal. The riskiest part for
 them is the same part that makes it useful: an ambient endpoint starts an export
 that includes thread ids, turn ids, and workspace paths, and upstream may prefer
 an explicit opt-in for a product with this many users.
