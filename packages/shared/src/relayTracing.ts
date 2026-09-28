@@ -143,8 +143,8 @@ export function makeRelayClientTracingLayer(
       serviceVersion: resource.serviceVersion,
       attributes: {
         "service.namespace": "t3code",
-        "service.runtime": resource.runtime,
-        "service.component": resource.component ?? "relay-client",
+        "process.runtime.name": resource.runtime,
+        "t3.component": resource.component ?? "relay-client",
         "t3.client.surface": resource.client,
       },
     },

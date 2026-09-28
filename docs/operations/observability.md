@@ -587,10 +587,18 @@ an `http` or `https` URL, a protocol other than `http/protobuf` or `http/json` s
 headers that are not `key=value` pairs with percent-encoded values turn that signal's export off
 with a startup warning, rather than sending it to the Settings endpoint.
 
-Service names are fixed: `t3code-server` for the backend and `t3code-desktop` for the desktop main
-process, both in `service.namespace` `t3code`. `OTEL_SERVICE_NAME` and a `service.name` or
-`service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations apart with other
-resource attributes, such as `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=development`.
+Service names are fixed: `t3code-server` for the backend, `t3code-desktop` for the desktop main
+process, and `t3code-web` for the UI, all in `service.namespace` `t3code`. `OTEL_SERVICE_NAME` and a
+`service.name` or `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations
+apart with other resource attributes, such as
+`OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging`. The desktop main process reports
+`deployment.environment.name` as `development` or `production` on its own, and a value from
+`OTEL_RESOURCE_ATTRIBUTES` replaces it.
+
+The UI runs as `t3code-web` in both a browser and the desktop window, since it is the same code. Its
+`t3.client.surface` resource attribute is `desktop` or `web`, and `user_agent.original` carries the
+full user agent. The server's `t3.server.managed_by` is `desktop` when the desktop app launched it
+and `standalone` otherwise.
 
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.

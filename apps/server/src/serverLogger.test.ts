@@ -147,7 +147,8 @@ describe("ServerLoggerLive", () => {
       assert.strictEqual(request?.url, "https://collector.example.com/v1/logs");
       assert.include(request?.body ?? "", "server logger under test");
       assert.include(request?.body ?? "", "t3code-server");
-      assert.include(request?.body ?? "", "service.runtime");
+      assert.include(request?.body ?? "", "t3.server.managed_by");
+      assert.include(request?.body ?? "", "process.runtime.name");
     }),
   );
 

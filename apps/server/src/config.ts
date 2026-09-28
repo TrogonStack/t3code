@@ -16,8 +16,13 @@ import * as Path from "effect/Path";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
+import packageJson from "../package.json" with { type: "json" };
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
-import { DEFAULT_SIGNAL_EXPORT, type SignalExport } from "@t3tools/shared/observability";
+import {
+  DEFAULT_SIGNAL_EXPORT,
+  nodeProcessRuntimeAttributes,
+  type SignalExport,
+} from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 export const DEFAULT_PORT = 3773;
@@ -118,10 +123,11 @@ export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config)
  */
 export const otlpResource = (config: ServerConfig["Service"]) => ({
   serviceName: "t3code-server",
+  serviceVersion: packageJson.version,
   attributes: {
     "service.namespace": "t3code",
-    "service.runtime": "t3-server",
-    "service.mode": config.mode,
+    "t3.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
+    ...nodeProcessRuntimeAttributes(),
   },
 });
 

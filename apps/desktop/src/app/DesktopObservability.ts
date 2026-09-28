@@ -2,6 +2,7 @@ import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import {
   makeLocalFileTracer,
   makeTraceSink,
+  nodeProcessRuntimeAttributes,
   otlpSerializationLayer,
   type SignalExport,
 } from "@t3tools/shared/observability";
@@ -627,10 +628,15 @@ const telemetryLayer = Layer.unwrap(
     const endpoints = yield* resolveOtlpEndpoints;
     const resource = {
       serviceName: "t3code-desktop",
+      serviceVersion: environment.appVersion,
       attributes: {
         "service.namespace": "t3code",
-        "service.runtime": "desktop",
-        "service.mode": environment.isDevelopment ? "development" : "packaged",
+        // Effect lets explicit attributes beat `OTEL_RESOURCE_ATTRIBUTES`, so an
+        // operator's tier has to be carried over by hand to keep winning.
+        "deployment.environment.name":
+          endpoints.resourceAttributes["deployment.environment.name"] ??
+          (environment.isDevelopment ? "development" : "production"),
+        ...nodeProcessRuntimeAttributes(),
       },
     };
 

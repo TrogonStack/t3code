@@ -412,7 +412,8 @@ describe("DesktopObservability", () => {
       const [request] = requests;
       assert.strictEqual(request?.url, "https://collector.example.com/v1/logs");
       assert.include(request?.body ?? "", "desktop log export");
-      assert.include(request?.body ?? "", "service.runtime");
+      assert.include(request?.body ?? "", "deployment.environment.name");
+      assert.include(request?.body ?? "", "process.runtime.name");
       assert.strictEqual(request?.headers["x-scope"], "desktop");
 
       // The log record is the export now, so the same message must not also
@@ -497,7 +498,7 @@ describe("DesktopObservability", () => {
       assert.lengthOf(requests, 1);
       const body = requests[0]?.body ?? "";
       assert.include(body, '"stringValue":"t3code-desktop"');
-      assert.include(body, "deployment.environment.name");
+      assert.include(body, '"key":"deployment.environment.name","value":{"stringValue":"staging"}');
       assert.include(body, '"key":"service.namespace","value":{"stringValue":"t3code"}');
       assert.notInclude(body, "renamed");
     }).pipe(
@@ -511,7 +512,7 @@ describe("DesktopObservability", () => {
               env: {
                 OTEL_SERVICE_NAME: "renamed",
                 OTEL_RESOURCE_ATTRIBUTES:
-                  "service.name=renamed,service.namespace=renamed,deployment.environment.name=development",
+                  "service.name=renamed,service.namespace=renamed,deployment.environment.name=staging",
               },
             }),
           ),
