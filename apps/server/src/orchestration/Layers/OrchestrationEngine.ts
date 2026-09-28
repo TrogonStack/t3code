@@ -21,6 +21,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type * as Tracer from "effect/Tracer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -59,6 +60,9 @@ interface CommandEnvelope {
   origin: OrchestrationClientOrigin | undefined;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
+  // The dispatcher's span, so the worker's command span joins the caller's trace
+  // instead of starting a new one on the queue's fiber.
+  parentSpan: Option.Option<Tracer.AnySpan>;
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
@@ -339,7 +343,12 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
         return { sequence: committedCommand.lastSequence };
-      }).pipe(Effect.withSpan(`orchestration.command.${envelope.command.type}`)),
+      }).pipe(Effect.withSpan(`orchestration.command.${envelope.command.type}`), (effect) =>
+        Option.match(envelope.parentSpan, {
+          onNone: () => effect,
+          onSome: (parentSpan) => Effect.withParentSpan(effect, parentSpan),
+        }),
+      ),
     ).pipe(
       Effect.flatMap((exit) =>
         Effect.gen(function* () {
@@ -443,6 +452,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         origin: options?.origin,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
+        parentSpan: yield* Effect.option(Effect.currentParentSpan),
       });
       return yield* Deferred.await(result);
     });

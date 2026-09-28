@@ -26,6 +26,7 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -566,6 +567,46 @@ describe("OrchestrationEngine", () => {
       });
       expect(yield* engine.latestSequence).toBe(sequence);
     }).pipe(Effect.provide(makeOrchestrationLayer())),
+  );
+
+  const commandSpans: Array<Tracer.NativeSpan> = [];
+  const recordingTracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      if (options.name.startsWith("orchestration.command.")) commandSpans.push(span);
+      return span;
+    },
+  });
+
+  effectIt.effect("runs each command inside the dispatcher's trace", () =>
+    Effect.gen(function* () {
+      const engine = yield* OrchestrationEngineService;
+      const dispatcherSpan = yield* Effect.gen(function* () {
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("cmd-trace-parent-project-create"),
+          projectId: ProjectId.make("project-trace-parent"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-trace-parent",
+          createdAt: now(),
+        });
+        return yield* Effect.currentSpan;
+      }).pipe(Effect.withSpan("client.dispatch"));
+
+      const commandSpan = commandSpans.find(
+        (span) => span.name === "orchestration.command.project.create",
+      );
+      expect(commandSpan?.traceId).toBe(dispatcherSpan.traceId);
+      expect(Option.map(commandSpan!.parent, (parent) => parent.spanId)).toEqual(
+        Option.some(dispatcherSpan.spanId),
+      );
+    }).pipe(
+      Effect.provide(
+        makeOrchestrationLayer().pipe(
+          Layer.provideMerge(Layer.succeed(Tracer.Tracer, recordingTracer)),
+        ),
+      ),
+    ),
   );
 
   effectIt.effect(
