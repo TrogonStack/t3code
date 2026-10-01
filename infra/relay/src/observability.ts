@@ -226,7 +226,7 @@ export const makeRelayTraceLayer = (input: {
         attributes: {
           "service.namespace": "t3code",
           "process.runtime.name": "cloudflare-worker",
-          "t3.component": "relay",
+          "t3code.component": "relay",
         },
       },
       headers: {

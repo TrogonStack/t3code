@@ -6,9 +6,9 @@
 ## What you can do now
 
 - Filter UI traces to the desktop window or to a browser tab with
-  `t3.client.surface`, instead of guessing from a key named `service.mode`.
+  `t3code.client.surface`, instead of guessing from a key named `service.mode`.
 - Tell a server the desktop app launched from one you started yourself with
-  `t3.server.managed_by`.
+  `t3code.server.managed_by`.
 - Query every T3 Code signal with the resource attributes a collector,
   dashboard, or vendor already understands: `service.version`,
   `deployment.environment.name`, `process.runtime.*`, `user_agent.original`,
@@ -27,18 +27,20 @@ the third. Nobody reading a trace could know that without reading the code.
 
 Following the semantic conventions puts every attribute where tooling
 already looks for it, and keeps the one question the conventions have no
-answer for, which surface of the product sent this, under the `t3.` prefix
-the relay tracing already used.
+answer for, which surface of the product sent this, under the `t3code.`
+prefix. That is the application's own name, which the conventions recommend
+for custom attributes, and unlike `t3` it cannot be mistaken for anything
+else.
 
 ## Upstream considerations
 
 A plausible upstream submission. The attributes came from upstream, and the
 change carries no fork-specific intent. Dashboards or saved queries that
-filter on `service.mode`, `service.runtime`, or `service.component` have to
-move to the new keys, which is the part upstream would want to weigh.
+filter on `service.mode`, `service.runtime`, `service.component`, or the
+relay's `t3.client.surface` have to move to the new keys, which is the part upstream would want to weigh.
 
 The server's own `mode` values (`web` for any standalone launch) are left
 alone, since renaming them touches the CLI flag, `T3CODE_MODE`, and persisted
-session data. Telemetry maps `mode` to `t3.server.managed_by` instead. A
+session data. Telemetry maps `mode` to `t3code.server.managed_by` instead. A
 sync that takes upstream's copy of any resource definition brings the old
 keys back without any test going red outside the ones changed here.

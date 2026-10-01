@@ -126,7 +126,7 @@ export const otlpResource = (config: ServerConfig["Service"]) => ({
   serviceVersion: packageJson.version,
   attributes: {
     "service.namespace": "t3code",
-    "t3.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
+    "t3code.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
     ...nodeProcessRuntimeAttributes(),
   },
 });

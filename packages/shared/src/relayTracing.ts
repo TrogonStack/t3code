@@ -144,8 +144,8 @@ export function makeRelayClientTracingLayer(
       attributes: {
         "service.namespace": "t3code",
         "process.runtime.name": resource.runtime,
-        "t3.component": resource.component ?? "relay-client",
-        "t3.client.surface": resource.client,
+        "t3code.component": resource.component ?? "relay-client",
+        "t3code.client.surface": resource.client,
       },
     },
   }).pipe(Layer.provide(OtlpSerialization.layerJson));
