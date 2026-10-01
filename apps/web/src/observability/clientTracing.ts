@@ -22,8 +22,9 @@ interface NavigatorUserAgentData {
 
 /**
  * The same `browser.*` and `user_agent.original` attributes the OpenTelemetry
- * browser resource detector reports. `userAgentData` exists only in Chromium,
- * which includes the desktop app.
+ * browser resource detector reports, plus the `process.runtime.*` values the
+ * semantic conventions give a web browser. `userAgentData` exists only in
+ * Chromium, which includes the desktop app.
  */
 const browserResourceAttributes = (): Record<string, unknown> => {
   if (typeof navigator === "undefined") return {};
@@ -31,6 +32,8 @@ const browserResourceAttributes = (): Record<string, unknown> => {
     .userAgentData;
   return {
     "user_agent.original": navigator.userAgent,
+    "process.runtime.name": "browser",
+    "process.runtime.version": navigator.userAgent,
     "browser.language": navigator.language,
     ...(userAgentData && {
       "browser.platform": userAgentData.platform,
