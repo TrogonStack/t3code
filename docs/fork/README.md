@@ -27,8 +27,6 @@ Each entry uses these sections:
 
 ## Ledger
 
-- **0007** [API-key Codex installs are not reported as broken](./0007-codex-api-key-auth-is-supported.md)
-  active, [#15](https://github.com/TrogonStack/t3code/pull/15)
 - **0008** [Drop a folder on the sidebar to add a project](./0008-drop-a-folder-to-add-a-project.md)
   active, [#17](https://github.com/TrogonStack/t3code/pull/17)
 - **0010** [Pull request conventions of our own](./0010-fork-pull-request-conventions.md)
