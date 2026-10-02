@@ -7,7 +7,7 @@ import {
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
-import * as EffectAcpSchema from "effect-acp/schema";
+import type * as EffectAcpSchema from "effect-acp/compat";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -37,8 +37,7 @@ import {
 } from "../providerMaintenance.ts";
 import {
   GROK_DEFAULT_MODEL_SLUG,
-  grokAuthFailureFromAcpCause,
-  grokAuthFromAcpAuthenticate,
+  GROK_SUPPORTED_RUNTIME_MODES,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
@@ -49,8 +48,8 @@ import { discoverGrokSkills } from "../Drivers/GrokSkills.ts";
 const GROK_PRESENTATION = {
   displayName: "Grok",
   supportsConversationRollback: false,
-  badgeLabel: "Early Access",
   showInteractionModeToggle: false,
+  supportedRuntimeModes: GROK_SUPPORTED_RUNTIME_MODES,
 } as const;
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -59,9 +58,6 @@ const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 // `initialize` is a single local round trip, so this is generous even on slow machines.
 const GROK_ACP_INITIALIZE_TIMEOUT_MS = 8_000;
-// A full session start (`initialize` + `authenticate` + `session/new`) does more work than a
-// bare `initialize`, so it gets a longer budget.
-const GROK_ACP_AUTHENTICATE_TIMEOUT_MS = 15_000;
 const GROK_API_KEY_ENV = "XAI_API_KEY";
 
 const GROK_BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
@@ -315,7 +311,13 @@ const runGrokCliCommand = (
   });
 
 const decodeAvailableCommands = Schema.decodeUnknownOption(Schema.Array(Schema.Unknown));
-const decodeAvailableCommand = Schema.decodeUnknownOption(EffectAcpSchema.AvailableCommand);
+const decodeAvailableCommand = Schema.decodeUnknownOption(
+  Schema.Struct({
+    name: Schema.String,
+    description: Schema.String,
+    input: Schema.optional(Schema.NullOr(Schema.Struct({ hint: Schema.String }))),
+  }),
+);
 
 export function grokSlashCommandsFromInitialize(
   initialized: EffectAcpSchema.InitializeResponse,
@@ -365,32 +367,6 @@ const discoverGrokMetadataViaAcpInitialize = (
     return {
       models: buildGrokModelsFromSessionModelState(sessionModelStateFromInitialize(initialized)),
       slashCommands: grokSlashCommandsFromInitialize(initialized),
-    };
-  }).pipe(Effect.scoped);
-
-/**
- * Starts a full ACP session (`initialize`, `authenticate`, `session/new`) to read the signed-in
- * account alongside the session's model list. `authenticate` can open an interactive browser
- * login as a side effect, so only call this once the caller already knows credentials exist
- * (an API key, or `grok models` reporting a cached login).
- */
-const discoverGrokAccountViaAcpAuthenticate = (
-  grokSettings: GrokSettings,
-  environment: NodeJS.ProcessEnv,
-) =>
-  Effect.gen(function* () {
-    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const acp = yield* makeGrokAcpRuntime({
-      grokSettings,
-      environment,
-      childProcessSpawner,
-      cwd: process.cwd(),
-      clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
-    });
-    const started = yield* acp.start();
-    return {
-      models: buildGrokModelsFromSessionModelState(started.sessionSetupResult.models),
-      auth: grokAuthFromAcpAuthenticate(started.authenticateResult, environment),
     };
   }).pipe(Effect.scoped);
 
@@ -514,7 +490,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     });
   }
 
-  const cliAuth: ServerProviderAuth = environment[GROK_API_KEY_ENV]?.trim()
+  const auth: ServerProviderAuth = environment[GROK_API_KEY_ENV]?.trim()
     ? { status: "authenticated", type: "api_key", label: "xAI API key" }
     : cliModels.authenticated === true
       ? { status: "authenticated", type: "cached_token", label: "Grok account" }
@@ -546,32 +522,6 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       ? grokModelsFromSettings(grokSettings.customModels, discoveredModels)
       : fallbackModels;
 
-  // `grok models` already told us there is nothing to authenticate with, so skip starting a
-  // full session here — there is nothing more useful an `authenticate` call could report.
-  const acpAccountExit =
-    cliAuth.status === "unauthenticated"
-      ? undefined
-      : yield* discoverGrokAccountViaAcpAuthenticate(grokSettings, environment).pipe(
-          Effect.timeoutOption(GROK_ACP_AUTHENTICATE_TIMEOUT_MS),
-          Effect.exit,
-        );
-  const acpAccountResult =
-    acpAccountExit && Exit.isSuccess(acpAccountExit)
-      ? Option.getOrUndefined(acpAccountExit.value)
-      : undefined;
-  // Recognizes a cached token the CLI reported as valid but that ACP `authenticate` rejects, so
-  // the settings card can say so instead of blaming a generic startup error.
-  const acpAuthFailure =
-    acpAccountExit && Exit.isFailure(acpAccountExit)
-      ? grokAuthFailureFromAcpCause(acpAccountExit.cause)
-      : undefined;
-
-  // ACP `authenticate` only earns the right to override the CLI's read when it has something
-  // the CLI text could not have: the actual signed-in account.
-  const auth: ServerProviderAuth =
-    acpAuthFailure?.auth ??
-    (acpAccountResult?.auth?.email !== undefined ? acpAccountResult.auth : cliAuth);
-
   if (auth.status === "unauthenticated") {
     return buildServerProvider({
       presentation: GROK_PRESENTATION,
@@ -584,8 +534,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version,
         status: "error",
         auth,
-        message:
-          acpAuthFailure?.message ?? "Grok CLI is installed but not logged in. Run `grok login`.",
+        message: "Grok CLI is installed but not logged in. Run `grok login`.",
       },
     });
   }

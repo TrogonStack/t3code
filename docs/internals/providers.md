@@ -2,7 +2,7 @@
 
 Orchestration records intent and state without knowing which provider runs a thread. Provider
 protocols, account ownership, permissions, and capabilities belong at the
-[adapter boundary](../../apps/server/src/provider/Services/ProviderAdapter.ts). Normalize there
+[adapter boundary](../../apps/server/src/orchestration-v2/ProviderAdapter.ts). Normalize there
 instead of spreading provider checks through reactors and clients.
 
 A driver kind identifies an integration; an instance identifies one configuration and account
@@ -20,7 +20,14 @@ external restart to pick up configuration changes.
 
 OpenCode also stores persistent approval grants per directory. Automatic full-access replies use
 `once` so they cannot widen a supervised thread's permissions on a shared external server.
-See the [adapter](../../apps/server/src/provider/Layers/OpenCodeAdapter.ts).
+See the [adapter](../../apps/server/src/orchestration-v2/Adapters/OpenCodeAdapterV2.ts).
+
+Pi runs the user's own `pi` install in RPC mode and owns native extension, package, and project
+trust discovery. T3 injects only its namespaced MCP bridge, so a Pi session behaves as it does in
+the Pi TUI. Pi session files back native resume, rollback, and same-instance thread forks.
+Forks use Pi's CLI in the destination directory because RPC session switching retains the source
+session's cwd. Provider switches still use portable handoff summaries.
+See the [adapter](../../apps/server/src/orchestration-v2/Adapters/PiAdapterV2.ts).
 
 Antigravity separates account profiles per instance while sharing installed executables across the
 environment. It forces file-based credential storage because the native macOS keychain entry would
@@ -47,6 +54,13 @@ T3 auth session. The client carries the return URL back to the environment becau
 loopback listener may be on another machine. Forward only the callback for the owned pending flow;
 a successful callback HTTP request is not proof that provider authentication finished. The native
 process owns token exchange and storage.
+
+Managed ChatGPT sign-in for a remote environment can finish on a local primary. The
+[primary handoff](../../apps/server/src/provider/CodexChatGptHandoff.ts) uses an ephemeral
+credential store and the destination's environment ID. It exchanges and verifies the code before
+transferring the issued client registration and tokens. Only the destination persists and refreshes
+that session; retaining a primary refresh session would race refresh-token rotation. Without a local
+primary, the client uses the remote callback completion flow.
 
 Antigravity sign-out closes admission to new processes and stops existing processes before clearing account
 metadata. Otherwise a helper or resumed session could retain the old account. Cached model lists
@@ -81,14 +95,18 @@ with a readable, current version.
 ## Protocol traps
 
 Codex async questions arrive as notifications and are answered with a new user message. There is
-no pending RPC response to send. Blocking questions still use the request/response path. The
-[adapter](../../apps/server/src/provider/Layers/CodexAdapter.ts) distinguishes them; the
-[decider](../../apps/server/src/orchestration/decider.ts) records an async answer and its user
-message together.
+no pending RPC response to send. The
+[adapter](../../apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts) persists them as
+`user_input_request` turn items and runtime requests with `responseCapability: { type: "message" }`.
+Their execution nodes do not block the run. Web, desktop, and mobile use their normal question
+panels, and requests remain pending after a turn finishes, a provider exits, or the server restarts.
 
-An async question can outlive the turn or a server restart. The engine reads that request's
-durable activity before resolving it because the in-memory command snapshot omits old activities.
-Do not infer that a request has disappeared merely because it is outside the recent window.
+`runtime-request.respond` reads the persisted request and question item, validates required
+answers, and commits the resolution and a user message in one transaction. Repeating the same
+command returns its receipt without posting the answer twice. The normal message path starts or
+resumes a run, queues behind active work, or steers when the adapter supports it. Blocking questions
+retain the provider's live response path. Do not infer that a request has disappeared merely because
+it is outside the recent history window.
 
 Capabilities must describe what the provider can actually do. Antigravity can capture workspace
 checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
@@ -97,8 +115,9 @@ also survive normalization; a display label is not necessarily a valid reply.
 
 ## Attachments and stored history
 
-Attachments live outside the project workspace. [ProviderService](../../apps/server/src/provider/Layers/ProviderService.ts)
-puts their environment-local paths in turn input and lets adapters choose native input formats.
+Attachments live outside the project workspace. The
+[attachment boundary](../../apps/server/src/orchestration-v2/AttachmentClaims.ts) validates and claims
+uploads for a thread; adapters choose native input formats for those environment-local files.
 A path in the prompt does not grant filesystem access. Keep provider sandbox and approval rules
 in force; copying uploads into the project to bypass them changes that boundary.
 
@@ -109,11 +128,14 @@ current client support.
 
 ## Secret references in provider environments
 
-A provider instance's `environment` is merged into the child process env by
-`mergeProviderInstanceEnvironment`, once per driver inside `create`. A value that starts with `op://`
-is not passed through: it is a secret reference, and
+A provider instance's `environment` can hold values that start with `op://`. Those are secret
+references, and
 [`ProviderSecretResolver`](../../apps/server/src/provider/Services/ProviderSecretResolver.ts) swaps
-it for the value the 1Password CLI returns before the merge happens.
+each one for the value the 1Password CLI returns. This happens once per instance in
+[`ProviderInstanceRegistryLive`](../../apps/server/src/provider/Layers/ProviderInstanceRegistryLive.ts),
+before `driver.create`, so drivers and the orchestration v2 adapters built from them only ever see
+resolved values. The registry keeps the raw `op://` config, which is what makes a later rebuild
+possible.
 
 The parsing half lives in
 [`ProviderSecretReference.ts`](../../apps/server/src/provider/ProviderSecretReference.ts) and knows
@@ -129,9 +151,10 @@ Three decisions are load-bearing:
   absent one, and the status badge would go back to lying about it. Unsetting is stronger than
   leaving the name out of the resolved list: the child environment starts from the server's own, so
   a name left alone keeps whatever the server inherited under it, and the agent would quietly run
-  as a different account than the one the instance names.
+  as a different account than the one the instance names. The registry therefore hands the driver a
+  `HostProcessEnvironment` with every unresolved name removed.
 - **Reads are batched across instances, and sequential within one.** The store charges an unlock per
-  `op` invocation, not per secret, and every instance resolves its own environment inside `create`,
+  `op` invocation, not per secret, and every instance resolves its own environment as it is built,
   so a fleet would otherwise cost one prompt per provider. `prime` reads the whole set in a single
   `op inject` before the builds start, called from the settings watcher (which covers boot) and from
   `reloadSecretBackedInstances` (which covers the refresh button). Whatever `prime` misses,
@@ -149,9 +172,11 @@ Three decisions are load-bearing:
 
 ### Why a refresh has to rebuild the instance
 
-A driver resolves its environment once, at `create` time, and `makeManagedServerProvider` re-probes
-using that captured `processEnv`. Dropping the cached secret therefore changes nothing on its own,
-because the running instance still holds the value it was built with.
+An instance's environment is resolved once, when the registry builds it, and
+`makeManagedServerProvider` re-probes using that captured `processEnv`. Dropping the cached secret
+therefore changes nothing on its own, because the running instance still holds the value it was
+built with. Sessions follow a rebuild without extra wiring, because the v2 adapter registry looks up
+the instance's adapter on every request.
 
 So `ProviderRegistry.reloadSecretBackedInstances` invalidates the cache and then calls
 [`rebuildInstanceWhen`](../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts) on each
@@ -218,31 +243,20 @@ Note that Bearer authentication with a Claude Code OAuth token is not part of An
 surface. It is verified working, not contractually stable, which is the other reason every
 unexpected answer is treated as `unknown`.
 
-## Stalled prompt detection
+## Provider diagnostics
 
-`session/prompt` is a long-lived request: ACP agents answer it only once the whole turn is done, and
-nothing in the protocol says how long that takes. An agent whose upstream connection dies mid-turn
-never answers and never errors, so
-[`AcpSessionRuntime`](../../apps/server/src/provider/acp/AcpSessionRuntime.ts) races the RPC against a
-liveness watchdog and fails the turn instead of waiting forever.
+Native event logs retain lifecycle events, responses, and failures. Token deltas and duplicate raw
+frames are filtered before adapters copy or redact payloads. The filter accepts both legacy native
+events and v2 protocol envelopes; decode failures remain visible through diagnostic frames.
 
-Liveness is traffic for this session plus outstanding work, and both halves are load-bearing.
+Log payloads have a 64 KiB encoded budget. Large or deeply nested payloads become structural
+summaries that retain routing identifiers, methods, status, and error fields. Traversal is bounded
+before redaction and serialization, so logging a large response does not require several full
+copies. These limits apply to diagnostics; provider event handling is unchanged.
 
-Scoping matters because one runtime projects one root session: a child session chattering on the
-same pipe says nothing about whether the root prompt is alive, so only updates that pass the
-root-session check refresh the stamp. Counting outstanding requests matters because silence is
-often our fault, not the agent's. Every request the agent makes of us is held open while it runs,
-including the extension requests, which is the case worth stating: `cursor/ask_question` and
-`x.ai/ask_user_question` park on a human, and a user who takes fifteen minutes to answer must not
-look like a dead agent. The same holds for a twenty-minute `terminal/wait_for_exit`.
-
-A stall therefore needs no root-session traffic _and_ nothing of ours outstanding, for
-`promptStallTimeout` (ten minutes by default).
-
-On a stall the runtime sends `session/cancel` so the agent can release the dead prompt and stay
-usable, then fails with an `AcpTransportError`. `ProviderCommandReactor` turns that into a thread
-session error with a `provider.turn.start.failed` activity and clears `activeTurnId`, so the working
-indicator stops and the reason is visible in the timeline.
+Codex resumes with metadata-only reads when it needs a thread's identity and update time. Its
+initialization capabilities opt out of `turn/diff/updated`: T3 derives diffs from checkpoints.
+The logger filters those notifications before traversal when an older provider still sends them.
 
 Model classification has its own [manifest constraints](./model-manifest.md). Assistant-reference
 handling is documented under [citations](./assistant-citations.md).

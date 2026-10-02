@@ -1,11 +1,11 @@
 ---
 name: trogonstack-sync-upstream
-description: Merge the latest pingdotgg/t3code upstream main into this TrogonStack fork while preserving the fork's tracked divergences, fork-only migrations, and merge-based sync history. Use when asked to sync, upgrade, update, or catch up the fork with upstream, or to pull in the latest upstream changes.
+description: Merge the latest pingdotgg/t3code upstream main into this TrogonStack fork while preserving the fork's tracked divergences and merge-based sync history. Use when asked to sync, upgrade, update, or catch up the fork with upstream, or to pull in the latest upstream changes.
 ---
 
 # Sync with upstream
 
-This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the `upstream` remote and carries a small set of intentional divergences. Syncing is always a **merge**, never a rebase: rebasing would rewrite fork history and break the shared migration tracker and published PR references.
+This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the `upstream` remote and carries a small set of intentional divergences. Syncing is always a **merge**, never a rebase: rebasing would rewrite fork history and break published PR references.
 
 ## 1. Prepare
 
@@ -39,10 +39,9 @@ Record every nontrivial resolution decision as you go; each one becomes a PR bod
 
 ### Migration rules (apps/server/src/persistence)
 
-- Upstream migrations sync as-is, keeping their own ids. `Migrations.ts` and every file under `apps/server/src/persistence/Migrations/` (excluding `fork/`) must stay byte-identical to upstream. If either conflicts during a sync, take upstream's side wholesale rather than hand-merging.
-- Fork-only schema never lands in `Migrations.ts`. It lives only in `apps/server/src/persistence/ForkMigrations.ts`, numbered independently under `apps/server/src/persistence/Migrations/fork/`, and tracked in its own `trogonstack_fork_migrations` ledger table instead of the shared `effect_sql_migrations` table.
-- Because the two chains never share a ledger, id collisions between fork and upstream migrations are structurally impossible - there is nothing to renumber or offset during a sync.
-- After resolving `Migrations.ts`, run the fail-fast guard: `vp test run apps/server/src/persistence/ForkMigrations.test.ts`. It rejects any fork migration name that leaks into the shared `migrationEntries` chain.
+- Upstream migrations sync as-is, keeping their own ids. `Migrations.ts` and every file under `apps/server/src/persistence/Migrations/` must stay byte-identical to upstream. If either conflicts during a sync, take upstream's side wholesale rather than hand-merging.
+- The fork currently carries no schema of its own.
+- If fork-only schema is ever needed again, it must live on a separate ledger table, never in `Migrations.ts`, so fork and upstream migration ids can never collide.
 
 ## 4. Verify
 

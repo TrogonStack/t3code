@@ -41,6 +41,7 @@ import {
   type ProviderDriverKind,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -54,14 +55,9 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { buildUnavailableProviderSnapshot } from "../unavailableProviderSnapshot.ts";
-import {
-  ProviderInstanceRegistry,
-  type ProviderInstanceRegistryShape,
-} from "../Services/ProviderInstanceRegistry.ts";
-import {
-  ProviderInstanceRegistryMutator,
-  type ProviderInstanceRegistryMutatorShape,
-} from "../Services/ProviderInstanceRegistryMutator.ts";
+import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
+import * as ProviderInstanceRegistryMutator from "../Services/ProviderInstanceRegistryMutator.ts";
+import * as ProviderSecretResolver from "../Services/ProviderSecretResolver.ts";
 import type { AnyProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 
 /**
@@ -146,6 +142,25 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
 };
 
 /**
+ * What a provider process inherits from the server. A variable whose secret
+ * could not be read is removed rather than left to the server's own value,
+ * because that would run the provider as an account the user did not pick.
+ */
+function hostEnvironmentWithout(
+  hostEnvironment: NodeJS.ProcessEnv,
+  names: ReadonlyArray<string>,
+): NodeJS.ProcessEnv {
+  if (names.length === 0) {
+    return hostEnvironment;
+  }
+  const next: NodeJS.ProcessEnv = { ...hostEnvironment };
+  for (const name of names) {
+    delete next[name];
+  }
+  return next;
+}
+
+/**
  * Build one live entry from a raw config envelope. Returns either a
  * `LiveEntry` plus undefined unavailable shadow, or a shadow snapshot and
  * undefined entry — callers dispatch to the appropriate Ref bucket.
@@ -153,6 +168,8 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
 const buildEntry = <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
+  readonly secretResolver: ProviderSecretResolver.ProviderSecretResolverShape;
+  readonly hostEnvironment: NodeJS.ProcessEnv;
   readonly instanceId: ProviderInstanceId;
   readonly rawInstanceId: string;
   readonly entry: ProviderInstanceConfig;
@@ -163,7 +180,15 @@ const buildEntry = <R>(input: {
   R
 > =>
   Effect.gen(function* () {
-    const { driversById, parentScope, instanceId, rawInstanceId, entry } = input;
+    const {
+      driversById,
+      parentScope,
+      secretResolver,
+      hostEnvironment,
+      instanceId,
+      rawInstanceId,
+      entry,
+    } = input;
     const driver = driversById.get(entry.driver);
     if (!driver) {
       return {
@@ -201,6 +226,7 @@ const buildEntry = <R>(input: {
     }
 
     const typedConfig = decodeResult.success;
+    const resolvedEnvironment = yield* secretResolver.resolve(entry.environment);
     const childScope = yield* Scope.make();
     // Attach the child scope to the registry's parent scope: if the
     // registry scope closes, each surviving instance's child scope is
@@ -214,11 +240,18 @@ const buildEntry = <R>(input: {
         instanceId,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
-        environment: entry.environment ?? [],
+        environment: resolvedEnvironment.variables ?? [],
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
       })
-      .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
+      .pipe(
+        Effect.provideService(Scope.Scope, childScope),
+        Effect.provideService(
+          HostProcessEnvironment,
+          hostEnvironmentWithout(hostEnvironment, resolvedEnvironment.unresolved),
+        ),
+        Effect.result,
+      );
     if (createResult._tag === "Failure") {
       yield* Effect.logError("Failed to create provider instance", {
         instanceId: rawInstanceId,
@@ -256,8 +289,10 @@ const makeReconcile = <R>(input: {
   readonly state: RegistryState;
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
+  readonly secretResolver: ProviderSecretResolver.ProviderSecretResolverShape;
+  readonly hostEnvironment: NodeJS.ProcessEnv;
 }): ((configMap: ProviderInstanceConfigMap) => Effect.Effect<void, never, R>) => {
-  const { state, driversById, parentScope } = input;
+  const { state, driversById, parentScope, secretResolver, hostEnvironment } = input;
   return (configMap: ProviderInstanceConfigMap) =>
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
@@ -311,6 +346,8 @@ const makeReconcile = <R>(input: {
         const result = yield* buildEntry({
           driversById,
           parentScope,
+          secretResolver,
+          hostEnvironment,
           instanceId,
           rawInstanceId,
           entry,
@@ -376,8 +413,8 @@ export const makeProviderInstanceRegistry = <R>(input: {
   readonly configMap: ProviderInstanceConfigMap;
 }): Effect.Effect<
   {
-    readonly registry: ProviderInstanceRegistryShape;
-    readonly mutator: ProviderInstanceRegistryMutatorShape;
+    readonly registry: ProviderInstanceRegistry.ProviderInstanceRegistryShape;
+    readonly mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape;
   },
   never,
   R | Scope.Scope
@@ -398,6 +435,8 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // The service tag's declared `reconcile: Effect<void>` hides R from
     // consumers — we materialize that here.
     const driverContext = yield* Effect.context<R>();
+    const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
+    const hostEnvironment = yield* HostProcessEnvironment;
 
     const entries = yield* Ref.make<ReadonlyMap<ProviderInstanceId, LiveEntry>>(new Map());
     const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());
@@ -418,14 +457,21 @@ export const makeProviderInstanceRegistry = <R>(input: {
     const mutations = yield* Semaphore.make(1);
 
     const state: RegistryState = { entries, unavailable, changes };
-    const reconcileWithR = makeReconcile({ state, driversById, parentScope });
-    const reconcile: ProviderInstanceRegistryMutatorShape["reconcile"] = (configMap) =>
-      mutations.withPermits(1)(
-        reconcileWithR(configMap).pipe(
-          Effect.tap(() => Ref.set(rebuildable, new Map())),
-          Effect.provideContext(driverContext),
-        ),
-      );
+    const reconcileWithR = makeReconcile({
+      state,
+      driversById,
+      parentScope,
+      secretResolver,
+      hostEnvironment,
+    });
+    const reconcile: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape["reconcile"] =
+      (configMap) =>
+        mutations.withPermits(1)(
+          reconcileWithR(configMap).pipe(
+            Effect.tap(() => Ref.set(rebuildable, new Map())),
+            Effect.provideContext(driverContext),
+          ),
+        );
 
     // Hydrate the initial configMap synchronously so callers can read
     // `listInstances` immediately after this effect completes.
@@ -435,81 +481,81 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // `reconcile`, which is driven by a settings diff, this is for inputs the
     // envelope cannot show, see the shape docs. Order is preserved by
     // rewriting the map in place rather than appending the replacement.
-    const rebuildInstanceWhen: ProviderInstanceRegistryShape["rebuildInstanceWhen"] = (
-      instanceId,
-      shouldRebuild,
-    ) =>
-      mutations.withPermits(1)(
-        Effect.gen(function* () {
-          const previousEntries = yield* Ref.get(entries);
-          const live = previousEntries.get(instanceId);
-          // An instance a previous rebuild could not restore has no live entry
-          // to read the config from, so its envelope comes from `rebuildable`.
-          const entry = live?.entry ?? (yield* Ref.get(rebuildable)).get(instanceId);
-          if (entry === undefined || !shouldRebuild(entry)) {
-            return false;
-          }
+    const rebuildInstanceWhen: ProviderInstanceRegistry.ProviderInstanceRegistryShape["rebuildInstanceWhen"] =
+      (instanceId, shouldRebuild) =>
+        mutations.withPermits(1)(
+          Effect.gen(function* () {
+            const previousEntries = yield* Ref.get(entries);
+            const live = previousEntries.get(instanceId);
+            // An instance a previous rebuild could not restore has no live entry
+            // to read the config from, so its envelope comes from `rebuildable`.
+            const entry = live?.entry ?? (yield* Ref.get(rebuildable)).get(instanceId);
+            if (entry === undefined || !shouldRebuild(entry)) {
+              return false;
+            }
 
-          // Everything except the build itself is bookkeeping over refs, and it
-          // is uninterruptible so the instance is never half-moved. Only the
-          // build is interruptible, because it is the part that can take
-          // minutes waiting on a secret store.
-          //
-          // Remembering the envelope comes first: an interrupt anywhere after
-          // this point still leaves the instance retryable on the next
-          // refresh, which is the only recovery path it has left.
-          yield* Effect.uninterruptible(
-            Effect.gen(function* () {
-              yield* Ref.update(rebuildable, (previous) =>
-                new Map(previous).set(instanceId, entry),
-              );
-              if (live === undefined) {
-                return;
-              }
-              // Drop the instance before closing it, or the map hands callers
-              // a bundle whose scope is gone for the whole build. Its last
-              // snapshot stands in meanwhile: aggregators treat an id that is
-              // in neither list as gone and prune it, so leaving the id
-              // nowhere would blank the provider's card until the build lands.
-              const parked = yield* live.instance.snapshot.getSnapshot;
-              yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
-              yield* Ref.update(unavailable, (previous) =>
-                new Map(previous).set(instanceId, parked),
-              );
-              yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
-            }),
-          );
-
-          const result = yield* buildEntry({
-            driversById,
-            parentScope,
-            instanceId,
-            rawInstanceId: instanceId,
-            entry,
-          });
-
-          // Uninterruptible as well: the replacement is already running by
-          // now, and an interrupt that dropped it on the floor would leave a
-          // provider process nothing can reach or stop.
-          yield* Effect.uninterruptible(
-            Effect.gen(function* () {
-              if (result.kind === "live") {
-                yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
-                yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
-                yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
-              } else {
-                yield* Ref.update(unavailable, (previous) =>
-                  new Map(previous).set(instanceId, result.snapshot),
+            // Everything except the build itself is bookkeeping over refs, and it
+            // is uninterruptible so the instance is never half-moved. Only the
+            // build is interruptible, because it is the part that can take
+            // minutes waiting on a secret store.
+            //
+            // Remembering the envelope comes first: an interrupt anywhere after
+            // this point still leaves the instance retryable on the next
+            // refresh, which is the only recovery path it has left.
+            yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                yield* Ref.update(rebuildable, (previous) =>
+                  new Map(previous).set(instanceId, entry),
                 );
-              }
-              yield* PubSub.publish(changes, undefined);
-            }),
-          );
-          return true;
-        }).pipe(Effect.provideContext(driverContext)),
-      );
+                if (live === undefined) {
+                  return;
+                }
+                // Drop the instance before closing it, or the map hands callers
+                // a bundle whose scope is gone for the whole build. Its last
+                // snapshot stands in meanwhile: aggregators treat an id that is
+                // in neither list as gone and prune it, so leaving the id
+                // nowhere would blank the provider's card until the build lands.
+                const parked = yield* live.instance.snapshot.getSnapshot;
+                yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
+                yield* Ref.update(unavailable, (previous) =>
+                  new Map(previous).set(instanceId, parked),
+                );
+                yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
+              }),
+            );
 
-    const registry: ProviderInstanceRegistryShape = {
+            const result = yield* buildEntry({
+              driversById,
+              parentScope,
+              secretResolver,
+              hostEnvironment,
+              instanceId,
+              rawInstanceId: instanceId,
+              entry,
+            });
+
+            // Uninterruptible as well: the replacement is already running by
+            // now, and an interrupt that dropped it on the floor would leave a
+            // provider process nothing can reach or stop.
+            yield* Effect.uninterruptible(
+              Effect.gen(function* () {
+                if (result.kind === "live") {
+                  yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
+                  yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
+                  yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
+                } else {
+                  yield* Ref.update(unavailable, (previous) =>
+                    new Map(previous).set(instanceId, result.snapshot),
+                  );
+                }
+                yield* PubSub.publish(changes, undefined);
+              }),
+            );
+            return true;
+          }).pipe(Effect.provideContext(driverContext)),
+        );
+
+    const registry: ProviderInstanceRegistry.ProviderInstanceRegistryShape = {
       getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
       listInstances: Ref.get(entries).pipe(
         Effect.map(
@@ -550,7 +596,9 @@ export const makeProviderInstanceRegistry = <R>(input: {
       },
     };
 
-    const mutator: ProviderInstanceRegistryMutatorShape = { reconcile };
+    const mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape = {
+      reconcile,
+    };
 
     return { registry, mutator };
   });
@@ -564,13 +612,23 @@ export const makeProviderInstanceRegistry = <R>(input: {
 export const ProviderInstanceRegistryMutableLayer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
-}): Layer.Layer<ProviderInstanceRegistry | ProviderInstanceRegistryMutator, never, R> =>
+}): Layer.Layer<
+  | ProviderInstanceRegistry.ProviderInstanceRegistry
+  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+  never,
+  R
+> =>
   Layer.effectContext(
     makeProviderInstanceRegistry(input).pipe(
       Effect.map(({ registry, mutator }) =>
-        Context.make(ProviderInstanceRegistry, registry).pipe(
-          Context.add(ProviderInstanceRegistryMutator, mutator),
+        Context.make(ProviderInstanceRegistry.ProviderInstanceRegistry, registry).pipe(
+          Context.add(ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator, mutator),
         ),
       ),
     ),
-  ) as Layer.Layer<ProviderInstanceRegistry | ProviderInstanceRegistryMutator, never, R>;
+  ) as Layer.Layer<
+    | ProviderInstanceRegistry.ProviderInstanceRegistry
+    | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+    never,
+    R
+  >;

@@ -1,17 +1,39 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Cause from "effect/Cause";
+
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import {
   applyGrokAcpModelSelection,
   buildGrokAcpSpawnInput,
+  grokAcpRuntimeProcessOwnership,
   grokAcpSpawnArgs,
-  grokAuthFailureFromAcpCause,
-  grokAuthFromAcpAuthenticate,
   isValidGrokReasoningEffortToken,
   resolveGrokAcpBaseModelId,
 } from "./GrokAcpSupport.ts";
+
+describe("grokAcpRuntimeProcessOwnership", () => {
+  it("opts Grok into detached process-tree ownership on the injected host platform", () => {
+    expect(grokAcpRuntimeProcessOwnership("linux")).toEqual({
+      ownDescendantProcessGroups: true,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "linux",
+    });
+  });
+
+  it("uses the prior provider-group path on Darwin and Windows", () => {
+    expect(grokAcpRuntimeProcessOwnership("darwin")).toEqual({
+      ownDescendantProcessGroups: false,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "darwin",
+    });
+    expect(grokAcpRuntimeProcessOwnership("win32")).toEqual({
+      ownDescendantProcessGroups: false,
+      ownDetachedProcessGroup: true,
+      processGroupPlatform: "win32",
+    });
+  });
+});
 
 describe("resolveGrokAcpBaseModelId", () => {
   it("normalizes empty and custom Grok model ids", () => {
@@ -39,14 +61,14 @@ describe("grokAcpSpawnArgs", () => {
     expect(grokAcpSpawnArgs("full-access")).toEqual(["agent", "--always-approve", "stdio"]);
   });
 
-  it("maps Auto-accept edits and Auto onto Grok permission modes", () => {
+  it("launches Auto on Grok's classifier and a mode Grok does not offer asking", () => {
+    expect(grokAcpSpawnArgs("auto")).toEqual(["--permission-mode", "auto", "agent", "stdio"]);
     expect(grokAcpSpawnArgs("auto-accept-edits")).toEqual([
       "--permission-mode",
-      "acceptEdits",
+      "default",
       "agent",
       "stdio",
     ]);
-    expect(grokAcpSpawnArgs("auto")).toEqual(["--permission-mode", "auto", "agent", "stdio"]);
   });
 });
 
@@ -86,53 +108,6 @@ describe("isValidGrokReasoningEffortToken", () => {
     expect(isValidGrokReasoningEffortToken("not a token")).toBe(false);
     expect(isValidGrokReasoningEffortToken("-leading-dash")).toBe(false);
     expect(isValidGrokReasoningEffortToken("x".repeat(33))).toBe(false);
-  });
-});
-
-describe("grokAuthFromAcpAuthenticate", () => {
-  it("reports the account email Grok returns from authenticate", () => {
-    expect(
-      grokAuthFromAcpAuthenticate({
-        _meta: { email: " grok-user@example.com ", auth_mode: "Oidc", team_id: "team-1" },
-      }),
-    ).toEqual({ status: "authenticated", email: "grok-user@example.com" });
-  });
-
-  it("labels API key credentials when authenticate reports no account", () => {
-    expect(grokAuthFromAcpAuthenticate({}, { XAI_API_KEY: "secret" })).toEqual({
-      status: "authenticated",
-      type: "API key",
-    });
-  });
-
-  it("treats a bare authenticate success as authenticated without identity", () => {
-    expect(grokAuthFromAcpAuthenticate({ _meta: { email: "   " } }, {})).toEqual({
-      status: "authenticated",
-    });
-    expect(grokAuthFromAcpAuthenticate({ _meta: null }, {})).toEqual({ status: "authenticated" });
-  });
-});
-
-describe("grokAuthFailureFromAcpCause", () => {
-  it("maps an ACP auth-required failure to an unauthenticated snapshot", () => {
-    const failure = grokAuthFailureFromAcpCause(
-      Cause.fail(EffectAcpErrors.AcpRequestError.authRequired()),
-    );
-    expect(failure?.auth).toEqual({ status: "unauthenticated" });
-    expect(failure?.message).toContain("not authenticated");
-  });
-
-  it("leaves unrelated ACP failures to the generic startup message", () => {
-    expect(
-      grokAuthFailureFromAcpCause(
-        Cause.fail(EffectAcpErrors.AcpRequestError.invalidParams("session id not known")),
-      ),
-    ).toBeUndefined();
-    expect(
-      grokAuthFailureFromAcpCause(
-        Cause.fail(new EffectAcpErrors.AcpSpawnError({ command: "grok", cause: "boom" })),
-      ),
-    ).toBeUndefined();
   });
 });
 

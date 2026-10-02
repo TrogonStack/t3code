@@ -10,7 +10,7 @@ import {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "./previewAutomation.ts";
-import { SnapShotSource } from "./orchestration.ts";
+import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -530,16 +530,6 @@ export interface PickedThemeFile {
   name: string;
   size: number;
   text: string;
-}
-
-/**
- * Structural stand-in for the DOM `File`, which this package cannot name
- * because it is built without DOM types. Only the object's identity matters to
- * its one consumer, the desktop dropped-path resolver.
- */
-export interface DroppedFileHandle {
-  readonly name: string;
-  readonly size: number;
 }
 
 export const PickedThemeFileSchema = Schema.Struct({
@@ -1212,13 +1202,6 @@ export interface DesktopBridge {
   /** Optional while older desktop shells can host a newer web client. */
   pickProjectFavicon?: (initialPath?: string) => Promise<string | null>;
   /**
-   * Absolute path of a file or folder the user dropped onto the window. The web
-   * platform never exposes it, so this is the only way a dropped folder can
-   * become a project path. Optional: older desktop builds lack it, and browser
-   * clients have no equivalent at all.
-   */
-  getPathForDroppedFile?: (file: DroppedFileHandle) => string | null;
-  /**
    * Multi-select JSON file picker that opens in the VS Code extensions
    * directory when one exists. Optional: older desktop builds lack it, and
    * web callers fall back to a plain file input.
@@ -1229,6 +1212,9 @@ export interface DesktopBridge {
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
+  /** Receives a local OAuth code for a sign-in owned by a remote environment. */
+  receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds

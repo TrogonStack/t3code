@@ -147,11 +147,7 @@ const readSecret = Effect.fn("readSecret")(function* (reference: string) {
   return secret.length > 0 ? secret : undefined;
 });
 
-export const ProviderSecretResolverLive: Layer.Layer<
-  ProviderSecretResolver,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
-> = Layer.effect(
+export const ProviderSecretResolverLive = Layer.effect(
   ProviderSecretResolver,
   Effect.gen(function* () {
     // The service tag declares `prime` as `Effect<void>`, so the spawner and
