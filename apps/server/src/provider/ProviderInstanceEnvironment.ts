@@ -2,35 +2,16 @@ import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 
 import { expandHomePath } from "../pathExpansion.ts";
 
-/**
- * An instance environment after its secret references have been read.
- *
- * `unresolved` names the variables the instance configures but whose value
- * could not be read. They are tracked separately because being absent from
- * `variables` is not enough: the child environment starts from the server's
- * own, so a name left alone keeps whatever the server inherited under it.
- * That is the wrong credential precisely when the user asked for a specific
- * one, and it hides as "authenticated".
- */
-export interface ResolvedProviderInstanceEnvironment {
-  readonly variables: ProviderInstanceEnvironment | undefined;
-  readonly unresolved: ReadonlyArray<string>;
-}
-
 export function mergeProviderInstanceEnvironment(
-  resolved: ResolvedProviderInstanceEnvironment,
+  environment: ProviderInstanceEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  const { variables, unresolved } = resolved;
-  if ((!variables || variables.length === 0) && unresolved.length === 0) {
+  if (!environment || environment.length === 0) {
     return baseEnv;
   }
 
   const next: NodeJS.ProcessEnv = { ...baseEnv };
-  for (const name of unresolved) {
-    delete next[name];
-  }
-  for (const variable of variables ?? []) {
+  for (const variable of environment) {
     // Child processes do not apply shell expansion to environment values.
     next[variable.name] =
       variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"

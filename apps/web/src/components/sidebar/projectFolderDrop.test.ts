@@ -10,7 +10,9 @@ function makeItem(options: { name: string; isDirectory: boolean; asFile?: boolea
   return {
     webkitGetAsEntry: () => ({ isDirectory: options.isDirectory }),
     getAsFile: () =>
-      options.asFile === false ? null : { name: options.name, size: options.isDirectory ? 0 : 12 },
+      options.asFile === false
+        ? null
+        : new File(options.isDirectory ? [] : ["file content"], options.name),
   } satisfies ProjectFolderDropItem;
 }
 

@@ -15,9 +15,21 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
-import type { ResolvedProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+/**
+ * An instance environment after its secret references have been read.
+ *
+ * `unresolved` names the variables the instance configures but whose value
+ * could not be read. They are tracked separately because being absent from
+ * `variables` is not enough: the child environment starts from the server's
+ * own, so a name left alone keeps whatever the server inherited under it.
+ * That is the wrong credential precisely when the user asked for a specific
+ * one, and it hides as "authenticated".
+ */
+export interface ResolvedProviderInstanceEnvironment {
+  readonly variables: ProviderInstanceEnvironment | undefined;
+  readonly unresolved: ReadonlyArray<string>;
+}
 
 export interface ProviderSecretResolverShape {
   /**
@@ -29,7 +41,7 @@ export interface ProviderSecretResolverShape {
    * installed, item deleted) is reported as unresolved rather than
    * substituted with an empty string, so the provider reports the honest
    * "unauthenticated" instead of failing later with a credential that looks
-   * present and is not. `mergeProviderInstanceEnvironment` unsets those names,
+   * present and is not. The instance registry unsets those names,
    * which is what keeps the provider off a same-named credential the server
    * happens to have inherited.
    */
@@ -60,22 +72,19 @@ export interface ProviderSecretResolverShape {
   readonly invalidate: Effect.Effect<void>;
 }
 
-export class ProviderSecretResolver extends Context.Service<
-  ProviderSecretResolver,
-  ProviderSecretResolverShape
->()("t3/provider/Services/ProviderSecretResolver") {}
-
 /**
- * Resolver that hands every environment back untouched. This is what a build
+ * Defaults to handing every environment back untouched, which is what a build
  * without secret-store integration behaves like, and what tests want unless
  * they are testing resolution itself: an `op://` value stays an `op://`
  * value, and the provider reports whatever the CLI makes of it.
  */
-const passthroughProviderSecretResolver: ProviderSecretResolverShape = {
-  resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
-  prime: () => Effect.void,
-  invalidate: Effect.void,
-};
-
-export const ProviderSecretResolverPassthroughLayer: Layer.Layer<ProviderSecretResolver> =
-  Layer.succeed(ProviderSecretResolver, passthroughProviderSecretResolver);
+export class ProviderSecretResolver extends Context.Reference<ProviderSecretResolverShape>(
+  "t3/provider/Services/ProviderSecretResolver",
+  {
+    defaultValue: () => ({
+      resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+      prime: () => Effect.void,
+      invalidate: Effect.void,
+    }),
+  },
+) {}

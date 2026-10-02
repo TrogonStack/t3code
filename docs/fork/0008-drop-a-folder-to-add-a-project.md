@@ -28,13 +28,13 @@ installed it and has nothing to compare against.
 ## Upstream considerations
 
 Nothing here is fork-specific and it touches upstream files on every surface it
-needs (the bridge contract, the desktop preload, the sidebar, the command
-palette), so it belongs upstream as a feature rather than something to carry.
-Submit it and delete this entry once it merges.
+needs (the sidebar, the command palette), so it belongs upstream as a feature
+rather than something to carry. Submit it and delete this entry once it merges.
 
 While it is carried, the sidebar and command palette edits are the parts a
 sync will notice, since both files move often upstream. The rest is additive:
-one optional bridge method and one self-contained drop helper.
+one self-contained drop helper, which resolves the folder through the same
+desktop bridge upstream already uses for folders dropped on the composer.
 
 Mobile is deliberately untouched: the platform has no file manager to drag from.
 Browser clients are untouched for a harder reason, that the web platform never

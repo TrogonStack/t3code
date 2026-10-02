@@ -10,17 +10,10 @@ import * as Stream from "effect/Stream";
 import { outcomeFromExit } from "./Attributes.ts";
 import { metricAttributes, rpcRequestDuration, rpcRequestsTotal, withMetrics } from "./Metrics.ts";
 
-/**
- * Passed to `RpcServer.make` so the server opens each request's span as a child
- * of the span the client sent with it. The observe helpers below only annotate
- * that span.
- */
-export const rpcServerTracingOptions = {
-  spanPrefix: "ws.rpc",
-  spanAttributes: {
-    "rpc.transport": "websocket",
-    "rpc.system": "effect-rpc",
-  },
+const RPC_SPAN_PREFIX = "ws.rpc";
+const DEFAULT_RPC_SPAN_ATTRIBUTES = {
+  "rpc.transport": "websocket",
+  "rpc.system": "effect-rpc",
 } as const;
 const RPC_METHODS_WITH_TRACING_DISABLED: ReadonlySet<string> = new Set([
   WS_METHODS.serverGetTraceDiagnostics,
@@ -37,6 +30,7 @@ const rpcSpanAttributes = (
   method: string,
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> => ({
+  ...DEFAULT_RPC_SPAN_ATTRIBUTES,
   "rpc.method": method,
   ...traceAttributes,
 });
@@ -47,7 +41,11 @@ const withRpcEffectTracing = <A, E, R>(
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Effect.Effect<A, E, R> =>
   shouldTraceRpc(method)
-    ? Effect.andThen(Effect.annotateCurrentSpan(rpcSpanAttributes(method, traceAttributes)), effect)
+    ? effect.pipe(
+        Effect.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
+          attributes: rpcSpanAttributes(method, traceAttributes),
+        }),
+      )
     : effect.pipe(Effect.provideService(References.TracerEnabled, false));
 
 const withRpcStreamTracing = <A, E, R>(
@@ -56,8 +54,10 @@ const withRpcStreamTracing = <A, E, R>(
   traceAttributes?: Readonly<Record<string, unknown>>,
 ): Stream.Stream<A, E, R> =>
   shouldTraceRpc(method)
-    ? Stream.unwrap(
-        Effect.as(Effect.annotateCurrentSpan(rpcSpanAttributes(method, traceAttributes)), stream),
+    ? stream.pipe(
+        Stream.withSpan(`${RPC_SPAN_PREFIX}.${method}`, {
+          attributes: rpcSpanAttributes(method, traceAttributes),
+        }),
       )
     : stream.pipe(Stream.provideService(References.TracerEnabled, false));
 

@@ -5,7 +5,7 @@
  */
 export interface ProjectFolderDropItem {
   webkitGetAsEntry(): { readonly isDirectory: boolean } | null;
-  getAsFile(): { readonly name: string; readonly size: number } | null;
+  getAsFile(): File | null;
 }
 
 export interface ProjectFolderDragEvent {
@@ -29,7 +29,7 @@ export type ProjectFolderDropRejection = "no-folder" | "path-unresolved";
 
 export interface ProjectFolderDropHost {
   setDragActive(active: boolean): void;
-  resolveDroppedFolderPath(file: { readonly name: string; readonly size: number }): string | null;
+  resolveDroppedFolderPath(file: File): string | null;
   addProjectAtPath(path: string): void;
   rejectDrop(reason: ProjectFolderDropRejection): void;
 }
@@ -46,9 +46,7 @@ function movedWithinDropTarget(event: ProjectFolderDragEvent): boolean {
  * The first dropped directory, or null. Directories cannot be told apart from
  * files until the drop lands, so this runs there rather than on drag over.
  */
-function findDroppedFolder(
-  items: ArrayLike<ProjectFolderDropItem>,
-): { readonly name: string; readonly size: number } | null {
+function findDroppedFolder(items: ArrayLike<ProjectFolderDropItem>): File | null {
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (!item || item.webkitGetAsEntry()?.isDirectory !== true) continue;

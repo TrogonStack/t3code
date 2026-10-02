@@ -53,16 +53,26 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 
-import { ServerSettingsService } from "../../serverSettings.ts";
+import * as Settings from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { collectProviderSecretReferences } from "../ProviderSecretReference.ts";
-import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
-import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
-import {
-  ProviderSecretResolver,
-  type ProviderSecretResolverShape,
-} from "../Services/ProviderSecretResolver.ts";
+import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
+import * as ProviderInstanceRegistryMutator from "../Services/ProviderInstanceRegistryMutator.ts";
+import * as ProviderSecretResolver from "../Services/ProviderSecretResolver.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
+import {
+  type ProviderOrchestrationAdapterInfrastructure,
+  ProviderOrchestrationAdapterInfrastructureLive,
+} from "./ProviderOrchestrationAdapterInfrastructure.ts";
+import * as AcpRegistrySupport from "../acp/AcpRegistrySupport.ts";
+import { AcpRegistryCatalogLive } from "./AcpRegistryCatalog.ts";
+
+type ProviderInstanceRegistryHydrationEnv =
+  | Exclude<
+      BuiltInDriversEnv,
+      ProviderOrchestrationAdapterInfrastructure | AcpRegistrySupport.AcpRegistryCatalog
+    >
+  | Settings.ServerSettingsService;
 
 /**
  * Synthesize a `ProviderInstanceConfigMap` from a `ServerSettings` snapshot.
@@ -117,7 +127,7 @@ export const deriveProviderInstanceConfigMap = (
  * fleet of five reference-backed providers is five authorizations.
  */
 const primeConfigMapSecrets = (
-  secretResolver: ProviderSecretResolverShape,
+  secretResolver: ProviderSecretResolver.ProviderSecretResolverShape,
   configMap: ProviderInstanceConfigMap,
 ) =>
   secretResolver.prime(
@@ -137,9 +147,9 @@ const primeConfigMapSecrets = (
  */
 const SettingsWatcherLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const mutator = yield* ProviderInstanceRegistryMutator;
-    const serverSettings = yield* ServerSettingsService;
-    const secretResolver = yield* ProviderSecretResolver;
+    const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
+    const serverSettings = yield* Settings.ServerSettingsService;
+    const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
     const settingsChanges = yield* serverSettings.subscribeChanges;
     yield* settingsChanges.pipe(
       Stream.runForEach((next) => {
@@ -173,13 +183,13 @@ const SettingsWatcherLive = Layer.effectDiscard(
  * it, so the visibility leak is harmless in practice.
  */
 export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
-  ProviderInstanceRegistry,
+  ProviderInstanceRegistry.ProviderInstanceRegistry,
   never,
-  BuiltInDriversEnv | ServerSettingsService
+  ProviderInstanceRegistryHydrationEnv
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const serverSettings = yield* ServerSettingsService;
-    const secretResolver = yield* ProviderSecretResolver;
+    const serverSettings = yield* Settings.ServerSettingsService;
+    const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -195,8 +205,15 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
       configMap: initialConfigMap,
-    });
+    }).pipe(
+      Layer.provide(ProviderOrchestrationAdapterInfrastructureLive),
+      Layer.provide(AcpRegistryCatalogLive),
+    );
 
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
   }),
-) as Layer.Layer<ProviderInstanceRegistry, never, BuiltInDriversEnv | ServerSettingsService>;
+) as Layer.Layer<
+  ProviderInstanceRegistry.ProviderInstanceRegistry,
+  never,
+  ProviderInstanceRegistryHydrationEnv
+>;
