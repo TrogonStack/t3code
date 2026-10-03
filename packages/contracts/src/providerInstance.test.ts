@@ -233,11 +233,8 @@ describe("ProviderInstanceEnvironmentVariable secret sources", () => {
     ["trailing newline", "op://Private/item/field\n"],
     ["control character", "op://Private/it\u0007em/field"],
     ["missing scheme", "Private/item/field"],
-    ["missing field", "op://Private/item"],
-    ["too many segments", "op://a/b/c/d/e"],
-    ["empty segment", "op://Private//field"],
+    ["nothing after the scheme", "op://"],
     ["template delimiter", "op://Private/item}}/field"],
-    ["unsafe query", "op://Private/item/field?x=<y>"],
   ])("rejects a reference with %s", (_label, reference) => {
     expect(() => decodeEnvironmentVariable(onePassword(reference))).toThrow();
   });

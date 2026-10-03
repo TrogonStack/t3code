@@ -103,7 +103,6 @@ export type ProviderInstanceEnvironmentVariableName =
 
 const ONE_PASSWORD_SECRET_REFERENCE_PREFIX = "op://";
 const ONE_PASSWORD_SECRET_REFERENCE_MAX_CHARS = 1024;
-const ONE_PASSWORD_SECRET_REFERENCE_QUERY_PATTERN = /^[A-Za-z0-9._=&-]+$/;
 const ONE_PASSWORD_ACCOUNT_MAX_CHARS = 253;
 const ONE_PASSWORD_ACCOUNT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -130,29 +129,16 @@ function onePasswordSecretReferenceIssue(value: string): string | undefined {
   if (value.includes("{{") || value.includes("}}")) {
     return "1Password secret reference must not contain {{ or }}.";
   }
-  const [path = "", query, ...extraQueries] = value
-    .slice(ONE_PASSWORD_SECRET_REFERENCE_PREFIX.length)
-    .split("?");
-  if (
-    extraQueries.length > 0 ||
-    (query !== undefined && !ONE_PASSWORD_SECRET_REFERENCE_QUERY_PATTERN.test(query))
-  ) {
-    return "1Password secret reference has an invalid query.";
-  }
-  const segments = path.split("/");
-  if (
-    segments.length < 3 ||
-    segments.length > 4 ||
-    segments.some((segment) => segment.trim().length === 0)
-  ) {
-    return "1Password secret reference must look like op://vault/item/field or op://vault/item/section/field.";
+  if (value.length === ONE_PASSWORD_SECRET_REFERENCE_PREFIX.length) {
+    return "1Password secret reference must name a vault, item, and field after op://.";
   }
   return undefined;
 }
 
 /**
- * A 1Password secret reference, `op://vault/item/[section/]field`, optionally
- * followed by a `?query` such as `?attribute=otp`. Names may contain spaces.
+ * A 1Password secret reference such as `op://vault/item/field`. Only what
+ * T3 Code itself depends on is checked here; `op` validates the rest and
+ * reports which part it could not resolve.
  */
 export const OnePasswordSecretReference = Schema.String.check(
   Schema.isMaxLength(ONE_PASSWORD_SECRET_REFERENCE_MAX_CHARS),
