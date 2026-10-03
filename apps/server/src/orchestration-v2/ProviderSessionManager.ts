@@ -185,6 +185,11 @@ export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2Shape
 >()("t3/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
+interface BusyMark {
+  readonly previousRunOrdinal: number | null;
+  readonly runOrdinal: number;
+}
+
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
@@ -1178,10 +1183,10 @@ export const layerWithOptions = (
           Effect.gen(function* () {
             const key = sessionKey(providerSessionId);
             const now = yield* Clock.currentTimeMillis;
-            const [idleFiber, added] = yield* Ref.modify(sessions, (current) => {
+            const [idleFiber, mark] = yield* Ref.modify(sessions, (current) => {
               const entry = current.get(key);
               if (entry === undefined) {
-                return [[null, false] as const, current] as const;
+                return [[null, null] as const, current] as const;
               }
               const updated = new Map(current);
               const busyRunOrdinals = new Map(entry.busyRunOrdinals);
@@ -1196,13 +1201,14 @@ export const layerWithOptions = (
                 lastActivityAtMs: now,
                 pinnedSinceMs: null,
               });
-              return [
-                [entry.idleFiber, !entry.busyRunOrdinals.has(providerThreadId)] as const,
-                updated,
-              ] as const;
+              const mark: BusyMark = {
+                previousRunOrdinal: entry.busyRunOrdinals.get(providerThreadId) ?? null,
+                runOrdinal: busyRunOrdinals.get(providerThreadId)!,
+              };
+              return [[entry.idleFiber, mark] as const, updated] as const;
             });
             yield* cancelIdleFiber(idleFiber);
-            return added;
+            return mark;
           }),
         );
 
@@ -1233,6 +1239,34 @@ export const layerWithOptions = (
                 lastActivityAtMs: now,
               });
               return updated;
+            });
+            yield* scheduleIdleReleaseInternal(providerSessionId);
+          }),
+        );
+
+      // Undoes a markBusy whose turn failed to start, unless a terminal or a
+      // newer turn has since changed the thread's busy state.
+      const revertBusy = (
+        providerSessionId: ProviderSessionId,
+        providerThreadId: ProviderThreadId,
+        mark: BusyMark,
+      ) =>
+        withActivityError(
+          providerSessionId,
+          Effect.gen(function* () {
+            const key = sessionKey(providerSessionId);
+            yield* Ref.update(sessions, (current) => {
+              const entry = current.get(key);
+              if (entry?.busyRunOrdinals.get(providerThreadId) !== mark.runOrdinal) {
+                return current;
+              }
+              const busyRunOrdinals = new Map(entry.busyRunOrdinals);
+              if (mark.previousRunOrdinal === null) {
+                busyRunOrdinals.delete(providerThreadId);
+              } else {
+                busyRunOrdinals.set(providerThreadId, mark.previousRunOrdinal);
+              }
+              return new Map(current).set(key, { ...entry, busyRunOrdinals });
             });
             yield* scheduleIdleReleaseInternal(providerSessionId);
           }),
@@ -1409,23 +1443,23 @@ export const layerWithOptions = (
                     Effect.logWarning("orchestration-v2.driver-session.activity-failed", {
                       providerSessionId,
                       cause,
-                    }).pipe(Effect.as(false)),
+                    }).pipe(Effect.as(null)),
                   ),
                 ),
               ),
-              // Only the startTurn that marked the thread busy may clear it on
-              // failure; an overlapping attempt must not idle a running turn.
-              Effect.flatMap((markedBusy) =>
+              // A failed start restores the busy state it found, so an
+              // overlapping attempt neither idles nor pins a running turn.
+              Effect.flatMap((mark) =>
                 runtime
                   .startTurn(input)
                   .pipe(
                     Effect.catch((error) =>
-                      (markedBusy
-                        ? observeActivity(
+                      (mark === null
+                        ? Effect.void
+                        : observeActivity(
                             providerSessionId,
-                            markIdle(providerSessionId, input.providerThread.id, input.runOrdinal),
+                            revertBusy(providerSessionId, input.providerThread.id, mark),
                           )
-                        : Effect.void
                       ).pipe(Effect.andThen(Effect.fail(error))),
                     ),
                   ),

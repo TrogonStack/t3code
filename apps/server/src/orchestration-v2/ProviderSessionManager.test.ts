@@ -2986,6 +2986,28 @@ it.effect(
         yield* TestClock.adjust("2 seconds");
         yield* Effect.yieldNow;
         assert.equal((yield* Ref.get(state)).closeCount, 0);
+
+        // The failed run 2 must not leave its ordinal behind: run 1's
+        // terminal still idles the thread and lets the session release.
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        yield* Queue.offer(queue!, {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: providerThread.id,
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: CODEX_DRIVER,
+            nativeTurnId: "native-turn-overlap-1",
+          }),
+          runOrdinal: 1,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow;
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
       });
 
       yield* effect.pipe(
