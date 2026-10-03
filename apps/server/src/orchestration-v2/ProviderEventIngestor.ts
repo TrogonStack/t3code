@@ -25,6 +25,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { increment, providerRuntimeEventsTotal } from "../observability/Metrics.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -340,6 +341,10 @@ export const layer: Layer.Layer<
 
     const normalize: ProviderEventIngestorV2Shape["normalize"] = (input) =>
       Effect.gen(function* () {
+        yield* increment(providerRuntimeEventsTotal, {
+          provider: input.event.driver,
+          eventType: input.event.type,
+        });
         switch (input.event.type) {
           case "app_thread.created":
             return [
@@ -462,6 +467,10 @@ export const layer: Layer.Layer<
             if (input.event.status !== "failed") {
               return dismissed;
             }
+            yield* increment(providerRuntimeEventsTotal, {
+              provider: input.event.driver,
+              eventType: "turn.terminal.failed",
+            });
             const occurredAt = yield* DateTime.now;
             return [
               ...dismissed,

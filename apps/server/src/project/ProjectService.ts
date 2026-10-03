@@ -16,6 +16,11 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import {
+  orchestrationCommandDuration,
+  orchestrationCommandsTotal,
+  withMetrics,
+} from "../observability/Metrics.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as IdAllocator from "../orchestration-v2/IdAllocator.ts";
 import { makeKeyedSerialExecutor } from "../orchestration-v2/KeyedSerialExecutor.ts";
@@ -219,7 +224,7 @@ export const make = Effect.gen(function* () {
    * Plan one command against rows read under its locks, then commit its event or
    * its rejection. A reused command id resolves to the receipt it already has.
    */
-  const commit = Effect.fn("ProjectService.commit")(function* (command: ProjectCommand) {
+  const commitEffect = Effect.fn("ProjectService.commit")(function* (command: ProjectCommand) {
     const { projectId } = command;
     const dispatchError = (cause: unknown) =>
       new ProjectOperationError({ operation: "dispatch-project-command", projectId, cause });
@@ -294,6 +299,15 @@ export const make = Effect.gen(function* () {
         );
     }
   });
+
+  const commit = (command: ProjectCommand) =>
+    commitEffect(command).pipe(
+      withMetrics({
+        counter: orchestrationCommandsTotal,
+        timer: orchestrationCommandDuration,
+        attributes: { commandType: command.type },
+      }),
+    );
 
   const readCommitted = Effect.fn("ProjectService.readCommitted")(function* (projectId: ProjectId) {
     const row = yield* readRow(projectId, { includeDeleted: true });

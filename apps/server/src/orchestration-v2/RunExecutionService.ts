@@ -35,6 +35,12 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import {
+  providerTurnDuration,
+  providerTurnMetricAttributes,
+  providerTurnsTotal,
+  withMetrics,
+} from "../observability/Metrics.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
@@ -1374,6 +1380,15 @@ export const layer: Layer.Layer<
               ))
             : input.session.startTurn(turnInput);
           yield* startTurn.pipe(
+            withMetrics({
+              counter: providerTurnsTotal,
+              timer: providerTurnDuration,
+              attributes: providerTurnMetricAttributes({
+                provider: input.session.driver,
+                model: input.modelSelection.model,
+                extra: { operation: "send" },
+              }),
+            }),
             Effect.catchCause((cause) =>
               Effect.logError("orchestration V2 provider turn start failed", {
                 runId: input.run.id,

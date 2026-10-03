@@ -24,6 +24,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -464,6 +465,120 @@ layer("ProviderEventIngestorV2", (it) => {
         });
 
         assert.deepEqual(normalized, []);
+      }),
+  );
+
+  it.effect("records a provider runtime event metric for every normalized provider event", () =>
+    Effect.gen(function* () {
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const projectId = yield* idAllocator.allocate.project({
+        fixtureName: "provider-event-runtime-metric",
+      });
+      const threadId = yield* idAllocator.allocate.thread({
+        fixtureName: "provider-event-runtime-metric",
+        projectId,
+      });
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* ingestor.normalize({
+        providerSessionId,
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+        event: {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: idAllocator.derive.providerThread({
+            driver: CODEX_DRIVER,
+            nativeThreadId: "native-thread-runtime-metric",
+          }),
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: CODEX_DRIVER,
+            nativeTurnId: "native-turn-runtime-metric",
+          }),
+          runOrdinal: 1,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        },
+      });
+
+      const snapshots = yield* Metric.snapshot;
+      assert.isTrue(
+        snapshots.some(
+          (snapshot) =>
+            snapshot.id === "t3_provider_runtime_events_total" &&
+            snapshot.attributes?.provider === CODEX_DRIVER &&
+            snapshot.attributes?.eventType === "turn.terminal",
+        ),
+      );
+    }),
+  );
+
+  it.effect(
+    "records an additional failed-terminal metric when a provider turn ends in failure",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const threadEvent = yield* threadCreatedEvent(now);
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+        });
+        const providerThreadId = idAllocator.derive.providerThread({
+          driver: CODEX_DRIVER,
+          nativeThreadId: "native-thread-failed-metric",
+        });
+        const providerTurnId = idAllocator.derive.providerTurn({
+          driver: CODEX_DRIVER,
+          nativeTurnId: "native-turn-failed-metric",
+        });
+
+        yield* eventSink.write({ events: [threadEvent] });
+        yield* ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId: threadEvent.threadId,
+          event: {
+            type: "turn.terminal",
+            driver: CODEX_DRIVER,
+            providerThreadId,
+            providerTurnId,
+            runOrdinal: 1,
+            failureItemOrdinal: 102,
+            status: "failed",
+            failure: makeProviderFailure({
+              message: "Invalid reasoning effort.",
+              code: "invalid_request",
+              class: "validation_error",
+            }),
+            threadDisposition: "reusable",
+          },
+        });
+
+        const snapshots = yield* Metric.snapshot;
+        assert.isTrue(
+          snapshots.some(
+            (snapshot) =>
+              snapshot.id === "t3_provider_runtime_events_total" &&
+              snapshot.attributes?.provider === CODEX_DRIVER &&
+              snapshot.attributes?.eventType === "turn.terminal",
+          ),
+        );
+        assert.isTrue(
+          snapshots.some(
+            (snapshot) =>
+              snapshot.id === "t3_provider_runtime_events_total" &&
+              snapshot.attributes?.provider === CODEX_DRIVER &&
+              snapshot.attributes?.eventType === "turn.terminal.failed",
+          ),
+        );
       }),
   );
 

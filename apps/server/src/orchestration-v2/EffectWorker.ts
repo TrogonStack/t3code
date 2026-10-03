@@ -15,6 +15,7 @@ import {
   metricAttributes,
   orchestrationEffectClaimsTotal,
   orchestrationEffectQueueWait,
+  orchestrationEventsProcessedTotal,
 } from "../observability/Metrics.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
@@ -645,6 +646,10 @@ export const layerWithOptions = (
             return false;
           }).pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
           if (cancelledBeforeExecution) return true;
+
+          yield* increment(orchestrationEventsProcessedTotal, {
+            eventType: effect.request.type,
+          });
 
           const execution = executor
             .execute(effect, { willRetry: effect.attemptCount < maxAttempts })
