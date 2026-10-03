@@ -76,9 +76,9 @@ import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
   EffectOutboxV2,
-  PROCESS_BOUND_EFFECT_TYPES,
-  type OrchestrationEffectRequestV2,
+  SESSION_BOUND_EFFECT_TYPES,
   type PendingOrchestrationEffectV2,
+  type UnsettledEffectCancellation,
 } from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
@@ -101,10 +101,7 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
-import {
-  planProcessLossReconciliation,
-  planThreadReconciliation,
-} from "./ProviderRuntimeRecoveryService.ts";
+import { planProcessLossReconciliation } from "./ProviderRuntimeRecoveryService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -7929,10 +7926,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return {
           effectTypes: ["provider-turn.start", "provider-turn.restart"],
           reason: `Run ${run.id} was interrupted before its provider turn started.`,
-        } satisfies {
-          readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-          readonly reason: string;
-        };
+        } satisfies UnsettledEffectCancellation;
       }
 
       if (providerTurn === undefined) {
@@ -8047,78 +8041,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             },
           ]);
         }
-        // A linked subagent child thread is a genuinely separate thread: its
-        // own open work needs its own reconciliation plan and its own effect
-        // cancellation, since cancelUnsettledEffects below only scopes the
-        // primary thread.
-        const linkedChildThreadIds = recoveryProjection.subagents
-          .filter((subagent) => subagent.runId === run.id)
-          .map((subagent) => subagent.childThreadId)
-          .filter((childThreadId): childThreadId is ThreadId => childThreadId !== null);
-        for (const childThreadId of linkedChildThreadIds) {
-          const childProjection = yield* projectionStore
-            .getRuntimeRecoveryProjection(childThreadId)
-            .pipe(
-              Effect.mapError(
-                (cause) => new OrchestratorProjectionError({ threadId: childThreadId, cause }),
-              ),
-            );
-          const childPlan = yield* planThreadReconciliation({
-            projection: childProjection,
-            trigger: "process-loss",
-            continueAfterRestart: false,
-            commandId: command.commandId,
-            now,
-            ids: idAllocator,
-            outbox,
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new OrchestratorDispatchError({
-                  commandId: command.commandId,
-                  commandType: command.type,
-                  cause,
-                }),
-            ),
-          );
-          yield* Ref.update(events, (existing) => [...existing, ...childPlan.events]);
-          yield* Ref.update(effects, (existing) => [...existing, ...childPlan.effects]);
-          if (childPlan.events.length === 0) continue;
-          const retiredEffectIds = yield* outbox
-            .cancelUnsettled({
-              threadId: childThreadId,
-              effectTypes: PROCESS_BOUND_EFFECT_TYPES,
-              reason: childPlan.detail,
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestratorDispatchError({
-                    commandId: command.commandId,
-                    commandType: command.type,
-                    cause,
-                  }),
-              ),
-            );
-          yield* outbox.signalCancellations(retiredEffectIds);
-        }
         if (command.holdQueue === true) yield* holdQueuedRuns;
         yield* stopCompletionCohort();
+        // Read past the plan's events so a stale provider-thread row cannot
+        // overwrite the idle state the plan just wrote.
         yield* settleBackgroundWork({
           command,
           events,
-          projection,
+          projection: yield* getProjectionWithPendingEvents(command.threadId, events),
           stoppedProviderThreadId: providerThread.id,
           throughRunOrdinal: run.ordinal,
           now,
         });
+        // Only effects addressed to the dead session lost their process; a
+        // thread's other sessions keep theirs.
         return {
-          effectTypes: PROCESS_BOUND_EFFECT_TYPES,
+          effectTypes: providerThread.providerSessionId === null ? [] : SESSION_BOUND_EFFECT_TYPES,
           reason: plan.detail,
-        } satisfies {
-          readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-          readonly reason: string;
-        };
+          ...(providerThread.providerSessionId === null
+            ? {}
+            : { providerSessionId: providerThread.providerSessionId }),
+        } satisfies UnsettledEffectCancellation;
       }
       if (providerThread.providerSessionId === null) {
         return yield* new OrchestratorDispatchError({
@@ -9175,10 +9118,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     {
       readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
       readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
-      readonly cancelUnsettledEffects?: {
-        readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-        readonly reason: string;
-      };
+      readonly cancelUnsettledEffects?: UnsettledEffectCancellation;
     },
     OrchestratorV2Error
   > {
@@ -9190,12 +9130,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
     const events = yield* Ref.make<Array<OrchestrationV2DomainEvent>>([]);
     const effects = yield* Ref.make<Array<PendingOrchestrationEffectV2>>([]);
-    let cancelUnsettledEffects:
-      | {
-          readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-          readonly reason: string;
-        }
-      | undefined;
+    let cancelUnsettledEffects: UnsettledEffectCancellation | undefined;
     switch (command.type) {
       case "thread.create":
         yield* dispatchThreadCreate(command, events);

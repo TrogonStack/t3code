@@ -12,6 +12,7 @@ import {
   EventId,
   MessageId,
   NodeId,
+  ProviderSessionId,
   RuntimeRequestId,
   TurnItemId,
   type ModelSelection,
@@ -3125,6 +3126,27 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         const checkpointCommandId = CommandId.make(
           `command:effect:checkpoint.capture:${activeRun.id}`,
         );
+        // Effects addressed to the dead session lose their process; one for
+        // another session on the same thread does not.
+        const sessionRespond = (name: string, providerSessionId: ProviderSessionId) => ({
+          id: `effect:${threadId}:${name}`,
+          commandId: CommandId.make(`${threadId}:${name}`),
+          threadId,
+          request: {
+            type: "runtime-request.respond" as const,
+            providerSessionId,
+            requestId: RuntimeRequestId.make(`${threadId}:${name}`),
+          },
+        });
+        const deadSessionRespond = sessionRespond(
+          "dead-session",
+          providerThread.providerSessionId!,
+        );
+        const otherSessionRespond = sessionRespond(
+          "other-session",
+          ProviderSessionId.make(`${threadId}:other-session`),
+        );
+        yield* outbox.enqueue([deadSessionRespond, otherSessionRespond]);
 
         // Drive the run and its provider turn into "running" the same way a
         // real provider session reaching that state would, without actually
@@ -3330,11 +3352,19 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
           scopeId: checkpointScope.id,
         });
 
+        const [deadSessionEffect] = yield* outbox.listByCommandId(deadSessionRespond.commandId);
+        assert.equal(deadSessionEffect?.status, "cancelled");
+        const [otherSessionEffect] = yield* outbox.listByCommandId(otherSessionRespond.commandId);
+        assert.equal(otherSessionEffect?.status, "pending");
+
+        // Like a live interrupt, this one stays on its own thread: the child
+        // may run on a session that is still alive, and its own interrupt
+        // settles it if not.
         const childAfter = yield* orchestrator.getThreadProjection(childThreadId);
-        assert.equal(childAfter.runs.find((run) => run.id === childRun.id)?.status, "cancelled");
+        assert.equal(childAfter.runs.find((run) => run.id === childRun.id)?.status, "running");
         assert.equal(
           childAfter.turnItems.find((item) => item.id === childItemId)?.status,
-          "cancelled",
+          "running",
         );
       }),
   );

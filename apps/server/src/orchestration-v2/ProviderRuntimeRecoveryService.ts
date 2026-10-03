@@ -269,7 +269,7 @@ export function scopeProjectionToRun(
  * callers must scope `projection` first (see `scopeProjectionToRun`), since
  * this plans against everything the projection contains.
  */
-export const planThreadReconciliation = Effect.fn(
+const planThreadReconciliation = Effect.fn(
   "ProviderRuntimeRecoveryService.planThreadReconciliation",
 )(function* (input: {
   readonly projection: ProjectionStore.ProjectionRuntimeRecoveryState;

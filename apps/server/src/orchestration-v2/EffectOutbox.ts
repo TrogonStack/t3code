@@ -123,6 +123,24 @@ export const PROCESS_BOUND_EFFECT_TYPES = [
   "runtime-request.respond",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
+export const SESSION_BOUND_EFFECT_TYPES = [
+  "provider-turn.interrupt",
+  "provider-turn.steer",
+  "provider-turn.restart",
+  "runtime-request.respond",
+] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+
+/**
+ * Which unsettled effects of a thread to cancel. `providerSessionId` narrows
+ * it to effects addressed to that provider session, leaving effects for other
+ * sessions on the same thread alone.
+ */
+export interface UnsettledEffectCancellation {
+  readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+  readonly reason: string;
+  readonly providerSessionId?: ProviderSessionId;
+}
+
 export const OrchestrationEffectStatusV2 = Schema.Literals([
   "pending",
   "running",
@@ -184,11 +202,9 @@ export interface EffectOutboxV2Shape {
   readonly listByCommandId: (
     commandId: CommandId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
-  readonly cancelUnsettled: (input: {
-    readonly threadId: ThreadId;
-    readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-    readonly reason: string;
-  }) => Effect.Effect<ReadonlyArray<string>, EffectOutboxError>;
+  readonly cancelUnsettled: (
+    input: UnsettledEffectCancellation & { readonly threadId: ThreadId },
+  ) => Effect.Effect<ReadonlyArray<string>, EffectOutboxError>;
   readonly signalCancellations: (effectIds: ReadonlyArray<string>) => Effect.Effect<void>;
   readonly awaitCancellation: (effectId: string) => Effect.Effect<void>;
   readonly clearCancellation: (effectId: string) => Effect.Effect<void>;
@@ -391,7 +407,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               : new EffectOutboxError({ operation: "list", cause }),
           ),
         ),
-      cancelUnsettled: ({ threadId, effectTypes, reason }) =>
+      cancelUnsettled: ({ threadId, effectTypes, reason, providerSessionId }) =>
         Effect.gen(function* () {
           if (effectTypes.length === 0) return [];
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -407,6 +423,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE thread_id = ${threadId}
               AND status IN ('pending', 'running')
               AND effect_type IN ${sql.in(effectTypes)}
+              ${providerSessionId === undefined ? sql`` : sql`AND json_extract(payload_json, '$.providerSessionId') = ${providerSessionId}`}
             RETURNING effect_id
           `;
           return rows.map(({ effect_id }) => effect_id);
