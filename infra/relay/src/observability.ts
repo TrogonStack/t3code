@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Output from "alchemy/Output";
@@ -218,7 +220,7 @@ let serviceInstanceId: string | undefined;
  * One `service.instance.id` per isolate, made on first use because Workers
  * refuse to generate random values in global scope.
  */
-const isolateServiceInstanceId = (): string => (serviceInstanceId ??= crypto.randomUUID());
+const isolateServiceInstanceId = (): string => (serviceInstanceId ??= NodeCrypto.randomUUID());
 
 export const makeRelayTraceLayer = (input: {
   readonly tracesEndpoint: string;
