@@ -131,6 +131,28 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("saves through a symlinked settings file without replacing the link", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
+      const linkedSettingsPath = path.join(dotfiles, "settings.json");
+      yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
+      yield* fs.remove(config.settingsPath, { force: true });
+      yield* fs.symlink(linkedSettingsPath, config.settingsPath);
+
+      yield* service.updateSettings({ responseStreamingMode: "paragraph" });
+
+      assert.equal(yield* fs.readLink(config.settingsPath), linkedSettingsPath);
+      const persisted = yield* decodeServerSettingsJson(
+        yield* fs.readFileString(linkedSettingsPath),
+      );
+      assert.equal(persisted.responseStreamingMode, "paragraph");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("preserves context when reading a provider environment secret fails", () => {
     const platformCause = PlatformError.systemError({
       _tag: "PermissionDenied",
