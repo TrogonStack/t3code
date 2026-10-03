@@ -1219,10 +1219,15 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, pathService),
     );
-    const linkTargetEvents =
-      linkTargetPath === pathService.resolve(settingsPath)
-        ? Stream.empty
-        : watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true }));
+    const isLinked = linkTargetPath !== pathService.resolve(settingsPath);
+    if (isLinked) {
+      yield* fs
+        .makeDirectory(pathService.dirname(linkTargetPath), { recursive: true })
+        .pipe(Effect.ignore({ log: true }));
+    }
+    const linkTargetEvents = isLinked
+      ? watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true }))
+      : Stream.empty;
 
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
