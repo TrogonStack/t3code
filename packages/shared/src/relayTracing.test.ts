@@ -75,7 +75,7 @@ describe("withRelayClientTracing", () => {
       },
       {
         serviceName: "relay-test",
-        runtime: "test",
+        serviceInstanceId: "test-instance",
         client: "test",
       },
     ).pipe(Layer.provide(httpClientLayer));

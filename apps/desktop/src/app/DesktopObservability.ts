@@ -2,6 +2,7 @@ import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import {
   makeLocalFileTracer,
   makeTraceSink,
+  nodeProcessResourceAttributes,
   otlpSerializationLayer,
   type SignalExport,
 } from "@t3tools/shared/observability";
@@ -627,10 +628,13 @@ const telemetryLayer = Layer.unwrap(
     const endpoints = yield* resolveOtlpEndpoints;
     const resource = {
       serviceName: "t3code-desktop",
+      serviceVersion: environment.appVersion,
       attributes: {
         "service.namespace": "t3code",
-        "service.runtime": "desktop",
-        "service.mode": environment.isDevelopment ? "development" : "packaged",
+        ...nodeProcessResourceAttributes({
+          operatorAttributes: endpoints.resourceAttributes,
+          isDevelopment: environment.isDevelopment,
+        }),
       },
     };
 

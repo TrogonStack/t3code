@@ -12,6 +12,7 @@ import { browserCryptoLayer } from "../cloud/dpop";
 import { managedRelayClientLayer } from "../cloud/managedRelayLayer";
 import { resolveCloudPublicConfig, resolveRelayTracingConfig } from "../cloud/publicConfig";
 import * as ClientTracer from "../observability/clientTracer";
+import { serviceInstanceId } from "../observability/serviceInstance";
 
 function configuredRelayUrl(): string {
   return resolveCloudPublicConfig().relayUrl ?? "http://relay.invalid";
@@ -21,7 +22,8 @@ const httpClientLayer = remoteHttpClientLayer((input, init) => globalThis.fetch(
 const relayTracingLayer = makeRelayClientTracingLayer(resolveRelayTracingConfig(), {
   serviceName: "t3code-web",
   serviceVersion: import.meta.env.APP_VERSION,
-  runtime: "browser",
+  serviceInstanceId,
+  attributes: { "process.runtime.name": "browser" },
   client: typeof window !== "undefined" && window.desktopBridge ? "desktop" : "web",
 }).pipe(Layer.provide(httpClientLayer));
 

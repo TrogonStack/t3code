@@ -11,6 +11,7 @@ export interface TracingConfig {
 
 export interface TracingResource {
   readonly serviceVersion?: string;
+  readonly serviceInstanceId: string;
   readonly appVariant: string;
 }
 
@@ -27,13 +28,20 @@ export function makeTracingLayer(config: TracingConfig | null, resource: Tracing
   return makeRelayClientTracingLayer(config, {
     serviceName: "t3code-mobile",
     serviceVersion: resource.serviceVersion,
-    runtime: "react-native",
-    client: `mobile-${resource.appVariant}`,
+    serviceInstanceId: resource.serviceInstanceId,
+    client: "mobile",
+    attributes: {
+      "process.runtime.name": "react-native",
+      ...(resource.appVariant !== "unknown" && {
+        "deployment.environment.name": resource.appVariant,
+      }),
+    },
   });
 }
 
 export const tracingLayer = makeTracingLayer(resolveTracingConfig(), {
   serviceVersion: Constants.expoConfig?.version,
+  serviceInstanceId: Constants.sessionId,
   appVariant:
     typeof Constants.expoConfig?.extra?.appVariant === "string"
       ? Constants.expoConfig.extra.appVariant

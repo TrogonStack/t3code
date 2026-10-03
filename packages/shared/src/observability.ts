@@ -1,3 +1,5 @@
+import * as NodeCrypto from "node:crypto";
+
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
@@ -27,6 +29,46 @@ export interface SignalExport {
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly exportIntervalMs: number;
 }
+
+let serviceInstanceId: string | undefined;
+
+/**
+ * `service.instance.id` for this process. Every resource the process exports
+ * shares it, so a restart reads as a new instance and two resources of one
+ * process can be joined.
+ */
+export const processServiceInstanceId = (): string =>
+  (serviceInstanceId ??= NodeCrypto.randomUUID());
+
+/**
+ * `process.runtime.*` resource attributes for a Node process, matching the
+ * OpenTelemetry Node process detector. Electron embeds Node, so an Electron
+ * process reports Node and names Electron in the description.
+ */
+export const nodeProcessRuntimeAttributes = (): Record<string, string> => ({
+  "process.runtime.name": "nodejs",
+  "process.runtime.version": process.versions.node,
+  "process.runtime.description": process.versions.electron
+    ? `Electron ${process.versions.electron}`
+    : "Node.js",
+});
+
+/**
+ * Resource attributes a Node process reports besides its service identity.
+ * Effect lets explicit attributes beat `OTEL_RESOURCE_ATTRIBUTES`, so values an
+ * operator set there are carried over by hand to keep winning.
+ */
+export const nodeProcessResourceAttributes = (input: {
+  readonly operatorAttributes: Readonly<Record<string, unknown>>;
+  readonly isDevelopment: boolean;
+}): Record<string, unknown> => ({
+  "service.instance.id":
+    input.operatorAttributes["service.instance.id"] ?? processServiceInstanceId(),
+  "deployment.environment.name":
+    input.operatorAttributes["deployment.environment.name"] ??
+    (input.isDevelopment ? "development" : "production"),
+  ...nodeProcessRuntimeAttributes(),
+});
 
 /** What T3 Code exports with when nothing configured a signal. */
 export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
