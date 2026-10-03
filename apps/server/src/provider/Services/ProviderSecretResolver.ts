@@ -1,12 +1,13 @@
 /**
- * ProviderSecretResolver: turns `op://` environment values into the secrets
- * they name, once, and holds them in memory.
+ * ProviderSecretResolver: turns environment values that name a secret (a
+ * 1Password secret source, or a legacy `op://` string) into the secrets they
+ * name, once, and holds them in memory.
  *
  * Every provider instance resolves its environment when the driver builds it,
  * and a single instance can rebuild several times per session. Shelling out
  * to `op` on each of those is slow (seconds) and, worse, can put a biometric
  * prompt in front of a user who only started a thread. The resolver therefore
- * caches by reference for the lifetime of the process; `invalidate` is wired
+ * caches by secret (reference plus account) for the lifetime of the process; `invalidate` is wired
  * to the Settings refresh button, which is the user's way of saying "go read
  * it again" after rotating a credential.
  *
@@ -15,6 +16,9 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+
+import type { ResolvedProviderEnvironment } from "../ProviderInstanceEnvironment.ts";
+import type { ProviderSecretReference } from "../ProviderSecretReference.ts";
 
 /**
  * An instance environment after its secret references have been read.
@@ -27,15 +31,14 @@ import * as Effect from "effect/Effect";
  * one, and it hides as "authenticated".
  */
 export interface ResolvedProviderInstanceEnvironment {
-  readonly variables: ProviderInstanceEnvironment | undefined;
+  readonly variables: ResolvedProviderEnvironment;
   readonly unresolved: ReadonlyArray<string>;
 }
 
 export interface ProviderSecretResolverShape {
   /**
-   * Replace every secret reference in the environment with its value.
-   * Literal values pass through untouched, and an environment with no
-   * references is returned as-is.
+   * Replace every secret the environment names with its value. Literal values
+   * pass through untouched.
    *
    * Never fails. A reference that cannot be read (1Password locked, `op` not
    * installed, item deleted) is reported as unresolved rather than
@@ -62,7 +65,7 @@ export interface ProviderSecretResolverShape {
    * found it, so `resolve` falls back to reading one reference at a time with
    * the same per-variable failure isolation it has always had.
    */
-  readonly prime: (references: ReadonlyArray<string>) => Effect.Effect<void>;
+  readonly prime: (references: ReadonlyArray<ProviderSecretReference>) => Effect.Effect<void>;
   /**
    * Drop every cached secret. The next `resolve` re-reads from the store.
    * Callers that need the new value to reach a running provider must also
@@ -73,16 +76,32 @@ export interface ProviderSecretResolverShape {
 }
 
 /**
- * Defaults to handing every environment back untouched, which is what a build
+ * Defaults to handing every literal back untouched, which is what a build
  * without secret-store integration behaves like, and what tests want unless
- * they are testing resolution itself: an `op://` value stays an `op://`
- * value, and the provider reports whatever the CLI makes of it.
+ * they are testing resolution itself: a legacy `op://` string stays an
+ * `op://` string, and the provider reports whatever the CLI makes of it. A
+ * secret source has no literal form, so it is reported unresolved.
  */
+const resolveWithoutSecretStore = (
+  environment: ProviderInstanceEnvironment | undefined,
+): ResolvedProviderInstanceEnvironment => {
+  const variables: Array<ResolvedProviderEnvironment[number]> = [];
+  const unresolved: Array<string> = [];
+  for (const { name, value } of environment ?? []) {
+    if (typeof value === "string") {
+      variables.push({ name, value });
+    } else {
+      unresolved.push(name);
+    }
+  }
+  return { variables, unresolved };
+};
+
 export class ProviderSecretResolver extends Context.Reference<ProviderSecretResolverShape>(
   "t3/provider/Services/ProviderSecretResolver",
   {
     defaultValue: () => ({
-      resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+      resolve: (environment) => Effect.sync(() => resolveWithoutSecretStore(environment)),
       prime: () => Effect.void,
       invalidate: Effect.void,
     }),

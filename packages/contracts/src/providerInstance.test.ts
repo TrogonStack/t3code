@@ -6,6 +6,7 @@ import {
   ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   ProviderInstanceId,
+  ProviderInstanceEnvironmentVariable,
   ProviderInstanceRef,
 } from "./providerInstance.ts";
 
@@ -14,6 +15,7 @@ const decodeProviderInstanceId = Schema.decodeUnknownSync(ProviderInstanceId);
 const decodeProviderInstanceRef = Schema.decodeUnknownSync(ProviderInstanceRef);
 const decodeProviderInstanceConfig = Schema.decodeUnknownSync(ProviderInstanceConfig);
 const decodeProviderInstanceConfigMap = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
+const decodeEnvironmentVariable = Schema.decodeUnknownSync(ProviderInstanceEnvironmentVariable);
 
 describe("provider slug validation (shared by driver + instance ids)", () => {
   const cases = [
@@ -204,5 +206,75 @@ describe("ProviderInstanceConfigMap", () => {
         "1codex": { driver: "codex" },
       }),
     ).toThrow();
+  });
+});
+
+describe("ProviderInstanceEnvironmentVariable secret sources", () => {
+  const onePassword = (reference: string, account = "my.1password.com") => ({
+    name: "API_KEY",
+    value: { kind: "1password", reference, account },
+  });
+
+  it.each([
+    "op://Private/claude-code/credential",
+    "op://Home Lab/Claude Code/API Key",
+    "op://Private/claude-code/login section/password",
+    "op://Private/github/one-time password?attribute=otp",
+  ])("accepts the 1Password reference %s", (reference) => {
+    expect(decodeEnvironmentVariable(onePassword(reference)).value).toEqual({
+      kind: "1password",
+      reference,
+      account: "my.1password.com",
+    });
+  });
+
+  it.each([
+    ["leading whitespace", " op://Private/item/field"],
+    ["trailing newline", "op://Private/item/field\n"],
+    ["control character", "op://Private/it\u0007em/field"],
+    ["missing scheme", "Private/item/field"],
+    ["missing field", "op://Private/item"],
+    ["too many segments", "op://a/b/c/d/e"],
+    ["empty segment", "op://Private//field"],
+    ["template delimiter", "op://Private/item}}/field"],
+    ["unsafe query", "op://Private/item/field?x=<y>"],
+  ])("rejects a reference with %s", (_label, reference) => {
+    expect(() => decodeEnvironmentVariable(onePassword(reference))).toThrow();
+  });
+
+  it.each(["my", "my.1password.com", "team-acme.1password.eu", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"])(
+    "accepts the account %s",
+    (account) => {
+      expect(
+        decodeEnvironmentVariable(onePassword("op://Private/item/field", account)).value,
+      ).toMatchObject({ account });
+    },
+  );
+
+  it.each([
+    ["empty", ""],
+    ["a space", "my account"],
+    ["a leading dash", "--help"],
+    ["surrounding whitespace", " my "],
+  ])("rejects an account with %s", (_label, account) => {
+    expect(() =>
+      decodeEnvironmentVariable(onePassword("op://Private/item/field", account)),
+    ).toThrow();
+  });
+
+  it("rejects a 1Password source without an account", () => {
+    expect(() =>
+      decodeEnvironmentVariable({
+        name: "API_KEY",
+        value: { kind: "1password", reference: "op://Private/item/field" },
+      }),
+    ).toThrow();
+  });
+
+  it("keeps decoding literal values, including legacy op:// strings", () => {
+    expect(decodeEnvironmentVariable({ name: "API_KEY" }).value).toBe("");
+    expect(
+      decodeEnvironmentVariable({ name: "API_KEY", value: "op://Private/item/field" }).value,
+    ).toBe("op://Private/item/field");
   });
 });

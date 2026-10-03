@@ -65,6 +65,7 @@ import {
 } from "../providerStatusCache.ts";
 import { COMPACT_SLASH_COMMAND } from "../providerSnapshot.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
+import { literalProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
@@ -1609,7 +1610,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const invalidations = yield* Ref.make(0);
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: () => Effect.void,
             invalidate: Ref.update(invalidations, (count) => count + 1),
           });
@@ -1687,7 +1692,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
 
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: () => Effect.void,
             invalidate: Effect.void,
           });
@@ -1764,9 +1773,16 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const primed = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: (references) =>
-              Ref.update(primed, (previous) => [...previous, references]).pipe(Effect.asVoid),
+              Ref.update(primed, (previous) => [
+                ...previous,
+                references.map((secret) => secret.reference),
+              ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
           });
           const environmentFor = (reference: string) => [
@@ -2944,12 +2960,15 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const recordingSecretResolverLayer = Layer.succeed(ProviderSecretResolver, {
             resolve: (environment) =>
               Ref.update(calls, (previous) => [...previous, "resolve"]).pipe(
-                Effect.as({ variables: environment, unresolved: [] }),
+                Effect.as({
+                  variables: literalProviderInstanceEnvironment(environment),
+                  unresolved: [],
+                }),
               ),
             prime: (references) =>
               Ref.update(calls, (previous) => [
                 ...previous,
-                `prime:${Array.from(references).join(",")}`,
+                `prime:${references.map((secret) => secret.reference).join(",")}`,
               ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
           });

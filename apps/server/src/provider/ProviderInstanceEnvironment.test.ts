@@ -5,7 +5,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+import {
+  literalProviderInstanceEnvironment,
+  mergeProviderInstanceEnvironment,
+} from "./ProviderInstanceEnvironment.ts";
 
 describe("mergeProviderInstanceEnvironment", () => {
   it.effect.each([
@@ -20,9 +26,9 @@ describe("mergeProviderInstanceEnvironment", () => {
       };
       const environment = mergeProviderInstanceEnvironment(
         [
-          { name: "CODEX_HOME", value, sensitive: false },
-          { name: "CLAUDE_CONFIG_DIR", value, sensitive: false },
-          { name: "CUSTOM_VALUE", value, sensitive: false },
+          { name: "CODEX_HOME", value },
+          { name: "CLAUDE_CONFIG_DIR", value },
+          { name: "CUSTOM_VALUE", value },
         ],
         baseEnv,
       );
@@ -43,10 +49,7 @@ describe("mergeProviderInstanceEnvironment", () => {
     const baseEnv = { CODEX_HOME: "~/.codex", CLAUDE_CONFIG_DIR: "~\\.claude" };
 
     expect(
-      mergeProviderInstanceEnvironment(
-        [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
-        baseEnv,
-      ),
+      mergeProviderInstanceEnvironment([{ name: "CUSTOM_VALUE", value: "~/.custom" }], baseEnv),
     ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom" });
   });
 
@@ -54,8 +57,8 @@ describe("mergeProviderInstanceEnvironment", () => {
     expect(
       mergeProviderInstanceEnvironment(
         [
-          { name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true },
-          { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+          { name: "OPENROUTER_API_KEY", value: "sk-or-test" },
+          { name: "ANTHROPIC_API_KEY", value: "" },
         ],
         { ANTHROPIC_API_KEY: "inherited", PATH: "/bin" },
       ),
@@ -64,5 +67,24 @@ describe("mergeProviderInstanceEnvironment", () => {
       ANTHROPIC_API_KEY: "",
       PATH: "/bin",
     });
+  });
+});
+
+const decodeProviderInstanceEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+
+describe("literalProviderInstanceEnvironment", () => {
+  it("keeps literals and leaves out every value that names a secret", () => {
+    const environment = decodeProviderInstanceEnvironment([
+      { name: "CODEX_HOME", value: "~/.codex-work" },
+      { name: "LEGACY_TOKEN", value: "op://Private/item/field" },
+      {
+        name: "TOKEN",
+        value: { kind: "1password", reference: "op://Private/item/field", account: "my" },
+      },
+    ]);
+
+    expect(literalProviderInstanceEnvironment(environment)).toEqual([
+      { name: "CODEX_HOME", value: "~/.codex-work" },
+    ]);
   });
 });

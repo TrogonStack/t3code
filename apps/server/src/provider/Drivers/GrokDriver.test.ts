@@ -65,7 +65,7 @@ it.layer(testLayer)("GrokDriver", (it) => {
         instanceId: ProviderInstanceId.make("grok-update"),
         displayName: "Grok test",
         enabled: false,
-        environment: [{ name: "GROK_HOME", value: grokHome, sensitive: false }],
+        environment: [{ name: "GROK_HOME", value: grokHome }],
         config: { ...GrokDriver.defaultConfig(), binaryPath },
       });
 

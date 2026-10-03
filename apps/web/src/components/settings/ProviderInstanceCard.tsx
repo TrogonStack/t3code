@@ -10,16 +10,21 @@ import {
   LockIcon,
   LockOpenIcon,
   ExternalLinkIcon,
+  KeyRoundIcon,
   PlusIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  OnePasswordAccount,
+  OnePasswordSecretReference,
   resolveProviderInstanceEnabled,
+  type OnePasswordSecretSource,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
@@ -85,10 +90,15 @@ function ProviderStatusDiagnostic({
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
 
+type EnvironmentDraftSource = "plain" | "1password";
+
 type EnvironmentDraftRow = {
   readonly id: string;
   readonly name: string;
+  readonly source: EnvironmentDraftSource;
   readonly value: string;
+  readonly reference: string;
+  readonly account: string;
   readonly sensitive: boolean;
   readonly valueRedacted?: boolean;
 };
@@ -97,13 +107,59 @@ function makeEnvironmentDraftRow(
   variable: ProviderInstanceEnvironmentVariable,
   index: number,
 ): EnvironmentDraftRow {
+  const id = `${index}:${variable.name}`;
+  if (typeof variable.value !== "string") {
+    return {
+      id,
+      name: variable.name,
+      source: "1password",
+      value: "",
+      reference: variable.value.reference,
+      account: variable.value.account,
+      sensitive: false,
+    };
+  }
   return {
-    id: `${index}:${variable.name}`,
+    id,
     name: variable.name,
+    source: "plain",
     value: variable.value,
+    reference: "",
+    account: "",
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
+}
+
+const decodeOnePasswordSecretReference = Schema.decodeUnknownResult(OnePasswordSecretReference);
+const decodeOnePasswordAccount = Schema.decodeUnknownResult(OnePasswordAccount);
+
+/**
+ * The 1Password source a draft row describes, or the message explaining why
+ * it is not one yet.
+ */
+function onePasswordSourceFromDraft(
+  row: EnvironmentDraftRow,
+): Result.Result<OnePasswordSecretSource, string> {
+  const reference = decodeOnePasswordSecretReference(row.reference);
+  if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
+  const account = decodeOnePasswordAccount(row.account);
+  if (Result.isFailure(account)) return Result.fail(account.failure.message);
+  return Result.succeed({
+    kind: "1password",
+    reference: reference.success,
+    account: account.success,
+  });
+}
+
+function environmentValuesEqual(
+  left: ProviderInstanceEnvironmentVariable["value"],
+  right: ProviderInstanceEnvironmentVariable["value"],
+): boolean {
+  if (typeof left === "string" || typeof right === "string") return left === right;
+  return (
+    left.kind === right.kind && left.reference === right.reference && left.account === right.account
+  );
 }
 
 function providerEnvironmentsEqual(
@@ -117,7 +173,7 @@ function providerEnvironmentsEqual(
       return (
         other !== undefined &&
         variable.name === other.name &&
-        variable.value === other.value &&
+        environmentValuesEqual(variable.value, other.value) &&
         variable.sensitive === other.sensitive &&
         variable.valueRedacted === other.valueRedacted
       );
@@ -257,7 +313,11 @@ function ProviderEnvironmentFieldRow(props: {
   readonly onRemove: (field: ProviderEnvironmentFieldDefinition) => void;
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
-  const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
+  const configuredValue = props.variable?.value;
+  const value =
+    props.variable?.valueRedacted || typeof configuredValue !== "string"
+      ? ""
+      : (configuredValue ?? "");
   const placeholder = props.variable?.valueRedacted
     ? "Stored secret - enter a new value to replace"
     : props.field.placeholder;
@@ -331,6 +391,7 @@ function ProviderEnvironmentSection(props: {
       if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
         if (
           name.length > 0 ||
+          row.source !== "plain" ||
           row.value.length > 0 ||
           row.sensitive !== true ||
           row.valueRedacted !== undefined
@@ -339,8 +400,18 @@ function ProviderEnvironmentSection(props: {
         }
         continue;
       }
-      const { id: _id, ...rest } = row;
-      published.push({ ...rest, name });
+      if (row.source === "1password") {
+        const source = onePasswordSourceFromDraft(row);
+        if (Result.isFailure(source)) return;
+        published.push({ name, value: source.success, sensitive: false });
+        continue;
+      }
+      published.push({
+        name,
+        value: row.value,
+        sensitive: row.sensitive,
+        ...(row.valueRedacted !== undefined ? { valueRedacted: row.valueRedacted } : {}),
+      });
     }
     lastPublishedEnvironmentRef.current = published;
     props.onChange(published);
@@ -372,7 +443,10 @@ function ProviderEnvironmentSection(props: {
       {
         id: nextEnvironmentVariableDraftId(),
         name: "",
+        source: "plain",
         value: "",
+        reference: "",
+        account: "",
         sensitive: true,
       },
     ]);
@@ -390,79 +464,154 @@ function ProviderEnvironmentSection(props: {
     >
       {rows.length > 0 ? (
         <div className="mt-3 min-w-0 space-y-2 pb-2">
-          {rows.map((variable, index) => (
-            <div key={variable.id} className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <DraftInput
-                size="sm"
-                font="mono"
-                className="w-full min-w-0 sm:w-44 sm:shrink-0"
-                value={variable.name}
-                onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
-                placeholder="VARIABLE_NAME"
-                spellCheck={false}
-                aria-label={`Environment variable name ${index + 1}`}
-              />
-              <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
-                =
-              </span>
-              <DraftInput
-                size="sm"
-                font="mono"
-                className="min-w-0 flex-1"
-                value={variable.valueRedacted ? "" : variable.value}
-                onCommit={(value) => updateVariable(variable.id, { value })}
-                type={variable.sensitive ? "password" : undefined}
-                autoComplete="off"
-                placeholder={
-                  variable.valueRedacted ? "Stored secret, enter a new value to replace" : "value"
-                }
-                spellCheck={false}
-                aria-label={`Environment variable value ${index + 1}`}
-              />
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      type="button"
-                      size="icon-micro"
-                      variant="ghost-muted"
-                      onClick={() => {
-                        const sensitive = !variable.sensitive;
-                        updateVariable(variable.id, {
-                          sensitive,
-                          ...(sensitive && variable.valueRedacted === undefined
-                            ? {}
-                            : { valueRedacted: sensitive ? variable.valueRedacted : false }),
-                        });
-                      }}
-                      aria-pressed={variable.sensitive}
-                      aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
-                    >
-                      {variable.sensitive ? (
-                        <LockIcon className="size-3" />
-                      ) : (
-                        <LockOpenIcon className="size-3" />
-                      )}
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="top">
-                  {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
-                </TooltipPopup>
-              </Tooltip>
-              <Button
-                type="button"
-                size="icon-micro"
-                variant="ghost-destructive"
-                onClick={() => removeVariable(variable.id)}
-                aria-label={`Remove environment variable ${variable.name || index + 1}`}
-              >
-                <XIcon className="size-3" />
-              </Button>
-            </div>
-          ))}
+          {rows.map((variable, index) => {
+            const isOnePassword = variable.source === "1password";
+            const sourceIssue =
+              isOnePassword && (variable.reference.length > 0 || variable.account.length > 0)
+                ? Result.match(onePasswordSourceFromDraft(variable), {
+                    onFailure: (message) => message,
+                    onSuccess: () => undefined,
+                  })
+                : undefined;
+            return (
+              <div key={variable.id} className="flex min-w-0 flex-col gap-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <DraftInput
+                    size="sm"
+                    font="mono"
+                    className="w-full min-w-0 sm:w-44 sm:shrink-0"
+                    value={variable.name}
+                    onCommit={(name) => updateVariable(variable.id, { name: name.trim() })}
+                    placeholder="VARIABLE_NAME"
+                    spellCheck={false}
+                    aria-label={`Environment variable name ${index + 1}`}
+                  />
+                  <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
+                    =
+                  </span>
+                  {isOnePassword ? (
+                    <>
+                      <DraftInput
+                        size="sm"
+                        font="mono"
+                        className="min-w-0 flex-1"
+                        value={variable.reference}
+                        onCommit={(reference) => updateVariable(variable.id, { reference })}
+                        placeholder="op://vault/item/field"
+                        spellCheck={false}
+                        aria-invalid={sourceIssue !== undefined || undefined}
+                        aria-label={`Environment variable 1Password reference ${index + 1}`}
+                      />
+                      <DraftInput
+                        size="sm"
+                        font="mono"
+                        className="w-full min-w-0 sm:w-40 sm:shrink-0"
+                        value={variable.account}
+                        onCommit={(account) => updateVariable(variable.id, { account })}
+                        placeholder="my.1password.com"
+                        spellCheck={false}
+                        aria-invalid={sourceIssue !== undefined || undefined}
+                        aria-label={`Environment variable 1Password account ${index + 1}`}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <DraftInput
+                        size="sm"
+                        font="mono"
+                        className="min-w-0 flex-1"
+                        value={variable.valueRedacted ? "" : variable.value}
+                        onCommit={(value) => updateVariable(variable.id, { value })}
+                        type={variable.sensitive ? "password" : undefined}
+                        autoComplete="off"
+                        placeholder={
+                          variable.valueRedacted
+                            ? "Stored secret, enter a new value to replace"
+                            : "value"
+                        }
+                        spellCheck={false}
+                        aria-label={`Environment variable value ${index + 1}`}
+                      />
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              type="button"
+                              size="icon-micro"
+                              variant="ghost-muted"
+                              onClick={() => {
+                                const sensitive = !variable.sensitive;
+                                updateVariable(variable.id, {
+                                  sensitive,
+                                  ...(sensitive && variable.valueRedacted === undefined
+                                    ? {}
+                                    : {
+                                        valueRedacted: sensitive ? variable.valueRedacted : false,
+                                      }),
+                                });
+                              }}
+                              aria-pressed={variable.sensitive}
+                              aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
+                            >
+                              {variable.sensitive ? (
+                                <LockIcon className="size-3" />
+                              ) : (
+                                <LockOpenIcon className="size-3" />
+                              )}
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup side="top">
+                          {variable.sensitive ? "Sensitive, stored separately" : "Plain text"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    </>
+                  )}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          size="icon-micro"
+                          variant="ghost-muted"
+                          onClick={() =>
+                            updateVariable(
+                              variable.id,
+                              isOnePassword
+                                ? { source: "plain", value: "", sensitive: true }
+                                : { source: "1password", value: "", sensitive: false },
+                            )
+                          }
+                          aria-pressed={isOnePassword}
+                          aria-label={`Read environment variable ${variable.name || index + 1} from 1Password`}
+                        >
+                          <KeyRoundIcon className="size-3" />
+                        </Button>
+                      }
+                    />
+                    <TooltipPopup side="top">
+                      {isOnePassword ? "Read from 1Password" : "Plain value"}
+                    </TooltipPopup>
+                  </Tooltip>
+                  <Button
+                    type="button"
+                    size="icon-micro"
+                    variant="ghost-destructive"
+                    onClick={() => removeVariable(variable.id)}
+                    aria-label={`Remove environment variable ${variable.name || index + 1}`}
+                  >
+                    <XIcon className="size-3" />
+                  </Button>
+                </div>
+                {sourceIssue !== undefined ? (
+                  <p className="text-xs text-destructive">{sourceIssue}</p>
+                ) : null}
+              </div>
+            );
+          })}
           <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app.
+            Sensitive values are stored separately and never returned to the app. 1Password
+            references are read with the 1Password CLI each time the provider starts.
           </p>
         </div>
       ) : null}

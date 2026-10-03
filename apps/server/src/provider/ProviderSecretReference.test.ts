@@ -5,21 +5,42 @@ import * as Schema from "effect/Schema";
 import {
   collectProviderSecretReferences,
   hasProviderSecretReference,
+  OnePasswordSecretReference,
   providerSecretReference,
 } from "./ProviderSecretReference.ts";
 
 const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
 
+const legacy = (reference: string) =>
+  new OnePasswordSecretReference({ reference, account: undefined });
+
+const onePasswordVariable = (name: string, reference: string, account: string) => ({
+  name,
+  value: { kind: "1password" as const, reference, account },
+});
+
 describe("providerSecretReference", () => {
-  it("reads a 1Password reference", () => {
-    expect(providerSecretReference("op://Private/claude-code/credential")).toBe(
-      "op://Private/claude-code/credential",
+  it("reads a 1Password source with its account", () => {
+    const [variable] = decodeEnvironment([
+      onePasswordVariable("TOKEN", "op://Private/claude-code/credential", "my.1password.com"),
+    ]);
+    expect(providerSecretReference(variable!.value)).toEqual(
+      new OnePasswordSecretReference({
+        reference: "op://Private/claude-code/credential",
+        account: "my.1password.com" as OnePasswordSecretReference["account"],
+      }),
+    );
+  });
+
+  it("reads a legacy op:// string from the default account", () => {
+    expect(providerSecretReference("op://Private/claude-code/credential")).toEqual(
+      legacy("op://Private/claude-code/credential"),
     );
   });
 
   it("trims a reference pasted with surrounding whitespace", () => {
-    expect(providerSecretReference("  op://Private/claude-code/credential\n")).toBe(
-      "op://Private/claude-code/credential",
+    expect(providerSecretReference("  op://Private/claude-code/credential\n")).toEqual(
+      legacy("op://Private/claude-code/credential"),
     );
   });
 
@@ -61,6 +82,18 @@ describe("hasProviderSecretReference", () => {
   });
 });
 
+describe("hasProviderSecretReference with secret sources", () => {
+  it("is true for a 1Password source", () => {
+    expect(
+      hasProviderSecretReference(
+        decodeEnvironment([
+          onePasswordVariable("TOKEN", "op://Private/item/field", "my.1password.com"),
+        ]),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("collectProviderSecretReferences", () => {
   it("returns each distinct reference once, in first-seen order", () => {
     const shared = "op://Private/shared/credential";
@@ -78,8 +111,26 @@ describe("collectProviderSecretReferences", () => {
     ];
 
     expect(Array.from(collectProviderSecretReferences(environments))).toEqual([
-      shared,
-      "op://Private/codex/credential",
+      legacy(shared),
+      legacy("op://Private/codex/credential"),
+    ]);
+  });
+
+  it("keeps one reference read from different accounts apart", () => {
+    const shared = "op://Private/shared/credential";
+    const references = collectProviderSecretReferences([
+      decodeEnvironment([
+        onePasswordVariable("HOME_TOKEN", shared, "my.1password.com"),
+        onePasswordVariable("WORK_TOKEN", shared, "acme.1password.com"),
+        onePasswordVariable("HOME_AGAIN", shared, "my.1password.com"),
+        { name: "LEGACY_TOKEN", value: shared },
+      ]),
+    ]);
+
+    expect(references.map(({ reference, account }) => [reference, account])).toEqual([
+      [shared, "my.1password.com"],
+      [shared, "acme.1password.com"],
+      [shared, undefined],
     ]);
   });
 

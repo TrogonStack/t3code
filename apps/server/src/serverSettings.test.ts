@@ -5,6 +5,7 @@ import {
   ProjectId,
   ProjectScript,
   ProviderDriverKind,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -1416,6 +1417,47 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeServerSettingsLayer())),
     );
   }
+
+  it.effect("stores 1Password secret sources as written and never as sensitive", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const instanceId = ProviderInstanceId.make("codex_personal");
+      const source = {
+        kind: "1password",
+        reference: "op://Home Lab/Codex/api key",
+        account: "my.1password.com",
+      } as const;
+      const decodeEnvironment = Schema.decodeEffect(ProviderInstanceEnvironment);
+      const environment = yield* decodeEnvironment([
+        { name: "OPENAI_API_KEY", value: source, sensitive: true, valueRedacted: true },
+      ]);
+      const expected = yield* decodeEnvironment([
+        { name: "OPENAI_API_KEY", value: source, sensitive: false },
+      ]);
+
+      const next = yield* serverSettings.updateSettings({
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            environment,
+            config: {},
+          },
+        },
+      });
+
+      assert.deepEqual(next.providerInstances[instanceId]?.environment, expected);
+      assert.deepEqual(
+        ServerSettingsModule.redactServerSettingsForClient(next).providerInstances[instanceId]
+          ?.environment,
+        expected,
+      );
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(raw).providerInstances.codex_personal.environment, expected);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 
   it.effect("stores sensitive provider instance environment values outside settings.json", () =>
     Effect.gen(function* () {

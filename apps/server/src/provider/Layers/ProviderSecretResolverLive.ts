@@ -2,16 +2,18 @@
  * ProviderSecretResolverLive: 1Password-backed implementation of
  * `ProviderSecretResolver`.
  *
- * Resolution is `op read <reference>`, which is the same command the user
- * would run by hand and inherits their existing `op` session, so there is no
- * second place to configure credentials. Reads run one at a time: two
+ * Resolution is `op read --account <account> <reference>`, which is the same
+ * command the user would run by hand and inherits their existing `op` session,
+ * so there is no second place to configure credentials. The account is what
+ * keeps a user signed into several 1Password accounts from reading against
+ * whichever one `op` picks by default. Reads run one at a time: two
  * concurrent reads against a locked vault stack up two biometric prompts.
  *
  * The prompt is charged per `op` invocation rather than per secret, so reading
  * one reference at a time makes the whole fleet cost one authorization each.
  * `prime` exists for that: `op inject` substitutes any number of references in
  * a single process, so the caller that is about to build every instance pays
- * one prompt for all of them.
+ * one prompt per account for all of them.
  *
  * Failures are cached alongside successes. If the vault is locked when the
  * first thread starts, every later thread in that session would otherwise
@@ -21,10 +23,7 @@
  *
  * @module provider/Layers/ProviderSecretResolverLive
  */
-import type {
-  ProviderInstanceEnvironment,
-  ProviderInstanceEnvironmentVariable,
-} from "@t3tools/contracts";
+import type { OnePasswordAccount } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -35,7 +34,12 @@ import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import { hasProviderSecretReference, providerSecretReference } from "../ProviderSecretReference.ts";
+import type { ResolvedProviderEnvironmentVariable } from "../ProviderInstanceEnvironment.ts";
+import {
+  providerSecretReference,
+  type OnePasswordSecretReference,
+  type ProviderSecretReference,
+} from "../ProviderSecretReference.ts";
 import { spawnAndCollect } from "../providerSnapshot.ts";
 import {
   ProviderSecretResolver,
@@ -58,8 +62,12 @@ const SECRET_READ_TIMEOUT = Duration.seconds(45);
  */
 const SECRET_CACHE_CAPACITY = 64;
 
+/** `--account` arguments for `op`; legacy references use its default account. */
+const accountArgs = (account: OnePasswordAccount | undefined): ReadonlyArray<string> =>
+  account === undefined ? [] : ["--account", account];
+
 /**
- * Read many references in one `op inject`.
+ * Read many references from one account in one `op inject`.
  *
  * `op inject` substitutes references inside a template, so the template is the
  * references themselves joined by a separator, and the output is the secrets
@@ -81,6 +89,7 @@ const SECRET_CACHE_CAPACITY = 64;
  * text; the secrets themselves come back on stdout and never touch disk.
  */
 const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
+  account: OnePasswordAccount | undefined,
   references: ReadonlyArray<string>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -90,6 +99,7 @@ const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   yield* fileSystem.writeFileString(templatePath, template);
   const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
     "inject",
+    ...accountArgs(account),
     "-i",
     templatePath,
   ]);
@@ -103,6 +113,7 @@ const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
     // `op` names the reference it could not resolve on stderr and never echoes
     // a secret, so this is safe to log verbatim.
     yield* Effect.logWarning("Could not batch-read provider secrets from 1Password", {
+      account,
       references: references.length,
       exitCode: result.code,
       detail: result.stderr.trim(),
@@ -123,9 +134,13 @@ const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   });
 });
 
-const readSecret = Effect.fn("readSecret")(function* (reference: string) {
+const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
+  reference,
+  account,
+}: OnePasswordSecretReference) {
   const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
     "read",
+    ...accountArgs(account),
     "--no-newline",
     reference,
   ]);
@@ -138,6 +153,7 @@ const readSecret = Effect.fn("readSecret")(function* (reference: string) {
     // and never echoes the secret itself, so this is safe to log verbatim.
     yield* Effect.logWarning("Could not read provider secret from 1Password", {
       reference,
+      account,
       exitCode: result.code,
       detail: result.stderr.trim(),
     });
@@ -146,6 +162,13 @@ const readSecret = Effect.fn("readSecret")(function* (reference: string) {
   const secret = result.stdout.trim();
   return secret.length > 0 ? secret : undefined;
 });
+
+const readSecret = (secret: ProviderSecretReference) => {
+  switch (secret._tag) {
+    case "1password":
+      return readOnePasswordSecret(secret);
+  }
+};
 
 export const ProviderSecretResolverLive = Layer.effect(
   ProviderSecretResolver,
@@ -162,13 +185,14 @@ export const ProviderSecretResolverLive = Layer.effect(
       // No time to live: a resolved secret is held until the user asks for a
       // provider refresh. Expiring on a timer would reintroduce the surprise
       // biometric prompt mid-session that the cache exists to remove.
-      lookup: (reference: string) =>
+      lookup: (reference: ProviderSecretReference) =>
         readSecret(reference).pipe(
           Effect.timeoutOption(SECRET_READ_TIMEOUT),
           Effect.map(Option.getOrUndefined),
           Effect.catch((error) =>
             Effect.logWarning("Could not run 1Password to read a provider secret", {
-              reference,
+              reference: reference.reference,
+              account: reference.account,
               detail: String(error),
             }).pipe(Effect.as(undefined)),
           ),
@@ -177,60 +201,85 @@ export const ProviderSecretResolverLive = Layer.effect(
 
     const resolve: ProviderSecretResolverShape["resolve"] = (environment) =>
       Effect.gen(function* () {
-        if (!hasProviderSecretReference(environment)) {
-          return { variables: environment, unresolved: [] };
-        }
-        const resolved: Array<ProviderInstanceEnvironmentVariable> = [];
+        const resolved: Array<ResolvedProviderEnvironmentVariable> = [];
         const unresolved: Array<string> = [];
-        for (const variable of environment ?? []) {
-          const reference = providerSecretReference(variable.value);
+        for (const { name, value } of environment ?? []) {
+          const reference = providerSecretReference(value);
           if (reference === undefined) {
-            resolved.push(variable);
+            if (typeof value === "string") {
+              resolved.push({ name, value });
+            }
             continue;
           }
           const secret = yield* Cache.get(cache, reference);
           if (secret === undefined) {
-            unresolved.push(variable.name);
+            unresolved.push(name);
             continue;
           }
-          resolved.push({ ...variable, value: secret });
+          resolved.push({ name, value: secret });
         }
-        return { variables: resolved as ProviderInstanceEnvironment, unresolved };
+        return { variables: resolved, unresolved };
       });
+
+    const primeOnePassword = Effect.fn("primeOnePassword")(function* (
+      account: OnePasswordAccount | undefined,
+      wanted: ReadonlyArray<OnePasswordSecretReference>,
+    ) {
+      // One reference costs one prompt whichever command reads it, so there
+      // is nothing to save and `op read` gives the better error.
+      if (wanted.length < 2) {
+        return;
+      }
+      const values = yield* readSecretsTogether(
+        account,
+        wanted.map((secret) => secret.reference),
+      ).pipe(
+        Effect.scoped,
+        Effect.timeoutOption(SECRET_READ_TIMEOUT),
+        Effect.map(Option.getOrUndefined),
+        Effect.catch((error) =>
+          Effect.logWarning("Could not run 1Password to batch-read provider secrets", {
+            account,
+            references: wanted.length,
+            detail: String(error),
+          }).pipe(Effect.as(undefined)),
+        ),
+      );
+      if (values === undefined) {
+        return;
+      }
+      yield* Effect.forEach(wanted, (secret, index) => Cache.set(cache, secret, values[index]), {
+        discard: true,
+      });
+    });
 
     const prime: ProviderSecretResolverShape["prime"] = (references) =>
       Effect.gen(function* () {
-        const wanted: Array<string> = [];
-        for (const reference of new Set(references)) {
-          if (!(yield* Cache.has(cache, reference))) {
-            wanted.push(reference);
+        // `op inject` reads every reference in its template from one account,
+        // so a batch is one call per account.
+        const onePasswordByAccount = new Map<
+          OnePasswordAccount | undefined,
+          Array<OnePasswordSecretReference>
+        >();
+        for (const reference of references) {
+          if (yield* Cache.has(cache, reference)) {
+            continue;
+          }
+          switch (reference._tag) {
+            case "1password": {
+              const group = onePasswordByAccount.get(reference.account) ?? [];
+              if (!group.some((seen) => seen.reference === reference.reference)) {
+                group.push(reference);
+              }
+              onePasswordByAccount.set(reference.account, group);
+              break;
+            }
           }
         }
-        // One reference costs one prompt whichever command reads it, so there
-        // is nothing to save and `op read` gives the better error.
-        if (wanted.length < 2) {
-          return;
-        }
-        const values = yield* readSecretsTogether(wanted).pipe(
-          Effect.scoped,
-          Effect.timeoutOption(SECRET_READ_TIMEOUT),
-          Effect.map(Option.getOrUndefined),
-          Effect.catch((error) =>
-            Effect.logWarning("Could not run 1Password to batch-read provider secrets", {
-              references: wanted.length,
-              detail: String(error),
-            }).pipe(Effect.as(undefined)),
-          ),
-        );
-        if (values === undefined) {
-          return;
-        }
         yield* Effect.forEach(
-          wanted,
-          (reference, index) => Cache.set(cache, reference, values[index]),
-          {
-            discard: true,
-          },
+          onePasswordByAccount,
+          ([account, wanted]) => primeOnePassword(account, wanted),
+          { discard: true },
         );
       }).pipe(Effect.provideContext(primeContext));
 

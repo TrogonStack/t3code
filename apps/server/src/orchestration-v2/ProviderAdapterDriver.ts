@@ -1,12 +1,9 @@
-import {
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ProviderInstanceEnvironment,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 
+import type { ResolvedProviderEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 
 export class ProviderAdapterDriverCreateError extends Schema.TaggedError<ProviderAdapterDriverCreateError>()(
@@ -27,7 +24,7 @@ export interface ProviderAdapterDriverCreateInput<Config> {
   readonly instanceId: ProviderInstanceId;
   readonly displayName: string | undefined;
   readonly accentColor?: string | undefined;
-  readonly environment: ProviderInstanceEnvironment;
+  readonly environment: ResolvedProviderEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
 }

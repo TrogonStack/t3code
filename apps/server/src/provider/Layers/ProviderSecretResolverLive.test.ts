@@ -10,6 +10,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeFS from "node:fs";
 
+import { OnePasswordSecretReference } from "../ProviderSecretReference.ts";
 import { ProviderSecretResolverLive } from "./ProviderSecretResolverLive.ts";
 import { ProviderSecretResolver } from "../Services/ProviderSecretResolver.ts";
 
@@ -17,6 +18,10 @@ const encoder = new TextEncoder();
 const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
 
 const TOKEN_REFERENCE = "op://Private/claude-code/credential";
+
+/** A plain-string `op://` value, read from the default `op` account. */
+const legacy = (reference: string) =>
+  new OnePasswordSecretReference({ reference, account: undefined });
 
 /**
  * Spawner that answers every `op read` with `result` and records the argv it
@@ -61,7 +66,10 @@ describe("ProviderSecretResolverLive", () => {
 
       const resolved = yield* resolver.resolve(environment);
 
-      assert.deepStrictEqual(resolved, { variables: environment, unresolved: [] });
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CLAUDE_SECURESTORAGE_CONFIG_DIR", value: "/home/u/.claude/work" }],
+        unresolved: [],
+      });
       assert.strictEqual(spawner.invocations.length, 0);
     }).pipe(
       Effect.provide(
@@ -264,7 +272,7 @@ describe("ProviderSecretResolverLive.prime", () => {
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
 
-      yield* resolver.prime([TOKEN_REFERENCE, SECOND_REFERENCE]);
+      yield* resolver.prime([legacy(TOKEN_REFERENCE), legacy(SECOND_REFERENCE)]);
 
       assert.strictEqual(spawner.invocations.length, 1);
       assert.deepStrictEqual(Array.from(spawner.invocations[0] ?? []).slice(0, 2), [
@@ -307,7 +315,7 @@ describe("ProviderSecretResolverLive.prime", () => {
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
 
-      yield* resolver.prime([TOKEN_REFERENCE, SECOND_REFERENCE]);
+      yield* resolver.prime([legacy(TOKEN_REFERENCE), legacy(SECOND_REFERENCE)]);
 
       // The batch is still attempted; it is the recovery that is per reference.
       assert.strictEqual(spawner.invocations[0]?.[0], "inject");
@@ -352,7 +360,7 @@ describe("ProviderSecretResolverLive.prime", () => {
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
 
-      yield* resolver.prime([TOKEN_REFERENCE, SECOND_REFERENCE]);
+      yield* resolver.prime([legacy(TOKEN_REFERENCE), legacy(SECOND_REFERENCE)]);
 
       // `op` only reads piped input from a named pipe, and Node hands a child
       // a socket pair, so a template offered on stdin is never seen and the
@@ -391,7 +399,7 @@ describe("ProviderSecretResolverLive.prime", () => {
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
 
-      yield* resolver.prime([TOKEN_REFERENCE, SECOND_REFERENCE]);
+      yield* resolver.prime([legacy(TOKEN_REFERENCE), legacy(SECOND_REFERENCE)]);
 
       assert.isTrue(templatePath.length > 0);
       assert.isFalse(NodeFS.existsSync(templatePath));
@@ -409,11 +417,135 @@ describe("ProviderSecretResolverLive.prime", () => {
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
 
-      yield* resolver.prime([TOKEN_REFERENCE]);
+      yield* resolver.prime([legacy(TOKEN_REFERENCE)]);
 
       // One reference is one prompt either way, and `op read` names the
       // reference it could not resolve.
       assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        ProviderSecretResolverLive.pipe(
+          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
+        ),
+      ),
+    );
+  });
+});
+
+const HOME_ACCOUNT = "my.1password.com";
+const WORK_ACCOUNT = "acme.1password.com";
+
+const onePasswordVariable = (name: string, reference: string, account: string) => ({
+  name,
+  value: { kind: "1password" as const, reference, account },
+});
+
+const onePassword = (reference: string, account: string) => {
+  const [variable] = decodeEnvironment([onePasswordVariable("TOKEN", reference, account)]);
+  const source = variable?.value;
+  if (source === undefined || typeof source === "string") {
+    throw new Error("expected a 1Password source");
+  }
+  return new OnePasswordSecretReference({ reference: source.reference, account: source.account });
+};
+
+describe("ProviderSecretResolverLive with 1Password accounts", () => {
+  it.effect("reads a 1Password source from the account it names", () => {
+    const spawner = recordingOpSpawner({ stdout: "sk-work-token", stderr: "", code: 0 });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([onePasswordVariable("CODEX_TOKEN", TOKEN_REFERENCE, WORK_ACCOUNT)]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-work-token" }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.invocations, [
+        ["read", "--account", WORK_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+      ]);
+    }).pipe(
+      Effect.provide(
+        ProviderSecretResolverLive.pipe(
+          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps the same reference in two accounts apart", () => {
+    const spawner = scriptedOpSpawner((args) => ({
+      stdout: args.includes(WORK_ACCOUNT) ? "sk-work-token" : "sk-home-token",
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          onePasswordVariable("HOME_TOKEN", TOKEN_REFERENCE, HOME_ACCOUNT),
+          onePasswordVariable("WORK_TOKEN", TOKEN_REFERENCE, WORK_ACCOUNT),
+        ]),
+      );
+
+      assert.deepStrictEqual(resolved.variables, [
+        { name: "HOME_TOKEN", value: "sk-home-token" },
+        { name: "WORK_TOKEN", value: "sk-work-token" },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 2);
+    }).pipe(
+      Effect.provide(
+        ProviderSecretResolverLive.pipe(
+          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
+        ),
+      ),
+    );
+  });
+
+  it.effect("primes one batch per account", () => {
+    const spawner = scriptedOpSpawner((args, template) => {
+      if (!args.includes("inject")) {
+        return { stdout: "should-not-be-read-one-at-a-time", stderr: "", code: 0 };
+      }
+      const prefix = args.includes(WORK_ACCOUNT) ? "work" : "home";
+      return {
+        stdout: [`${prefix}-claude`, `${prefix}-codex`].join(separatorOf(template)),
+        stderr: "",
+        code: 0,
+      };
+    });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.prime([
+        onePassword(TOKEN_REFERENCE, HOME_ACCOUNT),
+        onePassword(TOKEN_REFERENCE, WORK_ACCOUNT),
+        onePassword(SECOND_REFERENCE, HOME_ACCOUNT),
+        onePassword(SECOND_REFERENCE, WORK_ACCOUNT),
+      ]);
+
+      assert.deepStrictEqual(
+        spawner.invocations.map((args) => Array.from(args).slice(0, 4)),
+        [
+          ["inject", "--account", HOME_ACCOUNT, "-i"],
+          ["inject", "--account", WORK_ACCOUNT, "-i"],
+        ],
+      );
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          onePasswordVariable("HOME_CODEX", SECOND_REFERENCE, HOME_ACCOUNT),
+          onePasswordVariable("WORK_CLAUDE", TOKEN_REFERENCE, WORK_ACCOUNT),
+        ]),
+      );
+      assert.deepStrictEqual(resolved.variables, [
+        { name: "HOME_CODEX", value: "home-codex" },
+        { name: "WORK_CLAUDE", value: "work-claude" },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 2);
     }).pipe(
       Effect.provide(
         ProviderSecretResolverLive.pipe(
