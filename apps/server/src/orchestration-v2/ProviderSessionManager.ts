@@ -1174,10 +1174,10 @@ export const layerWithOptions = (
           Effect.gen(function* () {
             const key = sessionKey(providerSessionId);
             const now = yield* Clock.currentTimeMillis;
-            const idleFiber = yield* Ref.modify(sessions, (current) => {
+            const [idleFiber, added] = yield* Ref.modify(sessions, (current) => {
               const entry = current.get(key);
               if (entry === undefined) {
-                return [null, current] as const;
+                return [[null, false] as const, current] as const;
               }
               const updated = new Map(current);
               const busyProviderThreadIds = new Set(entry.busyProviderThreadIds);
@@ -1189,9 +1189,13 @@ export const layerWithOptions = (
                 lastActivityAtMs: now,
                 pinnedSinceMs: null,
               });
-              return [entry.idleFiber, updated] as const;
+              return [
+                [entry.idleFiber, !entry.busyProviderThreadIds.has(providerThreadId)] as const,
+                updated,
+              ] as const;
             });
             yield* cancelIdleFiber(idleFiber);
+            return added;
           }),
         );
 
@@ -1386,17 +1390,31 @@ export const layerWithOptions = (
               }),
             ).pipe(
               Effect.andThen(
-                observeActivity(
-                  providerSessionId,
-                  markBusy(providerSessionId, input.providerThread.id),
+                markBusy(providerSessionId, input.providerThread.id).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("orchestration-v2.driver-session.activity-failed", {
+                      providerSessionId,
+                      cause,
+                    }).pipe(Effect.as(false)),
+                  ),
                 ),
               ),
-              Effect.andThen(runtime.startTurn(input)),
-              Effect.catch((error) =>
-                observeActivity(
-                  providerSessionId,
-                  markIdle(providerSessionId, input.providerThread.id),
-                ).pipe(Effect.andThen(Effect.fail(error))),
+              // Only the startTurn that marked the thread busy may clear it on
+              // failure; an overlapping attempt must not idle a running turn.
+              Effect.flatMap((markedBusy) =>
+                runtime
+                  .startTurn(input)
+                  .pipe(
+                    Effect.catch((error) =>
+                      (markedBusy
+                        ? observeActivity(
+                            providerSessionId,
+                            markIdle(providerSessionId, input.providerThread.id),
+                          )
+                        : Effect.void
+                      ).pipe(Effect.andThen(Effect.fail(error))),
+                    ),
+                  ),
               ),
             ),
           steerTurn: (input) =>
