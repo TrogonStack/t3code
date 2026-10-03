@@ -26,9 +26,9 @@ describe("mergeProviderInstanceEnvironment", () => {
       };
       const environment = mergeProviderInstanceEnvironment(
         [
-          { name: "CODEX_HOME", value },
-          { name: "CLAUDE_CONFIG_DIR", value },
-          { name: "CUSTOM_VALUE", value },
+          { name: "CODEX_HOME", value, sensitive: false },
+          { name: "CLAUDE_CONFIG_DIR", value, sensitive: false },
+          { name: "CUSTOM_VALUE", value, sensitive: false },
         ],
         baseEnv,
       );
@@ -49,7 +49,10 @@ describe("mergeProviderInstanceEnvironment", () => {
     const baseEnv = { CODEX_HOME: "~/.codex", CLAUDE_CONFIG_DIR: "~\\.claude" };
 
     expect(
-      mergeProviderInstanceEnvironment([{ name: "CUSTOM_VALUE", value: "~/.custom" }], baseEnv),
+      mergeProviderInstanceEnvironment(
+        [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
+        baseEnv,
+      ),
     ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom" });
   });
 
@@ -57,8 +60,8 @@ describe("mergeProviderInstanceEnvironment", () => {
     expect(
       mergeProviderInstanceEnvironment(
         [
-          { name: "OPENROUTER_API_KEY", value: "sk-or-test" },
-          { name: "ANTHROPIC_API_KEY", value: "" },
+          { name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true },
+          { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
         ],
         { ANTHROPIC_API_KEY: "inherited", PATH: "/bin" },
       ),
@@ -84,7 +87,7 @@ describe("literalProviderInstanceEnvironment", () => {
     ]);
 
     expect(literalProviderInstanceEnvironment(environment)).toEqual([
-      { name: "CODEX_HOME", value: "~/.codex-work" },
+      { name: "CODEX_HOME", value: "~/.codex-work", sensitive: false },
     ]);
   });
 });

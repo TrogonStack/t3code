@@ -203,11 +203,11 @@ export const ProviderSecretResolverLive = Layer.effect(
       Effect.gen(function* () {
         const resolved: Array<ResolvedProviderEnvironmentVariable> = [];
         const unresolved: Array<string> = [];
-        for (const { name, value } of environment ?? []) {
+        for (const { name, value, sensitive } of environment ?? []) {
           const reference = providerSecretReference(value);
           if (reference === undefined) {
             if (typeof value === "string") {
-              resolved.push({ name, value });
+              resolved.push({ name, value, sensitive });
             }
             continue;
           }
@@ -216,7 +216,7 @@ export const ProviderSecretResolverLive = Layer.effect(
             unresolved.push(name);
             continue;
           }
-          resolved.push({ name, value: secret });
+          resolved.push({ name, value: secret, sensitive: true });
         }
         return { variables: resolved, unresolved };
       });

@@ -87,9 +87,9 @@ const resolveWithoutSecretStore = (
 ): ResolvedProviderInstanceEnvironment => {
   const variables: Array<ResolvedProviderEnvironment[number]> = [];
   const unresolved: Array<string> = [];
-  for (const { name, value } of environment ?? []) {
+  for (const { name, value, sensitive } of environment ?? []) {
     if (typeof value === "string") {
-      variables.push({ name, value });
+      variables.push({ name, value, sensitive });
     } else {
       unresolved.push(name);
     }

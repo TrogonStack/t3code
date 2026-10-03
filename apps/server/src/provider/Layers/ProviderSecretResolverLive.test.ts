@@ -67,7 +67,13 @@ describe("ProviderSecretResolverLive", () => {
       const resolved = yield* resolver.resolve(environment);
 
       assert.deepStrictEqual(resolved, {
-        variables: [{ name: "CLAUDE_SECURESTORAGE_CONFIG_DIR", value: "/home/u/.claude/work" }],
+        variables: [
+          {
+            name: "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+            value: "/home/u/.claude/work",
+            sensitive: false,
+          },
+        ],
         unresolved: [],
       });
       assert.strictEqual(spawner.invocations.length, 0);
@@ -460,7 +466,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
       );
 
       assert.deepStrictEqual(resolved, {
-        variables: [{ name: "CODEX_TOKEN", value: "sk-work-token" }],
+        variables: [{ name: "CODEX_TOKEN", value: "sk-work-token", sensitive: true }],
         unresolved: [],
       });
       assert.deepStrictEqual(spawner.invocations, [
@@ -492,8 +498,8 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
       );
 
       assert.deepStrictEqual(resolved.variables, [
-        { name: "HOME_TOKEN", value: "sk-home-token" },
-        { name: "WORK_TOKEN", value: "sk-work-token" },
+        { name: "HOME_TOKEN", value: "sk-home-token", sensitive: true },
+        { name: "WORK_TOKEN", value: "sk-work-token", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
     }).pipe(
@@ -542,8 +548,8 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         ]),
       );
       assert.deepStrictEqual(resolved.variables, [
-        { name: "HOME_CODEX", value: "home-codex" },
-        { name: "WORK_CLAUDE", value: "work-claude" },
+        { name: "HOME_CODEX", value: "home-codex", sensitive: true },
+        { name: "WORK_CLAUDE", value: "work-claude", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
     }).pipe(

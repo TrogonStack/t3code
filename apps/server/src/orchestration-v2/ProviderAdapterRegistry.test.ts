@@ -347,13 +347,13 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
         Effect.gen(function* () {
           const variables = [];
           const unresolved = [];
-          for (const { name, value } of environment ?? []) {
+          for (const { name, value, sensitive } of environment ?? []) {
             if (value === apiKeyReference) {
-              variables.push({ name, value: yield* Ref.get(apiKey) });
+              variables.push({ name, value: yield* Ref.get(apiKey), sensitive: true });
             } else if (typeof value !== "string" || value.startsWith("op://")) {
               unresolved.push(name);
             } else {
-              variables.push({ name, value });
+              variables.push({ name, value, sensitive });
             }
           }
           return { variables, unresolved };

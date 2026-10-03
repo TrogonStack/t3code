@@ -152,7 +152,7 @@ it.layer(testLayer)("CodexDriver", (it) => {
           instanceId,
           displayName: "Restored account",
           enabled: true,
-          environment: [{ name: "OPENAI_API_KEY", value: "ambient-key" }],
+          environment: [{ name: "OPENAI_API_KEY", value: "ambient-key", sensitive: true }],
           config: { ...CodexDriver.defaultConfig(), setupMode: "managed", homePath: sharedHome },
         }).pipe(
           Effect.provideService(
@@ -546,7 +546,7 @@ it.layer(testLayer)("CodexDriver", (it) => {
           instanceId: ProviderInstanceId.make("codex-mise-shim"),
           displayName: "Codex shim test",
           enabled: false,
-          environment: [{ name: "PATH", value: lookupPath }],
+          environment: [{ name: "PATH", value: lookupPath, sensitive: false }],
           config: {
             ...CodexDriver.defaultConfig(),
             binaryPath: fixture.commandName,
