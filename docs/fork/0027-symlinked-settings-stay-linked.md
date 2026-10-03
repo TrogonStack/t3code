@@ -1,6 +1,6 @@
 # 0027: Symlinked settings stay linked
 
-- PR: pending
+- PR: [TrogonStack/t3code#73](https://github.com/TrogonStack/t3code/pull/73)
 - Status: active
 
 ## What you can do now
