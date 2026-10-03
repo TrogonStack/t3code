@@ -12,6 +12,7 @@ import {
   EventId,
   MessageId,
   NodeId,
+  ProviderSessionId,
   RuntimeRequestId,
   TurnItemId,
   type ModelSelection,
@@ -2993,6 +2994,379 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.isTrue(after.runs.find((run) => run.id === queuedRun.id)?.queueHeld);
       assert.isFalse(after.turnItems.some((item) => item.runId === queuedRun.id));
     }),
+  );
+
+  it.effect(
+    "settles a run left running after its provider session was released out from under it",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
+        const threadId = ThreadId.make("runtime-layer-interrupt-dead-session");
+        const childThreadId = ThreadId.make(`${threadId}:child`);
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Interrupt dead session",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:0`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:0`),
+          text: "Active",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const activeRun = before.runs[0]!;
+        const providerThread = before.providerThreads[0]!;
+        const checkpointScope = before.checkpointScopes[0]!;
+        const now = yield* DateTime.now;
+        const providerTurn = {
+          id: ProviderTurnId.make(`${threadId}:turn`),
+          providerThreadId: providerThread.id,
+          nodeId: activeRun.rootNodeId!,
+          runAttemptId: activeRun.activeAttemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running" as const,
+          startedAt: now,
+          completedAt: null,
+        };
+        const streamingMessageId = MessageId.make(`${threadId}:assistant-message`);
+        const streamingItemId = TurnItemId.make(`${threadId}:assistant-item`);
+        const dynamicToolItemId = TurnItemId.make(`${threadId}:dynamic-tool`);
+        const subagentId = NodeId.make(`${threadId}:subagent`);
+
+        // A delegated subagent child thread: a genuinely separate thread doing
+        // work on behalf of the active run, linked via subagent.childThreadId.
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "agent",
+          creationSource: "web",
+          commandId: CommandId.make(`${childThreadId}:create`),
+          threadId: childThreadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Delegated subtask",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${childThreadId}:message:0`),
+          threadId: childThreadId,
+          messageId: MessageId.make(`${childThreadId}:message:0`),
+          text: "Do the subtask",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const childBefore = yield* orchestrator.getThreadProjection(childThreadId);
+        const childRun = childBefore.runs[0]!;
+        const childProviderThread = childBefore.providerThreads[0]!;
+        const childItemId = TurnItemId.make(`${childThreadId}:dynamic-tool`);
+        yield* eventSink.write({
+          commandId: CommandId.make(`${childThreadId}:force-running`),
+          events: [
+            {
+              id: EventId.make(`${childThreadId}:run-running`),
+              type: "run.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: { ...childRun, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make(`${childThreadId}:item-running`),
+              type: "turn-item.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              nodeId: childRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: childItemId,
+                type: "dynamic_tool",
+                threadId: childThreadId,
+                runId: childRun.id,
+                nodeId: childRun.rootNodeId!,
+                providerThreadId: childProviderThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "running",
+                title: "Subtask work",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                toolName: "subtask_tool",
+                input: {},
+              },
+            },
+          ],
+        });
+
+        const checkpointCommandId = CommandId.make(
+          `command:effect:checkpoint.capture:${activeRun.id}`,
+        );
+        // Effects addressed to the dead session lose their process; one for
+        // another session on the same thread does not.
+        const sessionRespond = (name: string, providerSessionId: ProviderSessionId) => ({
+          id: `effect:${threadId}:${name}`,
+          commandId: CommandId.make(`${threadId}:${name}`),
+          threadId,
+          request: {
+            type: "runtime-request.respond" as const,
+            providerSessionId,
+            requestId: RuntimeRequestId.make(`${threadId}:${name}`),
+          },
+        });
+        const deadSessionRespond = sessionRespond(
+          "dead-session",
+          providerThread.providerSessionId!,
+        );
+        const otherSessionRespond = sessionRespond(
+          "other-session",
+          ProviderSessionId.make(`${threadId}:other-session`),
+        );
+        yield* outbox.enqueue([deadSessionRespond, otherSessionRespond]);
+
+        // Drive the run and its provider turn into "running" the same way a
+        // real provider session reaching that state would, without actually
+        // opening one in ProviderSessionManagerV2. No server restart happens
+        // between a run starting and its shared session later getting
+        // released on idle timeout, so by the time interrupt is dispatched
+        // the projection still says "running" while the live session is
+        // already gone: `sessions.get` for it returns none, exactly as it
+        // would after a real release.
+        //
+        // Also seed an in-flight turn item, a persistent dynamic_tool item, a
+        // streaming message, and a running subagent (linked to the child
+        // thread above) on the same run, mirroring the in-flight work a real
+        // provider turn would leave open. None of these are reported terminal
+        // by a live process, so interrupt finalization must settle them
+        // itself.
+        yield* eventSink.write({
+          commandId: CommandId.make(`${threadId}:force-running`),
+          events: [
+            {
+              id: EventId.make(`${threadId}:run-running`),
+              type: "run.updated",
+              threadId,
+              runId: activeRun.id,
+              occurredAt: now,
+              payload: { ...activeRun, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make(`${threadId}:turn-running`),
+              type: "provider-turn.updated",
+              threadId,
+              runId: activeRun.id,
+              occurredAt: now,
+              payload: providerTurn,
+            },
+            {
+              id: EventId.make(`${threadId}:streaming-message`),
+              type: "message.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                createdBy: "agent",
+                creationSource: "provider",
+                id: streamingMessageId,
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                role: "assistant",
+                text: "Working on it",
+                attachments: [],
+                streaming: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}:streaming-item`),
+              type: "turn-item.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: streamingItemId,
+                type: "assistant_message",
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                providerThreadId: providerThread.id,
+                providerTurnId: providerTurn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "running",
+                title: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                messageId: streamingMessageId,
+                text: "Working on it",
+                streaming: true,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}:dynamic-tool-running`),
+              type: "turn-item.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: dynamicToolItemId,
+                type: "dynamic_tool",
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                providerThreadId: providerThread.id,
+                providerTurnId: providerTurn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Persistent monitor",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                toolName: "persistent_monitor",
+                input: { persistent: true },
+              },
+            },
+            {
+              id: EventId.make(`${threadId}:subagent-running`),
+              type: "subagent.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: subagentId,
+              driver: providerThread.driver,
+              providerInstanceId: providerThread.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                id: subagentId,
+                threadId,
+                runId: activeRun.id,
+                parentNodeId: activeRun.rootNodeId!,
+                origin: "app_owned",
+                createdBy: "agent",
+                driver: providerThread.driver,
+                providerInstanceId: providerThread.providerInstanceId,
+                providerThreadId: null,
+                childThreadId,
+                nativeTaskRef: null,
+                prompt: "Do the subtask",
+                title: null,
+                model: null,
+                status: "running",
+                result: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(`${threadId}:interrupt`),
+          threadId,
+          runId: activeRun.id,
+        });
+
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        const interruptedRun = after.runs.find((run) => run.id === activeRun.id);
+        // The canonical reconciliation path (ProviderRuntimeRecoveryService)
+        // marks force-cancelled work "cancelled", not "interrupted", and does
+        // not add a separate run_interrupt_result marker: the run's own
+        // status already conveys it stopped.
+        assert.equal(interruptedRun?.status, "cancelled");
+        assert.equal(
+          after.providerTurns.find(
+            (providerTurn) => providerTurn.runAttemptId === activeRun.activeAttemptId,
+          )?.status,
+          "cancelled",
+        );
+        assert.equal(
+          after.attempts.find((attempt) => attempt.id === activeRun.activeAttemptId)?.status,
+          "cancelled",
+        );
+        assert.equal(
+          after.nodes.find((node) => node.id === activeRun.rootNodeId)?.status,
+          "cancelled",
+        );
+        const streamingItem = after.turnItems.find((item) => item.id === streamingItemId);
+        assert.equal(streamingItem?.status, "cancelled");
+        assert.equal(
+          streamingItem !== undefined && "streaming" in streamingItem
+            ? streamingItem.streaming
+            : undefined,
+          false,
+        );
+        const dynamicToolItem = after.turnItems.find((item) => item.id === dynamicToolItemId);
+        assert.equal(dynamicToolItem?.status, "cancelled");
+        assert.equal(
+          after.messages.find((message) => message.id === streamingMessageId)?.streaming,
+          false,
+        );
+        assert.equal(
+          after.subagents.find((subagent) => subagent.id === subagentId)?.status,
+          "cancelled",
+        );
+        const interruptResult = after.turnItems.find(
+          (item) => item.type === "run_interrupt_result" && item.runId === activeRun.id,
+        );
+        assert.isUndefined(interruptResult);
+
+        const [checkpointEffect] = yield* outbox.listByCommandId(checkpointCommandId);
+        assert.equal(checkpointEffect?.status, "pending");
+        assert.deepEqual(checkpointEffect?.request, {
+          type: "checkpoint.capture",
+          runId: activeRun.id,
+          scopeId: checkpointScope.id,
+        });
+
+        const [deadSessionEffect] = yield* outbox.listByCommandId(deadSessionRespond.commandId);
+        assert.equal(deadSessionEffect?.status, "cancelled");
+        const [otherSessionEffect] = yield* outbox.listByCommandId(otherSessionRespond.commandId);
+        assert.equal(otherSessionEffect?.status, "pending");
+
+        // Like a live interrupt, this one stays on its own thread: the child
+        // may run on a session that is still alive, and its own interrupt
+        // settles it if not.
+        const childAfter = yield* orchestrator.getThreadProjection(childThreadId);
+        assert.equal(childAfter.runs.find((run) => run.id === childRun.id)?.status, "running");
+        assert.equal(
+          childAfter.turnItems.find((item) => item.id === childItemId)?.status,
+          "running",
+        );
+      }),
   );
 
   for (const trigger of ["startup", "shutdown"] as const) {
