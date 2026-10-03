@@ -23,10 +23,12 @@ import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import { writeFileStringAtomically } from "./atomicWrite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
@@ -151,6 +153,32 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       );
       assert.equal(persisted.responseStreamingMode, "paragraph");
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("reloads when the destination of a symlinked settings file changes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const dotfiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-settings-dotfiles-" });
+        const linkedSettingsPath = path.join(dotfiles, "settings.json");
+        yield* fs.writeFileString(linkedSettingsPath, `{ "responseStreamingMode": "turn" }`);
+        yield* fs.remove(config.settingsPath, { force: true });
+        yield* fs.symlink(linkedSettingsPath, config.settingsPath);
+        yield* service.start;
+        const changes = yield* service.subscribeChanges;
+
+        yield* writeFileStringAtomically({
+          filePath: linkedSettingsPath,
+          contents: `{ "responseStreamingMode": "paragraph" }`,
+        });
+
+        const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
+        assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+      }),
+    ).pipe(TestClock.withLive, Effect.provide(makeServerSettingsLayer())),
   );
 
   it.effect("preserves context when reading a provider environment secret fails", () => {

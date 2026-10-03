@@ -26,6 +26,23 @@ it.layer(NodeServices.layer)("writeFileStringAtomically", (it) => {
     }),
   );
 
+  it.effect("keeps a dangling symlink linked and creates its destination", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-atomic-write-" });
+      const destination = path.join(root, "dotfiles", "settings.json");
+      const link = path.join(root, "home", "settings.json");
+      yield* fs.makeDirectory(path.dirname(link), { recursive: true });
+      yield* fs.symlink(destination, link);
+
+      yield* writeFileStringAtomically({ filePath: link, contents: "fresh" });
+
+      assert.strictEqual(yield* fs.readLink(link), destination);
+      assert.strictEqual(yield* fs.readFileString(destination), "fresh");
+    }),
+  );
+
   it.effect("creates a missing file and its directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -51,7 +51,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { writeFileStringAtomically } from "./atomicWrite.ts";
+import { resolveSymlinkTarget, writeFileStringAtomically } from "./atomicWrite.ts";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
 import { fromJsonStringPretty, fromLenientJson } from "@t3tools/shared/schemaJson";
@@ -1181,10 +1181,24 @@ const make = Effect.gen(function* () {
     }),
   );
 
+  const watchFileChanges = (filePath: string) => {
+    const directory = pathService.dirname(filePath);
+    const fileName = pathService.basename(filePath);
+    const resolvedFilePath = pathService.resolve(filePath);
+    return fs
+      .watch(directory)
+      .pipe(
+        Stream.filter(
+          (event) =>
+            event.path === fileName ||
+            event.path === filePath ||
+            pathService.resolve(directory, event.path) === resolvedFilePath,
+        ),
+      );
+  };
+
   const startWatcher = Effect.gen(function* () {
     const settingsDir = pathService.dirname(settingsPath);
-    const settingsFile = pathService.basename(settingsPath);
-    const settingsPathResolved = pathService.resolve(settingsPath);
 
     yield* fs.makeDirectory(settingsDir, { recursive: true }).pipe(
       Effect.mapError(
@@ -1199,19 +1213,24 @@ const make = Effect.gen(function* () {
 
     const revalidateAndEmitSafely = revalidateAndEmit.pipe(Effect.ignoreCause({ log: true }));
 
+    // A symlinked settings file is rewritten in its destination's directory,
+    // which a watch on the link's directory never sees.
+    const linkTargetPath = yield* resolveSymlinkTarget(settingsPath).pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, pathService),
+    );
+    const linkTargetEvents =
+      linkTargetPath === pathService.resolve(settingsPath)
+        ? Stream.empty
+        : watchFileChanges(linkTargetPath).pipe(Stream.ignore({ log: true }));
+
     // Debounce watch events so the file is fully written before we read it.
     // Editors emit multiple events per save (truncate, write, rename) and
     // `fs.watch` can fire before the content has been flushed to disk.
-    const debouncedSettingsEvents = fs.watch(settingsDir).pipe(
-      Stream.filter((event) => {
-        return (
-          event.path === settingsFile ||
-          event.path === settingsPath ||
-          pathService.resolve(settingsDir, event.path) === settingsPathResolved
-        );
-      }),
-      Stream.debounce(Duration.millis(100)),
-    );
+    const debouncedSettingsEvents = Stream.merge(
+      watchFileChanges(settingsPath),
+      linkTargetEvents,
+    ).pipe(Stream.debounce(Duration.millis(100)));
 
     yield* Stream.runForEach(debouncedSettingsEvents, () => revalidateAndEmitSafely).pipe(
       Effect.ignoreCause({ log: true }),
