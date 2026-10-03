@@ -49,8 +49,8 @@ const VERIFY_TIMEOUT = Duration.seconds(10);
  * The OAuth token a Claude instance was configured with, if any.
  *
  * Reads the same variable the CLI itself reads, so an instance whose
- * environment carries an `op://` reference is checked with whatever that
- * reference resolved to.
+ * environment reads the token from a secret store is checked with whatever
+ * that secret resolved to.
  */
 export function claudeOAuthTokenFromEnvironment(
   environment: NodeJS.ProcessEnv,

@@ -129,8 +129,8 @@ current client support.
 ## Secret references in provider environments
 
 A provider instance's `environment` can hold secret references: a `ProviderSecretSource` value such
-as `{ kind: "1password", reference, account }`, or a legacy plain string starting with `op://` that
-reads from the CLI's default account.
+as `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
+that starts with `op://`.
 [`ProviderSecretResolver`](../../apps/server/src/provider/Services/ProviderSecretResolver.ts) swaps
 each one for the value the 1Password CLI returns. This happens once per instance in
 [`ProviderInstanceRegistryLive`](../../apps/server/src/provider/Layers/ProviderInstanceRegistryLive.ts),

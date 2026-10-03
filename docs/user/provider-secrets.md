@@ -29,9 +29,9 @@ never lands in your settings file or in T3 Code's secret store.
 Plain values are used exactly as typed, so mixing literal variables and references on the same
 provider is fine.
 
-A plain value beginning with `op://` is also read from 1Password, from the CLI's default account.
-That keeps older settings working; switch those variables to the 1Password source to pin them to an
-account.
+A plain value is never read from 1Password, even one that starts with `op://`. Settings saved with a
+plain `op://` value open as a 1Password source that still needs its account; fill it in and the
+variable resolves again.
 
 To copy a reference in 1Password, open the item, use the field's overflow menu, and choose
 **Copy Secret Reference**.
@@ -57,9 +57,6 @@ The vault has to be reachable from wherever `npx t3` or the desktop app is actua
 
 No. A reference is not a secret, so there is nothing to protect by storing it as one, and variables
 that read from 1Password are always stored as written.
-
-A plain `op://` value can still be marked sensitive if you prefer the redacted field, and it is
-resolved the same way either way.
 
 ## How Often Does It Ask Me To Unlock
 

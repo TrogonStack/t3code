@@ -24,6 +24,7 @@ import {
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ServerSettings,
   type ServerProvider,
@@ -72,6 +73,13 @@ import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMainte
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
+const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+const HOME_ACCOUNT = "my.1password.com";
+const onePasswordVariable = (name: string, reference: string, sensitive = true) => ({
+  name,
+  value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
+  sensitive,
+});
 
 const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({});
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
@@ -1628,9 +1636,9 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               rebuildInstanceWhen: (instanceId, shouldRebuild) =>
                 shouldRebuild({
                   driver: codexDriver,
-                  environment: [
-                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
-                  ],
+                  environment: decodeEnvironment([
+                    onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
+                  ]),
                 })
                   ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
                       Effect.as(true),
@@ -1709,9 +1717,9 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               rebuildInstanceWhen: (instanceId, shouldRebuild) =>
                 shouldRebuild({
                   driver: codexDriver,
-                  environment: [
-                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
-                  ],
+                  environment: decodeEnvironment([
+                    onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
+                  ]),
                 })
                   ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
                       Effect.as(true),
@@ -1785,9 +1793,8 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
           });
-          const environmentFor = (reference: string) => [
-            { name: "TOKEN", value: reference, sensitive: true },
-          ];
+          const environmentFor = (reference: string) =>
+            decodeEnvironment([onePasswordVariable("TOKEN", reference)]);
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
             {
@@ -2942,14 +2949,30 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                     displayName: "Claude Secret",
                     enabled: false,
                     environment: [
-                      { name: "CLAUDE_CODE_OAUTH_TOKEN", value: claudeReference, sensitive: true },
+                      {
+                        name: "CLAUDE_CODE_OAUTH_TOKEN",
+                        value: {
+                          kind: "1password",
+                          reference: claudeReference,
+                          account: HOME_ACCOUNT,
+                        },
+                      },
                     ],
                   },
                   codex_secret: {
                     driver: "codex",
                     displayName: "Codex Secret",
                     enabled: false,
-                    environment: [{ name: "TOKEN", value: codexReference, sensitive: true }],
+                    environment: [
+                      {
+                        name: "TOKEN",
+                        value: {
+                          kind: "1password",
+                          reference: codexReference,
+                          account: HOME_ACCOUNT,
+                        },
+                      },
+                    ],
                   },
                 } as unknown as ContractServerSettings["providerInstances"],
               }),

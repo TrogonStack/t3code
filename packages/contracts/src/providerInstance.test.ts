@@ -215,7 +215,7 @@ describe("ProviderInstanceEnvironmentVariable secret sources", () => {
     expect(decodeEnvironmentVariable({ name: "API_KEY", value }).value).toEqual(value);
   });
 
-  it("keeps decoding literal values, including legacy op:// strings", () => {
+  it("decodes a string value as a literal, even one that looks like a reference", () => {
     expect(decodeEnvironmentVariable({ name: "API_KEY" }).value).toBe("");
     expect(
       decodeEnvironmentVariable({ name: "API_KEY", value: "op://Private/item/field" }).value,

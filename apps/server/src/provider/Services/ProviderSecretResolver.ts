@@ -1,7 +1,7 @@
 /**
- * ProviderSecretResolver: turns environment values that name a secret (a
- * 1Password secret source, or a legacy `op://` string) into the secrets they
- * name, once, and holds them in memory.
+ * ProviderSecretResolver: turns environment values that name a secret (such as
+ * a 1Password secret source) into the secrets they name, once, and holds them
+ * in memory.
  *
  * Every provider instance resolves its environment when the driver builds it,
  * and a single instance can rebuild several times per session. Shelling out
@@ -78,9 +78,8 @@ export interface ProviderSecretResolverShape {
 /**
  * Defaults to handing every literal back untouched, which is what a build
  * without secret-store integration behaves like, and what tests want unless
- * they are testing resolution itself: a legacy `op://` string stays an
- * `op://` string, and the provider reports whatever the CLI makes of it. A
- * secret source has no literal form, so it is reported unresolved.
+ * they are testing resolution itself. A secret source has no literal form, so
+ * it is reported unresolved.
  */
 const resolveWithoutSecretStore = (
   environment: ProviderInstanceEnvironment | undefined,

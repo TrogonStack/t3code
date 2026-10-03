@@ -62,10 +62,6 @@ const SECRET_READ_TIMEOUT = Duration.seconds(45);
  */
 const SECRET_CACHE_CAPACITY = 64;
 
-/** `--account` arguments for `op`; legacy references use its default account. */
-const accountArgs = (account: OnePasswordAccount | undefined): ReadonlyArray<string> =>
-  account === undefined ? [] : ["--account", account];
-
 /**
  * Read many references from one account in one `op inject`.
  *
@@ -89,7 +85,7 @@ const accountArgs = (account: OnePasswordAccount | undefined): ReadonlyArray<str
  * text; the secrets themselves come back on stdout and never touch disk.
  */
 const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
-  account: OnePasswordAccount | undefined,
+  account: OnePasswordAccount,
   references: ReadonlyArray<string>,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -99,7 +95,8 @@ const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   yield* fileSystem.writeFileString(templatePath, template);
   const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
     "inject",
-    ...accountArgs(account),
+    "--account",
+    account,
     "-i",
     templatePath,
   ]);
@@ -140,7 +137,8 @@ const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
 }: OnePasswordSecretReference) {
   const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
     "read",
-    ...accountArgs(account),
+    "--account",
+    account,
     "--no-newline",
     reference,
   ]);
@@ -222,7 +220,7 @@ export const ProviderSecretResolverLive = Layer.effect(
       });
 
     const primeOnePassword = Effect.fn("primeOnePassword")(function* (
-      account: OnePasswordAccount | undefined,
+      account: OnePasswordAccount,
       wanted: ReadonlyArray<OnePasswordSecretReference>,
     ) {
       // One reference costs one prompt whichever command reads it, so there
@@ -258,7 +256,7 @@ export const ProviderSecretResolverLive = Layer.effect(
         // `op inject` reads every reference in its template from one account,
         // so a batch is one call per account.
         const onePasswordByAccount = new Map<
-          OnePasswordAccount | undefined,
+          OnePasswordAccount,
           Array<OnePasswordSecretReference>
         >();
         for (const reference of references) {

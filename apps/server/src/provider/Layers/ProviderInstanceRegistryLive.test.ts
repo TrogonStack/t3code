@@ -37,6 +37,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { HostProcessPlatform, isHostWindows } from "@t3tools/shared/hostProcess";
@@ -48,6 +49,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -871,6 +873,8 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
     ),
   );
 
+  const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+
   const codexDriverKind = ProviderDriverKind.make("codex");
   const firstId = ProviderInstanceId.make("codex_first");
   const secondId = ProviderInstanceId.make("codex_second");
@@ -878,7 +882,16 @@ describe("ProviderInstanceRegistryLive: rebuildInstanceWhen", () => {
     driver: codexDriverKind,
     displayName: "Codex (first)",
     enabled: false,
-    environment: [{ name: "OP_TOKEN", value: "op://Vault/Item/token", sensitive: true }],
+    environment: decodeEnvironment([
+      {
+        name: "OP_TOKEN",
+        value: {
+          kind: "1password",
+          reference: "op://Vault/Item/token",
+          account: "my.1password.com",
+        },
+      },
+    ]),
     config: makeCodexConfig({ homePath: "/home/julius/.codex_first" }),
   };
   const secondEntry: ProviderInstanceConfig = {

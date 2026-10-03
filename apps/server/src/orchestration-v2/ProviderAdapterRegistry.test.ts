@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -37,6 +38,13 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 const driver = ProviderDriverKind.make("codex");
 const personalId = ProviderInstanceId.make("codex_personal");
 const workId = ProviderInstanceId.make("codex_work");
+
+const HOME_ACCOUNT = "my.1password.com";
+const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+const onePasswordVariable = (name: string, reference: string) => ({
+  name,
+  value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
+});
 
 const makeAdapter = (instanceId: ProviderInstanceId): ProviderAdapterV2Shape =>
   ({
@@ -348,9 +356,9 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
           const variables = [];
           const unresolved = [];
           for (const { name, value, sensitive } of environment ?? []) {
-            if (value === apiKeyReference) {
+            if (typeof value !== "string" && value.reference === apiKeyReference) {
               variables.push({ name, value: yield* Ref.get(apiKey), sensitive: true });
-            } else if (typeof value !== "string" || value.startsWith("op://")) {
+            } else if (typeof value !== "string") {
               unresolved.push(name);
             } else {
               variables.push({ name, value, sensitive });
@@ -408,11 +416,11 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
       configMap: {
         [secretInstanceId]: {
           driver,
-          environment: [
-            { name: "OPENAI_API_KEY", value: apiKeyReference, sensitive: true },
-            { name: "ANTHROPIC_API_KEY", value: "op://Vault/Locked/api-key", sensitive: true },
+          environment: decodeEnvironment([
+            onePasswordVariable("OPENAI_API_KEY", apiKeyReference),
+            onePasswordVariable("ANTHROPIC_API_KEY", "op://Vault/Locked/api-key"),
             { name: "CODEX_PROFILE", value: "work", sensitive: false },
-          ],
+          ]),
           config: {},
         },
       },

@@ -4,7 +4,6 @@ import type {
 } from "@t3tools/contracts";
 
 import { expandHomePath } from "../pathExpansion.ts";
-import { providerSecretReference } from "./ProviderSecretReference.ts";
 
 /**
  * A provider environment variable whose value is ready for a child process.
@@ -24,14 +23,14 @@ export type ResolvedProviderEnvironment = ReadonlyArray<ResolvedProviderEnvironm
 /**
  * The configured variables that hold literal values, for callers that build a
  * process environment without resolving secrets. Variables that read from a
- * secret store are left out rather than passed through as references.
+ * secret store are left out.
  */
 export function literalProviderInstanceEnvironment(
   environment: ProviderInstanceEnvironment | undefined,
 ): ResolvedProviderEnvironment {
   const literals: Array<ResolvedProviderEnvironmentVariable> = [];
   for (const { name, value, sensitive } of environment ?? []) {
-    if (typeof value === "string" && providerSecretReference(value) === undefined) {
+    if (typeof value === "string") {
       literals.push({ name, value, sensitive });
     }
   }

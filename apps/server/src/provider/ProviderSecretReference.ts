@@ -21,18 +21,13 @@ import type {
 import * as Data from "effect/Data";
 import * as Equal from "effect/Equal";
 
-/** URI scheme 1Password uses for secret references; `op read` consumes these. */
-const ONE_PASSWORD_SECRET_REFERENCE_PREFIX = "op://";
-
 /**
  * One secret to read from 1Password. Structurally comparable, so it doubles as
  * the resolver's cache key: the same reference in two accounts is two secrets.
- * `account` is absent only for legacy plain-string references, which `op`
- * reads from its default account.
  */
 export class OnePasswordSecretReference extends Data.TaggedClass("1password")<{
   readonly reference: string;
-  readonly account: OnePasswordAccount | undefined;
+  readonly account: OnePasswordAccount;
 }> {}
 
 /** Every secret a provider environment value can name. */
@@ -45,26 +40,16 @@ export type ProviderSecretReference = OnePasswordSecretReference;
 export function providerSecretReference(
   value: ProviderInstanceEnvironmentVariable["value"],
 ): ProviderSecretReference | undefined {
-  if (typeof value !== "string") {
-    switch (value.kind) {
-      case "1password":
-        return new OnePasswordSecretReference({
-          reference: value.reference,
-          account: value.account,
-        });
-    }
-  }
-  // Legacy: a plain string beginning with `op://` predates secret sources and
-  // is read from the default `op` account. Trimmed because a reference copied
-  // out of a password manager routinely arrives with surrounding whitespace.
-  const trimmed = value.trim();
-  if (
-    !trimmed.startsWith(ONE_PASSWORD_SECRET_REFERENCE_PREFIX) ||
-    trimmed.length === ONE_PASSWORD_SECRET_REFERENCE_PREFIX.length
-  ) {
+  if (typeof value === "string") {
     return undefined;
   }
-  return new OnePasswordSecretReference({ reference: trimmed, account: undefined });
+  switch (value.kind) {
+    case "1password":
+      return new OnePasswordSecretReference({
+        reference: value.reference,
+        account: value.account,
+      });
+  }
 }
 
 /**

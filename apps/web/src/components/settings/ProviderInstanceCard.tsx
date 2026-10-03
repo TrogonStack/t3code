@@ -119,6 +119,20 @@ function makeEnvironmentDraftRow(
       sensitive: false,
     };
   }
+  // Plain `op://` values were once read from 1Password. They are literals now,
+  // so they open as a 1Password source that still needs its account.
+  const reference = variable.value.trim();
+  if (reference.startsWith("op://") && variable.valueRedacted !== true) {
+    return {
+      id,
+      name: variable.name,
+      source: "1password",
+      value: "",
+      reference,
+      account: "",
+      sensitive: false,
+    };
+  }
   return {
     id,
     name: variable.name,
