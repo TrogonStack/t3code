@@ -267,12 +267,18 @@ export const make = Effect.gen(function* () {
         error: encodeProjectCommandRejection(planned.failure),
       });
     });
+    const timedPlanAndCommit = planAndCommit.pipe(
+      withMetrics({
+        timer: orchestrationCommandDuration,
+        attributes: { commandType: command.type },
+      }),
+    );
     const receipt = yield* projectLocks
       .withLock(
         projectId,
         workspaceRoot === undefined
-          ? planAndCommit
-          : workspaceLocks.withLock(workspaceRoot, planAndCommit),
+          ? timedPlanAndCommit
+          : workspaceLocks.withLock(workspaceRoot, timedPlanAndCommit),
       )
       .pipe(Effect.mapError(dispatchError));
     if (receipt.projectId !== projectId || receipt.commandType !== command.type) {
@@ -304,7 +310,6 @@ export const make = Effect.gen(function* () {
     commitEffect(command).pipe(
       withMetrics({
         counter: orchestrationCommandsTotal,
-        timer: orchestrationCommandDuration,
         attributes: { commandType: command.type },
       }),
     );

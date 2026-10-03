@@ -31,7 +31,8 @@ export const orchestrationCommandsTotal = Metric.counter("t3_orchestration_comma
 });
 
 export const orchestrationCommandDuration = Metric.timer("t3_orchestration_command_duration", {
-  description: "Orchestration command dispatch duration, from receipt lookup through commit.",
+  description:
+    "Orchestration command dispatch duration while holding its dispatch lock, excluding lock wait.",
 });
 
 export const orchestrationCommandAckDuration = Metric.timer(

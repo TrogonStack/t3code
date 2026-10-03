@@ -1583,6 +1583,7 @@ export const layerWithOptions = (
                 const key = sessionKey(input.providerSessionId);
                 const existing = (yield* Ref.get(sessions)).get(key);
                 if (existing !== undefined) {
+                  reusedExisting = true;
                   if (
                     !existing.attachedThreadIds.has(input.threadId) &&
                     !existing.supportsMultipleProviderThreads
@@ -1599,7 +1600,6 @@ export const layerWithOptions = (
                     providerInstanceId: existing.runtime.instanceId,
                   });
                   yield* touchActivity(input.providerSessionId);
-                  reusedExisting = true;
                   return existing.exposedRuntime;
                 }
 
@@ -1613,6 +1613,7 @@ export const layerWithOptions = (
                       }),
                   ),
                 );
+                openedDriver = adapter.driver;
                 const prepared = yield* prepareMcpSession(
                   input.threadId,
                   input.modelSelection.instanceId,
@@ -1675,7 +1676,6 @@ export const layerWithOptions = (
                         }),
                     ),
                   );
-                openedDriver = runtime.driver;
                 const eventSubscribers = yield* Ref.make<
                   ReadonlyMap<number, Queue.Queue<ProviderSessionEventSignal, Cause.Done>>
                 >(new Map());
