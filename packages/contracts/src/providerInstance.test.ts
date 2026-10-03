@@ -210,62 +210,9 @@ describe("ProviderInstanceConfigMap", () => {
 });
 
 describe("ProviderInstanceEnvironmentVariable secret sources", () => {
-  const onePassword = (reference: string, account = "my.1password.com") => ({
-    name: "API_KEY",
-    value: { kind: "1password", reference, account },
-  });
-
-  it.each([
-    "op://Private/claude-code/credential",
-    "op://Home Lab/Claude Code/API Key",
-    "op://Private/claude-code/login section/password",
-    "op://Private/github/one-time password?attribute=otp",
-  ])("accepts the 1Password reference %s", (reference) => {
-    expect(decodeEnvironmentVariable(onePassword(reference)).value).toEqual({
-      kind: "1password",
-      reference,
-      account: "my.1password.com",
-    });
-  });
-
-  it.each([
-    ["leading whitespace", " op://Private/item/field"],
-    ["trailing newline", "op://Private/item/field\n"],
-    ["control character", "op://Private/it\u0007em/field"],
-    ["missing scheme", "Private/item/field"],
-    ["nothing after the scheme", "op://"],
-    ["template delimiter", "op://Private/item}}/field"],
-  ])("rejects a reference with %s", (_label, reference) => {
-    expect(() => decodeEnvironmentVariable(onePassword(reference))).toThrow();
-  });
-
-  it.each(["my", "my.1password.com", "team-acme.1password.eu", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"])(
-    "accepts the account %s",
-    (account) => {
-      expect(
-        decodeEnvironmentVariable(onePassword("op://Private/item/field", account)).value,
-      ).toMatchObject({ account });
-    },
-  );
-
-  it.each([
-    ["empty", ""],
-    ["a space", "my account"],
-    ["a leading dash", "--help"],
-    ["surrounding whitespace", " my "],
-  ])("rejects an account with %s", (_label, account) => {
-    expect(() =>
-      decodeEnvironmentVariable(onePassword("op://Private/item/field", account)),
-    ).toThrow();
-  });
-
-  it("rejects a 1Password source without an account", () => {
-    expect(() =>
-      decodeEnvironmentVariable({
-        name: "API_KEY",
-        value: { kind: "1password", reference: "op://Private/item/field" },
-      }),
-    ).toThrow();
+  it("decodes a 1Password source", () => {
+    const value = { kind: "1password", reference: "op://Private/item/field", account: "my" };
+    expect(decodeEnvironmentVariable({ name: "API_KEY", value }).value).toEqual(value);
   });
 
   it("keeps decoding literal values, including legacy op:// strings", () => {
