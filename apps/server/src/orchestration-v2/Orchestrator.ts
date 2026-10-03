@@ -7926,14 +7926,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Stop on a settled thread's background work. Its process may be gone
       // (released, restarted) and only the projection still shows the work;
       // the settle follow-up ends whatever no provider reports ending.
-      const settleOnly =
-        providerTurn.status !== "running" &&
-        (providerThread.providerSessionId === null ||
-          Option.isNone(
-            yield* providerSessions
-              .get(providerThread.providerSessionId)
-              .pipe(Effect.orElseSucceed(() => Option.none())),
-          ));
+      const sessionIsDead =
+        providerThread.providerSessionId === null ||
+        Option.isNone(
+          yield* providerSessions
+            .get(providerThread.providerSessionId)
+            .pipe(Effect.orElseSucceed(() => Option.none())),
+        );
+      const settleOnly = providerTurn.status !== "running" && sessionIsDead;
       if (settleOnly) {
         yield* emitEvent({
           type: "turn-item.updated",
@@ -7955,6 +7955,85 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now,
         });
         return undefined;
+      }
+      // The projection still shows this turn running, but its provider
+      // session is already gone (e.g. released on idle timeout): no live
+      // process will ever report a terminal for it. Settle the run the same
+      // way as an interrupt before provider start, plus the stuck turn
+      // itself, instead of erroring and leaving the run wedged forever.
+      if (providerTurn.status === "running" && sessionIsDead) {
+        const attempt = projection.attempts.find(
+          (candidate) => candidate.id === run.activeAttemptId,
+        );
+        if (attempt === undefined) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Run ${command.runId} has no active attempt to interrupt.`,
+          });
+        }
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: interruptRequestItem,
+        });
+        yield* emitEvent({
+          type: "provider-turn.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: providerTurn.nodeId,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...providerTurn, status: "interrupted", completedAt: now },
+        });
+        yield* emitEvent({
+          type: "run-attempt.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...attempt, status: "interrupted", completedAt: now },
+        });
+        yield* emitEvent({
+          type: "node.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...rootNode, status: "interrupted", completedAt: now },
+        });
+        yield* emitEvent({
+          type: "run.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, status: "interrupted", completedAt: now },
+        });
+        if (command.holdQueue === true) yield* holdQueuedRuns;
+        yield* stopCompletionCohort();
+        yield* settleBackgroundWork({
+          command,
+          events,
+          projection,
+          stoppedProviderThreadId: providerThread.id,
+          throughRunOrdinal: run.ordinal,
+          now,
+        });
+        return {
+          effectTypes: ["provider-turn.start", "provider-turn.restart"],
+          reason: `Run ${run.id} was interrupted after its provider session ${providerThread.providerSessionId} was no longer active.`,
+        } satisfies {
+          readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+          readonly reason: string;
+        };
       }
       if (providerThread.providerSessionId === null) {
         return yield* new OrchestratorDispatchError({

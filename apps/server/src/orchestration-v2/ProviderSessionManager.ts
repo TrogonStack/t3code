@@ -7,6 +7,7 @@ import {
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
   ProviderSessionId,
+  type ProviderThreadId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -204,7 +205,13 @@ interface LiveSessionEntry {
   readonly requestEventPermit: Semaphore.Semaphore;
   readonly scope: Scope.Closeable;
   readonly idleGeneration: number;
-  readonly busyCount: number;
+  /**
+   * Provider threads with a turn in flight, keyed by provider thread id
+   * rather than counted: a stray or duplicate `turn.terminal` for a thread
+   * that never started a turn here (or already settled one) is then a no-op
+   * instead of zeroing out another thread's genuinely running turn.
+   */
+  readonly busyProviderThreadIds: ReadonlySet<ProviderThreadId>;
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   /** Set when idle release is deferred for pending background work; bounds total deferral. */
@@ -725,7 +732,8 @@ export const layerWithOptions = (
             }
             if (
               input.onlyIfIdleGeneration !== undefined &&
-              (existing.busyCount > 0 || existing.idleGeneration !== input.onlyIfIdleGeneration)
+              (existing.busyProviderThreadIds.size > 0 ||
+                existing.idleGeneration !== input.onlyIfIdleGeneration)
             ) {
               return [Option.none<LiveSessionEntry>(), current] as const;
             }
@@ -871,7 +879,7 @@ export const layerWithOptions = (
           const entry = current.get(key);
           if (
             entry === undefined ||
-            entry.busyCount > 0 ||
+            entry.busyProviderThreadIds.size > 0 ||
             entry.idleGeneration !== input.generation
           ) {
             return;
@@ -893,7 +901,7 @@ export const layerWithOptions = (
                 const latestEntry = latest.get(key);
                 if (
                   latestEntry === undefined ||
-                  latestEntry.busyCount > 0 ||
+                  latestEntry.busyProviderThreadIds.size > 0 ||
                   latestEntry.idleGeneration !== input.generation ||
                   latestEntry.runtime !== probedRuntime
                 ) {
@@ -925,8 +933,8 @@ export const layerWithOptions = (
           }
           // hasPendingBackgroundWork yields to the adapter, so the idle
           // decision above can go stale; the generation guard revalidates
-          // busyCount and idleGeneration inside releaseEntry's atomic
-          // entry removal.
+          // busyProviderThreadIds and idleGeneration inside releaseEntry's
+          // atomic entry removal.
           yield* releaseEntry({
             providerSessionId: input.providerSessionId,
             reason: "idle_timeout",
@@ -962,7 +970,7 @@ export const layerWithOptions = (
           const key = sessionKey(providerSessionId);
           const current = yield* Ref.get(sessions);
           const entry = current.get(key);
-          if (entry === undefined || entry.busyCount > 0) {
+          if (entry === undefined || entry.busyProviderThreadIds.size > 0) {
             return;
           }
 
@@ -975,7 +983,7 @@ export const layerWithOptions = (
           const lastActivityAtMs = yield* Clock.currentTimeMillis;
           yield* Ref.update(sessions, (latest) => {
             const latestEntry = latest.get(key);
-            if (latestEntry === undefined || latestEntry.busyCount > 0) {
+            if (latestEntry === undefined || latestEntry.busyProviderThreadIds.size > 0) {
               return latest;
             }
             const updated = new Map(latest);
@@ -1160,7 +1168,7 @@ export const layerWithOptions = (
           );
         });
 
-      const markBusy = (providerSessionId: ProviderSessionId) =>
+      const markBusy = (providerSessionId: ProviderSessionId, providerThreadId: ProviderThreadId) =>
         withActivityError(
           providerSessionId,
           Effect.gen(function* () {
@@ -1172,9 +1180,11 @@ export const layerWithOptions = (
                 return [null, current] as const;
               }
               const updated = new Map(current);
+              const busyProviderThreadIds = new Set(entry.busyProviderThreadIds);
+              busyProviderThreadIds.add(providerThreadId);
               updated.set(key, {
                 ...entry,
-                busyCount: entry.busyCount + 1,
+                busyProviderThreadIds,
                 idleFiber: null,
                 lastActivityAtMs: now,
                 pinnedSinceMs: null,
@@ -1185,7 +1195,7 @@ export const layerWithOptions = (
           }),
         );
 
-      const markIdle = (providerSessionId: ProviderSessionId) =>
+      const markIdle = (providerSessionId: ProviderSessionId, providerThreadId: ProviderThreadId) =>
         withActivityError(
           providerSessionId,
           Effect.gen(function* () {
@@ -1197,9 +1207,11 @@ export const layerWithOptions = (
                 return current;
               }
               const updated = new Map(current);
+              const busyProviderThreadIds = new Set(entry.busyProviderThreadIds);
+              busyProviderThreadIds.delete(providerThreadId);
               updated.set(key, {
                 ...entry,
-                busyCount: Math.max(0, entry.busyCount - 1),
+                busyProviderThreadIds,
                 lastActivityAtMs: now,
               });
               return updated;
@@ -1373,12 +1385,18 @@ export const layerWithOptions = (
                 providerInstanceId: runtime.instanceId,
               }),
             ).pipe(
-              Effect.andThen(observeActivity(providerSessionId, markBusy(providerSessionId))),
+              Effect.andThen(
+                observeActivity(
+                  providerSessionId,
+                  markBusy(providerSessionId, input.providerThread.id),
+                ),
+              ),
               Effect.andThen(runtime.startTurn(input)),
               Effect.catch((error) =>
-                observeActivity(providerSessionId, markIdle(providerSessionId)).pipe(
-                  Effect.andThen(Effect.fail(error)),
-                ),
+                observeActivity(
+                  providerSessionId,
+                  markIdle(providerSessionId, input.providerThread.id),
+                ).pipe(Effect.andThen(Effect.fail(error))),
               ),
             ),
           steerTurn: (input) =>
@@ -1435,7 +1453,7 @@ export const layerWithOptions = (
             return observeActivity(
               entry.runtime.providerSessionId,
               event.type === "turn.terminal"
-                ? markIdle(entry.runtime.providerSessionId)
+                ? markIdle(entry.runtime.providerSessionId, event.providerThreadId)
                 : touchActivity(entry.runtime.providerSessionId),
             ).pipe(
               Effect.andThen(
@@ -1678,7 +1696,7 @@ export const layerWithOptions = (
                 requestEventPermit: yield* Semaphore.make(1),
                 scope: sessionScope,
                 idleGeneration: 0,
-                busyCount: 0,
+                busyProviderThreadIds: new Set(),
                 lastActivityAtMs: now,
                 idleFiber: null,
                 pinnedSinceMs: null,

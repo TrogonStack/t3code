@@ -195,11 +195,13 @@ function makeProviderThread(input: {
   readonly threadId: ThreadId;
   readonly providerSessionId: ProviderSessionId;
   readonly now: DateTime.Utc;
+  readonly nativeThreadId?: string;
 }): OrchestrationV2ProviderThread {
+  const nativeThreadId = input.nativeThreadId ?? "native-thread";
   return {
     id: input.idAllocator.derive.providerThread({
       driver: CODEX_DRIVER,
-      nativeThreadId: "native-thread",
+      nativeThreadId,
     }),
     driver: CODEX_DRIVER,
     providerInstanceId: modelSelection.instanceId,
@@ -208,7 +210,7 @@ function makeProviderThread(input: {
     ownerNodeId: null,
     nativeThreadRef: {
       driver: CODEX_DRIVER,
-      nativeId: "native-thread",
+      nativeId: nativeThreadId,
       strength: "strong",
     },
     nativeConversationHeadRef: null,
@@ -2561,12 +2563,14 @@ it.effect(
           threadId: firstThreadId,
           providerSessionId,
           now,
+          nativeThreadId: "native-thread-a",
         });
         const secondProviderThread = makeProviderThread({
           idAllocator,
           threadId: secondThreadId,
           providerSessionId,
           now,
+          nativeThreadId: "native-thread-b",
         });
         const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
         const secondRunId = idAllocator.derive.run({ threadId: secondThreadId, ordinal: 1 });
@@ -2671,6 +2675,135 @@ it.effect(
         yield* TestClock.adjust("1 second");
         yield* Effect.yieldNow;
         assert.equal((yield* Ref.get(state)).closeCount, 1);
+      });
+
+      yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 ignores a stray turn.terminal for a provider thread that never started a turn",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const projectId = yield* idAllocator.allocate.project({
+          fixtureName: "provider-session-manager-stray-terminal",
+        });
+        const firstThreadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-stray-terminal-a",
+          projectId,
+        });
+        const secondThreadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-stray-terminal-b",
+          projectId,
+        });
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId: firstThreadId,
+        });
+        const firstProviderThread = makeProviderThread({
+          idAllocator,
+          threadId: firstThreadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-thread-a",
+        });
+        const secondProviderThread = makeProviderThread({
+          idAllocator,
+          threadId: secondThreadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-thread-b",
+        });
+        const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
+        const strayProviderTurnId = idAllocator.derive.providerTurn({
+          driver: CODEX_DRIVER,
+          nativeTurnId: "native-turn-stray",
+        });
+
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: secondThreadId, now }),
+          ],
+        });
+        const runtime = yield* manager.open({
+          threadId: firstThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* manager.open({
+          threadId: secondThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const firstAppThread = (yield* projectionStore.getThreadProjection(firstThreadId)).thread;
+        // Only the first thread ever starts a turn. The second thread's
+        // provider thread id never calls markBusy on this session.
+        yield* runtime.startTurn({
+          appThread: firstAppThread,
+          threadId: firstThreadId,
+          runId: firstRunId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId: firstRunId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId: firstRunId }),
+          providerThread: firstProviderThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId: firstThreadId, ordinal: 1 }),
+            text: "first",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        // A stray terminal arrives for the second (never-busy) provider
+        // thread, e.g. a turn cancelled moments after it started on another
+        // app thread sharing this session. With a session-wide busyCount
+        // this would zero it out and release the session even though the
+        // first thread's turn is still genuinely running.
+        yield* Queue.offer(queue!, {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: secondProviderThread.id,
+          providerTurnId: strayProviderTurnId,
+          runOrdinal: 1,
+          status: "cancelled",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow;
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+
+        // The same stray terminal arriving again is also a no-op.
+        yield* Queue.offer(queue!, {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: secondProviderThread.id,
+          providerTurnId: strayProviderTurnId,
+          runOrdinal: 1,
+          status: "cancelled",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow;
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
       });
 
       yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));

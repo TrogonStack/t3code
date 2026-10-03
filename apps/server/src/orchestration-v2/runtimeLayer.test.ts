@@ -2995,6 +2995,110 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect(
+    "settles a run left running after its provider session was released out from under it",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make("runtime-layer-interrupt-dead-session");
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Interrupt dead session",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${threadId}:message:0`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:message:0`),
+          text: "Active",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const activeRun = before.runs[0]!;
+        const providerThread = before.providerThreads[0]!;
+        const now = yield* DateTime.now;
+        const providerTurn = {
+          id: ProviderTurnId.make(`${threadId}:turn`),
+          providerThreadId: providerThread.id,
+          nodeId: activeRun.rootNodeId!,
+          runAttemptId: activeRun.activeAttemptId,
+          nativeTurnRef: null,
+          ordinal: 1,
+          status: "running" as const,
+          startedAt: now,
+          completedAt: null,
+        };
+        // Drive the run and its provider turn into "running" the same way a
+        // real provider session reaching that state would, without actually
+        // opening one in ProviderSessionManagerV2. No server restart happens
+        // between a run starting and its shared session later getting
+        // released on idle timeout, so by the time interrupt is dispatched
+        // the projection still says "running" while the live session is
+        // already gone: `sessions.get` for it returns none, exactly as it
+        // would after a real release.
+        yield* eventSink.write({
+          commandId: CommandId.make(`${threadId}:force-running`),
+          events: [
+            {
+              id: EventId.make(`${threadId}:run-running`),
+              type: "run.updated",
+              threadId,
+              runId: activeRun.id,
+              occurredAt: now,
+              payload: { ...activeRun, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make(`${threadId}:turn-running`),
+              type: "provider-turn.updated",
+              threadId,
+              runId: activeRun.id,
+              occurredAt: now,
+              payload: providerTurn,
+            },
+          ],
+        });
+
+        yield* orchestrator.dispatch({
+          type: "run.interrupt",
+          commandId: CommandId.make(`${threadId}:interrupt`),
+          threadId,
+          runId: activeRun.id,
+        });
+
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        const interruptedRun = after.runs.find((run) => run.id === activeRun.id);
+        assert.equal(interruptedRun?.status, "interrupted");
+        assert.equal(
+          after.providerTurns.find(
+            (providerTurn) => providerTurn.runAttemptId === activeRun.activeAttemptId,
+          )?.status,
+          "interrupted",
+        );
+        assert.equal(
+          after.attempts.find((attempt) => attempt.id === activeRun.activeAttemptId)?.status,
+          "interrupted",
+        );
+        assert.equal(
+          after.nodes.find((node) => node.id === activeRun.rootNodeId)?.status,
+          "interrupted",
+        );
+      }),
+  );
+
   for (const trigger of ["startup", "shutdown"] as const) {
     it.effect(
       `preserves and holds queued messages across ${trigger} until explicitly resumed`,
