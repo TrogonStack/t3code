@@ -18,6 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -321,4 +322,160 @@ it.effect(
       assert.equal(interrupted?.id, providerThreadId);
       assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
     }),
+);
+
+it.effect("records a provider turn metric for a successful interrupt", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:interrupt-metrics");
+    const sessionId = ProviderSessionId.make("provider-session:interrupt-metrics");
+    const providerThreadId = ProviderThreadId.make("provider-thread:interrupt-metrics");
+    const providerTurnId = ProviderTurnId.make("provider-turn:interrupt-metrics");
+    const attemptId = RunAttemptId.make("run-attempt:interrupt-metrics");
+    const providerThread: OrchestrationV2ProviderThread = {
+      id: providerThreadId,
+      driver,
+      providerInstanceId,
+      providerSessionId: sessionId,
+      appThreadId: threadId,
+      ownerNodeId: null,
+      nativeThreadRef: {
+        driver,
+        nativeId: "native-thread:interrupt-metrics",
+        strength: "strong",
+      },
+      nativeConversationHeadRef: null,
+      status: "active",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const projection = yield* Ref.make(
+      makeProjection({ now, threadId, providerThread, providerTurnId, attemptId }),
+    );
+    const providerSession = {
+      id: sessionId,
+      driver,
+      providerInstanceId,
+      status: "running" as const,
+      cwd: "/workspace",
+      model: modelSelection.model,
+      capabilities: CodexProviderCapabilitiesV2,
+      createdAt: now,
+      updatedAt: now,
+      lastError: null,
+    };
+    const runtime: ProviderAdapterV2SessionRuntime = {
+      instanceId: providerInstanceId,
+      driver,
+      providerSessionId: sessionId,
+      providerSession,
+      events: Stream.empty,
+      ensureThread: () => Effect.die("unused ensureThread"),
+      resumeThread: () => Effect.die("unused resumeThread"),
+      startTurn: () => Effect.die("unused startTurn"),
+      steerTurn: () => Effect.die("unused steerTurn"),
+      interruptTurn: () =>
+        Ref.update(projection, (current) => ({
+          ...current,
+          providerTurns: current.providerTurns.map((turn) =>
+            turn.id === providerTurnId
+              ? { ...turn, status: "interrupted" as const, completedAt: now }
+              : turn,
+          ),
+        })),
+      respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
+      readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+      rollbackThread: () => Effect.die("unused rollbackThread"),
+      forkThread: () => Effect.die("unused forkThread"),
+    };
+    const projectionLayer = Layer.succeed(
+      ProjectionStore.ProjectionStoreV2,
+      ProjectionStore.ProjectionStoreV2.of({
+        apply: () => Effect.void,
+        getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
+        getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
+        getThreadShell: () => Effect.die("unused getThreadShell"),
+        getThread: () => Ref.get(projection).pipe(Effect.map((state) => state.thread)),
+        getSettlementCandidates: () => Effect.die("unused getSettlementCandidates"),
+        getThreadsWithPullRequests: () => Effect.die("unused getThreadsWithPullRequests"),
+        getThreadProjection: () => Effect.die("control effects must not load transcript"),
+        getTurnStartContext: () => Effect.die("unused"),
+        getTurnStartHistory: () => Effect.die("unused"),
+        getRuntimeRecoveryProjection: () => Effect.die("unused getRuntimeRecoveryProjection"),
+        getPlan: () => Effect.die("unused"),
+        hasUnpairedRunInterruptRequest: () => Effect.die("unused interrupt read"),
+        getThreadAttachmentIds: () => Effect.die("Unused attachment lookup"),
+        getTimelinePage: () => Effect.die("Unused timeline read"),
+        getMessageCount: () => Effect.die("unused message count"),
+        getNextTurnItemOrdinal: () => Effect.die("unused ordinal read"),
+        getThreadRecords: () => Effect.die("unused record read"),
+        getRuntimeRequest: () => Effect.die("unused getRuntimeRequest"),
+        getRunningTurnContext: () => Effect.die("unused getRunningTurnContext"),
+        getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
+        getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
+        getPendingNativeUserInputs: () => Effect.die("unused getPendingNativeUserInputs"),
+        getProviderControlContext: (_threadId, target) =>
+          Ref.get(projection).pipe(
+            Effect.map((current) => ({
+              providerThread: current.providerThreads.find(
+                (thread) => thread.id === target.providerThreadId,
+              ),
+              providerTurn: current.providerTurns.find((turn) => turn.id === target.providerTurnId),
+              attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
+              message: undefined,
+              run: undefined,
+            })),
+          ),
+        getCheckpointContext: () => Effect.die("not used"),
+        getCheckpointCaptureContext: () => Effect.die("not used"),
+        getRunMessage: () => Effect.die("not used"),
+        canStartQueuedRun: () => Effect.die("not used"),
+        getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
+        getUnreadableThreadIds: () => Effect.die("unused getUnreadableThreadIds"),
+        getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
+        getThreadSnapshotWindow: () => Effect.die("unused getThreadSnapshotWindow"),
+      }),
+    );
+    const sessionManagerLayer = Layer.succeed(
+      ProviderSessionManager.ProviderSessionManagerV2,
+      ProviderSessionManager.ProviderSessionManagerV2.of({
+        shutdown: Effect.void,
+        open: () => Effect.die("unused open"),
+        get: (providerSessionId) =>
+          Effect.succeed(providerSessionId === sessionId ? Option.some(runtime) : Option.none()),
+        close: () => Effect.void,
+        closeInstance: () => Effect.void,
+        release: () => Effect.void,
+        detach: () => Effect.void,
+      }),
+    );
+    const controlLayer = ProviderTurnControlService.layer.pipe(
+      Layer.provide(Layer.merge(projectionLayer, sessionManagerLayer)),
+    );
+
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      yield* control.interrupt({
+        threadId,
+        providerSessionId: sessionId,
+        providerThreadId,
+        providerTurnId,
+      });
+    }).pipe(Effect.provide(controlLayer));
+
+    const snapshots = yield* Metric.snapshot;
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_provider_turns_total" &&
+          snapshot.attributes?.provider === driver &&
+          snapshot.attributes?.operation === "interrupt" &&
+          snapshot.attributes?.outcome === "success",
+      ),
+    );
+  }),
 );

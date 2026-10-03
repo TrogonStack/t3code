@@ -50,10 +50,13 @@ import {
   derivePendingBackgroundWork,
   pendingBackgroundTurnItems,
 } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -96,6 +99,13 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
+import {
+  metricAttributes,
+  orchestrationCommandAckDuration,
+  orchestrationCommandDuration,
+  orchestrationCommandsTotal,
+  withMetrics,
+} from "../observability/Metrics.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -9277,6 +9287,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
   const dispatchWithReceiptEffect = Effect.fn("orchestrationV2.dispatch.withReceipt")(function* (
     command: OrchestrationV2ServerCommand,
+    dispatchStartedAtMs: number,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.command_id": command.commandId,
@@ -9446,6 +9457,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         detail: committed.receipt.error ?? "Previously rejected.",
       });
     }
+    const ackEventType = committed.storedEvents[0]?.event.type;
+    if (ackEventType !== undefined) {
+      yield* Metric.update(
+        Metric.withAttributes(orchestrationCommandAckDuration, metricAttributes({ ackEventType })),
+        Duration.millis(Math.max(0, (yield* Clock.currentTimeMillis) - dispatchStartedAtMs)),
+      );
+    }
     if (command.type === "queue.resume") {
       yield* mapDispatchError(command)(startNextQueuedRun(command.threadId));
     }
@@ -9463,7 +9481,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   });
 
   const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    Effect.gen(function* () {
+      const dispatchStartedAtMs = yield* Clock.currentTimeMillis;
+      return yield* threadDispatch.withLock(
+        commandThreadId(command),
+        dispatchWithReceiptEffect(command, dispatchStartedAtMs).pipe(
+          withMetrics({
+            counter: orchestrationCommandsTotal,
+            timer: orchestrationCommandDuration,
+            attributes: { commandType: command.type },
+          }),
+        ),
+      );
+    });
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {

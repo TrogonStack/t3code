@@ -20,6 +20,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
@@ -532,5 +533,50 @@ it.effect("settles only the stopped run's background work, once", () =>
       `${commandItem(2)}:running`,
       `${commandItem(3)}:running`,
     ]);
+  }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("records a command, duration and ack metric for a dispatched command", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const threadId = ThreadId.make("thread:dispatch-metrics");
+    yield* orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("create-dispatch-metrics"),
+      threadId,
+      projectId: ProjectId.make("project:dispatch-metrics"),
+      title: "Dispatch metrics",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    });
+
+    const snapshots = yield* Metric.snapshot;
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_orchestration_commands_total" &&
+          snapshot.attributes?.commandType === "thread.create" &&
+          snapshot.attributes?.outcome === "success",
+      ),
+    );
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_orchestration_command_duration" &&
+          snapshot.attributes?.commandType === "thread.create",
+      ),
+    );
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_orchestration_command_ack_duration" &&
+          snapshot.attributes?.ackEventType === "thread.created",
+      ),
+    );
   }).pipe(Effect.provide(testLayer)),
 );

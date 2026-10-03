@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -830,6 +831,57 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
         }),
       ),
     );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 records provider session lifecycle metrics", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    const effect = Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-provider-session-manager-metrics");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const sessionCount = (operation: string) =>
+        Metric.snapshot.pipe(
+          Effect.map((snapshots) => {
+            const snapshot = snapshots.find(
+              (candidate) =>
+                candidate.id === "t3_provider_sessions_total" &&
+                candidate.attributes?.provider === CODEX_DRIVER &&
+                candidate.attributes?.operation === operation &&
+                candidate.attributes?.outcome === "success",
+            );
+            return snapshot !== undefined && "count" in snapshot.state
+              ? Number(snapshot.state.count)
+              : 0;
+          }),
+        );
+      const startsBefore = yield* sessionCount("start");
+      const stopsBefore = yield* sessionCount("stop");
+
+      const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      yield* open;
+      yield* open;
+      yield* manager.close(providerSessionId);
+      yield* manager.close(providerSessionId);
+      yield* open;
+      yield* manager.close(providerSessionId);
+
+      assert.equal((yield* sessionCount("start")) - startsBefore, 2);
+      assert.equal((yield* sessionCount("stop")) - stopsBefore, 2);
+    });
+
+    yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 60_000 })));
   }),
 );
 

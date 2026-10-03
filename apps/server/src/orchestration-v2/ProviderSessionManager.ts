@@ -32,6 +32,8 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "../mcp/McpProviderSession.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import { outcomeFromExit } from "../observability/Attributes.ts";
+import { increment, providerSessionsTotal } from "../observability/Metrics.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
@@ -806,7 +808,15 @@ export const layerWithOptions = (
                   if (Option.isSome(closeExit) && Exit.isFailure(closeExit.value)) {
                     return yield* Effect.failCause(closeExit.value.cause);
                   }
-                }),
+                }).pipe(
+                  Effect.onExit((exit) =>
+                    increment(providerSessionsTotal, {
+                      provider: entry.runtime.driver,
+                      operation: "stop",
+                      outcome: outcomeFromExit(exit),
+                    }),
+                  ),
+                ),
             }),
           (entry) =>
             Option.match(entry, {
@@ -1544,6 +1554,29 @@ export const layerWithOptions = (
       });
       yield* Effect.addFinalizer(() => shutdown);
 
+      // Reuse of a live session is not a start, so only fresh opens are counted.
+      const recordSessionOpen =
+        (input: Parameters<ProviderSessionManagerV2Shape["open"]>[0]) =>
+        <E, R>(effect: Effect.Effect<ProviderAdapterV2SessionRuntime, E, R>) =>
+          Effect.gen(function* () {
+            if ((yield* Ref.get(sessions)).has(sessionKey(input.providerSessionId))) {
+              return yield* effect;
+            }
+            const exit = yield* Effect.exit(effect);
+            const provider = Exit.isSuccess(exit)
+              ? exit.value.driver
+              : yield* registry.get(input.modelSelection.instanceId).pipe(
+                  Effect.map((adapter) => adapter.driver),
+                  Effect.orElseSucceed(() => undefined),
+                );
+            yield* increment(providerSessionsTotal, {
+              provider,
+              operation: input.resumeFromSession === undefined ? "start" : "recover",
+              outcome: outcomeFromExit(exit),
+            });
+            return Exit.isSuccess(exit) ? exit.value : yield* Effect.failCause(exit.cause);
+          });
+
       return ProviderSessionManagerV2.of({
         shutdown,
         open: (input) =>
@@ -1711,7 +1744,7 @@ export const layerWithOptions = (
               yield* startEventPump(entry);
               yield* scheduleIdleRelease(input.providerSessionId);
               return exposedRuntime;
-            }),
+            }).pipe(recordSessionOpen(input)),
           ),
         get: (providerSessionId) =>
           Effect.gen(function* () {

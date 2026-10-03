@@ -33,6 +33,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -587,6 +588,86 @@ it.effect("rechecks run ownership immediately before calling the provider", () =
 
     assert.equal(yield* Ref.get(guardCalls), 2);
     assert.equal(yield* Ref.get(providerStarts), 0);
+  }).pipe(Effect.provide(RunExecutionTestLayer)),
+);
+
+it.effect("records a provider turn metric for a successful send", () =>
+  Effect.gen(function* () {
+    const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
+    const threadId = ThreadId.make("thread:run-execution-send-metrics");
+    const runId = RunId.make("run:run-execution-send-metrics");
+    const attemptId = RunAttemptId.make("attempt:run-execution-send-metrics");
+    const providerThreadId = ProviderThreadId.make("provider-thread:run-execution-send-metrics");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const providerSessionId = ProviderSessionId.make("session:run-execution-send-metrics");
+    const rootNodeId = NodeId.make("node:run-execution-send-metrics");
+
+    yield* runExecution.startRootRun({
+      commandId: CommandId.make("command:run-execution-send-metrics"),
+      appThread: { id: threadId } as OrchestrationV2AppThread,
+      providerSessionId,
+      session: {
+        driver,
+        events: Stream.never,
+        startTurn: () => Effect.void,
+      } as unknown as ProviderAdapterV2SessionRuntime,
+      run: {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId,
+      } as OrchestrationV2Run,
+      rootNode: { id: rootNodeId } as OrchestrationV2ExecutionNode,
+      checkpointScope: {
+        id: CheckpointScopeId.make("checkpoint-scope:run-execution-send-metrics"),
+      } as OrchestrationV2CheckpointScope,
+      providerThread: {
+        id: providerThreadId,
+        driver,
+      } as OrchestrationV2ProviderThread,
+      attempt: {
+        id: attemptId,
+        providerTurnId: null,
+      } as OrchestrationV2RunAttempt,
+      attemptId,
+      providerTurnOrdinal: 1,
+      message: {
+        messageId: MessageId.make("message:run-execution-send-metrics"),
+        text: "Record a send metric.",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+      },
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+        approvalPolicy: "never",
+        sandboxPolicy: {
+          type: "readOnly",
+          access: { type: "fullAccess" },
+          networkAccess: false,
+        },
+      },
+    });
+
+    const snapshots = yield* Metric.snapshot;
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_provider_turns_total" &&
+          snapshot.attributes?.provider === driver &&
+          snapshot.attributes?.operation === "send" &&
+          snapshot.attributes?.outcome === "success",
+      ),
+    );
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_provider_turn_duration" && snapshot.attributes?.provider === driver,
+      ),
+    );
   }).pipe(Effect.provide(RunExecutionTestLayer)),
 );
 
