@@ -869,13 +869,16 @@ it.effect("ProviderSessionManagerV2 records provider session lifecycle metrics",
       const startsBefore = yield* sessionCount("start");
       const stopsBefore = yield* sessionCount("stop");
 
-      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
-      yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+      yield* open;
+      yield* open;
       yield* manager.close(providerSessionId);
+      yield* manager.close(providerSessionId);
+      yield* open;
       yield* manager.close(providerSessionId);
 
-      assert.equal((yield* sessionCount("start")) - startsBefore, 1);
-      assert.equal((yield* sessionCount("stop")) - stopsBefore, 1);
+      assert.equal((yield* sessionCount("start")) - startsBefore, 2);
+      assert.equal((yield* sessionCount("stop")) - stopsBefore, 2);
     });
 
     yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 60_000 })));
