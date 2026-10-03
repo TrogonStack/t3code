@@ -39,7 +39,6 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
-  isOrchestrationV2WorkActive,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -75,7 +74,12 @@ import { notificationTurnItem } from "./Notification.ts";
 import { isRestartNoteSource } from "./RestartBackgroundNote.ts";
 import { isUndeliveredMailboxSteer } from "./NotificationMailbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
-import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
+import {
+  EffectOutboxV2,
+  PROCESS_BOUND_EFFECT_TYPES,
+  type OrchestrationEffectRequestV2,
+  type PendingOrchestrationEffectV2,
+} from "./EffectOutbox.ts";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import {
   ThreadCommandExecutor,
@@ -97,10 +101,13 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
+import {
+  planProcessLossReconciliation,
+  planThreadReconciliation,
+} from "./ProviderRuntimeRecoveryService.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
-import { makeInterruptResultTurnItem } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   makeSubagentChildThread,
@@ -662,6 +669,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const eventSink = yield* EventSinkV2;
   const commandReceipts = yield* CommandReceiptStoreV2;
   const idAllocator = yield* IdAllocatorV2;
+  const outbox = yield* EffectOutboxV2;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
   const nextTurnItemOrdinal = (
@@ -7973,10 +7981,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // way as an interrupt before provider start, plus the stuck turn
       // itself, instead of erroring and leaving the run wedged forever.
       if (providerTurn.status === "running" && sessionIsDead) {
-        const attempt = projection.attempts.find(
-          (candidate) => candidate.id === run.activeAttemptId,
-        );
-        if (attempt === undefined) {
+        if (!projection.attempts.some((candidate) => candidate.id === run.activeAttemptId)) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
@@ -7992,134 +7997,111 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: interruptRequestItem,
         });
-        yield* emitEvent({
-          type: "provider-turn.updated",
-          threadId: command.threadId,
+        // No live process remains to settle this run, so finalize it exactly
+        // the way ProviderRuntimeRecoveryService reconciles a dead provider
+        // process: scoped to this run and its own provider thread, so sibling
+        // live provider threads on the same orchestration thread (e.g. a
+        // concurrently-running native subagent) are left untouched.
+        const recoveryProjection = yield* projectionStore
+          .getRuntimeRecoveryProjection(command.threadId)
+          .pipe(
+            Effect.mapError(
+              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+            ),
+          );
+        const plan = yield* planProcessLossReconciliation({
+          projection: recoveryProjection,
           runId: run.id,
-          nodeId: providerTurn.nodeId,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: { ...providerTurn, status: "interrupted", completedAt: now },
-        });
-        yield* emitEvent({
-          type: "run-attempt.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: { ...attempt, status: "interrupted", completedAt: now },
-        });
-        yield* emitEvent({
-          type: "node.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: { ...rootNode, status: "interrupted", completedAt: now },
-        });
-        yield* emitEvent({
-          type: "run.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: { ...run, status: "interrupted", completedAt: now },
-        });
-        // No live process remains to settle the rest of the turn's in-flight
-        // work (settleBackgroundWork below only closes the background-capable
-        // roster). Finalize everything else the same way a dead-process
-        // reconciliation sweep would (ProviderRuntimeRecoveryService), so the
-        // thread does not keep showing open items, streaming text, or running
-        // subagents once the run itself says interrupted. request/approval
-        // items keep their runtime-request lifecycle untouched, same as
-        // elsewhere in this dispatch.
-        const residualTurnItems = yield* loadProjectionForCommand(command, ["turnItems"], {
-          turnItemRunId: run.id,
-          turnItemStatuses: ["pending", "running", "waiting"],
-        });
-        for (const item of residualTurnItems.turnItems) {
-          if (BACKGROUND_CAPABLE_TURN_ITEM_TYPES.has(item.type) || "requestId" in item) continue;
-          yield* emitEvent({
-            type: "turn-item.updated",
-            threadId: command.threadId,
-            runId: run.id,
-            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-            providerInstanceId: run.providerInstanceId,
-            occurredAt: now,
-            payload: {
-              ...item,
-              status: "interrupted",
-              completedAt: now,
-              updatedAt: now,
-              ...("streaming" in item ? { streaming: false } : {}),
+          providerThreadId: providerThread.id,
+          commandId: command.commandId,
+          now,
+          ids: idAllocator,
+          outbox,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorDispatchError({
+                commandId: command.commandId,
+                commandType: command.type,
+                cause,
+              }),
+          ),
+        );
+        yield* Ref.update(events, (existing) => [...existing, ...plan.events]);
+        yield* Ref.update(effects, (existing) => [...existing, ...plan.effects]);
+        // The workspace may have changed before the session died, so the run
+        // still gets its end-of-turn checkpoint like any interrupted turn.
+        const checkpointScopeId = rootNode.checkpointScopeId;
+        if (checkpointScopeId !== null) {
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:checkpoint.capture:${run.id}`,
+              commandId: CommandId.make(`command:effect:checkpoint.capture:${run.id}`),
+              threadId: run.threadId,
+              request: {
+                type: "checkpoint.capture" as const,
+                runId: run.id,
+                scopeId: checkpointScopeId,
+              },
             },
-          });
+          ]);
         }
-        for (const node of projection.nodes.filter(
-          (candidate) =>
-            candidate.id !== rootNode.id &&
-            candidate.runId === run.id &&
-            isOrchestrationV2WorkActive(candidate.status),
-        )) {
-          yield* emitEvent({
-            type: "node.updated",
-            threadId: command.threadId,
-            runId: run.id,
-            nodeId: node.id,
-            providerInstanceId: run.providerInstanceId,
-            occurredAt: now,
-            payload: { ...node, status: "interrupted", completedAt: now },
-          });
+        // A linked subagent child thread is a genuinely separate thread: its
+        // own open work needs its own reconciliation plan and its own effect
+        // cancellation, since cancelUnsettledEffects below only scopes the
+        // primary thread.
+        const linkedChildThreadIds = recoveryProjection.subagents
+          .filter((subagent) => subagent.runId === run.id)
+          .map((subagent) => subagent.childThreadId)
+          .filter((childThreadId): childThreadId is ThreadId => childThreadId !== null);
+        for (const childThreadId of linkedChildThreadIds) {
+          const childProjection = yield* projectionStore
+            .getRuntimeRecoveryProjection(childThreadId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestratorProjectionError({ threadId: childThreadId, cause }),
+              ),
+            );
+          const childPlan = yield* planThreadReconciliation({
+            projection: childProjection,
+            trigger: "process-loss",
+            continueAfterRestart: false,
+            commandId: command.commandId,
+            now,
+            ids: idAllocator,
+            outbox,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                }),
+            ),
+          );
+          yield* Ref.update(events, (existing) => [...existing, ...childPlan.events]);
+          yield* Ref.update(effects, (existing) => [...existing, ...childPlan.effects]);
+          if (childPlan.events.length === 0) continue;
+          const retiredEffectIds = yield* outbox
+            .cancelUnsettled({
+              threadId: childThreadId,
+              effectTypes: PROCESS_BOUND_EFFECT_TYPES,
+              reason: childPlan.detail,
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestratorDispatchError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    cause,
+                  }),
+              ),
+            );
+          yield* outbox.signalCancellations(retiredEffectIds);
         }
-        for (const message of projection.messages.filter(
-          (candidate) => candidate.runId === run.id && candidate.streaming,
-        )) {
-          yield* emitEvent({
-            type: "message.updated",
-            threadId: command.threadId,
-            runId: run.id,
-            ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
-            providerInstanceId: run.providerInstanceId,
-            occurredAt: now,
-            payload: { ...message, streaming: false, updatedAt: now },
-          });
-        }
-        for (const subagent of projection.subagents.filter(
-          (candidate) =>
-            candidate.runId === run.id && isOrchestrationV2WorkActive(candidate.status),
-        )) {
-          yield* emitEvent({
-            type: "subagent.updated",
-            threadId: command.threadId,
-            runId: run.id,
-            nodeId: subagent.id,
-            driver: subagent.driver,
-            providerInstanceId: subagent.providerInstanceId,
-            occurredAt: now,
-            payload: { ...subagent, status: "interrupted", completedAt: now, updatedAt: now },
-          });
-        }
-        // Same marker a live provider's turn.terminal interrupted would leave
-        // behind (RunExecutionService.writeFinalRunEvents); the web timeline
-        // keys the "Run interrupted" label off this item.
-        yield* emitEvent({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: makeInterruptResultTurnItem({
-            idAllocator,
-            run,
-            rootNode,
-            providerThread,
-            completedAt: now,
-          }),
-        });
         if (command.holdQueue === true) yield* holdQueuedRuns;
         yield* stopCompletionCohort();
         yield* settleBackgroundWork({
@@ -8131,8 +8113,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now,
         });
         return {
-          effectTypes: ["provider-turn.start", "provider-turn.restart"],
-          reason: `Run ${run.id} was interrupted after its provider session ${providerThread.providerSessionId} was no longer active.`,
+          effectTypes: PROCESS_BOUND_EFFECT_TYPES,
+          reason: plan.detail,
         } satisfies {
           readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
           readonly reason: string;
@@ -9892,6 +9874,7 @@ export const layer: Layer.Layer<
   | CommandPolicyV2
   | CommandReceiptStoreV2
   | ContextHandoffServiceV2
+  | EffectOutboxV2
   | EventSinkV2
   | IdAllocatorV2
   | ProjectStore.ProjectStoreV2

@@ -1433,7 +1433,7 @@ export const layer: Layer.Layer<
   }),
 );
 
-export function makeInterruptResultTurnItem(input: {
+function makeInterruptResultTurnItem(input: {
   readonly idAllocator: IdAllocator.IdAllocatorV2Shape;
   readonly run: OrchestrationV2Run;
   readonly rootNode: OrchestrationV2ExecutionNode;

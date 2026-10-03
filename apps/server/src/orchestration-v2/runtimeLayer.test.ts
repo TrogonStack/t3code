@@ -3001,7 +3001,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const eventSink = yield* EventSink.EventSinkV2;
+        const outbox = yield* EffectOutbox.EffectOutboxV2;
         const threadId = ThreadId.make("runtime-layer-interrupt-dead-session");
+        const childThreadId = ThreadId.make(`${threadId}:child`);
         yield* orchestrator.dispatch({
           type: "thread.create",
           createdBy: "user",
@@ -3030,6 +3032,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         const before = yield* orchestrator.getThreadProjection(threadId);
         const activeRun = before.runs[0]!;
         const providerThread = before.providerThreads[0]!;
+        const checkpointScope = before.checkpointScopes[0]!;
         const now = yield* DateTime.now;
         const providerTurn = {
           id: ProviderTurnId.make(`${threadId}:turn`),
@@ -3044,7 +3047,85 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         };
         const streamingMessageId = MessageId.make(`${threadId}:assistant-message`);
         const streamingItemId = TurnItemId.make(`${threadId}:assistant-item`);
+        const dynamicToolItemId = TurnItemId.make(`${threadId}:dynamic-tool`);
         const subagentId = NodeId.make(`${threadId}:subagent`);
+
+        // A delegated subagent child thread: a genuinely separate thread doing
+        // work on behalf of the active run, linked via subagent.childThreadId.
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "agent",
+          creationSource: "web",
+          commandId: CommandId.make(`${childThreadId}:create`),
+          threadId: childThreadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          title: "Delegated subtask",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${childThreadId}:message:0`),
+          threadId: childThreadId,
+          messageId: MessageId.make(`${childThreadId}:message:0`),
+          text: "Do the subtask",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+        });
+        const childBefore = yield* orchestrator.getThreadProjection(childThreadId);
+        const childRun = childBefore.runs[0]!;
+        const childProviderThread = childBefore.providerThreads[0]!;
+        const childItemId = TurnItemId.make(`${childThreadId}:dynamic-tool`);
+        yield* eventSink.write({
+          commandId: CommandId.make(`${childThreadId}:force-running`),
+          events: [
+            {
+              id: EventId.make(`${childThreadId}:run-running`),
+              type: "run.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              occurredAt: now,
+              payload: { ...childRun, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make(`${childThreadId}:item-running`),
+              type: "turn-item.updated",
+              threadId: childThreadId,
+              runId: childRun.id,
+              nodeId: childRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: childItemId,
+                type: "dynamic_tool",
+                threadId: childThreadId,
+                runId: childRun.id,
+                nodeId: childRun.rootNodeId!,
+                providerThreadId: childProviderThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "running",
+                title: "Subtask work",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                toolName: "subtask_tool",
+                input: {},
+              },
+            },
+          ],
+        });
+
+        const checkpointCommandId = CommandId.make(
+          `command:effect:checkpoint.capture:${activeRun.id}`,
+        );
+
         // Drive the run and its provider turn into "running" the same way a
         // real provider session reaching that state would, without actually
         // opening one in ProviderSessionManagerV2. No server restart happens
@@ -3054,11 +3135,12 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         // already gone: `sessions.get` for it returns none, exactly as it
         // would after a real release.
         //
-        // Also seed an in-flight turn item, a streaming message, and a
-        // running subagent on the same run, mirroring the in-flight work a
-        // real provider turn would leave open. None of these are reported
-        // terminal by a live process, so interrupt finalization must settle
-        // them itself.
+        // Also seed an in-flight turn item, a persistent dynamic_tool item, a
+        // streaming message, and a running subagent (linked to the child
+        // thread above) on the same run, mirroring the in-flight work a real
+        // provider turn would leave open. None of these are reported terminal
+        // by a live process, so interrupt finalization must settle them
+        // itself.
         yield* eventSink.write({
           commandId: CommandId.make(`${threadId}:force-running`),
           events: [
@@ -3129,6 +3211,33 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
               },
             },
             {
+              id: EventId.make(`${threadId}:dynamic-tool-running`),
+              type: "turn-item.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: dynamicToolItemId,
+                type: "dynamic_tool",
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                providerThreadId: providerThread.id,
+                providerTurnId: providerTurn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 1,
+                status: "running",
+                title: "Persistent monitor",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                toolName: "persistent_monitor",
+                input: { persistent: true },
+              },
+            },
+            {
               id: EventId.make(`${threadId}:subagent-running`),
               type: "subagent.updated",
               threadId,
@@ -3147,7 +3256,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
                 driver: providerThread.driver,
                 providerInstanceId: providerThread.providerInstanceId,
                 providerThreadId: null,
-                childThreadId: null,
+                childThreadId,
                 nativeTaskRef: null,
                 prompt: "Do the subtask",
                 title: null,
@@ -3171,41 +3280,62 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
 
         const after = yield* orchestrator.getThreadProjection(threadId);
         const interruptedRun = after.runs.find((run) => run.id === activeRun.id);
-        assert.equal(interruptedRun?.status, "interrupted");
+        // The canonical reconciliation path (ProviderRuntimeRecoveryService)
+        // marks force-cancelled work "cancelled", not "interrupted", and does
+        // not add a separate run_interrupt_result marker: the run's own
+        // status already conveys it stopped.
+        assert.equal(interruptedRun?.status, "cancelled");
         assert.equal(
           after.providerTurns.find(
             (providerTurn) => providerTurn.runAttemptId === activeRun.activeAttemptId,
           )?.status,
-          "interrupted",
+          "cancelled",
         );
         assert.equal(
           after.attempts.find((attempt) => attempt.id === activeRun.activeAttemptId)?.status,
-          "interrupted",
+          "cancelled",
         );
         assert.equal(
           after.nodes.find((node) => node.id === activeRun.rootNodeId)?.status,
-          "interrupted",
+          "cancelled",
         );
         const streamingItem = after.turnItems.find((item) => item.id === streamingItemId);
-        assert.equal(streamingItem?.status, "interrupted");
+        assert.equal(streamingItem?.status, "cancelled");
         assert.equal(
           streamingItem !== undefined && "streaming" in streamingItem
             ? streamingItem.streaming
             : undefined,
           false,
         );
+        const dynamicToolItem = after.turnItems.find((item) => item.id === dynamicToolItemId);
+        assert.equal(dynamicToolItem?.status, "cancelled");
         assert.equal(
           after.messages.find((message) => message.id === streamingMessageId)?.streaming,
           false,
         );
         assert.equal(
           after.subagents.find((subagent) => subagent.id === subagentId)?.status,
-          "interrupted",
+          "cancelled",
         );
         const interruptResult = after.turnItems.find(
           (item) => item.type === "run_interrupt_result" && item.runId === activeRun.id,
         );
-        assert.isDefined(interruptResult);
+        assert.isUndefined(interruptResult);
+
+        const [checkpointEffect] = yield* outbox.listByCommandId(checkpointCommandId);
+        assert.equal(checkpointEffect?.status, "pending");
+        assert.deepEqual(checkpointEffect?.request, {
+          type: "checkpoint.capture",
+          runId: activeRun.id,
+          scopeId: checkpointScope.id,
+        });
+
+        const childAfter = yield* orchestrator.getThreadProjection(childThreadId);
+        assert.equal(childAfter.runs.find((run) => run.id === childRun.id)?.status, "cancelled");
+        assert.equal(
+          childAfter.turnItems.find((item) => item.id === childItemId)?.status,
+          "cancelled",
+        );
       }),
   );
 
