@@ -212,6 +212,14 @@ const withSchemaErrorAttributes = (delegate: Tracer.Tracer): Tracer.Tracer =>
     ...(delegate.context ? { context: delegate.context } : {}),
   });
 
+let serviceInstanceId: string | undefined;
+
+/**
+ * One `service.instance.id` per isolate, made on first use because Workers
+ * refuse to generate random values in global scope.
+ */
+const isolateServiceInstanceId = (): string => (serviceInstanceId ??= crypto.randomUUID());
+
 export const makeRelayTraceLayer = (input: {
   readonly tracesEndpoint: string;
   readonly tracesDatasetName: string;
@@ -225,7 +233,9 @@ export const makeRelayTraceLayer = (input: {
         serviceName: "t3code-relay",
         attributes: {
           "service.namespace": "t3code",
-          "process.runtime.name": "cloudflare-worker",
+          "service.instance.id": isolateServiceInstanceId(),
+          "cloud.provider": "cloudflare",
+          "cloud.platform": "cloudflare.workers",
           "t3code.component": "relay",
         },
       },

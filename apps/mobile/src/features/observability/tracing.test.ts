@@ -27,6 +27,7 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
     },
     {
       appVariant: "test",
+      serviceInstanceId: "test-instance",
       serviceVersion: "1.2.3",
     },
   ).pipe(Layer.provide(remoteHttpClientLayer(fetchFn)));
@@ -47,7 +48,15 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
         expect(String(url)).toBe("https://api.axiom.test/v1/traces");
         expect(new Headers(init?.headers).get("authorization")).toBe("Bearer public-ingest-token");
         expect(new Headers(init?.headers).get("x-axiom-dataset")).toBe("mobile-traces");
-        expect(new TextDecoder().decode(init?.body as Uint8Array)).toContain("mobile.test.span");
+        const body = new TextDecoder().decode(init?.body as Uint8Array);
+        expect(body).toContain("mobile.test.span");
+        expect(body).toContain('"key":"t3code.client.surface","value":{"stringValue":"mobile"}');
+        expect(body).toContain(
+          '"key":"deployment.environment.name","value":{"stringValue":"test"}',
+        );
+        expect(body).toContain(
+          '"key":"service.instance.id","value":{"stringValue":"test-instance"}',
+        );
       }),
     ),
   );
@@ -63,6 +72,7 @@ it.effect("does not let OTLP serialization failures alter application effects", 
     },
     {
       appVariant: "test",
+      serviceInstanceId: "test-instance",
       serviceVersion: "1.2.3",
     },
   ).pipe(Layer.provide(remoteHttpClientLayer(fetchFn)));

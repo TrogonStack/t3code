@@ -20,7 +20,7 @@ import packageJson from "../package.json" with { type: "json" };
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import {
   DEFAULT_SIGNAL_EXPORT,
-  nodeProcessRuntimeAttributes,
+  nodeProcessResourceAttributes,
   type SignalExport,
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
@@ -127,7 +127,10 @@ export const otlpResource = (config: ServerConfig["Service"]) => ({
   attributes: {
     "service.namespace": "t3code",
     "t3code.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
-    ...nodeProcessRuntimeAttributes(),
+    ...nodeProcessResourceAttributes({
+      operatorAttributes: config.otelEnvironment.resourceAttributes,
+      isDevelopment: config.devUrl !== undefined,
+    }),
   },
 });
 

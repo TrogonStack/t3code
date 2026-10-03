@@ -11,10 +11,12 @@
   `t3code.server.managed_by`.
 - Query every T3 Code signal with the resource attributes a collector,
   dashboard, or vendor already understands: `service.version`,
-  `deployment.environment.name`, `process.runtime.*`, `user_agent.original`,
-  and `browser.*`.
-- Set `deployment.environment.name` through `OTEL_RESOURCE_ATTRIBUTES` and
-  have the desktop app keep it.
+  `service.instance.id`, `deployment.environment.name`, `process.runtime.*`,
+  `user_agent.original`, and `browser.*`.
+- Tell two copies of the same service apart, such as two browser tabs or a
+  desktop-managed server next to a standalone one, by `service.instance.id`.
+- Set `deployment.environment.name` or `service.instance.id` through
+  `OTEL_RESOURCE_ATTRIBUTES` and have the server and desktop app keep it.
 
 ## Why
 
@@ -38,6 +40,9 @@ A plausible upstream submission. The attributes came from upstream, and the
 change carries no fork-specific intent. Dashboards or saved queries that
 filter on `service.mode`, `service.runtime`, `service.component`, or the
 relay's `t3.client.surface` have to move to the new keys, which is the part upstream would want to weigh.
+Mobile relay traces now report `t3code.client.surface` as `mobile` and carry
+the build variant in `deployment.environment.name`, so a query on
+`mobile-production` becomes two filters.
 
 The server's own `mode` values (`web` for any standalone launch) are left
 alone, since renaming them touches the CLI flag, `T3CODE_MODE`, and persisted

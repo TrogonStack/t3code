@@ -26,7 +26,32 @@ import {
   type TraceSinkFlushStats,
   OtlpHeadersFromString,
   truncateTraceAttributes,
+  nodeProcessResourceAttributes,
 } from "./observability.ts";
+
+describe("nodeProcessResourceAttributes", () => {
+  it("shares one instance id per process and defaults the tier from the build", () => {
+    const first = nodeProcessResourceAttributes({ operatorAttributes: {}, isDevelopment: true });
+    const second = nodeProcessResourceAttributes({ operatorAttributes: {}, isDevelopment: false });
+
+    expect(first["service.instance.id"]).toBe(second["service.instance.id"]);
+    expect(first["deployment.environment.name"]).toBe("development");
+    expect(second["deployment.environment.name"]).toBe("production");
+  });
+
+  it("keeps values an operator set in OTEL_RESOURCE_ATTRIBUTES", () => {
+    const attributes = nodeProcessResourceAttributes({
+      operatorAttributes: {
+        "service.instance.id": "pod-7",
+        "deployment.environment.name": "staging",
+      },
+      isDevelopment: true,
+    });
+
+    expect(attributes["service.instance.id"]).toBe("pod-7");
+    expect(attributes["deployment.environment.name"]).toBe("staging");
+  });
+});
 
 describe("errorTag", () => {
   it("reports structural tags without retaining arbitrary values", () => {

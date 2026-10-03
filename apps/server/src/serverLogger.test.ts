@@ -149,6 +149,7 @@ describe("ServerLoggerLive", () => {
       assert.include(request?.body ?? "", "t3code-server");
       assert.include(request?.body ?? "", "t3code.server.managed_by");
       assert.include(request?.body ?? "", "process.runtime.name");
+      assert.include(request?.body ?? "", "service.instance.id");
     }),
   );
 
