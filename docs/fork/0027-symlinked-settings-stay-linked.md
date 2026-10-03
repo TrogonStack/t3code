@@ -1,6 +1,6 @@
 # 0027: Symlinked settings stay linked
 
-- PR: [TrogonStack/t3code#73](https://github.com/TrogonStack/t3code/pull/73)
+- PRs: [TrogonStack/t3code#73](https://github.com/TrogonStack/t3code/pull/73), [TrogonStack/t3code#74](https://github.com/TrogonStack/t3code/pull/74)
 - Status: active
 
 ## What you can do now
