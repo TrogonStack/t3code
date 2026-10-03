@@ -39,6 +39,7 @@ import {
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  isOrchestrationV2WorkActive,
   ProviderInstanceId,
   type ProviderSessionId,
   RunId,
@@ -99,6 +100,7 @@ import { makeProviderFailure } from "./ProviderFailure.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
+import { makeInterruptResultTurnItem } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 import {
   makeSubagentChildThread,
@@ -391,6 +393,15 @@ function pendingThreadTitleGenerationEffect(
 }
 
 const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
+
+// Turn item types a live provider process owns and reports the end of itself
+// (RunExecutionService/ProviderRuntimeRecoveryService background-work sweeps).
+// Interrupt finalization must not re-settle these outside that sweep.
+const BACKGROUND_CAPABLE_TURN_ITEM_TYPES: ReadonlySet<OrchestrationV2TurnItem["type"]> = new Set([
+  "command_execution",
+  "dynamic_tool",
+  "subagent",
+]);
 
 function isBlockingRun(run: OrchestrationV2Run): boolean {
   return (
@@ -7706,7 +7717,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         // Thread-wide, like the Waiting strip: a settled thread's background
         // work can belong to an earlier run than the one Stop targets.
         {
-          turnItemTypes: ["command_execution", "dynamic_tool", "subagent"],
+          turnItemTypes: [...BACKGROUND_CAPABLE_TURN_ITEM_TYPES],
           turnItemStatuses: ["pending", "running", "waiting"],
         },
       );
@@ -8016,6 +8027,98 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
           payload: { ...run, status: "interrupted", completedAt: now },
+        });
+        // No live process remains to settle the rest of the turn's in-flight
+        // work (settleBackgroundWork below only closes the background-capable
+        // roster). Finalize everything else the same way a dead-process
+        // reconciliation sweep would (ProviderRuntimeRecoveryService), so the
+        // thread does not keep showing open items, streaming text, or running
+        // subagents once the run itself says interrupted. request/approval
+        // items keep their runtime-request lifecycle untouched, same as
+        // elsewhere in this dispatch.
+        const residualTurnItems = yield* loadProjectionForCommand(command, ["turnItems"], {
+          turnItemRunId: run.id,
+          turnItemStatuses: ["pending", "running", "waiting"],
+        });
+        for (const item of residualTurnItems.turnItems) {
+          if (BACKGROUND_CAPABLE_TURN_ITEM_TYPES.has(item.type) || "requestId" in item) continue;
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...item,
+              status: "interrupted",
+              completedAt: now,
+              updatedAt: now,
+              ...("streaming" in item ? { streaming: false } : {}),
+            },
+          });
+        }
+        for (const node of projection.nodes.filter(
+          (candidate) =>
+            candidate.id !== rootNode.id &&
+            candidate.runId === run.id &&
+            isOrchestrationV2WorkActive(candidate.status),
+        )) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            nodeId: node.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...node, status: "interrupted", completedAt: now },
+          });
+        }
+        for (const message of projection.messages.filter(
+          (candidate) => candidate.runId === run.id && candidate.streaming,
+        )) {
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...message, streaming: false, updatedAt: now },
+          });
+        }
+        for (const subagent of projection.subagents.filter(
+          (candidate) =>
+            candidate.runId === run.id && isOrchestrationV2WorkActive(candidate.status),
+        )) {
+          yield* emitEvent({
+            type: "subagent.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            nodeId: subagent.id,
+            driver: subagent.driver,
+            providerInstanceId: subagent.providerInstanceId,
+            occurredAt: now,
+            payload: { ...subagent, status: "interrupted", completedAt: now, updatedAt: now },
+          });
+        }
+        // Same marker a live provider's turn.terminal interrupted would leave
+        // behind (RunExecutionService.writeFinalRunEvents); the web timeline
+        // keys the "Run interrupted" label off this item.
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: makeInterruptResultTurnItem({
+            idAllocator,
+            run,
+            rootNode,
+            providerThread,
+            completedAt: now,
+          }),
         });
         if (command.holdQueue === true) yield* holdQueuedRuns;
         yield* stopCompletionCohort();

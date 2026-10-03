@@ -3042,6 +3042,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
           startedAt: now,
           completedAt: null,
         };
+        const streamingMessageId = MessageId.make(`${threadId}:assistant-message`);
+        const streamingItemId = TurnItemId.make(`${threadId}:assistant-item`);
+        const subagentId = NodeId.make(`${threadId}:subagent`);
         // Drive the run and its provider turn into "running" the same way a
         // real provider session reaching that state would, without actually
         // opening one in ProviderSessionManagerV2. No server restart happens
@@ -3050,6 +3053,12 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         // the projection still says "running" while the live session is
         // already gone: `sessions.get` for it returns none, exactly as it
         // would after a real release.
+        //
+        // Also seed an in-flight turn item, a streaming message, and a
+        // running subagent on the same run, mirroring the in-flight work a
+        // real provider turn would leave open. None of these are reported
+        // terminal by a live process, so interrupt finalization must settle
+        // them itself.
         yield* eventSink.write({
           commandId: CommandId.make(`${threadId}:force-running`),
           events: [
@@ -3068,6 +3077,87 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
               runId: activeRun.id,
               occurredAt: now,
               payload: providerTurn,
+            },
+            {
+              id: EventId.make(`${threadId}:streaming-message`),
+              type: "message.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                createdBy: "agent",
+                creationSource: "provider",
+                id: streamingMessageId,
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                role: "assistant",
+                text: "Working on it",
+                attachments: [],
+                streaming: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}:streaming-item`),
+              type: "turn-item.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: activeRun.rootNodeId!,
+              occurredAt: now,
+              payload: {
+                id: streamingItemId,
+                type: "assistant_message",
+                threadId,
+                runId: activeRun.id,
+                nodeId: activeRun.rootNodeId!,
+                providerThreadId: providerThread.id,
+                providerTurnId: providerTurn.id,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 0,
+                status: "running",
+                title: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                messageId: streamingMessageId,
+                text: "Working on it",
+                streaming: true,
+              },
+            },
+            {
+              id: EventId.make(`${threadId}:subagent-running`),
+              type: "subagent.updated",
+              threadId,
+              runId: activeRun.id,
+              nodeId: subagentId,
+              driver: providerThread.driver,
+              providerInstanceId: providerThread.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                id: subagentId,
+                threadId,
+                runId: activeRun.id,
+                parentNodeId: activeRun.rootNodeId!,
+                origin: "app_owned",
+                createdBy: "agent",
+                driver: providerThread.driver,
+                providerInstanceId: providerThread.providerInstanceId,
+                providerThreadId: null,
+                childThreadId: null,
+                nativeTaskRef: null,
+                prompt: "Do the subtask",
+                title: null,
+                model: null,
+                status: "running",
+                result: null,
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+              },
             },
           ],
         });
@@ -3096,6 +3186,26 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
           after.nodes.find((node) => node.id === activeRun.rootNodeId)?.status,
           "interrupted",
         );
+        const streamingItem = after.turnItems.find((item) => item.id === streamingItemId);
+        assert.equal(streamingItem?.status, "interrupted");
+        assert.equal(
+          streamingItem !== undefined && "streaming" in streamingItem
+            ? streamingItem.streaming
+            : undefined,
+          false,
+        );
+        assert.equal(
+          after.messages.find((message) => message.id === streamingMessageId)?.streaming,
+          false,
+        );
+        assert.equal(
+          after.subagents.find((subagent) => subagent.id === subagentId)?.status,
+          "interrupted",
+        );
+        const interruptResult = after.turnItems.find(
+          (item) => item.type === "run_interrupt_result" && item.runId === activeRun.id,
+        );
+        assert.isDefined(interruptResult);
       }),
   );
 
