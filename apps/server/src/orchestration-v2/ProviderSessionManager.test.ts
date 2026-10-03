@@ -13,6 +13,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderTurnId,
   type ProviderSessionId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -3071,6 +3072,121 @@ it.effect(
               Ref.getAndUpdate(startTurnCalls, (calls) => calls + 1).pipe(
                 Effect.flatMap((calls) =>
                   calls === 0 ? Effect.void : unimplemented("overlapping turn rejected"),
+                ),
+              ),
+          }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 releases the session when the running turn ends while an overlapping startTurn fails",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const startTurnCalls = yield* Ref.make(0);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const projectId = yield* idAllocator.allocate.project({
+          fixtureName: "provider-session-manager-overlap-race",
+        });
+        const threadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-overlap-race",
+          projectId,
+        });
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+          nativeThreadId: "native-thread-overlap-race",
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
+        const startInput = (ordinal: number) =>
+          Effect.gen(function* () {
+            const runId = idAllocator.derive.run({ threadId, ordinal });
+            return {
+              appThread,
+              threadId,
+              runId,
+              runOrdinal: ordinal,
+              providerTurnOrdinal: ordinal,
+              attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+              rootNodeId: idAllocator.derive.rootNode({ runId }),
+              providerThread,
+              message: {
+                createdBy: "user" as const,
+                creationSource: "web" as const,
+                messageId: yield* idAllocator.allocate.message({ threadId, ordinal }),
+                text: `turn ${ordinal}`,
+                attachments: [],
+              },
+              modelSelection,
+              runtimePolicy,
+            };
+          });
+
+        yield* runtime.startTurn(yield* startInput(1));
+        const overlapping = yield* runtime.startTurn(yield* startInput(2)).pipe(Effect.exit);
+        assert.isTrue(overlapping._tag === "Failure");
+
+        yield* TestClock.adjust("2 seconds");
+        yield* Effect.yieldNow;
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 1000,
+            // Run 1's terminal lands while run 2's start is still failing.
+            startTurn: (input) =>
+              Ref.getAndUpdate(startTurnCalls, (calls) => calls + 1).pipe(
+                Effect.flatMap((calls) =>
+                  calls === 0
+                    ? Effect.void
+                    : Ref.get(state).pipe(
+                        Effect.flatMap((current) =>
+                          Queue.offer(
+                            current.eventQueues.get(
+                              String(input.providerThread.providerSessionId),
+                            )!,
+                            {
+                              type: "turn.terminal",
+                              driver: CODEX_DRIVER,
+                              providerThreadId: input.providerThread.id,
+                              providerTurnId: ProviderTurnId.make("native-turn-overlap-race-1"),
+                              runOrdinal: 1,
+                              status: "completed",
+                              failure: null,
+                              threadDisposition: "reusable",
+                            },
+                          ),
+                        ),
+                        Effect.andThen(Effect.yieldNow),
+                        Effect.andThen(Effect.yieldNow),
+                        Effect.andThen(unimplemented("overlapping turn rejected")),
+                      ),
                 ),
               ),
           }),

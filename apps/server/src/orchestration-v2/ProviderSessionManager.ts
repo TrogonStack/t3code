@@ -187,11 +187,6 @@ export class ProviderSessionManagerV2 extends Context.Service<
   ProviderSessionManagerV2Shape
 >()("t3/orchestration-v2/ProviderSessionManager/ProviderSessionManagerV2") {}
 
-interface BusyMark {
-  readonly previousRunOrdinal: number | null;
-  readonly runOrdinal: number;
-}
-
 interface LiveSessionEntry {
   readonly attachedThreadIds: ReadonlySet<ThreadId>;
   readonly loadedProviderThreadKeyByThread: ReadonlyMap<ThreadId, string>;
@@ -213,12 +208,12 @@ interface LiveSessionEntry {
   readonly scope: Scope.Closeable;
   readonly idleGeneration: number;
   /**
-   * Run ordinal of the turn in flight on each provider thread, keyed rather
-   * than counted: a stray, duplicate, or late `turn.terminal` (one for a
-   * thread that never started a turn here, or for an earlier run) is then a
-   * no-op instead of idling a genuinely running turn.
+   * Run ordinals with a turn in flight, per provider thread; a thread with
+   * none is absent. Tracking runs rather than a count makes a stray,
+   * duplicate, or late `turn.terminal`, or a failed overlapping start, settle
+   * only the runs it is about instead of idling a genuinely running turn.
    */
-  readonly busyRunOrdinals: ReadonlyMap<ProviderThreadId, number>;
+  readonly busyRunOrdinals: ReadonlyMap<ProviderThreadId, ReadonlySet<number>>;
   readonly lastActivityAtMs: number;
   readonly idleFiber: Fiber.Fiber<void, never> | null;
   /** Set when idle release is deferred for pending background work; bounds total deferral. */
@@ -1193,47 +1188,34 @@ export const layerWithOptions = (
           Effect.gen(function* () {
             const key = sessionKey(providerSessionId);
             const now = yield* Clock.currentTimeMillis;
-            const [idleFiber, mark] = yield* Ref.modify(
-              sessions,
-              (
-                current,
-              ): readonly [
-                readonly [LiveSessionEntry["idleFiber"], BusyMark | null],
-                Map<string, LiveSessionEntry>,
-              ] => {
-                const entry = current.get(key);
-                if (entry === undefined) {
-                  return [[null, null], current];
-                }
-                const updated = new Map(current);
-                const busyRunOrdinals = new Map(entry.busyRunOrdinals);
-                busyRunOrdinals.set(
-                  providerThreadId,
-                  Math.max(runOrdinal, entry.busyRunOrdinals.get(providerThreadId) ?? runOrdinal),
-                );
-                updated.set(key, {
-                  ...entry,
-                  busyRunOrdinals,
-                  idleFiber: null,
-                  lastActivityAtMs: now,
-                  pinnedSinceMs: null,
-                });
-                const mark: BusyMark = {
-                  previousRunOrdinal: entry.busyRunOrdinals.get(providerThreadId) ?? null,
-                  runOrdinal: busyRunOrdinals.get(providerThreadId)!,
-                };
-                return [[entry.idleFiber, mark], updated];
-              },
-            );
+            const [idleFiber, added] = yield* Ref.modify(sessions, (current) => {
+              const entry = current.get(key);
+              const runs = entry?.busyRunOrdinals.get(providerThreadId);
+              if (entry === undefined) {
+                return [[null, false] as const, current] as const;
+              }
+              const busyRunOrdinals = new Map(entry.busyRunOrdinals).set(
+                providerThreadId,
+                new Set(runs).add(runOrdinal),
+              );
+              const updated = new Map(current).set(key, {
+                ...entry,
+                busyRunOrdinals,
+                idleFiber: null,
+                lastActivityAtMs: now,
+                pinnedSinceMs: null,
+              });
+              return [[entry.idleFiber, runs?.has(runOrdinal) !== true] as const, updated] as const;
+            });
             yield* cancelIdleFiber(idleFiber);
-            return mark;
+            return added;
           }),
         );
 
       const markIdle = (
         providerSessionId: ProviderSessionId,
         providerThreadId: ProviderThreadId,
-        runOrdinal: number,
+        settles: (runOrdinal: number) => boolean,
       ) =>
         withActivityError(
           providerSessionId,
@@ -1245,46 +1227,20 @@ export const layerWithOptions = (
               if (entry === undefined) {
                 return current;
               }
-              const updated = new Map(current);
+              const remaining = [...(entry.busyRunOrdinals.get(providerThreadId) ?? [])].filter(
+                (runOrdinal) => !settles(runOrdinal),
+              );
               const busyRunOrdinals = new Map(entry.busyRunOrdinals);
-              const busyRunOrdinal = busyRunOrdinals.get(providerThreadId);
-              if (busyRunOrdinal !== undefined && busyRunOrdinal <= runOrdinal) {
+              if (remaining.length === 0) {
                 busyRunOrdinals.delete(providerThreadId);
+              } else {
+                busyRunOrdinals.set(providerThreadId, new Set(remaining));
               }
-              updated.set(key, {
+              return new Map(current).set(key, {
                 ...entry,
                 busyRunOrdinals,
                 lastActivityAtMs: now,
               });
-              return updated;
-            });
-            yield* scheduleIdleReleaseInternal(providerSessionId);
-          }),
-        );
-
-      // Undoes a markBusy whose turn failed to start, unless a terminal or a
-      // newer turn has since changed the thread's busy state.
-      const revertBusy = (
-        providerSessionId: ProviderSessionId,
-        providerThreadId: ProviderThreadId,
-        mark: BusyMark,
-      ) =>
-        withActivityError(
-          providerSessionId,
-          Effect.gen(function* () {
-            const key = sessionKey(providerSessionId);
-            yield* Ref.update(sessions, (current) => {
-              const entry = current.get(key);
-              if (entry?.busyRunOrdinals.get(providerThreadId) !== mark.runOrdinal) {
-                return current;
-              }
-              const busyRunOrdinals = new Map(entry.busyRunOrdinals);
-              if (mark.previousRunOrdinal === null) {
-                busyRunOrdinals.delete(providerThreadId);
-              } else {
-                busyRunOrdinals.set(providerThreadId, mark.previousRunOrdinal);
-              }
-              return new Map(current).set(key, { ...entry, busyRunOrdinals });
             });
             yield* scheduleIdleReleaseInternal(providerSessionId);
           }),
@@ -1461,26 +1417,28 @@ export const layerWithOptions = (
                     Effect.logWarning("orchestration-v2.driver-session.activity-failed", {
                       providerSessionId,
                       cause,
-                    }).pipe(Effect.as(null)),
+                    }).pipe(Effect.as(false)),
                   ),
                 ),
               ),
-              // A failed start restores the busy state it found, so an
+              // A failed start settles only the run it added, so an
               // overlapping attempt neither idles nor pins a running turn.
-              Effect.flatMap((mark) =>
-                runtime
-                  .startTurn(input)
-                  .pipe(
-                    Effect.catch((error) =>
-                      (mark === null
-                        ? Effect.void
-                        : observeActivity(
+              Effect.flatMap((added) =>
+                runtime.startTurn(input).pipe(
+                  Effect.catch((error) =>
+                    (added
+                      ? observeActivity(
+                          providerSessionId,
+                          markIdle(
                             providerSessionId,
-                            revertBusy(providerSessionId, input.providerThread.id, mark),
-                          )
-                      ).pipe(Effect.andThen(Effect.fail(error))),
-                    ),
+                            input.providerThread.id,
+                            (runOrdinal) => runOrdinal === input.runOrdinal,
+                          ),
+                        )
+                      : Effect.void
+                    ).pipe(Effect.andThen(Effect.fail(error))),
                   ),
+                ),
               ),
             ),
           steerTurn: (input) =>
@@ -1540,7 +1498,9 @@ export const layerWithOptions = (
                 ? markIdle(
                     entry.runtime.providerSessionId,
                     event.providerThreadId,
-                    event.runOrdinal,
+                    // A run's terminal also settles any earlier run whose own
+                    // terminal never arrived.
+                    (runOrdinal) => runOrdinal <= event.runOrdinal,
                   )
                 : touchActivity(entry.runtime.providerSessionId),
             ).pipe(

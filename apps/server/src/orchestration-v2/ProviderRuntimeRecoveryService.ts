@@ -222,7 +222,7 @@ function reconciliationRequestReason(trigger: ReconciliationTrigger): string {
  * out entirely, so a "process-loss" plan built from this view cannot cancel
  * work that is still alive elsewhere on the thread.
  */
-export function scopeProjectionToRun(
+function scopeProjectionToRun(
   projection: ProjectionStore.ProjectionRuntimeRecoveryState,
   input: { readonly runId: RunId; readonly providerThreadId: ProviderThreadId },
 ): ProjectionStore.ProjectionRuntimeRecoveryState {
