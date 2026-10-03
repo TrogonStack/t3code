@@ -43,3 +43,5 @@ Each entry uses these sections:
   active, [#38](https://github.com/TrogonStack/t3code/pull/38)
 - **0025** [A test run leaves no processes behind](./0025-a-test-run-leaves-no-processes-behind.md)
   active, [#57](https://github.com/TrogonStack/t3code/pull/57)
+- **0027** [Symlinked settings stay linked](./0027-symlinked-settings-stay-linked.md)
+  active, [#73](https://github.com/TrogonStack/t3code/pull/73)
