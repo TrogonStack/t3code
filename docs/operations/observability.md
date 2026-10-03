@@ -598,8 +598,9 @@ it.
 
 The UI runs as `t3code-web` in both a browser and the desktop window, since it is the same code. Its
 `t3code.client.surface` resource attribute is `desktop` or `web`, and `user_agent.original` carries the
-full user agent. The server's `t3code.server.managed_by` is `desktop` when the desktop app launched it
-and `standalone` otherwise.
+full user agent. Its `deployment.environment.name` follows the build: `development` under the Vite dev
+server and `production` otherwise. The server's `t3code.server.managed_by` is `desktop` when the
+desktop app launched it and `standalone` otherwise.
 
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.

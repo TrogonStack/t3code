@@ -14,6 +14,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -719,6 +720,59 @@ it.effect("backs off briefly when a due deadline loses a claim race", () =>
     yield* TestClock.adjust("1 millis");
     while ((yield* Ref.get(attempts)) < 2) yield* Effect.yieldNow;
   }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("records a processed-event metric for a successfully executed claim", () =>
+  Effect.gen(function* () {
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const effectId = "effect:worker-processed-metric";
+    const workerId = "worker-processed-metric";
+    const claimedEffect: EffectOutbox.OrchestrationEffectV2 = {
+      id: effectId,
+      commandId: CommandId.make("command:worker-processed-metric"),
+      threadId: ThreadId.make("thread:worker-processed-metric"),
+      request: { type: "terminal.cleanup" },
+      status: "running",
+      attemptCount: 1,
+      availableAt: now,
+      leaseOwner: workerId,
+      leaseExpiresAt: now,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+      lastError: null,
+    };
+    const outboxLayer = Layer.mock(EffectOutbox.EffectOutboxV2)({
+      claimNext: () => Effect.succeed(Option.some(claimedEffect)),
+      get: () => Effect.succeed(Option.some(claimedEffect)),
+      awaitCancellation: () => Effect.never,
+      clearCancellation: () => Effect.void,
+      succeed: () => Effect.succeed(true),
+    });
+    const executorLayer = Layer.succeed(
+      EffectWorker.OrchestrationEffectExecutorV2,
+      EffectWorker.OrchestrationEffectExecutorV2.of({ execute: () => Effect.void }),
+    );
+    const workerLayer = EffectWorker.layerWithOptions({ workerId }).pipe(
+      Layer.provide(Layer.merge(outboxLayer, executorLayer)),
+    );
+
+    const exit = yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
+      Effect.flatMap((worker) => worker.runOnce),
+      Effect.provide(workerLayer),
+      Effect.exit,
+    );
+
+    assert.isTrue(Exit.isSuccess(exit));
+    const snapshots = yield* Metric.snapshot;
+    assert.isTrue(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.id === "t3_orchestration_events_processed_total" &&
+          snapshot.attributes?.eventType === "terminal.cleanup",
+      ),
+    );
+  }),
 );
 
 it.effect("safely retries after replacement cleanup succeeds and start fails", () =>
