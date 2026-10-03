@@ -1183,30 +1183,38 @@ export const layerWithOptions = (
           Effect.gen(function* () {
             const key = sessionKey(providerSessionId);
             const now = yield* Clock.currentTimeMillis;
-            const [idleFiber, mark] = yield* Ref.modify(sessions, (current) => {
-              const entry = current.get(key);
-              if (entry === undefined) {
-                return [[null, null] as const, current] as const;
-              }
-              const updated = new Map(current);
-              const busyRunOrdinals = new Map(entry.busyRunOrdinals);
-              busyRunOrdinals.set(
-                providerThreadId,
-                Math.max(runOrdinal, entry.busyRunOrdinals.get(providerThreadId) ?? runOrdinal),
-              );
-              updated.set(key, {
-                ...entry,
-                busyRunOrdinals,
-                idleFiber: null,
-                lastActivityAtMs: now,
-                pinnedSinceMs: null,
-              });
-              const mark: BusyMark = {
-                previousRunOrdinal: entry.busyRunOrdinals.get(providerThreadId) ?? null,
-                runOrdinal: busyRunOrdinals.get(providerThreadId)!,
-              };
-              return [[entry.idleFiber, mark] as const, updated] as const;
-            });
+            const [idleFiber, mark] = yield* Ref.modify(
+              sessions,
+              (
+                current,
+              ): readonly [
+                readonly [LiveSessionEntry["idleFiber"], BusyMark | null],
+                Map<string, LiveSessionEntry>,
+              ] => {
+                const entry = current.get(key);
+                if (entry === undefined) {
+                  return [[null, null], current];
+                }
+                const updated = new Map(current);
+                const busyRunOrdinals = new Map(entry.busyRunOrdinals);
+                busyRunOrdinals.set(
+                  providerThreadId,
+                  Math.max(runOrdinal, entry.busyRunOrdinals.get(providerThreadId) ?? runOrdinal),
+                );
+                updated.set(key, {
+                  ...entry,
+                  busyRunOrdinals,
+                  idleFiber: null,
+                  lastActivityAtMs: now,
+                  pinnedSinceMs: null,
+                });
+                const mark: BusyMark = {
+                  previousRunOrdinal: entry.busyRunOrdinals.get(providerThreadId) ?? null,
+                  runOrdinal: busyRunOrdinals.get(providerThreadId)!,
+                };
+                return [[entry.idleFiber, mark], updated];
+              },
+            );
             yield* cancelIdleFiber(idleFiber);
             return mark;
           }),
