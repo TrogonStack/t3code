@@ -80,6 +80,10 @@ Refresh provider status in Settings.
 Refresh drops everything that was held in memory and rebuilds the providers that use references, so
 the next read goes back to 1Password. Providers with only literal variables are left alone.
 
+The 1Password CLI's own cache is never used, so a refresh cannot be answered with the old value. Skipping
+it also means T3 Code never starts the CLI's background `op daemon`, which can hang behind a macOS
+permission prompt when the server runs in the background.
+
 Threads that are already running keep the process they were given. Work started after the refresh
 uses the new value.
 

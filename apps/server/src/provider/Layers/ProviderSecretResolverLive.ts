@@ -50,6 +50,15 @@ import {
 const ONE_PASSWORD_BINARY = "op";
 
 /**
+ * Every `op` call skips its cache. The cache lives in an `op daemon` that `op`
+ * spawns on its own, which hangs on macOS permission prompts nobody can see
+ * from a background server and leaks zombie processes on Linux. Reads are
+ * already held in memory here, so the daemon only adds risk.
+ */
+const resolveOnePasswordCommand = (args: ReadonlyArray<string>) =>
+  resolveSpawnCommand(ONE_PASSWORD_BINARY, ["--cache=false", ...args]);
+
+/**
  * Bound on a single `op read`. Long enough for a user to reach for the
  * fingerprint reader, short enough that a vault that will never answer does
  * not wedge the instance rebuild that is waiting on it.
@@ -94,7 +103,7 @@ const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   const template = references.map((reference) => `{{ ${reference} }}`).join(separator);
   const templatePath = yield* fileSystem.makeTempFileScoped({ prefix: "t3code-op-inject-" });
   yield* fileSystem.writeFileString(templatePath, template);
-  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
+  const spawnCommand = yield* resolveOnePasswordCommand([
     "inject",
     "--account",
     account,
@@ -136,7 +145,7 @@ const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
   reference,
   account,
 }: OnePasswordSecretReference) {
-  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
+  const spawnCommand = yield* resolveOnePasswordCommand([
     "read",
     "--account",
     account,
@@ -167,12 +176,7 @@ const OnePasswordAccountListJson = Schema.fromJsonString(
 );
 
 const readOnePasswordAccounts = Effect.fn("readOnePasswordAccounts")(function* () {
-  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
-    "account",
-    "list",
-    "--format",
-    "json",
-  ]);
+  const spawnCommand = yield* resolveOnePasswordCommand(["account", "list", "--format", "json"]);
   const result = yield* spawnAndCollect(
     ONE_PASSWORD_BINARY,
     ChildProcess.make(spawnCommand.command, spawnCommand.args, { shell: spawnCommand.shell }),

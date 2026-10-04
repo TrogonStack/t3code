@@ -119,7 +119,7 @@ describe("ProviderSecretResolverLive", () => {
         ],
       );
       assert.deepStrictEqual(spawner.invocations, [
-        ["read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+        ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
     }).pipe(
       Effect.provide(
@@ -299,7 +299,8 @@ describe("ProviderSecretResolverLive.prime", () => {
       ]);
 
       assert.strictEqual(spawner.invocations.length, 1);
-      assert.deepStrictEqual(Array.from(spawner.invocations[0] ?? []).slice(0, 4), [
+      assert.deepStrictEqual(Array.from(spawner.invocations[0] ?? []).slice(0, 5), [
+        "--cache=false",
         "inject",
         "--account",
         HOME_ACCOUNT,
@@ -347,7 +348,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       ]);
 
       // The batch is still attempted; it is the recovery that is per reference.
-      assert.strictEqual(spawner.invocations[0]?.[0], "inject");
+      assert.strictEqual(spawner.invocations[0]?.[1], "inject");
 
       // A batch that cannot be trusted leaves the cache cold rather than
       // caching a failure for every reference in it, so the good reference
@@ -398,8 +399,14 @@ describe("ProviderSecretResolverLive.prime", () => {
       // a socket pair, so a template offered on stdin is never seen and the
       // batch fails every time. The `-i` path is the delivery that works.
       const args = Array.from(spawner.invocations[0] ?? []);
-      assert.deepStrictEqual(args.slice(0, 4), ["inject", "--account", HOME_ACCOUNT, "-i"]);
-      assert.isTrue((args[4] ?? "").length > 0);
+      assert.deepStrictEqual(args.slice(0, 5), [
+        "--cache=false",
+        "inject",
+        "--account",
+        HOME_ACCOUNT,
+        "-i",
+      ]);
+      assert.isTrue((args[5] ?? "").length > 0);
       assert.deepStrictEqual(spawner.stdinUses, [false]);
 
       // The file `op` was pointed at held both references and nothing else,
@@ -482,7 +489,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         unresolved: [],
       });
       assert.deepStrictEqual(spawner.invocations, [
-        ["read", "--account", WORK_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+        ["--cache=false", "read", "--account", WORK_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
     }).pipe(
       Effect.provide(
@@ -546,10 +553,10 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
       ]);
 
       assert.deepStrictEqual(
-        spawner.invocations.map((args) => Array.from(args).slice(0, 4)),
+        spawner.invocations.map((args) => Array.from(args).slice(0, 5)),
         [
-          ["inject", "--account", HOME_ACCOUNT, "-i"],
-          ["inject", "--account", WORK_ACCOUNT, "-i"],
+          ["--cache=false", "inject", "--account", HOME_ACCOUNT, "-i"],
+          ["--cache=false", "inject", "--account", WORK_ACCOUNT, "-i"],
         ],
       );
 
@@ -600,7 +607,9 @@ describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
         { account: OnePasswordAccount.make(HOME_ACCOUNT), email: "me@example.com" },
         { account: OnePasswordAccount.make(WORK_ACCOUNT), email: "me@acme.example" },
       ]);
-      assert.deepStrictEqual(spawner.invocations, [["account", "list", "--format", "json"]]);
+      assert.deepStrictEqual(spawner.invocations, [
+        ["--cache=false", "account", "list", "--format", "json"],
+      ]);
     }).pipe(provideResolver(spawner));
   });
 
