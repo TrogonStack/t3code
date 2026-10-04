@@ -28,7 +28,6 @@ import type {
   AcpRegistryOperationError,
   AcpRegistrySetProviderInput,
   ProviderDriverKind,
-  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ServerProvider,
 } from "@t3tools/contracts";
@@ -37,6 +36,7 @@ import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
 import type { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import type { ResolvedProviderEnvironment } from "./ProviderInstanceEnvironment.ts";
 import type { ProviderAdapterV2Shape } from "../orchestration-v2/ProviderAdapter.ts";
 import type { ProviderDriverError } from "./Errors.ts";
 import type { ProviderAuthController } from "./Services/ProviderAuthService.ts";
@@ -142,7 +142,7 @@ export interface ProviderDriverCreateInput<Config> {
   readonly instanceId: ProviderInstanceId;
   readonly displayName: string | undefined;
   readonly accentColor?: string | undefined;
-  readonly environment: ProviderInstanceEnvironment;
+  readonly environment: ResolvedProviderEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
 }

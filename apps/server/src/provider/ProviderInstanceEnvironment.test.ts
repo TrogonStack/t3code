@@ -5,7 +5,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+import {
+  literalProviderInstanceEnvironment,
+  mergeProviderInstanceEnvironment,
+} from "./ProviderInstanceEnvironment.ts";
 
 describe("mergeProviderInstanceEnvironment", () => {
   it.effect.each([
@@ -64,5 +70,25 @@ describe("mergeProviderInstanceEnvironment", () => {
       ANTHROPIC_API_KEY: "",
       PATH: "/bin",
     });
+  });
+});
+
+const decodeProviderInstanceEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+
+describe("literalProviderInstanceEnvironment", () => {
+  it("keeps every literal and leaves out secret sources", () => {
+    const environment = decodeProviderInstanceEnvironment([
+      { name: "CODEX_HOME", value: "~/.codex-work" },
+      { name: "REFERENCE_LOOKALIKE", value: "op://Private/item/field" },
+      {
+        name: "TOKEN",
+        value: { kind: "1password", reference: "op://Private/item/field", account: "my" },
+      },
+    ]);
+
+    expect(literalProviderInstanceEnvironment(environment)).toEqual([
+      { name: "CODEX_HOME", value: "~/.codex-work", sensitive: false },
+      { name: "REFERENCE_LOOKALIKE", value: "op://Private/item/field", sensitive: false },
+    ]);
   });
 });

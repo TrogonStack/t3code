@@ -6,6 +6,7 @@ import {
   ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   ProviderInstanceId,
+  ProviderInstanceEnvironmentVariable,
   ProviderInstanceRef,
 } from "./providerInstance.ts";
 
@@ -14,6 +15,7 @@ const decodeProviderInstanceId = Schema.decodeUnknownSync(ProviderInstanceId);
 const decodeProviderInstanceRef = Schema.decodeUnknownSync(ProviderInstanceRef);
 const decodeProviderInstanceConfig = Schema.decodeUnknownSync(ProviderInstanceConfig);
 const decodeProviderInstanceConfigMap = Schema.decodeUnknownSync(ProviderInstanceConfigMap);
+const decodeEnvironmentVariable = Schema.decodeUnknownSync(ProviderInstanceEnvironmentVariable);
 
 describe("provider slug validation (shared by driver + instance ids)", () => {
   const cases = [
@@ -204,5 +206,19 @@ describe("ProviderInstanceConfigMap", () => {
         "1codex": { driver: "codex" },
       }),
     ).toThrow();
+  });
+});
+
+describe("ProviderInstanceEnvironmentVariable secret sources", () => {
+  it("decodes a 1Password source", () => {
+    const value = { kind: "1password", reference: "op://Private/item/field", account: "my" };
+    expect(decodeEnvironmentVariable({ name: "API_KEY", value }).value).toEqual(value);
+  });
+
+  it("decodes a string value as a literal, even one that looks like a reference", () => {
+    expect(decodeEnvironmentVariable({ name: "API_KEY" }).value).toBe("");
+    expect(
+      decodeEnvironmentVariable({ name: "API_KEY", value: "op://Private/item/field" }).value,
+    ).toBe("op://Private/item/field");
   });
 });

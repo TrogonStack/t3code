@@ -166,6 +166,12 @@ const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : ""
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
+  const { value } = variable;
+  // A secret source names a secret without carrying it, so it is never
+  // sensitive and is stored as written.
+  if (typeof value !== "string") {
+    return { name: variable.name, value, sensitive: false };
+  }
   if (!variable.sensitive) {
     const { valueRedacted: _omit, ...rest } = variable;
     return rest;
@@ -173,7 +179,7 @@ function redactProviderEnvironmentVariable(
   return {
     ...variable,
     value: "",
-    ...(variable.value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
+    ...(value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
   };
 }
 
@@ -820,7 +826,11 @@ const make = Effect.gen(function* () {
         if (!instance.environment) continue;
         const environment: ProviderInstanceEnvironmentVariable[] = [];
         for (const variable of instance.environment) {
-          if (!variable.sensitive || !variable.valueRedacted) {
+          if (
+            !variable.sensitive ||
+            !variable.valueRedacted ||
+            typeof variable.value !== "string"
+          ) {
             environment.push(variable);
             continue;
           }
@@ -925,7 +935,8 @@ const make = Effect.gen(function* () {
         const environment: ProviderInstanceEnvironmentVariable[] = [];
         for (const variable of instance.environment) {
           const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (!variable.sensitive) {
+          const { value: configuredValue } = variable;
+          if (!variable.sensitive || typeof configuredValue !== "string") {
             changes.push({
               kind: "remove",
               secretName,
@@ -945,10 +956,13 @@ const make = Effect.gen(function* () {
               )
             : undefined;
           const inlineValue =
-            previous?.sensitive && !previous.valueRedacted && previous.value.length > 0
+            previous?.sensitive &&
+            !previous.valueRedacted &&
+            typeof previous.value === "string" &&
+            previous.value.length > 0
               ? previous.value
               : undefined;
-          const value = inlineValue ?? variable.value;
+          const value = inlineValue ?? configuredValue;
           if (!variable.valueRedacted || inlineValue !== undefined) {
             if (value.length > 0) {
               changes.push({

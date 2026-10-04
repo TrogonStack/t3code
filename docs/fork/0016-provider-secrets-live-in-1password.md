@@ -5,10 +5,10 @@
 
 ## What you can do now
 
-- Give a provider its credential without giving T3 Code the credential. Paste a
-  1Password `op://` secret reference as an environment variable value on any
-  provider instance, and T3 Code reads the value from the 1Password CLI when it
-  starts the agent. What gets saved is the reference; the secret itself is
+- Give a provider its credential without giving T3 Code the credential. Set any
+  provider instance's environment variable to a 1Password secret reference
+  plus the account it lives in, and T3 Code reads the value from the 1Password
+  CLI when it starts the agent. What gets saved is the reference; the secret itself is
   never written to the settings file or to T3 Code's secret store.
 - Unlock your vault once instead of all day. Each reference is read a single
   time and held in memory for the life of the server, so starting a thread,

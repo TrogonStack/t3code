@@ -7,22 +7,33 @@ For provider setup itself, see [Codex](./providers-codex.md) and [Claude](./prov
 
 ## I Do Not Want To Paste My Token Into T3 Code
 
-Paste the 1Password reference instead of the value.
+Point the variable at 1Password instead of pasting the value.
 
-In the provider's Environment variables section in Settings, use the `op://` secret reference as the
-value:
+In the provider's Environment variables section in Settings, add the variable, pick the 1Password
+account it lives in as its source, and fill in the secret reference:
 
 ```text
-Name:  CLAUDE_CODE_OAUTH_TOKEN
-Value: op://Private/claude-code/credential
+Name:      CLAUDE_CODE_OAUTH_TOKEN
+Source:    my.1password.com
+Reference: op://Private/claude-code/credential
 ```
+
+The source list offers every account the 1Password CLI is signed in to on the machine running the
+T3 Code server. Naming the account means a reference keeps resolving against the right one when you
+are signed in to more than one. If the server cannot list any accounts, type the account instead:
+anything `op --account` accepts works.
 
 T3 Code reads the value with the 1Password CLI right before it starts the agent, and hands the
 resolved value to the agent process only. The reference is what T3 Code stores; the secret itself
 never lands in your settings file or in T3 Code's secret store.
 
-Any value beginning with `op://` is treated this way. Everything else is used exactly as typed, so
-mixing literal variables and references on the same provider is fine.
+Plain values are used exactly as typed, so mixing literal variables and references on the same
+provider is fine.
+
+A plain value is never read from 1Password, even one that starts with `op://`. Settings saved with a
+plain `op://` value open as a 1Password source that still needs its account; pick it and the
+variable resolves again. A sensitive `op://` value is hidden from the app, so it cannot be
+recognized; add it again with 1Password as its source.
 
 To copy a reference in 1Password, open the item, use the field's overflow menu, and choose
 **Copy Secret Reference**.
@@ -35,7 +46,7 @@ running the T3 Code server.
 Confirm it works from a normal shell first:
 
 ```bash
-op read --no-newline "op://Private/claude-code/credential"
+op read --account my.1password.com --no-newline "op://Private/claude-code/credential"
 ```
 
 If that command prints your secret, T3 Code can read it too. If it asks you to sign in, sign in
@@ -46,10 +57,8 @@ The vault has to be reachable from wherever `npx t3` or the desktop app is actua
 
 ## Do I Still Mark It Sensitive
 
-You do not need to. A reference is not a secret, so there is nothing to protect by storing it as one.
-
-Marking it sensitive still works if you prefer the redacted field in the UI, and the reference is
-resolved the same way either way.
+No. A reference is not a secret, so there is nothing to protect by storing it as one, and variables
+that read from 1Password are always stored as written.
 
 ## How Often Does It Ask Me To Unlock
 
@@ -60,8 +69,9 @@ sending a message, and the background provider status check all reuse the value 
 read, so a locked vault prompts you once rather than every few minutes.
 
 One unlock covers every reference T3 Code needs, across every provider. Starting the server and
-refreshing provider status both read the whole set in a single request to 1Password, so five
-providers backed by references cost the same one approval that one provider does.
+refreshing provider status both read the whole set in a single request per 1Password account, so
+five providers backed by references in one account cost the same one approval that one provider
+does.
 
 ## I Rotated The Secret, How Do I Pick Up The New One
 
@@ -69,6 +79,10 @@ Refresh provider status in Settings.
 
 Refresh drops everything that was held in memory and rebuilds the providers that use references, so
 the next read goes back to 1Password. Providers with only literal variables are left alone.
+
+The 1Password CLI's own cache is never used, so a refresh cannot be answered with the old value. Skipping
+it also means T3 Code never starts the CLI's background `op daemon`, which can hang behind a macOS
+permission prompt when the server runs in the background.
 
 Threads that are already running keep the process they were given. Work started after the refresh
 uses the new value.
@@ -91,4 +105,4 @@ The server log records which reference failed and what the 1Password CLI said ab
 
 ## Can I Use A Different Password Manager
 
-Not yet. `op://` references are the only form T3 Code resolves today.
+Not yet. 1Password is the only secret store T3 Code reads from today.

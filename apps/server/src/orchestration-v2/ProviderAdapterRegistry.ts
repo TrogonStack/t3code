@@ -13,6 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import { literalProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -271,7 +272,7 @@ const createAdapterEntryFromConfigEntry = Effect.fn(
       instanceId: input.instanceId,
       displayName: input.entry.displayName,
       accentColor: input.entry.accentColor,
-      environment: input.entry.environment ?? [],
+      environment: literalProviderInstanceEnvironment(input.entry.environment),
       enabled: input.entry.enabled ?? decodedConfigEnabled(typedConfig) ?? true,
       config: typedConfig,
     })

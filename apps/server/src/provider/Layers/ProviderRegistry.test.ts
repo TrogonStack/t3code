@@ -24,6 +24,7 @@ import {
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ServerSettings,
   type ServerProvider,
@@ -65,12 +66,20 @@ import {
 } from "../providerStatusCache.ts";
 import { COMPACT_SLASH_COMMAND } from "../providerSnapshot.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
+import { literalProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
+const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+const HOME_ACCOUNT = "my.1password.com";
+const onePasswordVariable = (name: string, reference: string, sensitive = true) => ({
+  name,
+  value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
+  sensitive,
+});
 
 const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({});
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
@@ -1609,9 +1618,14 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const invalidations = yield* Ref.make(0);
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: () => Effect.void,
             invalidate: Ref.update(invalidations, (count) => count + 1),
+            listOnePasswordAccounts: Effect.succeed([]),
           });
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1623,9 +1637,9 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               rebuildInstanceWhen: (instanceId, shouldRebuild) =>
                 shouldRebuild({
                   driver: codexDriver,
-                  environment: [
-                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
-                  ],
+                  environment: decodeEnvironment([
+                    onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
+                  ]),
                 })
                   ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
                       Effect.as(true),
@@ -1687,9 +1701,14 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
 
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: () => Effect.void,
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1700,9 +1719,9 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               rebuildInstanceWhen: (instanceId, shouldRebuild) =>
                 shouldRebuild({
                   driver: codexDriver,
-                  environment: [
-                    { name: "CODEX_TOKEN", value: "op://Vault/Item/token", sensitive: true },
-                  ],
+                  environment: decodeEnvironment([
+                    onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
+                  ]),
                 })
                   ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
                       Effect.as(true),
@@ -1764,14 +1783,21 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const primed = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
           const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
           const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-            resolve: (environment) => Effect.succeed({ variables: environment, unresolved: [] }),
+            resolve: (environment) =>
+              Effect.succeed({
+                variables: literalProviderInstanceEnvironment(environment),
+                unresolved: [],
+              }),
             prime: (references) =>
-              Ref.update(primed, (previous) => [...previous, references]).pipe(Effect.asVoid),
+              Ref.update(primed, (previous) => [
+                ...previous,
+                references.map((secret) => secret.reference),
+              ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
-          const environmentFor = (reference: string) => [
-            { name: "TOKEN", value: reference, sensitive: true },
-          ];
+          const environmentFor = (reference: string) =>
+            decodeEnvironment([onePasswordVariable("TOKEN", reference)]);
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
             {
@@ -2926,14 +2952,30 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                     displayName: "Claude Secret",
                     enabled: false,
                     environment: [
-                      { name: "CLAUDE_CODE_OAUTH_TOKEN", value: claudeReference, sensitive: true },
+                      {
+                        name: "CLAUDE_CODE_OAUTH_TOKEN",
+                        value: {
+                          kind: "1password",
+                          reference: claudeReference,
+                          account: HOME_ACCOUNT,
+                        },
+                      },
                     ],
                   },
                   codex_secret: {
                     driver: "codex",
                     displayName: "Codex Secret",
                     enabled: false,
-                    environment: [{ name: "TOKEN", value: codexReference, sensitive: true }],
+                    environment: [
+                      {
+                        name: "TOKEN",
+                        value: {
+                          kind: "1password",
+                          reference: codexReference,
+                          account: HOME_ACCOUNT,
+                        },
+                      },
+                    ],
                   },
                 } as unknown as ContractServerSettings["providerInstances"],
               }),
@@ -2944,14 +2986,18 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const recordingSecretResolverLayer = Layer.succeed(ProviderSecretResolver, {
             resolve: (environment) =>
               Ref.update(calls, (previous) => [...previous, "resolve"]).pipe(
-                Effect.as({ variables: environment, unresolved: [] }),
+                Effect.as({
+                  variables: literalProviderInstanceEnvironment(environment),
+                  unresolved: [],
+                }),
               ),
             prime: (references) =>
               Ref.update(calls, (previous) => [
                 ...previous,
-                `prime:${Array.from(references).join(",")}`,
+                `prime:${references.map((secret) => secret.reference).join(",")}`,
               ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
 
           const scope = yield* Scope.make();

@@ -50,6 +50,7 @@ import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { literalProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -1127,8 +1128,9 @@ export const make = Effect.gen(function* () {
       for (const { instanceId, config: instance } of instances) {
         const homeVariable = source === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
         const environmentHome =
-          instance.environment?.findLast((variable) => variable.name === homeVariable)?.value ??
-          hostEnvironment[homeVariable];
+          literalProviderInstanceEnvironment(instance.environment).findLast(
+            (variable) => variable.name === homeVariable,
+          )?.value ?? hostEnvironment[homeVariable];
 
         let homePath: string;
         if (source === "claudeAgent") {

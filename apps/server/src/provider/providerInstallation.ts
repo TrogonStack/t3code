@@ -18,7 +18,10 @@ import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import { deriveProviderInstanceConfigMap } from "./Layers/ProviderInstanceRegistryHydration.ts";
 import * as ProviderInstanceRegistry from "./Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./Services/ProviderRegistry.ts";
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import {
+  literalProviderInstanceEnvironment,
+  mergeProviderInstanceEnvironment,
+} from "./ProviderInstanceEnvironment.ts";
 
 const ANTIGRAVITY = ProviderDriverKind.make("antigravity");
 const hasBinaryPath = Schema.is(Schema.Struct({ binaryPath: Schema.String }));
@@ -140,7 +143,9 @@ export const makeProviderInstallation = Effect.fn("makeProviderInstallation")(fu
       }
       const binaryPath = entry.config.binaryPath.trim();
       return resolveCommandPath(binaryPath, {
-        env: mergeProviderInstanceEnvironment(entry.environment),
+        env: mergeProviderInstanceEnvironment(
+          literalProviderInstanceEnvironment(entry.environment),
+        ),
       }).pipe(
         Effect.map((resolved) => [binaryPath, resolved]),
         Effect.orElseSucceed(() => [binaryPath]),

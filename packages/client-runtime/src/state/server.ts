@@ -1055,6 +1055,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
+    onePasswordAccounts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:one-password-accounts",
+      tag: WS_METHODS.serverListOnePasswordAccounts,
+    }),
     processDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,

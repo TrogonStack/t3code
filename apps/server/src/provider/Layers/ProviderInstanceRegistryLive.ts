@@ -240,7 +240,7 @@ const buildEntry = <R>(input: {
         instanceId,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
-        environment: resolvedEnvironment.variables ?? [],
+        environment: resolvedEnvironment.variables,
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
       })

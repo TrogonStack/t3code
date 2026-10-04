@@ -1,9 +1,5 @@
 import * as NodeCrypto from "node:crypto";
-import type {
-  AcpRegistrySettings,
-  ProviderInstanceEnvironment,
-  ProviderInstanceId,
-} from "@t3tools/contracts";
+import type { AcpRegistrySettings, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -12,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import { writeFileStringAtomically } from "../../atomicWrite.ts";
+import type { ResolvedProviderEnvironment } from "../ProviderInstanceEnvironment.ts";
 
 const decodeState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ binding: Schema.String, authenticated: Schema.Boolean })),
@@ -25,7 +22,7 @@ export const makeAcpRegistryAuthenticationState = Effect.fn("makeAcpRegistryAuth
     readonly cacheDir: string;
     readonly instanceId: ProviderInstanceId;
     readonly settings: AcpRegistrySettings;
-    readonly environment: ProviderInstanceEnvironment;
+    readonly environment: ResolvedProviderEnvironment;
     readonly processEnvironment: NodeJS.ProcessEnv;
   }) {
     const fs = yield* FileSystem.FileSystem;

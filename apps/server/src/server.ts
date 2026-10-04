@@ -551,7 +551,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-  // Resolves `op://` environment values for both halves above: the instance
+  // Resolves secret-source environment values for both halves above: the instance
   // registry reads secrets while building an instance, and
   // `ProviderRegistryLive` drops the cached values when the user refreshes.
   Layer.provideMerge(ProviderSecretResolverLive),

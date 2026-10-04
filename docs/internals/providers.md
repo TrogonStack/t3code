@@ -128,21 +128,25 @@ current client support.
 
 ## Secret references in provider environments
 
-A provider instance's `environment` can hold values that start with `op://`. Those are secret
-references, and
+A provider instance's `environment` can hold secret references: a `ProviderSecretSource` value such
+as `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
+that starts with `op://`.
 [`ProviderSecretResolver`](../../apps/server/src/provider/Services/ProviderSecretResolver.ts) swaps
 each one for the value the 1Password CLI returns. This happens once per instance in
 [`ProviderInstanceRegistryLive`](../../apps/server/src/provider/Layers/ProviderInstanceRegistryLive.ts),
 before `driver.create`, so drivers and the orchestration v2 adapters built from them only ever see
-resolved values. The registry keeps the raw `op://` config, which is what makes a later rebuild
-possible.
+resolved values; `ResolvedProviderEnvironment` is the type that enforces it. The registry keeps the
+raw config, which is what makes a later rebuild possible. Paths that build a process environment
+without the resolver (terminals, usage, installation, session scanning) use
+`literalProviderInstanceEnvironment`, which leaves references out rather than passing them through.
 
 The parsing half lives in
 [`ProviderSecretReference.ts`](../../apps/server/src/provider/ProviderSecretReference.ts) and knows
 nothing about how a secret is fetched, so the registry can ask "does this instance read from a secret
 store?" without depending on the resolver.
 [`ProviderSecretResolverLive`](../../apps/server/src/provider/Layers/ProviderSecretResolverLive.ts)
-is the half that shells out to `op read --no-newline`.
+is the half that shells out to `op read --account <account> --no-newline`. The account is part of the
+cache key, because the same reference in two accounts is two different secrets.
 
 Three decisions are load-bearing:
 
@@ -155,8 +159,8 @@ Three decisions are load-bearing:
   `HostProcessEnvironment` with every unresolved name removed.
 - **Reads are batched across instances, and sequential within one.** The store charges an unlock per
   `op` invocation, not per secret, and every instance resolves its own environment as it is built,
-  so a fleet would otherwise cost one prompt per provider. `prime` reads the whole set in a single
-  `op inject` before the builds start, called from the settings watcher (which covers boot) and from
+  so a fleet would otherwise cost one prompt per provider. `prime` reads the whole set with one
+  `op inject` per account before the builds start, called from the settings watcher (which covers boot) and from
   `reloadSecretBackedInstances` (which covers the refresh button). Whatever `prime` misses,
   `resolve` still walks with a plain loop rather than `Effect.forEach` with concurrency, so it
   produces one prompt rather than several simultaneous ones.
