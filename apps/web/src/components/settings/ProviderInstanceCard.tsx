@@ -406,9 +406,10 @@ function ProviderEnvironmentFieldRow(props: {
             value={value}
             onCommit={(next) => props.onCommit(props.field, next)}
             placeholder={placeholder}
+            disabled={readFromSecretStore}
             spellCheck={false}
           />
-          {props.variable ? (
+          {props.variable && !readFromSecretStore ? (
             <Button
               type="button"
               size="icon-sm"

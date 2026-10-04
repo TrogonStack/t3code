@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - asserts against the fake op CLI script this test writes to disk.
 import { describe, it, assert } from "@effect/vitest";
-import { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import { OnePasswordAccount, ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -597,8 +597,8 @@ describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
       const accounts = yield* resolver.listOnePasswordAccounts;
 
       assert.deepStrictEqual(accounts, [
-        { account: HOME_ACCOUNT, email: "me@example.com" },
-        { account: WORK_ACCOUNT, email: "me@acme.example" },
+        { account: OnePasswordAccount.make(HOME_ACCOUNT), email: "me@example.com" },
+        { account: OnePasswordAccount.make(WORK_ACCOUNT), email: "me@acme.example" },
       ]);
       assert.deepStrictEqual(spawner.invocations, [["account", "list", "--format", "json"]]);
     }).pipe(provideResolver(spawner));
