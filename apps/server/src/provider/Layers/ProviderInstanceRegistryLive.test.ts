@@ -178,7 +178,9 @@ const makeTildeProviderFixtures = Effect.fn(
   yield* fileSystem.chmod(codexPath, 0o755);
 
   yield* fileSystem.copyFile(
-    path.join(import.meta.dirname, "testing/ProviderInstanceRegistryLive.fixture.mjs"),
+    yield* path.fromFileUrl(
+      new URL("./testing/ProviderInstanceRegistryLive.fixture.mjs", import.meta.url),
+    ),
     claudePath,
   );
   yield* fileSystem.chmod(claudePath, 0o755);
