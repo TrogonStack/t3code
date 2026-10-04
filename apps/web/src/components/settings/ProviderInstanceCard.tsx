@@ -284,6 +284,26 @@ export function providerEnvironmentWithoutNames(
   return (environment ?? []).filter((variable) => !names.has(variable.name));
 }
 
+/**
+ * Dedicated fields only edit plain values, so a variable read from a secret
+ * store stays in the generic editor, which can show its source.
+ */
+export function splitDedicatedProviderEnvironment(
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
+  names: ReadonlySet<string>,
+): {
+  readonly dedicated: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+  readonly generic: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
+} {
+  const dedicated: ProviderInstanceEnvironmentVariable[] = [];
+  const generic: ProviderInstanceEnvironmentVariable[] = [];
+  for (const variable of environment ?? []) {
+    if (names.has(variable.name) && typeof variable.value === "string") dedicated.push(variable);
+    else generic.push(variable);
+  }
+  return { dedicated, generic };
+}
+
 export function nextProviderEnvironmentWithFieldValue(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
   field: ProviderEnvironmentFieldDefinition,
@@ -328,13 +348,14 @@ function ProviderEnvironmentFieldRow(props: {
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const configuredValue = props.variable?.value;
+  const readFromSecretStore = configuredValue !== undefined && typeof configuredValue !== "string";
   const value =
-    props.variable?.valueRedacted || typeof configuredValue !== "string"
-      ? ""
-      : (configuredValue ?? "");
-  const placeholder = props.variable?.valueRedacted
-    ? "Stored secret - enter a new value to replace"
-    : props.field.placeholder;
+    props.variable?.valueRedacted || typeof configuredValue !== "string" ? "" : configuredValue;
+  const placeholder = readFromSecretStore
+    ? "Read from 1Password - edit it under Environment"
+    : props.variable?.valueRedacted
+      ? "Stored secret - enter a new value to replace"
+      : props.field.placeholder;
 
   return (
     <SettingsRow
@@ -416,8 +437,14 @@ function ProviderEnvironmentSection(props: {
       }
       if (row.source === "1password") {
         const source = onePasswordSourceFromDraft(row);
-        if (Result.isFailure(source)) return;
-        published.push({ name, value: source.success, sensitive: false });
+        if (Result.isSuccess(source)) {
+          published.push({ name, value: source.success, sensitive: false });
+          continue;
+        }
+        // Keep what is saved until the row is complete, so one unfinished row
+        // never holds back edits to the others.
+        const saved = readProviderEnvironmentVariable(props.environment, name);
+        if (saved !== undefined) published.push(saved);
         continue;
       }
       published.push({
@@ -480,13 +507,12 @@ function ProviderEnvironmentSection(props: {
         <div className="mt-3 min-w-0 space-y-2 pb-2">
           {rows.map((variable, index) => {
             const isOnePassword = variable.source === "1password";
-            const sourceIssue =
-              isOnePassword && (variable.reference.length > 0 || variable.account.length > 0)
-                ? Result.match(onePasswordSourceFromDraft(variable), {
-                    onFailure: (message) => message,
-                    onSuccess: () => undefined,
-                  })
-                : undefined;
+            const sourceIssue = isOnePassword
+              ? Result.match(onePasswordSourceFromDraft(variable), {
+                  onFailure: (message) => `Not saved yet. ${message}`,
+                  onSuccess: () => undefined,
+                })
+              : undefined;
             return (
               <div key={variable.id} className="flex min-w-0 flex-col gap-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -853,17 +879,16 @@ export function ProviderInstanceCard({
   // the generic editor only shows the remaining variables.
   const environmentFields = driverOption?.environmentFields ?? [];
   const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
-  const genericEnvironment = providerEnvironmentWithoutNames(
-    instance.environment,
-    environmentFieldNames,
-  );
+  const { dedicated: dedicatedEnvironment, generic: genericEnvironment } =
+    splitDedicatedProviderEnvironment(instance.environment, environmentFieldNames);
   const updateGenericEnvironment = (
     environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
   ) => {
-    const dedicatedEnvironment = (instance.environment ?? []).filter((variable) =>
-      environmentFieldNames.has(variable.name),
-    );
-    updateEnvironment([...dedicatedEnvironment, ...environment]);
+    const genericNames = new Set(environment.map((variable) => variable.name));
+    updateEnvironment([
+      ...providerEnvironmentWithoutNames(dedicatedEnvironment, genericNames),
+      ...environment,
+    ]);
   };
   const updateEnvironmentField = (field: ProviderEnvironmentFieldDefinition, value: string) => {
     updateEnvironment(nextProviderEnvironmentWithFieldValue(instance.environment, field, value));

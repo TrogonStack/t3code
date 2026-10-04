@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  type OnePasswordAccount,
+  type OnePasswordSecretReference,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -14,6 +16,7 @@ import {
   providerEnvironmentWithoutNames,
   ProviderInstanceCard,
   readProviderEnvironmentVariable,
+  splitDedicatedProviderEnvironment,
 } from "./ProviderInstanceCard";
 
 describe("deriveProviderModelsForDisplay", () => {
@@ -230,5 +233,22 @@ describe("provider environment helpers", () => {
     expect(providerEnvironmentWithoutNames(environment, new Set(["CURSOR_API_KEY"]))).toEqual([
       { name: "EXTRA_FLAG", value: "1", sensitive: false },
     ]);
+  });
+
+  it("keeps a dedicated variable read from 1Password in the generic editor", () => {
+    const source = {
+      kind: "1password" as const,
+      reference: "op://Private/cursor/credential" as OnePasswordSecretReference,
+      account: "my" as OnePasswordAccount,
+    };
+    const environment = [
+      { name: "CURSOR_API_KEY", value: source, sensitive: false },
+      { name: "EXTRA_FLAG", value: "1", sensitive: false },
+    ];
+
+    expect(splitDedicatedProviderEnvironment(environment, new Set(["CURSOR_API_KEY"]))).toEqual({
+      dedicated: [],
+      generic: environment,
+    });
   });
 });
