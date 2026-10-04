@@ -7,8 +7,6 @@ import {
   ArrowUpCircleIcon,
   CopyIcon,
   DownloadIcon,
-  LockIcon,
-  LockOpenIcon,
   ExternalLinkIcon,
   KeyRoundIcon,
   PlusIcon,
@@ -16,6 +14,7 @@ import {
   TypeIcon,
   XIcon,
 } from "lucide-react";
+import { Lock as LockGlyph, LockOpen } from "lucide";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -50,6 +49,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -757,11 +757,10 @@ function ProviderEnvironmentSection(props: {
                             aria-pressed={variable.sensitive}
                             aria-label={`Mark environment variable ${variable.name || index + 1} as sensitive`}
                           >
-                            {variable.sensitive ? (
-                              <LockIcon className="size-3" />
-                            ) : (
-                              <LockOpenIcon className="size-3" />
-                            )}
+                            <MorphIcon
+                              className="size-3"
+                              icon={variable.sensitive ? LockGlyph : LockOpen}
+                            />
                           </Button>
                         }
                       />

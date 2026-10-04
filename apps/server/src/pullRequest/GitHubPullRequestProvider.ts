@@ -120,6 +120,7 @@ export function gitHubProviderFailure(
   if (error._tag === "SourceControlRateLimitPausedError") {
     return { reason: "rate-limited", retryAt: error.retryAt };
   }
+  if (error._tag === "GitHubPullRequestNotFoundError") return { reason: "not-found" };
   // A refusal is still a failed request; what it adds is which one, so the page can offer the
   // way out where there is one rather than leave the reader with a sentence and no button.
   if (error._tag === "GitHubCliRefusedError") {
