@@ -251,4 +251,20 @@ describe("provider environment helpers", () => {
       generic: environment,
     });
   });
+
+  it("keeps a plain op:// value in the generic editor so its account can be picked", () => {
+    const legacy = {
+      name: "CURSOR_API_KEY",
+      value: "op://Private/cursor/credential",
+      sensitive: false,
+    };
+    const literal = { name: "OTHER_KEY", value: "cursor-key", sensitive: true };
+
+    expect(
+      splitDedicatedProviderEnvironment(
+        [legacy, literal],
+        new Set(["CURSOR_API_KEY", "OTHER_KEY"]),
+      ),
+    ).toEqual({ dedicated: [literal], generic: [legacy] });
+  });
 });

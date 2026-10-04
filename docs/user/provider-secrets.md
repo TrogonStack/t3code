@@ -32,7 +32,8 @@ provider is fine.
 
 A plain value is never read from 1Password, even one that starts with `op://`. Settings saved with a
 plain `op://` value open as a 1Password source that still needs its account; pick it and the
-variable resolves again.
+variable resolves again. A sensitive `op://` value is hidden from the app, so it cannot be
+recognized; add it again with 1Password as its source.
 
 To copy a reference in 1Password, open the item, use the field's overflow menu, and choose
 **Copy Secret Reference**.

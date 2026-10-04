@@ -137,6 +137,18 @@ type EnvironmentDraftRow = {
   readonly valueRedacted?: boolean;
 };
 
+/**
+ * Plain `op://` values were once read from 1Password. They are literals now,
+ * so they open as a 1Password source that still needs its account.
+ */
+function isLegacyOnePasswordReference(variable: ProviderInstanceEnvironmentVariable): boolean {
+  return (
+    typeof variable.value === "string" &&
+    variable.valueRedacted !== true &&
+    variable.value.trim().startsWith("op://")
+  );
+}
+
 function makeEnvironmentDraftRow(
   variable: ProviderInstanceEnvironmentVariable,
   index: number,
@@ -153,16 +165,13 @@ function makeEnvironmentDraftRow(
       sensitive: false,
     };
   }
-  // Plain `op://` values were once read from 1Password. They are literals now,
-  // so they open as a 1Password source that still needs its account.
-  const reference = variable.value.trim();
-  if (reference.startsWith("op://") && variable.valueRedacted !== true) {
+  if (isLegacyOnePasswordReference(variable)) {
     return {
       id,
       name: variable.name,
       source: "1password",
       value: "",
-      reference,
+      reference: variable.value.trim(),
       account: "",
       sensitive: false,
     };
@@ -320,7 +329,8 @@ export function providerEnvironmentWithoutNames(
 
 /**
  * Dedicated fields only edit plain values, so a variable read from a secret
- * store stays in the generic editor, which can show its source.
+ * store, or one that still has to become one, stays in the generic editor,
+ * which can show its source.
  */
 export function splitDedicatedProviderEnvironment(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
@@ -332,8 +342,13 @@ export function splitDedicatedProviderEnvironment(
   const dedicated: ProviderInstanceEnvironmentVariable[] = [];
   const generic: ProviderInstanceEnvironmentVariable[] = [];
   for (const variable of environment ?? []) {
-    if (names.has(variable.name) && typeof variable.value === "string") dedicated.push(variable);
-    else generic.push(variable);
+    if (
+      names.has(variable.name) &&
+      typeof variable.value === "string" &&
+      !isLegacyOnePasswordReference(variable)
+    ) {
+      dedicated.push(variable);
+    } else generic.push(variable);
   }
   return { dedicated, generic };
 }
@@ -382,7 +397,9 @@ function ProviderEnvironmentFieldRow(props: {
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const configuredValue = props.variable?.value;
-  const readFromSecretStore = configuredValue !== undefined && typeof configuredValue !== "string";
+  const readFromSecretStore =
+    props.variable !== undefined &&
+    (typeof configuredValue !== "string" || isLegacyOnePasswordReference(props.variable));
   const value =
     props.variable?.valueRedacted || typeof configuredValue !== "string" ? "" : configuredValue;
   const placeholder = readFromSecretStore
@@ -462,9 +479,8 @@ function ProviderEnvironmentSection(props: {
       if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
         if (
           name.length > 0 ||
-          row.source !== "plain" ||
           row.value.length > 0 ||
-          row.sensitive !== true ||
+          row.reference.length > 0 ||
           row.valueRedacted !== undefined
         ) {
           return;
@@ -655,7 +671,9 @@ function ProviderEnvironmentSection(props: {
                       font="mono"
                       className={cn("min-w-0", !typesAccount && "col-span-2")}
                       value={variable.reference}
-                      onCommit={(reference) => updateVariable(variable.id, { reference })}
+                      onCommit={(reference) =>
+                        updateVariable(variable.id, { reference: reference.trim() })
+                      }
                       placeholder="op://vault/item/field"
                       spellCheck={false}
                       aria-invalid={sourceIssue !== undefined || undefined}
