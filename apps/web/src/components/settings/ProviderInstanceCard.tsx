@@ -101,11 +101,14 @@ const PLAIN_SOURCE_OPTION = "plain";
 const EMPTY_ONE_PASSWORD_ACCOUNTS: ReadonlyArray<OnePasswordAccountSummary> = [];
 const ONE_PASSWORD_SOURCE_OPTION_PREFIX = "1password:";
 
-/** The source select's option for a row: a plain value, or the 1Password account it reads from. */
-function environmentDraftSourceOption(row: EnvironmentDraftRow): string {
-  return row.source === "1password"
-    ? `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${row.account}`
-    : PLAIN_SOURCE_OPTION;
+/**
+ * The source select's option for a row: a plain value, or the 1Password account
+ * it reads from. When the account is typed instead, every 1Password row shares
+ * one option.
+ */
+function environmentDraftSourceOption(row: EnvironmentDraftRow, typesAccount: boolean): string {
+  if (row.source !== "1password") return PLAIN_SOURCE_OPTION;
+  return `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${typesAccount ? "" : row.account}`;
 }
 
 function EnvironmentDraftSourceLabel(props: { readonly option: string }) {
@@ -546,27 +549,28 @@ function ProviderEnvironmentSection(props: {
     commitRows(nextRows);
   };
 
+  // Without any account from the server there is nothing to pick, so the
+  // account is typed instead.
+  const typesAccount = props.onePasswordAccounts.length === 0;
   // Accounts already saved stay pickable even when this server's `op` no
   // longer reports them, so opening settings never rewrites a row.
-  const onePasswordAccounts = Arr.dedupe([
-    ...props.onePasswordAccounts.map(({ account }) => account as string),
-    ...Arr.filterMap(rows, (row) =>
-      row.source === "1password" && row.account.length > 0
-        ? Result.succeed(row.account)
-        : Result.failVoid,
-    ),
-  ]);
+  const onePasswordAccounts = typesAccount
+    ? [""]
+    : Arr.dedupe([
+        ...props.onePasswordAccounts.map(({ account }) => account as string),
+        ...Arr.filterMap(rows, (row) =>
+          row.source === "1password" && row.account.length > 0
+            ? Result.succeed(row.account)
+            : Result.failVoid,
+        ),
+      ]);
   const sourceOptions = [
     PLAIN_SOURCE_OPTION,
-    ...(onePasswordAccounts.length > 0 ? onePasswordAccounts : [""]).map(
-      (account) => `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${account}`,
-    ),
+    ...onePasswordAccounts.map((account) => `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${account}`),
   ];
   const emailByAccount = new Map(
     props.onePasswordAccounts.map(({ account, email }) => [account as string, email]),
   );
-  // Without any known account there is nothing to pick, so the account is typed instead.
-  const typesAccount = onePasswordAccounts.length === 0;
 
   const addVariable = () =>
     setRows([
@@ -623,9 +627,12 @@ function ProviderEnvironmentSection(props: {
                   aria-label={`Environment variable name ${index + 1}`}
                 />
                 <Select
-                  value={environmentDraftSourceOption(variable)}
+                  value={environmentDraftSourceOption(variable, typesAccount)}
                   onValueChange={(option) => {
-                    if (option === null || option === environmentDraftSourceOption(variable)) {
+                    if (
+                      option === null ||
+                      option === environmentDraftSourceOption(variable, typesAccount)
+                    ) {
                       return;
                     }
                     if (!option.startsWith(ONE_PASSWORD_SOURCE_OPTION_PREFIX)) {
@@ -634,7 +641,9 @@ function ProviderEnvironmentSection(props: {
                     }
                     updateVariable(variable.id, {
                       source: "1password",
-                      account: option.slice(ONE_PASSWORD_SOURCE_OPTION_PREFIX.length),
+                      account: typesAccount
+                        ? variable.account
+                        : option.slice(ONE_PASSWORD_SOURCE_OPTION_PREFIX.length),
                       value: "",
                       sensitive: false,
                     });
@@ -647,7 +656,7 @@ function ProviderEnvironmentSection(props: {
                   >
                     <SelectValue>
                       <EnvironmentDraftSourceLabel
-                        option={environmentDraftSourceOption(variable)}
+                        option={environmentDraftSourceOption(variable, typesAccount)}
                       />
                     </SelectValue>
                   </SelectTrigger>
