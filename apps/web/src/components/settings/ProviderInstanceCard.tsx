@@ -135,6 +135,8 @@ type EnvironmentDraftRow = {
   readonly account: string;
   readonly sensitive: boolean;
   readonly valueRedacted?: boolean;
+  /** The name this row is saved under, so an unfinished edit can fall back to it. */
+  readonly savedName?: string;
 };
 
 /**
@@ -159,6 +161,7 @@ function makeEnvironmentDraftRow(
       id,
       name: variable.name,
       source: "1password",
+      savedName: variable.name,
       value: "",
       reference: variable.value.reference,
       account: variable.value.account,
@@ -170,6 +173,7 @@ function makeEnvironmentDraftRow(
       id,
       name: variable.name,
       source: "1password",
+      savedName: variable.name,
       value: "",
       reference: variable.value.trim(),
       account: "",
@@ -180,6 +184,7 @@ function makeEnvironmentDraftRow(
     id,
     name: variable.name,
     source: "plain",
+    savedName: variable.name,
     value: variable.value,
     reference: "",
     account: "",
@@ -472,8 +477,9 @@ function ProviderEnvironmentSection(props: {
     setRows(props.environment.map(makeEnvironmentDraftRow));
   }, [props.environment]);
 
-  const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
+  const commitRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
+    const savedNames = new Map<string, string>();
     for (const row of nextRows) {
       const name = row.name.trim();
       if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
@@ -483,6 +489,7 @@ function ProviderEnvironmentSection(props: {
           row.reference.length > 0 ||
           row.valueRedacted !== undefined
         ) {
+          setRows(nextRows);
           return;
         }
         continue;
@@ -491,11 +498,15 @@ function ProviderEnvironmentSection(props: {
         const source = onePasswordSourceFromDraft(row);
         if (Result.isSuccess(source)) {
           published.push({ name, value: source.success, sensitive: false });
+          savedNames.set(row.id, name);
           continue;
         }
         // Keep what is saved until the row is complete, so one unfinished row
         // never holds back edits to the others.
-        const saved = readProviderEnvironmentVariable(props.environment, name);
+        const saved =
+          row.savedName === undefined
+            ? undefined
+            : readProviderEnvironmentVariable(props.environment, row.savedName);
         if (saved !== undefined) published.push(saved);
         continue;
       }
@@ -505,7 +516,14 @@ function ProviderEnvironmentSection(props: {
         sensitive: row.sensitive,
         ...(row.valueRedacted !== undefined ? { valueRedacted: row.valueRedacted } : {}),
       });
+      savedNames.set(row.id, name);
     }
+    setRows(
+      nextRows.map((row) => {
+        const savedName = savedNames.get(row.id);
+        return savedName === undefined ? row : { ...row, savedName };
+      }),
+    );
     lastPublishedEnvironmentRef.current = published;
     props.onChange(published);
   };
@@ -520,14 +538,12 @@ function ProviderEnvironmentSection(props: {
           }
         : row,
     );
-    setRows(nextRows);
-    publishRows(nextRows);
+    commitRows(nextRows);
   };
 
   const removeVariable = (id: string) => {
     const nextRows = rows.filter((row) => row.id !== id);
-    setRows(nextRows);
-    publishRows(nextRows);
+    commitRows(nextRows);
   };
 
   // Accounts already saved stay pickable even when this server's `op` no
