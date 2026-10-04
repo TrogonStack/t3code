@@ -41,7 +41,5 @@ Each entry uses these sections:
   active, [#28](https://github.com/TrogonStack/t3code/pull/28)
 - **0024** [A refused merge says why, and an administrator can merge anyway](./0024-a-refused-merge-says-why.md)
   active, [#38](https://github.com/TrogonStack/t3code/pull/38)
-- **0025** [A test run leaves no processes behind](./0025-a-test-run-leaves-no-processes-behind.md)
-  active, [#57](https://github.com/TrogonStack/t3code/pull/57)
 - **0026** [Telemetry says which app sent it](./0026-telemetry-says-which-app-sent-it.md)
   active, [#68](https://github.com/TrogonStack/t3code/pull/68)
