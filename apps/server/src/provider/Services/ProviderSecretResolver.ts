@@ -13,7 +13,7 @@
  *
  * @module provider/Services/ProviderSecretResolver
  */
-import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import type { OnePasswordAccountSummary, ProviderInstanceEnvironment } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
@@ -73,6 +73,12 @@ export interface ProviderSecretResolverShape {
    * spawned with.
    */
   readonly invalidate: Effect.Effect<void>;
+  /**
+   * The 1Password accounts signed in on this machine, so settings can offer
+   * them instead of asking the user to type one. Reads local `op` config only,
+   * so it never prompts. Empty when `op` is missing or fails.
+   */
+  readonly listOnePasswordAccounts: Effect.Effect<ReadonlyArray<OnePasswordAccountSummary>>;
 }
 
 /**
@@ -103,6 +109,7 @@ export class ProviderSecretResolver extends Context.Reference<ProviderSecretReso
       resolve: (environment) => Effect.sync(() => resolveWithoutSecretStore(environment)),
       prime: () => Effect.void,
       invalidate: Effect.void,
+      listOnePasswordAccounts: Effect.succeed([]),
     }),
   },
 ) {}

@@ -1625,6 +1625,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               }),
             prime: () => Effect.void,
             invalidate: Ref.update(invalidations, (count) => count + 1),
+            listOnePasswordAccounts: Effect.succeed([]),
           });
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1707,6 +1708,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
               }),
             prime: () => Effect.void,
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -1792,6 +1794,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 references.map((secret) => secret.reference),
               ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
           const environmentFor = (reference: string) =>
             decodeEnvironment([onePasswordVariable("TOKEN", reference)]);
@@ -2994,6 +2997,7 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
                 `prime:${references.map((secret) => secret.reference).join(",")}`,
               ]).pipe(Effect.asVoid),
             invalidate: Effect.void,
+            listOnePasswordAccounts: Effect.succeed([]),
           });
 
           const scope = yield* Scope.make();

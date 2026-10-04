@@ -161,6 +161,7 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
+import { ProviderSecretResolver } from "./provider/Services/ProviderSecretResolver.ts";
 import * as AcpRegistrySupport from "./provider/acp/AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./provider/acp/AcpRegistryRuntimeCoordinator.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -1199,6 +1200,7 @@ const makeWsRpcLayer = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
+      const providerSecretResolver = yield* ProviderSecretResolver;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
           (settings) => resolveServerBackgroundActivitySettings(settings).automaticGitFetchInterval,
@@ -2522,6 +2524,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
             sourceControlDiscovery.discover,
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverListOnePasswordAccounts]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListOnePasswordAccounts,
+            providerSecretResolver.listOnePasswordAccounts,
             {
               "rpc.aggregate": "server",
             },

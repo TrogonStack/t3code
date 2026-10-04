@@ -23,13 +23,14 @@
  *
  * @module provider/Layers/ProviderSecretResolverLive
  */
-import type { OnePasswordAccount } from "@t3tools/contracts";
+import { OnePasswordAccount, OnePasswordAccountSummary } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
@@ -161,6 +162,32 @@ const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
   return secret.length > 0 ? secret : undefined;
 });
 
+const OnePasswordAccountListJson = Schema.fromJsonString(
+  Schema.Array(Schema.Struct({ url: OnePasswordAccount, email: Schema.String })),
+);
+
+const readOnePasswordAccounts = Effect.fn("readOnePasswordAccounts")(function* () {
+  const spawnCommand = yield* resolveSpawnCommand(ONE_PASSWORD_BINARY, [
+    "account",
+    "list",
+    "--format",
+    "json",
+  ]);
+  const result = yield* spawnAndCollect(
+    ONE_PASSWORD_BINARY,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, { shell: spawnCommand.shell }),
+  );
+  if (result.code !== 0) {
+    yield* Effect.logWarning("Could not list 1Password accounts", {
+      exitCode: result.code,
+      detail: result.stderr.trim(),
+    });
+    return [];
+  }
+  const accounts = yield* Schema.decodeUnknownEffect(OnePasswordAccountListJson)(result.stdout);
+  return accounts.map(({ url, email }): OnePasswordAccountSummary => ({ account: url, email }));
+});
+
 const readSecret = (secret: ProviderSecretReference) => {
   switch (secret._tag) {
     case "1password":
@@ -281,6 +308,23 @@ export const ProviderSecretResolverLive = Layer.effect(
         );
       }).pipe(Effect.provideContext(primeContext));
 
-    return { resolve, prime, invalidate: Cache.invalidateAll(cache) };
+    const listOnePasswordAccounts: ProviderSecretResolverShape["listOnePasswordAccounts"] =
+      readOnePasswordAccounts().pipe(
+        Effect.timeoutOption(SECRET_READ_TIMEOUT),
+        Effect.map(Option.getOrElse(() => [])),
+        Effect.catch((error) =>
+          Effect.logWarning("Could not run 1Password to list accounts", {
+            detail: String(error),
+          }).pipe(Effect.as([])),
+        ),
+        Effect.provideContext(primeContext),
+      );
+
+    return {
+      resolve,
+      prime,
+      invalidate: Cache.invalidateAll(cache),
+      listOnePasswordAccounts,
+    };
   }),
 );

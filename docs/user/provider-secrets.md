@@ -9,18 +9,19 @@ For provider setup itself, see [Codex](./providers-codex.md) and [Claude](./prov
 
 Point the variable at 1Password instead of pasting the value.
 
-In the provider's Environment variables section in Settings, add the variable, switch it to read from
-1Password with the key button, and fill in the secret reference and the account it lives in:
+In the provider's Environment variables section in Settings, add the variable, pick the 1Password
+account it lives in as its source, and fill in the secret reference:
 
 ```text
 Name:      CLAUDE_CODE_OAUTH_TOKEN
+Source:    my.1password.com
 Reference: op://Private/claude-code/credential
-Account:   my.1password.com
 ```
 
-The account is anything `op --account` accepts: the sign-in address, the account shorthand, or the
-account ID. Run `op account list` to see yours. Naming it means a reference keeps resolving against
-the right account when you are signed in to more than one.
+The source list offers every account the 1Password CLI is signed in to on the machine running the
+T3 Code server. Naming the account means a reference keeps resolving against the right one when you
+are signed in to more than one. If the server cannot list any accounts, type the account instead:
+anything `op --account` accepts works.
 
 T3 Code reads the value with the 1Password CLI right before it starts the agent, and hands the
 resolved value to the agent process only. The reference is what T3 Code stores; the secret itself
@@ -30,7 +31,7 @@ Plain values are used exactly as typed, so mixing literal variables and referenc
 provider is fine.
 
 A plain value is never read from 1Password, even one that starts with `op://`. Settings saved with a
-plain `op://` value open as a 1Password source that still needs its account; fill it in and the
+plain `op://` value open as a 1Password source that still needs its account; pick it and the
 variable resolves again.
 
 To copy a reference in 1Password, open the item, use the field's overflow menu, and choose

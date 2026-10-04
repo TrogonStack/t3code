@@ -573,3 +573,50 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
     );
   });
 });
+
+describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
+  const provideResolver = (spawner: ReturnType<typeof recordingOpSpawner>) =>
+    Effect.provide(
+      ProviderSecretResolverLive.pipe(
+        Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
+      ),
+    );
+
+  it.effect("offers each signed-in account by the address `op --account` accepts", () => {
+    const spawner = recordingOpSpawner({
+      stdout: JSON.stringify([
+        { url: HOME_ACCOUNT, email: "me@example.com", user_uuid: "U1", account_uuid: "A1" },
+        { url: WORK_ACCOUNT, email: "me@acme.example", user_uuid: "U2", account_uuid: "A2" },
+      ]),
+      stderr: "",
+      code: 0,
+    });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const accounts = yield* resolver.listOnePasswordAccounts;
+
+      assert.deepStrictEqual(accounts, [
+        { account: HOME_ACCOUNT, email: "me@example.com" },
+        { account: WORK_ACCOUNT, email: "me@acme.example" },
+      ]);
+      assert.deepStrictEqual(spawner.invocations, [["account", "list", "--format", "json"]]);
+    }).pipe(provideResolver(spawner));
+  });
+
+  it.effect("offers no accounts when `op` fails", () => {
+    const spawner = recordingOpSpawner({ stdout: "", stderr: "not configured", code: 1 });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+      assert.deepStrictEqual(yield* resolver.listOnePasswordAccounts, []);
+    }).pipe(provideResolver(spawner));
+  });
+
+  it.effect("offers no accounts when `op` prints something unexpected", () => {
+    const spawner = recordingOpSpawner({ stdout: "not json", stderr: "", code: 0 });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+      assert.deepStrictEqual(yield* resolver.listOnePasswordAccounts, []);
+    }).pipe(provideResolver(spawner));
+  });
+});

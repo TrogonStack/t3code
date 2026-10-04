@@ -67,3 +67,10 @@ export const OnePasswordSecretSource = Schema.Struct({
   account: OnePasswordAccount,
 });
 export type OnePasswordSecretSource = typeof OnePasswordSecretSource.Type;
+
+/** A 1Password account signed in on the server, as `op account list` reports it. */
+export const OnePasswordAccountSummary = Schema.Struct({
+  account: OnePasswordAccount,
+  email: Schema.String,
+});
+export type OnePasswordAccountSummary = typeof OnePasswordAccountSummary.Type;
