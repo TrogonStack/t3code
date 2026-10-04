@@ -55,7 +55,13 @@ export class PullRequestProviderError extends Schema.TaggedError<PullRequestProv
   {
     provider: SourceControlProviderKindSchema,
     operation: Schema.String,
-    reason: Schema.Literals(["missing-tool", "unauthenticated", "rate-limited", "failed"]),
+    reason: Schema.Literals([
+      "missing-tool",
+      "unauthenticated",
+      "rate-limited",
+      "not-found",
+      "failed",
+    ]),
     detail: Schema.String,
     /** The refusal behind a `failed`, where the host named one. */
     refusal: Schema.optional(PullRequestRefusal),
@@ -219,6 +225,8 @@ export interface ProviderChangeRequestStat {
 }
 
 export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
+  /** The head commit, where the host's detail read reports it. */
+  readonly headSha?: string | null;
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;

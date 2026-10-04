@@ -45,5 +45,3 @@ Each entry uses these sections:
   active, [#57](https://github.com/TrogonStack/t3code/pull/57)
 - **0026** [Telemetry says which app sent it](./0026-telemetry-says-which-app-sent-it.md)
   active, [#68](https://github.com/TrogonStack/t3code/pull/68)
-- **0027** [Symlinked settings stay linked](./0027-symlinked-settings-stay-linked.md)
-  active, [#73](https://github.com/TrogonStack/t3code/pull/73), [#74](https://github.com/TrogonStack/t3code/pull/74)

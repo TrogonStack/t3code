@@ -488,6 +488,7 @@ function toPullRequestError(
       : new PullRequestOperationError({
           operation,
           detail: error.detail,
+          ...(error.reason === "not-found" ? { reason: "not-found" as const } : {}),
           ...(error.refusal === undefined ? {} : { refusal: error.refusal }),
           cause: error,
         });
@@ -1710,6 +1711,7 @@ export const make = Effect.gen(function* () {
             ...(changeRequest.headRepositoryNameWithOwner === undefined
               ? {}
               : { headRepositoryNameWithOwner: changeRequest.headRepositoryNameWithOwner }),
+            ...(changeRequest.headSha ? { headSha: changeRequest.headSha } : {}),
             baseBranch: changeRequest.baseBranch,
             createdAt: changeRequest.createdAt,
             updatedAt: changeRequest.updatedAt,
