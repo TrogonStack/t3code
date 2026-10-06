@@ -185,6 +185,14 @@ export const make = Effect.fn("ProjectEnrichmentService.make")(function* (
     workspaceRoot: string,
   ) {
     const faviconPath = yield* Cache.get(faviconCache, workspaceRoot);
+    if (
+      Option.exists(
+        Exit.findErrorOption(faviconPath),
+        ProjectFaviconResolver.isMissingWorkspaceRoot,
+      )
+    ) {
+      return;
+    }
     yield* logFailure(workspaceRoot, "faviconPath", faviconPath);
   });
 

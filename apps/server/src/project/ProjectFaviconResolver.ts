@@ -110,6 +110,12 @@ export class ProjectFaviconResolutionError extends Schema.TaggedError<ProjectFav
   }
 }
 
+const isWorkspaceRootNotExistsError = Schema.is(WorkspacePaths.WorkspaceRootNotExistsError);
+
+/** True when the workspace root itself is gone, e.g. a moved or deleted checkout. */
+export const isMissingWorkspaceRoot = (error: ProjectFaviconResolutionError): boolean =>
+  error.operation === "normalize-workspace" && isWorkspaceRootNotExistsError(error.cause);
+
 /** Service tag for project favicon resolution. */
 export class ProjectFaviconResolver extends Context.Service<
   ProjectFaviconResolver,
@@ -209,12 +215,7 @@ export const make = Effect.gen(function* () {
     cwd: string,
     faviconPath?: string,
   ): Effect.fn.Return<string | null, ProjectFaviconResolutionError> {
-    // A project whose checkout was moved or deleted has no icon to show.
-    const normalizedCwd = yield* workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
-      Effect.asSome,
-      Effect.catchTags({
-        WorkspaceRootNotExistsError: () => Effect.succeed(Option.none<string>()),
-      }),
+    const projectCwd = yield* workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
       Effect.mapError(
         (cause) =>
           new ProjectFaviconResolutionError({
@@ -224,10 +225,6 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    if (Option.isNone(normalizedCwd)) {
-      return null;
-    }
-    const projectCwd = normalizedCwd.value;
     // A grouped project's saved path can be absent from one checkout. Use it
     // where it exists and retain automatic discovery for the other checkouts.
     if (faviconPath !== undefined) {
