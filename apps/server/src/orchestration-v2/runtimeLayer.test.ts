@@ -4258,6 +4258,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         // provider turn would leave open. None of these are reported terminal
         // by a live process, so interrupt finalization must settle them
         // itself.
+        const activeAttempt = (yield* orchestrator.getThreadProjection(threadId)).attempts.find(
+          (attempt) => attempt.id === activeRun.activeAttemptId,
+        )!;
         yield* eventSink.write({
           commandId: CommandId.make(`${threadId}:force-running`),
           events: [
@@ -4268,6 +4271,14 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
               runId: activeRun.id,
               occurredAt: now,
               payload: { ...activeRun, status: "running", startedAt: now },
+            },
+            {
+              id: EventId.make(`${threadId}:attempt-running`),
+              type: "run-attempt.updated",
+              threadId,
+              runId: activeRun.id,
+              occurredAt: now,
+              payload: { ...activeAttempt, status: "running", startedAt: now },
             },
             {
               id: EventId.make(`${threadId}:turn-running`),
@@ -4397,27 +4408,23 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
         const after = yield* orchestrator.getThreadProjection(threadId);
         const interruptedRun = after.runs.find((run) => run.id === activeRun.id);
-        // The canonical reconciliation path (ProviderRuntimeRecoveryService)
-        // marks force-cancelled work "cancelled", not "interrupted", and does
-        // not add a separate run_interrupt_result marker: the run's own
-        // status already conveys it stopped.
-        assert.equal(interruptedRun?.status, "cancelled");
+        assert.equal(interruptedRun?.status, "interrupted");
         assert.equal(
           after.providerTurns.find(
             (providerTurn) => providerTurn.runAttemptId === activeRun.activeAttemptId,
           )?.status,
-          "cancelled",
+          "interrupted",
         );
         assert.equal(
           after.attempts.find((attempt) => attempt.id === activeRun.activeAttemptId)?.status,
-          "cancelled",
+          "interrupted",
         );
         assert.equal(
           after.nodes.find((node) => node.id === activeRun.rootNodeId)?.status,
-          "cancelled",
+          "interrupted",
         );
         const streamingItem = after.turnItems.find((item) => item.id === streamingItemId);
-        assert.equal(streamingItem?.status, "cancelled");
+        assert.equal(streamingItem?.status, "interrupted");
         assert.equal(
           streamingItem !== undefined && "streaming" in streamingItem
             ? streamingItem.streaming
@@ -4425,7 +4432,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           false,
         );
         const dynamicToolItem = after.turnItems.find((item) => item.id === dynamicToolItemId);
-        assert.equal(dynamicToolItem?.status, "cancelled");
+        // Persistent monitors outlive Stop by design.
+        assert.equal(dynamicToolItem?.status, "running");
         assert.equal(
           after.messages.find((message) => message.id === streamingMessageId)?.streaming,
           false,
@@ -4439,7 +4447,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const interruptResult = after.turnItems.find(
           (item) => item.type === "run_interrupt_result" && item.runId === activeRun.id,
         );
-        assert.isUndefined(interruptResult);
+        assert.equal(interruptResult?.status, "interrupted");
 
         const [checkpointEffect] = yield* outbox.listByCommandId(checkpointCommandId);
         assert.equal(checkpointEffect?.status, "pending");

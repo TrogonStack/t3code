@@ -109,7 +109,6 @@ import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import { ProviderContinuationRequests } from "./ProviderContinuationRequests.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
-import { planProcessLossReconciliation } from "./ProviderRuntimeRecoveryService.ts";
 import {
   metricAttributes,
   orchestrationCommandAckDuration,
@@ -8896,11 +8895,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   }),
               ),
             );
-      const sessionIsDead = Option.isNone(sessionOption);
-      // A running turn on a dead session is instead finalized below like a
-      // lost provider process, with its own checkpoint and queue handling.
-      const settleOnly = providerTurn.status !== "running" && sessionIsDead;
-      if (settleOnly) {
+      if (Option.isNone(sessionOption)) {
         yield* emitEvent({
           type: "turn-item.updated",
           threadId: command.threadId,
@@ -8921,96 +8916,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           now,
         });
         yield* Ref.update(effects, (existing) => [...existing, ...otherProviderInterrupts]);
-        return undefined;
-      }
-      // The projection still shows this turn running, but its provider
-      // session is already gone (e.g. released on idle timeout): no live
-      // process will ever report a terminal for it. Settle the run the same
-      // way as an interrupt before provider start, plus the stuck turn
-      // itself, instead of erroring and leaving the run wedged forever.
-      if (providerTurn.status === "running" && sessionIsDead) {
-        if (!projection.attempts.some((candidate) => candidate.id === run.activeAttemptId)) {
-          return yield* new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause: `Run ${command.runId} has no active attempt to interrupt.`,
-          });
-        }
-        yield* emitEvent({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          runId: run.id,
-          nodeId: rootNode.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: interruptRequestItem,
-        });
-        // No live process remains to settle this run, so finalize it exactly
-        // the way ProviderRuntimeRecoveryService reconciles a dead provider
-        // process: scoped to this run and its own provider thread, so sibling
-        // live provider threads on the same orchestration thread (e.g. a
-        // concurrently-running native subagent) are left untouched.
-        const recoveryProjection = yield* projectionStore
-          .getRuntimeRecoveryProjection(command.threadId)
-          .pipe(
-            Effect.mapError(
-              (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-            ),
-          );
-        const plan = yield* planProcessLossReconciliation({
-          projection: recoveryProjection,
-          runId: run.id,
-          providerThreadId: providerThread.id,
-          commandId: command.commandId,
-          now,
-          ids: idAllocator,
-          outbox: effectOutbox,
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new OrchestratorDispatchError({
-                commandId: command.commandId,
-                commandType: command.type,
-                cause,
-              }),
-          ),
-        );
-        yield* Ref.update(events, (existing) => [...existing, ...plan.events]);
-        yield* Ref.update(effects, (existing) => [...existing, ...plan.effects]);
-        // The workspace may have changed before the session died, so the run
-        // still gets its end-of-turn checkpoint like any interrupted turn.
-        const checkpointScopeId = rootNode.checkpointScopeId;
-        if (checkpointScopeId !== null) {
-          yield* Ref.update(effects, (existing) => [
-            ...existing,
-            {
-              id: `effect:checkpoint.capture:${run.id}`,
-              commandId: CommandId.make(`command:effect:checkpoint.capture:${run.id}`),
-              threadId: run.threadId,
-              request: {
-                type: "checkpoint.capture" as const,
-                runId: run.id,
-                scopeId: checkpointScopeId,
-              },
-            },
-          ]);
-        }
-        yield* stopRemainingWork();
-        // Read past the plan's events so a stale provider-thread row cannot
-        // overwrite the idle state the plan just wrote.
-        yield* settleBackgroundWork({
-          command,
-          events,
-          projection: yield* getProjectionWithPendingEvents(command.threadId, events),
-          stoppedProviderThreadId: providerThread.id,
-          throughRunOrdinal: run.ordinal,
-          now,
-        });
         // Only effects addressed to the dead session lost their process; a
         // thread's other sessions keep theirs.
         return {
           effectTypes: providerThread.providerSessionId === null ? [] : SESSION_BOUND_EFFECT_TYPES,
-          reason: plan.detail,
+          reason: `Run ${run.id} was interrupted after its provider session was lost.`,
           ...(providerThread.providerSessionId === null
             ? {}
             : { providerSessionId: providerThread.providerSessionId }),
