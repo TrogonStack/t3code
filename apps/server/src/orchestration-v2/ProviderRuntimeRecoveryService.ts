@@ -7,7 +7,6 @@ import {
   type OrchestrationV2RestartCancelledBackgroundWork,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
-  type RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -59,13 +58,10 @@ export interface ProviderRuntimeReconciliationSummary {
 }
 
 /**
- * Why a projection is being reconciled. "startup"/"shutdown" assume every
- * provider process in the projection is dead. "process-loss" is narrower: one
- * provider session died while the rest of the thread may still be live, so
- * callers using it must scope the projection to what actually died (see
- * `scopeProjectionToRun`).
+ * Why a projection is being reconciled. Both assume every provider process in
+ * the projection is dead.
  */
-export type ReconciliationTrigger = "startup" | "shutdown" | "process-loss";
+export type ReconciliationTrigger = "startup" | "shutdown";
 
 export interface ThreadReconciliationPlan {
   readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
@@ -168,32 +164,14 @@ function resolveStaleBackgroundItemProviderInstanceId(
   return projection.providerThreads[0]?.providerInstanceId ?? projection.thread.providerInstanceId;
 }
 
-/**
- * Provider threads with background work reconciliation would cancel and
- * record for their next turn.
- */
-function providerThreadsWithOpenBackgroundWork(
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
-): ReadonlySet<ProviderThreadId> {
-  const ids = new Set<ProviderThreadId>();
-  for (const item of projection.turnItems ?? []) {
-    if (
-      !isBackgroundCapableTurnItemType(item.type) ||
-      !isNonterminalTurnItemStatus(item.status) ||
-      isAppOwnedDelegationItem(item)
-    )
-      continue;
-    const providerThreadId =
-      item.providerThreadId ??
-      projection.runs.find((run) => run.id === item.runId)?.providerThreadId;
-    if (providerThreadId != null) ids.add(providerThreadId);
-  }
-  for (const thread of projection.providerThreads ?? []) {
-    if (thread.ownerNodeId === null && providerThreadHasPendingBackgroundTasks(thread))
-      ids.add(thread.id);
-  }
-  return ids;
-}
+/** An open item closed by recovery. A secret card also closes its form, so it takes no answer. */
+const cancelledItem = (
+  item: OrchestrationV2ThreadProjection["turnItems"][number],
+  now: DateTime.Utc,
+): OrchestrationV2ThreadProjection["turnItems"][number] =>
+  item.type === "secret_request" && item.secretStatus === "pending"
+    ? { ...item, status: "cancelled", secretStatus: "cancelled", completedAt: now, updatedAt: now }
+    : { ...item, status: "cancelled", completedAt: now, updatedAt: now };
 
 /**
  * A provider thread's latest started run: the last turn that provider saw.
@@ -222,8 +200,6 @@ function reconciliationDetail(trigger: ReconciliationTrigger): string {
       return "Cancelled because the server restarted before the provider work completed.";
     case "shutdown":
       return "Cancelled because the server shut down before the provider work completed.";
-    case "process-loss":
-      return "Cancelled because its provider session ended before the work completed.";
   }
 }
 
@@ -233,65 +209,13 @@ function reconciliationRequestReason(trigger: ReconciliationTrigger): string {
       return "The server restarted before this runtime request was resolved.";
     case "shutdown":
       return "The server shut down before this runtime request was resolved.";
-    case "process-loss":
-      return "The provider session ended before this runtime request was resolved.";
   }
-}
-
-/**
- * Narrow a thread's recovery projection to one run and the provider thread
- * whose session died for it: that run's own records, plus runless native
- * subagent nodes/items owned by the same provider thread. Other runs,
- * provider threads and sessions on the same orchestration thread are left
- * out entirely, so a "process-loss" plan built from this view cannot cancel
- * work that is still alive elsewhere on the thread.
- */
-function scopeProjectionToRun(
-  projection: ProjectionStore.ProjectionRuntimeRecoveryState,
-  input: { readonly runId: RunId; readonly providerThreadId: ProviderThreadId },
-): ProjectionStore.ProjectionRuntimeRecoveryState {
-  const { runId, providerThreadId } = input;
-  const attempts = projection.attempts.filter((attempt) => attempt.runId === runId);
-  const attemptIds = new Set(attempts.map((attempt) => attempt.id));
-  const nodes = projection.nodes.filter(
-    (node) =>
-      node.runId === runId || (node.runId === null && node.providerThreadId === providerThreadId),
-  );
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  return {
-    thread: projection.thread,
-    runs: projection.runs.filter((run) => run.id === runId),
-    attempts,
-    nodes,
-    subagents: projection.subagents.filter((subagent) => subagent.runId === runId),
-    providerSessions: projection.providerSessions.filter(
-      (session) =>
-        session.id ===
-        projection.providerThreads.find((providerThread) => providerThread.id === providerThreadId)
-          ?.providerSessionId,
-    ),
-    providerThreads: projection.providerThreads.filter(
-      (providerThread) => providerThread.id === providerThreadId,
-    ),
-    providerTurns: projection.providerTurns.filter(
-      (providerTurn) =>
-        providerTurn.runAttemptId !== null && attemptIds.has(providerTurn.runAttemptId),
-    ),
-    runtimeRequests: projection.runtimeRequests.filter((request) => nodeIds.has(request.nodeId)),
-    messages: projection.messages.filter((message) => message.runId === runId),
-    turnItems: projection.turnItems.filter(
-      (item) =>
-        item.runId === runId || (item.runId === null && item.providerThreadId === providerThreadId),
-    ),
-  };
 }
 
 /**
  * Build the events and effects that cancel a projection's open work. Pure
  * planning only: the caller decides how to commit (a standalone reconcile
- * command, or folded into a larger command's own commit). "process-loss"
- * callers must scope `projection` first (see `scopeProjectionToRun`), since
- * this plans against everything the projection contains.
+ * command, or folded into a larger command's own commit).
  */
 const planThreadReconciliation = Effect.fn(
   "ProviderRuntimeRecoveryService.planThreadReconciliation",
@@ -544,15 +468,7 @@ const planThreadReconciliation = Effect.fn(
         ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
         providerInstanceId: run.providerInstanceId,
         occurredAt: now,
-        payload: {
-          ...item,
-          status: "cancelled",
-          completedAt: now,
-          updatedAt: now,
-          ...(item.type === "reasoning" || item.type === "assistant_message"
-            ? { streaming: false }
-            : {}),
-        },
+        payload: cancelledItem(item, now),
       });
     }
   }
@@ -582,7 +498,7 @@ const planThreadReconciliation = Effect.fn(
       ...(item.nodeId === null || item.nodeId === undefined ? {} : { nodeId: item.nodeId }),
       providerInstanceId,
       occurredAt: now,
-      payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+      payload: cancelledItem(item, now),
     });
     if (item.nodeId !== null && item.nodeId !== undefined) {
       const staleItemNode = projection.nodes.find(
@@ -764,9 +680,7 @@ const planThreadReconciliation = Effect.fn(
     });
   }
   const continuationRun =
-    continueAfterRestart && trigger === "startup"
-      ? restartContinuationRun(projection, new Set(cancelledBackgroundWork.keys()))
-      : undefined;
+    continueAfterRestart && trigger === "startup" ? restartContinuationRun(projection) : undefined;
   const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
     ? [
         {
@@ -788,36 +702,6 @@ const planThreadReconciliation = Effect.fn(
     stoppedSessions,
     closedRequests: requests.length,
   } satisfies ThreadReconciliationPlan;
-});
-
-/**
- * Narrow a thread's recovery plan to a single run whose provider session
- * died while the rest of the thread may still be live: scopes the projection
- * first, then plans against only what died.
- */
-export const planProcessLossReconciliation = Effect.fn(
-  "ProviderRuntimeRecoveryService.planProcessLossReconciliation",
-)(function* (input: {
-  readonly projection: ProjectionStore.ProjectionRuntimeRecoveryState;
-  readonly runId: RunId;
-  readonly providerThreadId: ProviderThreadId;
-  readonly commandId: CommandId;
-  readonly now: DateTime.Utc;
-  readonly ids: IdAllocator.IdAllocatorV2Shape;
-  readonly outbox: EffectOutbox.EffectOutboxV2Shape;
-}) {
-  return yield* planThreadReconciliation({
-    projection: scopeProjectionToRun(input.projection, {
-      runId: input.runId,
-      providerThreadId: input.providerThreadId,
-    }),
-    trigger: "process-loss",
-    continueAfterRestart: false,
-    commandId: input.commandId,
-    now: input.now,
-    ids: input.ids,
-    outbox: input.outbox,
-  });
 });
 
 export const make = Effect.gen(function* () {
@@ -966,12 +850,7 @@ export const make = Effect.gen(function* () {
             .continueThreadsAfterServerUpdate
         )
           return;
-        // Shutdown reconciliation cancels the background work below, so a
-        // settled thread's continuation must be captured while it is still open.
-        const run = restartContinuationRun(
-          projection,
-          providerThreadsWithOpenBackgroundWork(projection),
-        );
+        const run = restartContinuationRun(projection);
         if (!run) return;
         const commandId = CommandId.make(`command:restart-prepare:${run.id}`);
         yield* eventSink.writeWithEffects({

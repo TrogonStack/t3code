@@ -5,14 +5,18 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
+import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/rpc";
 
 import {
   observeRpcEffect,
   observeRpcStream,
   observeRpcStreamEffect,
+  rpcServerTracingOptions,
 } from "./RpcInstrumentation.ts";
 
 const hasMetricSnapshot = (
@@ -236,22 +240,68 @@ describe("RpcInstrumentation", () => {
     }),
   );
 
-  it.effect("records spans for traced stream RPC handlers", () =>
+  it.effect("runs traced RPC handlers inside the server span parented to the client span", () =>
     Effect.gen(function* () {
-      const spanNames = yield* collectSpanNames(
-        Stream.runCollect(
-          observeRpcStream(
-            "rpc.instrumentation.traced.stream",
-            Stream.fromEffect(
-              Effect.succeed("ok").pipe(Effect.withSpan("rpc.instrumentation.traced.stream.child")),
-            ),
-            { "rpc.aggregate": "test" },
-          ),
-        ),
+      const spans: Array<Tracer.Span> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const group = RpcGroup.make(
+        Rpc.make("Unary", { success: Schema.String }),
+        Rpc.make("Streamed", { success: Schema.String, stream: true }),
       );
+      const handlers = group.toLayer({
+        Unary: () =>
+          observeRpcEffect("Unary", Effect.succeed("ok").pipe(Effect.withSpan("unary.child")), {
+            "rpc.aggregate": "test",
+          }),
+        Streamed: () =>
+          observeRpcStream(
+            "Streamed",
+            Stream.fromEffect(Effect.succeed("ok").pipe(Effect.withSpan("streamed.child"))),
+          ),
+      });
 
-      assert.equal(spanNames.includes("ws.rpc.rpc.instrumentation.traced.stream"), true);
-      assert.equal(spanNames.includes("rpc.instrumentation.traced.stream.child"), true);
+      yield* Effect.gen(function* () {
+        let client!: Effect.Success<
+          ReturnType<typeof RpcClient.makeNoSerialization<RpcGroup.Rpcs<typeof group>, never>>
+        >;
+        const server = yield* RpcServer.makeNoSerialization(group, {
+          ...rpcServerTracingOptions,
+          onFromServer: (response) => client.write(response),
+        });
+        client = yield* RpcClient.makeNoSerialization(group, {
+          supportsAck: true,
+          onFromClient: ({ message }) => server.write(0, message),
+        });
+        yield* client.client.Unary();
+        yield* Stream.runCollect(client.client.Streamed());
+      }).pipe(Effect.provide(handlers), Effect.withTracer(tracer), Effect.scoped);
+
+      const spanNamed = (name: string) => spans.find((span) => span.name === name);
+      for (const [method, child] of [
+        ["Unary", "unary.child"],
+        ["Streamed", "streamed.child"],
+      ] as const) {
+        const clientSpan = spanNamed(`RpcClient.${method}`);
+        const serverSpan = spanNamed(`ws.rpc.${method}`);
+        assert.ok(clientSpan && serverSpan);
+        assert.equal(serverSpan.traceId, clientSpan.traceId);
+        assert.equal(Option.getOrUndefined(serverSpan.parent)?.spanId, clientSpan.spanId);
+        assert.equal(serverSpan.attributes.get("rpc.method"), method);
+        assert.equal(serverSpan.attributes.get("rpc.system"), "effect-rpc");
+        assert.equal(spans.filter((span) => span.name.endsWith(`.${method}`)).length, 2);
+        const childParent = Option.flatMap(
+          Option.fromNullishOr(spanNamed(child)),
+          (span) => span.parent,
+        );
+        assert.equal(Option.getOrUndefined(childParent)?.spanId, serverSpan.spanId);
+      }
+      assert.equal(spanNamed("ws.rpc.Unary")?.attributes.get("rpc.aggregate"), "test");
     }),
   );
 

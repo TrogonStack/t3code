@@ -1,17 +1,12 @@
-import * as NodeCrypto from "node:crypto";
-
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Output from "alchemy/Output";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
 
@@ -214,37 +209,14 @@ const withSchemaErrorAttributes = (delegate: Tracer.Tracer): Tracer.Tracer =>
     ...(delegate.context ? { context: delegate.context } : {}),
   });
 
-let serviceInstanceId: string | undefined;
-
 /**
- * One `service.instance.id` per isolate, made on first use because Workers
- * refuse to generate random values in global scope.
+ * Adds a failed span's schema error fields (`error.type`, `error.<field>`) to
+ * the span, on whichever tracer is current. Provide it around the work whose
+ * spans should carry them; the Worker's telemetry still owns export.
  */
-const isolateServiceInstanceId = (): string => (serviceInstanceId ??= NodeCrypto.randomUUID());
-
-export const makeRelayTraceLayer = (input: {
-  readonly tracesEndpoint: string;
-  readonly tracesDatasetName: string;
-  readonly ingestToken: Redacted.Redacted<string>;
-}) =>
-  Layer.effect(
-    Tracer.Tracer,
-    OtlpTracer.make({
-      url: input.tracesEndpoint,
-      resource: {
-        serviceName: "t3code-relay",
-        attributes: {
-          "service.namespace": "t3code",
-          "service.instance.id": isolateServiceInstanceId(),
-          "cloud.provider": "cloudflare",
-          "cloud.platform": "cloudflare.workers",
-          "t3code.component": "relay",
-        },
-      },
-      headers: {
-        Authorization: `Bearer ${Redacted.value(input.ingestToken)}`,
-        "X-Axiom-Dataset": input.tracesDatasetName,
-      },
-      exportInterval: "1 second",
-    }).pipe(Effect.map(withSchemaErrorAttributes)),
-  ).pipe(Layer.provideMerge(OtlpExporter.layerFlusher), Layer.provide(OtlpSerialization.layerJson));
+export const withSchemaErrorSpanAttributes = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.flatMap(Effect.tracer, (tracer) =>
+    effect.pipe(Effect.withTracer(withSchemaErrorAttributes(tracer))),
+  );
