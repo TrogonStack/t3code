@@ -163,6 +163,7 @@ import {
   observeRpcEffect,
   observeRpcStream,
   observeRpcStreamEffect,
+  rpcServerTracingOptions,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
@@ -3840,7 +3841,7 @@ export const layer = Layer.unwrap(
         yield* analytics.record("client.connected", clientAnalyticsProps);
         const rpcWebSocketHttpEffect = yield* Effect.gen(function* () {
           const { protocol, httpEffect } = yield* RpcServer.makeProtocolWithHttpEffectWebsocket;
-          yield* RpcServer.make(ServerWsRpcGroup, { disableTracing: true }).pipe(
+          yield* RpcServer.make(ServerWsRpcGroup, rpcServerTracingOptions).pipe(
             Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
             Effect.provide(RpcAuthorization.layer(session.scopes)),
             Effect.forkScoped,
