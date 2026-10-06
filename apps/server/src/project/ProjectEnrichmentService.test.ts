@@ -140,8 +140,11 @@ it.effect("does not warn about favicons for workspace roots that no longer exist
       assert.lengthOf(warnings, 1);
       assert.nestedPropertyVal(warnings[0], "[1].workspaceRoot", "/broken");
     }).pipe(
-      Effect.provide(makeLayer(metadataLayer, { concurrency: 1 })),
-      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.provide(
+        makeLayer(metadataLayer, { concurrency: 1 }).pipe(
+          Layer.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        ),
+      ),
     );
   }),
 );
