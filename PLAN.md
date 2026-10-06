@@ -32,16 +32,16 @@ started yet, from any client and across server restarts.
 
 ## What already exists
 
-| Need                                     | Existing piece                                                                                            |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Pure decisions, events, receipts, outbox | `Orchestrator.ts`, `EventSink.commitCommand`, `EffectWorker`                                              |
-| A step in a fresh session                | `delegate_task` MCP tool -> `delegated_task.request` -> child thread (`relationshipToParent: "subagent"`) |
-| Results back to the coordinator          | Delegated completion delivery mailbox, `ProviderContinuationService`                                      |
-| Retry identity                           | `RunAttempt` reasons (`retry`, `provider_recovery`, ...)                                                  |
-| Asking the user                          | Runtime requests (`user_input`, approvals), `RuntimeRequestService`                                       |
-| Steering a step                          | `message.dispatch` modes (`steer_active`, `queue_after_active`)                                           |
-| Waiting on a PR                          | `PullRequestWatchReactor`                                                                                 |
-| Child cannot exceed parent's runtime     | `OrchestratorMcpService` guardrail                                                                        |
+| Need                                     | Existing piece                                                                                              |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Pure decisions, events, receipts, outbox | `Orchestrator.ts`, `EventSink.commitCommand`, `EffectWorker`                                                |
+| A step in a fresh session                | `delegate_task` MCP tool -> `delegated_task.request` -> child thread (`relationshipToParent: "subagent"`)   |
+| Results back to the coordinator          | Delegated completion cohort on the parent run row, `ProviderContinuationService` (offer queue is in memory) |
+| Retry identity                           | `RunAttempt` reasons (`retry`, `provider_recovery`, ...)                                                    |
+| Asking the user                          | Runtime requests (`user_input`, approvals), `RuntimeRequestService`                                         |
+| Steering a step                          | `message.dispatch` modes (`steer_active`, `queue_after_active`)                                             |
+| Waiting on a PR                          | `PullRequestWatchReactor`                                                                                   |
+| Child cannot exceed parent's runtime     | `OrchestratorMcpService` guardrail                                                                          |
 
 What is missing: a declared plan, a run record that owns it, and recovery that reconciles
 dispatched steps instead of retiring them and asking the model to "continue where you left off".
@@ -62,9 +62,17 @@ Smallest model that makes the behavior unsurprising:
   (`workflow_step_complete`: outcome `succeeded | partial | failed`, declared outputs, summary).
   A negative review verdict is a successful step with an output, not a failure. Fallback when the
   tool is never called: the child's settled final message with outcome `unknown`.
-- **Recovery**: a dispatch that has a receipt is never dispatched again. On restart, reconcile each
-  dispatched step against its child thread state. Only steps with a determinate failure are
-  retryable.
+- **Ownership**: `delegated_task.request` gains an owner,
+  `{ type: "run", parentRunId, parentNodeId } | { type: "workflow", workflowRunId, occurrenceId, attempt }`.
+  Workflow-owned tasks have `runId: null`. A synthetic run is rejected: run rows are real turn
+  state, so one would block the user's messages, suppress wakes and be cancelled by startup recovery.
+- **Completion**: intercepted in `finalizeAppOwnedSubagent` before `planDelegatedCompletionDelivery`,
+  under the parent thread lock and in the same event batch. Workflow-owned tasks skip the cohort and
+  the `manual_context` handoff; the workflow posts its own `queue_after_active` progress message.
+- **Recovery**: a dispatch that has a receipt is never dispatched again. Command ids are
+  occurrence plus attempt, because a rejected receipt is permanent. A child cancelled by restart
+  reconciliation (`command:runtime-reconcile:` prefix) is re-dispatched as the same occurrence with
+  a new attempt; any other `cancelled` or `failed` outcome follows the node's policy.
 - **Reverse states**: start / cancel, pause / resume, request input / answer, revise remaining
   plan (pending nodes only, at a pause boundary).
 
@@ -72,12 +80,17 @@ Smallest model that makes the behavior unsurprising:
 
 ### 0. Decide and spike
 
-- [ ] Confirm `delegated_task.request` can be dispatched by the workflow without a live parent
-      run and node (it currently requires `parentRunId` and `parentNodeId`). Decide whether the
-      workflow run supplies a synthetic node, or the command grows a workflow owner.
-- [ ] Decide where completion goes: the workflow decider consumes the delegated completion, and the
-      coordinator's turn gets a progress message instead of the raw result.
-- [ ] Confirm per-thread serialization is enough when many children complete at once.
+- [x] Dispatch without a live parent run: not possible today. The parent run must be
+      `preparing | starting | running | waiting` and the node must belong to it. Decision: owner
+      field (see Proposed model).
+- [x] Completion: the coordinator already gets a pointer, not the raw result; the raw result goes
+      through the `manual_context` handoff. Decision: intercept in `finalizeAppOwnedSubagent`.
+- [x] Concurrency: one lock per thread, parent before child, never nested. Five children finishing
+      at once contend on the parent lock, and terminal-run finalization is a single global stream.
+      Acceptable for the first cut; measure before changing it.
+- [x] Restart: by default (`continueThreadsAfterServerUpdate: false`) every running lane is
+      cancelled and never continued, and not-yet-started lanes are never resumed. The workflow must
+      own re-dispatch (see Recovery).
 
 ### 1. Contracts and pure decider
 
@@ -92,8 +105,11 @@ Smallest model that makes the behavior unsurprising:
 - [ ] Effect that dispatches a step through the existing delegated-task path with a deterministic
       command id per occurrence and attempt.
 - [ ] Route child completion to the workflow decider.
-- [ ] Restart reconciliation in `ProviderRuntimeRecoveryService` / `EffectOutbox`: no
-      re-dispatch, reconcile against the child thread.
+- [ ] Restart reconciliation hooked into `Orchestrator.recoverDelegatedTasks` and the startup
+      phases (not `ProviderRuntimeRecoveryService`): no duplicate dispatch, re-dispatch
+      restart-cancelled occurrences with a new attempt.
+- [ ] Cohort code that assumes `task.runId`: acknowledge/dispose, `disposeAllDelegatedCompletionCohorts`,
+      `Notification.ts`, `ThreadDeletion.ts`, projection `parentNodeId` columns, MCP task scoping.
 - [ ] Tests that drain `OrchestrationEffectWorkerV2` and await persisted events. No sleeps.
 
 ### 3. Agent surface (MCP)
