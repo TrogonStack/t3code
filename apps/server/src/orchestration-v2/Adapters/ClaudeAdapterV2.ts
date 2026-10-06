@@ -2691,6 +2691,13 @@ interface ActiveClaudeSubagent {
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
+  // The parent turn the subagent's card is attributed to. A task_progress
+  // that lands with no active turn (the root settled while the background
+  // subagent keeps running) still needs these to update the card's turn
+  // item, so they are captured once and reused rather than read off a
+  // context that no longer exists.
+  readonly turnItemProviderThreadId: ProviderThreadId;
+  readonly turnItemProviderTurnId: OrchestrationV2ProviderTurn["id"];
   // The tool call that started the current run: the Agent launch, then each
   // SendMessage that resumes the subagent. A new one means a new prompt.
   readonly runToolUseId: string | null;
@@ -3941,6 +3948,8 @@ export function makeClaudeAdapterV2(
               resume.context,
               `task:${resume.taskId}:subagent`,
             ),
+            turnItemProviderThreadId: resume.context.input.providerThread.id,
+            turnItemProviderTurnId: resume.context.providerTurnId,
             runToolUseId: launchToolUseId,
             nextChildItemOrdinal: 100,
             resultItemOrdinal: null,
@@ -4097,6 +4106,19 @@ export function makeClaudeAdapterV2(
             childRootNodeId,
             turnItemId: existingSubagent?.turnItemId ?? derivedIds.turnItemId,
             turnItemOrdinal,
+            // A reopen reattributes to the resuming run's turn (see task.runId
+            // above); otherwise the card keeps the turn it was first created
+            // under so a later out-of-context progress tick can reuse it.
+            turnItemProviderThreadId:
+              existingSubagent === undefined ||
+              (input.reopen === true && input.status === "running")
+                ? input.context.input.providerThread.id
+                : existingSubagent.turnItemProviderThreadId,
+            turnItemProviderTurnId:
+              existingSubagent === undefined ||
+              (input.reopen === true && input.status === "running")
+                ? input.context.providerTurnId
+                : existingSubagent.turnItemProviderTurnId,
             runToolUseId:
               existingSubagent === undefined
                 ? (input.toolUseId ?? null)
@@ -4351,6 +4373,76 @@ export function makeClaudeAdapterV2(
               turnItem: resultArtifacts.turnItem,
             });
           }
+        });
+
+        // A backgrounded subagent (Agent with run_in_background) keeps
+        // streaming task_progress while the root turn is idle. Those frames
+        // carry only a point-in-time description, with nothing to usefully
+        // replay later, so unlike other frames they are not parked in the
+        // wake buffer: without this, the card shows whatever progress it had
+        // when the root settled for as long as the subagent keeps running.
+        // Hydrate the session registry that survives turn settle directly,
+        // reusing the turn attribution captured when the card was created.
+        const applyClaudeSubagentProgressWithoutActiveTurn = Effect.fnUntraced(function* (input: {
+          readonly message: Extract<SDKMessage, { readonly subtype: "task_progress" }>;
+        }) {
+          const progress = input.message.description.trim();
+          if (progress.length === 0) {
+            return;
+          }
+          const existingSubagent = (yield* Ref.get(sessionSubagentsByTaskId)).get(
+            input.message.task_id,
+          );
+          // A late/out-of-order frame for a subagent that already settled
+          // must not resurrect its card; the same rule updateClaudeSubagentNode
+          // applies to task_progress under an active turn.
+          if (existingSubagent === undefined || existingSubagent.task.status !== "running") {
+            return;
+          }
+          const now = yield* DateTime.now;
+          const task: OrchestrationV2Subagent = {
+            ...existingSubagent.task,
+            progress,
+            updatedAt: now,
+          };
+          const subagent: ActiveClaudeSubagent = { ...existingSubagent, task };
+          yield* Ref.update(sessionSubagentsByTaskId, (current) =>
+            new Map(current).set(input.message.task_id, subagent),
+          );
+          yield* emitProviderEvent({
+            type: "subagent.updated",
+            driver: CLAUDE_PROVIDER,
+            subagent: task,
+          });
+          yield* emitProviderEvent({
+            type: "turn_item.updated",
+            driver: CLAUDE_PROVIDER,
+            turnItem: {
+              id: subagent.turnItemId,
+              threadId: task.threadId,
+              runId: task.runId,
+              nodeId: task.id,
+              providerThreadId: subagent.turnItemProviderThreadId,
+              providerTurnId: subagent.turnItemProviderTurnId,
+              nativeItemRef: task.nativeTaskRef,
+              parentItemId: null,
+              ordinal: subagent.turnItemOrdinal,
+              status: task.status,
+              title: task.title,
+              startedAt: task.startedAt,
+              completedAt: task.completedAt,
+              updatedAt: task.updatedAt,
+              type: "subagent",
+              subagentId: task.id,
+              origin: task.origin,
+              driver: task.driver,
+              providerInstanceId: task.providerInstanceId,
+              childThreadId: task.childThreadId,
+              prompt: task.prompt,
+              progress: task.progress,
+              result: task.result,
+            },
+          });
         });
 
         const emitClaudePlanProjection = Effect.fnUntraced(function* (input: {
@@ -5503,6 +5595,13 @@ export function makeClaudeAdapterV2(
                 message,
                 activeContext: null,
               });
+            } else if (message.type === "system" && message.subtype === "task_progress") {
+              // A backgrounded subagent keeps streaming progress while the
+              // root is idle. task_progress is not wake evidence (it never
+              // proves the CLI re-engaged) and carries nothing worth
+              // replaying later, so it updates the card now instead of
+              // going through bufferWakeMessage.
+              yield* applyClaudeSubagentProgressWithoutActiveTurn({ message });
             } else {
               yield* applyBackgroundTaskRosterMessage({
                 nativeThreadId: liveQuery.nativeThreadId,
