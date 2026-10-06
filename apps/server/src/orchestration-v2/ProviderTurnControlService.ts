@@ -7,13 +7,13 @@ import {
   RunAttemptId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { providerTurnsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 
@@ -170,11 +170,9 @@ export const layer: Layer.Layer<
       });
 
     return ProviderTurnControlServiceV2.of({
-      interrupt: (input) => {
-        let driver: string | undefined;
-        return Effect.gen(function* () {
+      interrupt: (input) =>
+        Effect.gen(function* () {
           const loaded = yield* load({ ...input, operation: "interrupt" });
-          driver = loaded.providerThread.driver;
           const session = Option.isSome(loaded.session)
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
@@ -188,14 +186,27 @@ export const layer: Layer.Layer<
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
           });
+          // Give native terminal ingestion time to finish before the Stop
+          // follow-up repairs a run whose provider no longer reports on it.
+          // The wait is real time: ingestion runs on other fibers and never
+          // advances a test clock, so a test clock would hold Stop forever.
+          yield* Effect.gen(function* () {
+            const deadline = (yield* Clock.currentTimeMillis) + 2_000;
+            while (
+              loaded.providerTurn.status === "running" &&
+              (yield* Clock.currentTimeMillis) < deadline
+            ) {
+              const current = yield* projections.getProviderControlContext(input.threadId, input);
+              if (
+                current.providerTurn?.status !== "running" &&
+                current.attempt?.status !== "running"
+              ) {
+                return;
+              }
+              yield* Effect.sleep("10 millis");
+            }
+          }).pipe(Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()));
         }).pipe(
-          withMetrics({
-            counter: providerTurnsTotal,
-            attributes: () => ({
-              ...(driver === undefined ? {} : { provider: driver }),
-              operation: "interrupt",
-            }),
-          }),
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)
               ? cause
@@ -206,13 +217,10 @@ export const layer: Layer.Layer<
                   cause,
                 }),
           ),
-        );
-      },
-      interruptAndAwaitTerminal: (input) => {
-        let driver: string | undefined;
-        return Effect.gen(function* () {
+        ),
+      interruptAndAwaitTerminal: (input) =>
+        Effect.gen(function* () {
           const loaded = yield* load({ ...input, operation: "restart" });
-          driver = loaded.providerThread.driver;
           if (Option.isNone(loaded.session)) {
             // No live adapter: nothing can emit a terminal provider-turn update
             // from interrupt. Do not poll for projection terminalization or the
@@ -265,13 +273,6 @@ export const layer: Layer.Layer<
             cause: `Provider turn ${input.providerTurnId} did not terminalize before restart.`,
           });
         }).pipe(
-          withMetrics({
-            counter: providerTurnsTotal,
-            attributes: () => ({
-              ...(driver === undefined ? {} : { provider: driver }),
-              operation: "restart",
-            }),
-          }),
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)
               ? cause
@@ -282,11 +283,9 @@ export const layer: Layer.Layer<
                   cause,
                 }),
           ),
-        );
-      },
-      steer: (input) => {
-        let driver: string | undefined;
-        return Effect.gen(function* () {
+        ),
+      steer: (input) =>
+        Effect.gen(function* () {
           const context = yield* projections.getProviderControlContext(input.threadId, input);
           const ownership = context.message?.delegatedCompletion;
           if (ownership !== undefined) {
@@ -305,7 +304,6 @@ export const layer: Layer.Layer<
               return;
           }
           const loaded = yield* load({ ...input, operation: "steer" });
-          driver = loaded.providerThread.driver;
           if (Option.isNone(loaded.session)) return;
           const { message, run } = loaded.context;
           if (message === undefined || run === undefined) {
@@ -357,13 +355,6 @@ export const layer: Layer.Layer<
               ),
             );
         }).pipe(
-          withMetrics({
-            counter: providerTurnsTotal,
-            attributes: () => ({
-              ...(driver === undefined ? {} : { provider: driver }),
-              operation: "steer",
-            }),
-          }),
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)
               ? cause
@@ -374,8 +365,7 @@ export const layer: Layer.Layer<
                   cause,
                 }),
           ),
-        );
-      },
+        ),
     });
   }),
 );

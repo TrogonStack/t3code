@@ -21,13 +21,12 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as ProviderAuthFlow from "../provider/ProviderAuthFlow.ts";
-import type { ProviderAuthController } from "../provider/Services/ProviderAuthService.ts";
-import { makeProviderInstanceRegistry } from "../provider/Layers/ProviderInstanceRegistryLive.ts";
+import type { ProviderAuthController } from "../provider/ProviderAuthService.ts";
 import type { ProviderDriver, ProviderInstance } from "../provider/ProviderDriver.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { hasProviderSecretReference } from "../provider/ProviderSecretReference.ts";
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
-import * as ProviderSecretResolver from "../provider/Services/ProviderSecretResolver.ts";
+import * as ProviderSecretResolver from "../provider/ProviderSecretResolver.ts";
 import { ProviderAdapterOpenSessionError, type ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -78,7 +77,7 @@ const instances = [
   makeInstance(personalId, personalAdapter),
   makeInstance(workId, workAdapter),
 ] as const;
-const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
+const layerInstanceRegistry = Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, {
   getInstance: (instanceId) =>
     Effect.succeed(instances.find((instance) => instance.instanceId === instanceId)),
   listInstances: Effect.succeed(instances),
@@ -88,8 +87,8 @@ const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry.ProviderIns
   subscribeChanges: Effect.never,
   rebuildInstanceWhen: () => Effect.succeed(false),
 });
-const TestLayer = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
-  Layer.provide(instanceRegistryLayer),
+const layerTest = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
+  Layer.provide(layerInstanceRegistry),
 );
 
 it.effect("routes two configured instances of the same driver independently", () =>
@@ -99,7 +98,7 @@ it.effect("routes two configured instances of the same driver independently", ()
     assert.strictEqual(yield* registry.get(personalId), personalAdapter);
     assert.strictEqual(yield* registry.get(workId), workAdapter);
     assert.deepEqual(yield* registry.list(), [personalId, workId]);
-  }).pipe(Effect.provide(TestLayer)),
+  }).pipe(Effect.provide(layerTest)),
 );
 
 const lifecycleDriver = ProviderDriverKind.make("lifecycle-test");
@@ -412,26 +411,27 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
         Effect.exit,
       );
 
-    const { registry: instanceRegistry } = yield* makeProviderInstanceRegistry({
-      drivers: [secretDriver],
-      configMap: {
-        [secretInstanceId]: {
-          driver,
-          environment: decodeEnvironment([
-            onePasswordVariable("OPENAI_API_KEY", apiKeyReference),
-            onePasswordVariable("ANTHROPIC_API_KEY", "op://Vault/Locked/api-key"),
-            { name: "CODEX_PROFILE", value: "work", sensitive: false },
-          ]),
-          config: {},
+    const { registry: instanceRegistry } =
+      yield* ProviderInstanceRegistry.makeProviderInstanceRegistry({
+        drivers: [secretDriver],
+        configMap: {
+          [secretInstanceId]: {
+            driver,
+            environment: decodeEnvironment([
+              onePasswordVariable("OPENAI_API_KEY", apiKeyReference),
+              onePasswordVariable("ANTHROPIC_API_KEY", "op://Vault/Locked/api-key"),
+              { name: "CODEX_PROFILE", value: "work", sensitive: false },
+            ]),
+            config: {},
+          },
         },
-      },
-    }).pipe(
-      Effect.provideService(ProviderSecretResolver.ProviderSecretResolver, resolver),
-      Effect.provideService(HostProcessEnvironment, {
-        PATH: "/bin",
-        ANTHROPIC_API_KEY: "inherited-key",
-      }),
-    );
+      }).pipe(
+        Effect.provideService(ProviderSecretResolver.ProviderSecretResolver, resolver),
+        Effect.provideService(HostProcessEnvironment, {
+          PATH: "/bin",
+          ANTHROPIC_API_KEY: "inherited-key",
+        }),
+      );
     const registry = yield* Effect.service(ProviderAdapterRegistry.ProviderAdapterRegistryV2).pipe(
       Effect.provide(
         ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(

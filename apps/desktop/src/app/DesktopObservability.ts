@@ -3,9 +3,9 @@ import {
   makeLocalFileTracer,
   makeTraceSink,
   nodeProcessResourceAttributes,
-  otlpSerializationLayer,
   type SignalExport,
 } from "@t3tools/shared/observability";
+import * as SharedObservability from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import {
   parsePersistedServerObservabilitySettings,
@@ -27,7 +27,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Tracer from "effect/Tracer";
-import { OtlpExporter, OtlpLogger, OtlpTracer } from "effect/unstable/observability";
+import { OtlpExporter, OtlpLogger, OtlpTracer } from "effect/observability";
 
 import desktopPackageJson from "../../package.json" with { type: "json" };
 
@@ -230,7 +230,7 @@ const refreshFileSize = (
     Effect.orElseSucceed(() => 0),
   );
 
-const makeRotatingLogFileWriter = Effect.fn("makeRotatingLogFileWriter")(function* (input: {
+export const makeRotatingLogFileWriter = Effect.fn("makeRotatingLogFileWriter")(function* (input: {
   readonly filePath: string;
   readonly maxBytes?: number;
   readonly maxFiles?: number;
@@ -562,7 +562,7 @@ const makeBackendOutputLogShape = (
       }),
   });
 
-const backendOutputLogFactoryLayer = Layer.effect(
+const layerBackendOutputLogFactory = Layer.effect(
   DesktopBackendOutputLogFactory,
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -624,7 +624,7 @@ const backendOutputLogFactoryLayer = Layer.effect(
  * one read of the environment and Settings, and because a process gets exactly
  * one logger set.
  */
-const telemetryLayer = Layer.unwrap(
+const layerTelemetry = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const endpoints = yield* resolveOtlpEndpoints;
@@ -652,7 +652,7 @@ const telemetryLayer = Layer.unwrap(
     // while the OTLP logger carries every message as a log record stamped
     // with its trace and span ids. Keeping both would export every in-span
     // message twice.
-    const loggerLayer = Logger.layer(
+    const layerLogger = Logger.layer(
       endpoints.logs === undefined
         ? [Logger.consolePretty(), Logger.tracerLogger]
         : [
@@ -668,11 +668,13 @@ const telemetryLayer = Layer.unwrap(
     ).pipe(
       Layer.provide(OtlpExporter.layerFlusher),
       Layer.provide(
-        otlpSerializationLayer(endpoints.logs?.export.protocol ?? environment.otlpProtocol),
+        SharedObservability.layerOtlpSerialization(
+          endpoints.logs?.export.protocol ?? environment.otlpProtocol,
+        ),
       ),
     );
 
-    const tracerLayer = Layer.unwrap(
+    const layerTracer = Layer.unwrap(
       Effect.gen(function* () {
         const tracePath = environment.path.join(environment.logDir, "desktop.trace.ndjson");
         const sink = yield* makeTraceSink({
@@ -689,7 +691,11 @@ const telemetryLayer = Layer.unwrap(
                 exportInterval: `${endpoints.traces.export.exportIntervalMs} millis`,
                 headers: endpoints.traces.export.headers,
                 resource,
-              }).pipe(Effect.provide(otlpSerializationLayer(endpoints.traces.export.protocol)));
+              }).pipe(
+                Effect.provide(
+                  SharedObservability.layerOtlpSerialization(endpoints.traces.export.protocol),
+                ),
+              );
         const tracer = yield* makeLocalFileTracer({
           filePath: tracePath,
           maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,
@@ -717,23 +723,23 @@ const telemetryLayer = Layer.unwrap(
     //         exportInterval: `${endpoints.metrics.export.exportIntervalMs} millis`,
     //         headers: endpoints.metrics.export.headers,
     //         resource,
-    //       }).pipe(Layer.provide(otlpSerializationLayer(endpoints.metrics.export.protocol)));
+    //       }).pipe(Layer.provide(SharedObservability.layerOtlpSerialization(endpoints.metrics.export.protocol)));
 
     // Logged once the loggers above are installed, so the warnings use them.
-    const otelWarningsLayer = Layer.effectDiscard(
+    const layerOtelWarnings = Layer.effectDiscard(
       Effect.forEach(endpoints.warnings, (warning) => Effect.logWarning(warning)),
     );
 
-    return otelWarningsLayer.pipe(
-      Layer.provideMerge(Layer.mergeAll(loggerLayer, tracerLayer)),
+    return layerOtelWarnings.pipe(
+      Layer.provideMerge(Layer.mergeAll(layerLogger, layerTracer)),
       Layer.provide(OtelEnvironment.layerResourceAttributes(endpoints.resourceAttributes)),
     );
   }),
 );
 
 export const layer = Layer.mergeAll(
-  backendOutputLogFactoryLayer,
-  telemetryLayer,
+  layerBackendOutputLogFactory,
+  layerTelemetry,
   Layer.succeed(References.MinimumLogLevel, "Info"),
   Layer.succeed(Tracer.MinimumTraceLevel, "Info"),
   Layer.succeed(References.TracerTimingEnabled, true),

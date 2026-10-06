@@ -21,7 +21,7 @@
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/http";
 
 /**
  * Result of asking Anthropic about a token.
