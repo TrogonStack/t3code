@@ -35,6 +35,15 @@ vi.mock("../../hooks/useSettings", () => ({
   usePersistEnvironmentProviderInstanceMutation: settingsHooks.useMutation,
 }));
 
+vi.mock("../../state/query", () => ({
+  useEnvironmentQuery: () => ({
+    data: [],
+    error: null,
+    isPending: false,
+    refresh: vi.fn(),
+  }),
+}));
+
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
