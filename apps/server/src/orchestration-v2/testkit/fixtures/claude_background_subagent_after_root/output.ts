@@ -52,6 +52,20 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
   const subagent = projection.subagents[0];
   assert.equal(subagent?.status, "completed");
   assert.equal(subagent?.origin, "provider_native");
+  // The recording's two task_progress frames both land while the root is
+  // idle between its result and the wake that starts run 2 (the subagent's
+  // own foreground Bash steps are not background work and do not wake it
+  // early). The card must still pick up the latest one instead of staying
+  // frozen on whatever it showed when the root settled.
+  assert.equal(subagent?.progress, "Running Sleep 3 seconds then echo SUB_DONE_2");
+  const subagentTurnItem = projection.turnItems.find(
+    (item) => item.type === "subagent" && item.subagentId === subagent?.id,
+  );
+  assert.equal(
+    subagentTurnItem?.type === "subagent" ? subagentTurnItem.progress : undefined,
+    subagent?.progress,
+    "the turn item mobile reads progress from must match the subagent card",
+  );
   // Its completion drains into continuation run 2, but the subagent and its
   // node stay attributed to the run that launched it.
   assert.lengthOf(projection.runs, 2);
