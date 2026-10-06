@@ -352,20 +352,32 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("returns null when the workspace root no longer exists", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+
+        const resolved = yield* resolver.resolvePath(`${cwd}/missing`);
+
+        expect(resolved).toBeNull();
+      }),
+    );
+
     it.effect("preserves workspace normalization context", () =>
       Effect.gen(function* () {
         const resolver = yield* ProjectFaviconResolver.ProjectFaviconResolver;
         const cwd = yield* makeTempDir;
-        const missingCwd = `${cwd}/missing`;
+        yield* writeTextFile(cwd, "not-a-directory", "");
+        const fileCwd = `${cwd}/not-a-directory`;
 
-        const error = yield* resolver.resolvePath(missingCwd).pipe(Effect.flip);
+        const error = yield* resolver.resolvePath(fileCwd).pipe(Effect.flip);
 
         expect(error).toMatchObject({
           _tag: "ProjectFaviconResolutionError",
           operation: "normalize-workspace",
-          workspaceRoot: missingCwd,
+          workspaceRoot: fileCwd,
         });
-        expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspaceRootNotExistsError);
+        expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspaceRootNotDirectoryError);
       }),
     );
 

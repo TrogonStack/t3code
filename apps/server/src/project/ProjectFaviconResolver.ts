@@ -209,7 +209,12 @@ export const make = Effect.gen(function* () {
     cwd: string,
     faviconPath?: string,
   ): Effect.fn.Return<string | null, ProjectFaviconResolutionError> {
-    const projectCwd = yield* workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
+    // A project whose checkout was moved or deleted has no icon to show.
+    const normalizedCwd = yield* workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
+      Effect.asSome,
+      Effect.catchTags({
+        WorkspaceRootNotExistsError: () => Effect.succeed(Option.none<string>()),
+      }),
       Effect.mapError(
         (cause) =>
           new ProjectFaviconResolutionError({
@@ -219,6 +224,10 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    if (Option.isNone(normalizedCwd)) {
+      return null;
+    }
+    const projectCwd = normalizedCwd.value;
     // A grouped project's saved path can be absent from one checkout. Use it
     // where it exists and retain automatic discovery for the other checkouts.
     if (faviconPath !== undefined) {
