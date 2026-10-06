@@ -654,8 +654,14 @@ describe("terminatePosixOwnedProcessTree", () => {
 
   it.live("rotates more than 64 live parents without scanning retained tombstones", () =>
     Effect.gen(function* () {
+      // Pgids double as this fixture's "am I my own process group" guard
+      // input in terminatePosixOwnedProcessTree. A low pid range risks
+      // colliding with the real pid of the process running this test
+      // (small and sequential in a fresh CI container), which would make
+      // termination wrongly skip one of these synthetic parents as if it
+      // were the test runner's own group.
       const parents = Array.from({ length: 130 }, (_, index) =>
-        identity(1_000 + index, 100, 1_000 + index, 1_000 + index),
+        identity(900_000 + index, 100, 900_000 + index, 900_000 + index),
       );
       let childListReads = 0;
       let identityCalls = 0;
