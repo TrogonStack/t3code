@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- the op inject separator only needs a random token at this subprocess boundary
 /**
  * ProviderSecretResolverLive: 1Password-backed implementation of
  * `ProviderSecretResolver`.

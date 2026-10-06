@@ -1,5 +1,4 @@
-import * as NodeCrypto from "node:crypto";
-
+// @effect-diagnostics cryptoRandomUUID:off -- The process instance id is read synchronously while module-level tracing layers are built.
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -39,7 +38,7 @@ let serviceInstanceId: string | undefined;
  * process can be joined.
  */
 export const processServiceInstanceId = (): string =>
-  (serviceInstanceId ??= NodeCrypto.randomUUID());
+  (serviceInstanceId ??= globalThis.crypto.randomUUID());
 
 /**
  * `process.runtime.*` resource attributes for a Node process, matching the

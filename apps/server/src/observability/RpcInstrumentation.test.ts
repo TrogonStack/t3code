@@ -10,7 +10,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Tracer from "effect/Tracer";
 import * as TestClock from "effect/testing/TestClock";
-import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/unstable/rpc";
+import { Rpc, RpcClient, RpcGroup, RpcServer } from "effect/rpc";
 
 import {
   observeRpcEffect,

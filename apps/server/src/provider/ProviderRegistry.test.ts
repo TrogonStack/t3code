@@ -3088,9 +3088,7 @@ it.layer(
             Layer.provideMerge(ModelManifest.layerTest),
             Layer.provideMerge(ResetCreditCoordinator.layerTest),
             Layer.provideMerge(
-              OpenCodeRuntime.OpenCodeRuntimeLive.pipe(
-                Layer.provide(OpenCodeServerLedger.layerTest),
-              ),
+              OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
             ),
             Layer.provideMerge(NodeServices.layer),
             Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
