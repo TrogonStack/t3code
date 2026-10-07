@@ -252,17 +252,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-          !settings.provider.enabled
-            ? Effect.void
-            : resolveMaintenance().pipe(
-                Effect.flatMap((maintenanceCapabilities) =>
-                  enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-                    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                  }),
-                ),
-                Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-              ),
+          resolveMaintenance().pipe(
+            Effect.flatMap((maintenanceCapabilities) =>
+              enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+              }),
+            ),
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
+          ),
       }).pipe(
         Effect.mapError(
           (cause) =>
