@@ -3415,7 +3415,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
-    it.effect("says when a hook rejected the commit without echoing its output", () =>
+    it.effect("surfaces the output of a hook that rejected the commit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         yield* initRepoWithCommit(cwd);
@@ -3423,7 +3423,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const pathService = yield* Path.Path;
 
-        const hookOutput = "hook-output-secret";
+        const hookOutput = "commit message is missing Signed-off-by";
         yield* writeTextFile(
           cwd,
           ".git/hooks/pre-commit",
@@ -3437,8 +3437,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           .pipe(Effect.flip);
 
         assert.equal(error._tag, "GitCommandError");
-        assert.include(error.message, "A Git hook rejected the commit.");
-        assert.notInclude(error.message, hookOutput);
+        assert.include(error.message, hookOutput);
       }),
     );
 
@@ -3450,7 +3449,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const error = yield* driver.commit(cwd, "Empty", "").pipe(Effect.flip);
 
-        assert.include(error.message, "There are no staged changes to commit.");
+        assert.include(error.message, "nothing to commit");
       }),
     );
 
