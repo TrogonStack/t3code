@@ -491,6 +491,28 @@ function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
   return null;
 }
 
+// Names why `git commit` failed without echoing its stderr. Git prints its own
+// `fatal:` line for failures it owns; a rejecting hook exits with only the
+// hook's output, so a failure without one is the hook's.
+function describeCommitFailure({
+  stdout,
+  stderr,
+}: Pick<GitVcsDriver.ExecuteGitResult, "stdout" | "stderr">): string {
+  if (/nothing to commit|no changes added to commit/i.test(stdout)) {
+    return "There are no staged changes to commit.";
+  }
+  if (/Author identity unknown|unable to auto-detect email address/i.test(stderr)) {
+    return "Git does not know who you are. Set user.name and user.email, then try again.";
+  }
+  if (/failed to write commit object|failed to sign the data/i.test(stderr)) {
+    return "Git could not sign the commit. Check that your signing key or agent is available.";
+  }
+  if (!/^fatal:/m.test(stderr)) {
+    return "A Git hook rejected the commit. Run the commit in a terminal to see the hook's output.";
+  }
+  return "Git command exited with a non-zero status.";
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -2250,10 +2272,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+    const commitResult = yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+      allowNonZeroExit: true,
+    });
+    if (commitResult.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.commit.commit", cwd, args }),
+        detail: describeCommitFailure(commitResult),
+        ...(commitResult.exitCode === null ? {} : { exitCode: commitResult.exitCode }),
+        stdoutLength: commitResult.stdout.length,
+        stderrLength: commitResult.stderr.length,
+      });
+    }
     const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
