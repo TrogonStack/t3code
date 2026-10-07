@@ -11,8 +11,8 @@
   same "check that you have write access" guess.
 - Merge past the branch's own rules where GitHub lets you. Administrators of a
   repository get a "Squash past branch rules" entry in the pull request's
-  action menu, behind its own confirmation, which does what
-  `gh pr merge --admin` does.
+  action menu, behind its own confirmation, which merges directly and skips
+  any merge queue.
 - Take the override from where the refusal happened. When a merge is held back
   by the base branch's rules and the signed-in account may stand them down, the
   toast is replaced by a confirmation that leads with the host's own sentence
@@ -49,9 +49,11 @@ administrator can stand down from the ones nobody can, and only then ask.
 Both halves are good upstream candidates and are worth submitting together, as
 the second is hard to justify without the first.
 
-The reason vocabulary follows the shape upstream already uses: no tool output
+The reason vocabulary follows the shape upstream already uses: no host output
 crosses the process boundary, and each recognized reason gets a sentence
-written in the contract. The bypass is optional in the contract and reported
+written in the contract. Since upstream moved merges to GitHub's API, the
+reason comes from the merge state upstream already reads before merging, not
+from matching the host's error text. The bypass is optional in the contract and reported
 per provider, so GitLab, Bitbucket and Azure DevOps carry on saying nothing and
 offering nothing.
 
