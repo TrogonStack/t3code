@@ -3415,6 +3415,44 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("surfaces the output of a hook that rejected the commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+
+        const hookOutput = "commit message is missing Signed-off-by";
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/pre-commit",
+          `#!/bin/sh\necho "${hookOutput}" >&2\nexit 1\n`,
+        );
+        yield* fileSystem.chmod(pathService.join(cwd, ".git/hooks/pre-commit"), 0o755);
+        yield* writeTextFile(cwd, "a.txt", "a\n");
+
+        const error = yield* driver
+          .commit(cwd, "Add a", "", { stage: { filePaths: ["a.txt"] } })
+          .pipe(Effect.flip);
+
+        assert.equal(error._tag, "GitCommandError");
+        assert.include(error.message, hookOutput);
+      }),
+    );
+
+    it.effect("says when there is nothing to commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const error = yield* driver.commit(cwd, "Empty", "").pipe(Effect.flip);
+
+        assert.include(error.message, "nothing to commit");
+      }),
+    );
+
     it.effect.each([false, true])(
       "preserves partial staging and split-index files (split: %s)",
       (split) =>

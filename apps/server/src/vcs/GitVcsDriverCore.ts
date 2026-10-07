@@ -491,6 +491,18 @@ function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
   return null;
 }
 
+const COMMIT_FAILURE_OUTPUT_MAX_CHARS = 1_000;
+
+// `git commit` is local, so its output carries no remote URLs; it is surfaced
+// because a rejecting hook's own words are the only explanation of why.
+function commitFailureOutput({
+  stdout,
+  stderr,
+}: Pick<GitVcsDriver.ExecuteGitResult, "stdout" | "stderr">): string {
+  const output = (stderr.trim() || stdout.trim()).slice(-COMMIT_FAILURE_OUTPUT_MAX_CHARS);
+  return output.length > 0 ? output : "Git command exited with a non-zero status.";
+}
+
 function parseDefaultBranchFromRemoteHeadRef(value: string, remoteName: string): string | null {
   const trimmed = value.trim();
   const prefix = `refs/remotes/${remoteName}/`;
@@ -2250,10 +2262,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
-    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
+    const commitResult = yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
-    }).pipe(Effect.asVoid);
+      allowNonZeroExit: true,
+    });
+    if (commitResult.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.commit.commit", cwd, args }),
+        detail: commitFailureOutput(commitResult),
+        ...(commitResult.exitCode === null ? {} : { exitCode: commitResult.exitCode }),
+        stdoutLength: commitResult.stdout.length,
+        stderrLength: commitResult.stderr.length,
+      });
+    }
     const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
