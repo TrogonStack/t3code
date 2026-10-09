@@ -94,7 +94,7 @@ const makeClient = Effect.fnUntraced(function* <Rpcs extends Rpc.Any>(
 
 // The client's own `RpcClient.*` spans are the parents of the server's request spans.
 const appSpans = (ended: ReadonlyArray<Tracer.NativeSpan>) =>
-  ended.filter((span) => !span.name.startsWith("RpcClient."));
+  ended.filter((span) => span.attributes.get("rpc.system.name") !== "effect_rpc");
 
 const exitTag = (span: Tracer.NativeSpan | undefined) =>
   span?.status._tag === "Ended" ? span.status.exit._tag : undefined;
