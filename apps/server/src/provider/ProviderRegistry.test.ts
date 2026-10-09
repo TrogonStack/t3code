@@ -3175,7 +3175,11 @@ it.layer(
         // "none"` is the only thing separating it from an authenticated one.
         const status = yield* checkClaudeProviderStatus(
           defaultClaudeSettings,
-          claudeCapabilities({ tokenSource: "none", apiProvider: "firstParty" }),
+          claudeCapabilities({
+            tokenSource: "none",
+            apiKeySource: "none",
+            apiProvider: "firstParty",
+          }),
         );
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.auth.status, "unauthenticated");

@@ -179,8 +179,7 @@ function apiProviderAuthMetadata(
  * Silence is deliberately not disproof. Profile-authenticated installs report no
  * token source, and a CLI too old to send an account payload reports nothing at
  * all; treating either as logged out would sign working setups out of Settings.
- * `apiKeySource` is only ever set when a key was actually found, so it has no
- * "no key" sentinel to confuse with one.
+ * `apiKeySource: "none"` means no API key is in use, so it is no evidence either.
  */
 function claudeAuthStatus(
   capabilities: Pick<
@@ -194,7 +193,8 @@ function claudeAuthStatus(
   if (capabilities.tokenSource !== "none") return "authenticated";
   // An `ANTHROPIC_API_KEY` install reports no token source but is authenticated
   // all the same, so the key and account fields still get a say.
-  return capabilities.apiKeySource || capabilities.email || capabilities.subscriptionType
+  const hasApiKey = Boolean(capabilities.apiKeySource) && capabilities.apiKeySource !== "none";
+  return hasApiKey || capabilities.email || capabilities.subscriptionType
     ? "authenticated"
     : "unauthenticated";
 }
