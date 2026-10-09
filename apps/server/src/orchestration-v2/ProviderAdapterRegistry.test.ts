@@ -22,16 +22,19 @@ import * as Stream from "effect/Stream";
 
 import * as ProviderAuthFlow from "../provider/ProviderAuthFlow.ts";
 import type { ProviderAuthController } from "../provider/ProviderAuthService.ts";
-import type { ProviderDriver, ProviderInstance } from "../provider/ProviderDriver.ts";
-import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
+import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { hasProviderSecretReference } from "../provider/ProviderSecretReference.ts";
 import * as ProviderSecretResolver from "../provider/ProviderSecretResolver.ts";
-import { ProviderAdapterOpenSessionError, type ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import {
+  ProviderAdapterOpenSessionError,
+  type ProviderAdapterV2Shape,
+} from "@t3tools/provider-core/server/ProviderAdapter";
 import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
-} from "./ProviderAdapterDriver.ts";
+} from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 
 const driver = ProviderDriverKind.make("codex");

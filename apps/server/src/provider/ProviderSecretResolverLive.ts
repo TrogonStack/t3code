@@ -36,13 +36,13 @@ import * as NodeCrypto from "node:crypto";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
-import type { ResolvedProviderEnvironmentVariable } from "./ProviderInstanceEnvironment.ts";
+import type { ResolvedProviderEnvironmentVariable } from "@t3tools/provider-core/server/instanceEnvironment";
 import {
   providerSecretReference,
   type OnePasswordSecretReference,
   type ProviderSecretReference,
 } from "./ProviderSecretReference.ts";
-import { spawnAndCollect } from "./providerSnapshot.ts";
+import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   ProviderSecretResolver,
   type ProviderSecretResolverShape,
