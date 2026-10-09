@@ -48,7 +48,11 @@ const connectionMiddleware = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
   Layer.merge(RpcAuthorization.layer(scopes), rpcInstrumentationLayer);
 const readOnlyConnection = connectionMiddleware([AuthOrchestrationReadScope]);
 const taskId = ScheduledTaskId.make("scheduled-task:instrumented");
-const rpcSpanDefaults = { "rpc.transport": "websocket", "rpc.system": "effect-rpc" };
+const rpcSpanDefaults = {
+  "rpc.transport": "websocket",
+  "rpc.system": "effect-rpc",
+  "rpc.system.name": "effect_rpc",
+};
 
 /** Runs a test with a fresh metric registry and a tracer that keeps every span it ends. */
 const withTelemetry = <A, E, R>(
@@ -92,9 +96,9 @@ const makeClient = Effect.fnUntraced(function* <Rpcs extends Rpc.Any>(
   return client.client;
 });
 
-// The client's own `RpcClient.*` spans are the parents of the server's request spans.
+// The client's own spans are the parents of the server's request spans.
 const appSpans = (ended: ReadonlyArray<Tracer.NativeSpan>) =>
-  ended.filter((span) => span.attributes.get("rpc.system.name") !== "effect_rpc");
+  ended.filter((span) => span.kind !== "client");
 
 const exitTag = (span: Tracer.NativeSpan | undefined) =>
   span?.status._tag === "Ended" ? span.status.exit._tag : undefined;
@@ -342,7 +346,7 @@ describe("WS RPC instrumentation middleware", () => {
         yield* client[WS_METHODS.serverProbe]({}).pipe(Effect.withSpan("client.call"));
 
         const [rpcSpan] = rpcSpans(ended);
-        const clientSpan = ended.find((span) => span.name === "RpcClient.server.probe");
+        const clientSpan = ended.find((span) => span.kind === "client");
         const callSpan = ended.find((span) => span.name === "client.call");
         assert.equal(rpcSpan?.traceId, callSpan?.traceId);
         assert.equal(parentSpanId(rpcSpan), clientSpan?.spanId);

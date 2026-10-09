@@ -225,7 +225,7 @@ const planThreadReconciliation = Effect.fn(
   readonly continueAfterRestart: boolean;
   readonly commandId: CommandId;
   readonly now: DateTime.Utc;
-  readonly ids: IdAllocator.IdAllocatorV2Shape;
+  readonly ids: IdAllocator.IdAllocatorV2["Service"];
   readonly outbox: EffectOutbox.EffectOutboxV2Shape;
 }) {
   const { projection, trigger, continueAfterRestart, commandId, now, ids, outbox } = input;

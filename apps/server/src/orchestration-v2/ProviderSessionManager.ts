@@ -2019,7 +2019,7 @@ export const layerWithOptions = (
       // Reuse of a live session is not a start, so only fresh opens are counted.
       const recordSessionOpen =
         (input: Parameters<ProviderSessionManagerV2Shape["open"]>[0]) =>
-        <E, R>(effect: Effect.Effect<ProviderAdapterV2SessionRuntime, E, R>) =>
+        <E, R>(effect: Effect.Effect<ProviderAdapter.ProviderAdapterV2SessionRuntime, E, R>) =>
           Effect.gen(function* () {
             if ((yield* Ref.get(sessions)).has(sessionKey(input.providerSessionId))) {
               return yield* effect;

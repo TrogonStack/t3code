@@ -319,7 +319,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
     readonly hangSessionScopeClose?: boolean;
-    readonly startTurn?: Effect.Effect<void> | ProviderAdapterV2SessionRuntime["startTurn"];
+    readonly startTurn?:
+      | Effect.Effect<void>
+      | ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
     readonly beforeUnload?: Effect.Effect<void>;
     /** Registers the process's closeCount finalizer before `beforeOpen` runs. */
     readonly spawnBeforeOpen?: boolean;
@@ -469,7 +471,9 @@ function layerTest(input: {
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
-  readonly startTurn?: Effect.Effect<void> | ProviderAdapterV2SessionRuntime["startTurn"];
+  readonly startTurn?:
+    | Effect.Effect<void>
+    | ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
   readonly beforeUnload?: Effect.Effect<void>;
   readonly spawnBeforeOpen?: boolean;
   readonly scopeCloseReached?: Deferred.Deferred<void>;
