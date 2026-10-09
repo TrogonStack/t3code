@@ -21,7 +21,7 @@ import * as ProviderRegistry from "./ProviderRegistry.ts";
 import {
   literalProviderInstanceEnvironment,
   mergeProviderInstanceEnvironment,
-} from "./ProviderInstanceEnvironment.ts";
+} from "@t3tools/provider-core/server/instanceEnvironment";
 
 const ANTIGRAVITY = ProviderDriverKind.make("antigravity");
 const hasBinaryPath = Schema.is(Schema.Struct({ binaryPath: Schema.String }));
