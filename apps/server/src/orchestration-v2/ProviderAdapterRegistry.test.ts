@@ -20,7 +20,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
-import * as ProviderAuthFlow from "../provider/ProviderAuthFlow.ts";
+import * as ProviderAuthFlow from "@t3tools/provider-core/server/providerAuthFlow";
 import type { ProviderAuthController } from "../provider/ProviderAuthService.ts";
 import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -28,14 +28,11 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import { hasProviderSecretReference } from "../provider/ProviderSecretReference.ts";
 import * as ProviderSecretResolver from "../provider/ProviderSecretResolver.ts";
 import {
-  ProviderAdapterOpenSessionError,
-  type ProviderAdapterV2Shape,
-} from "@t3tools/provider-core/server/ProviderAdapter";
-import {
   ProviderAdapterDriverCreateError,
   type ProviderAdapterDriver,
 } from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
 const personalId = ProviderInstanceId.make("codex_personal");
@@ -48,18 +45,20 @@ const onePasswordVariable = (name: string, reference: string) => ({
   value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
 });
 
-const makeAdapter = (instanceId: ProviderInstanceId): ProviderAdapterV2Shape =>
+const makeAdapter = (
+  instanceId: ProviderInstanceId,
+): ProviderAdapter.ProviderAdapterV2["Service"] =>
   ({
     instanceId,
     driver,
     getCapabilities: () => Effect.die("capabilities are not used by this registry test"),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: () => Effect.die("sessions are not used by this registry test"),
-  }) as ProviderAdapterV2Shape;
+  }) as ProviderAdapter.ProviderAdapterV2["Service"];
 
 const makeInstance = (
   instanceId: ProviderInstanceId,
-  orchestrationAdapter: ProviderAdapterV2Shape,
+  orchestrationAdapter: ProviderAdapter.ProviderAdapterV2["Service"],
 ): ProviderInstance => ({
   instanceId,
   driverKind: driver,
@@ -115,7 +114,11 @@ const lifecycleConfigMap: ProviderInstanceConfigMap = {
 const lifecycleAdapter = makeAdapter(lifecycleInstanceId);
 
 const makeLifecycleDriver = (
-  create: Effect.Effect<ProviderAdapterV2Shape, ProviderAdapterDriverCreateError, Scope.Scope>,
+  create: Effect.Effect<
+    ProviderAdapter.ProviderAdapterV2["Service"],
+    ProviderAdapterDriverCreateError,
+    Scope.Scope
+  >,
 ): ProviderAdapterDriver<Record<string, never>> => ({
   driverKind: lifecycleDriver,
   configSchema: Schema.Struct({}),
@@ -277,7 +280,7 @@ it.effect(
           },
         })
         .pipe(Effect.flip);
-      assert.instanceOf(error, ProviderAdapterOpenSessionError);
+      assert.instanceOf(error, ProviderAdapter.ProviderAdapterOpenSessionError);
       assert.instanceOf(error.cause, ProviderSetupError);
     }),
 );
@@ -301,7 +304,7 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
       authenticate: () => Effect.void,
       logout: Effect.void,
     });
-    const adapter: ProviderAdapterV2Shape = {
+    const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
       ...workAdapter,
       openSession: () =>
         Effect.gen(function* () {

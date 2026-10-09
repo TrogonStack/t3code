@@ -33,7 +33,6 @@ Each entry uses these sections:
   active, [#19](https://github.com/TrogonStack/t3code/pull/19)
 - **0012** [The timeline scrolls only as far as its content](./0012-timeline-scrolls-only-as-far-as-its-content.md)
   active, [#21](https://github.com/TrogonStack/t3code/pull/21)
-- **0015** [A logged-out Claude install reads as logged out](./0015-a-logged-out-claude-install-reads-as-logged-out.md)
   active, [#26](https://github.com/TrogonStack/t3code/pull/26)
 - **0016** [Provider secrets can live in 1Password](./0016-provider-secrets-live-in-1password.md)
   active, [#27](https://github.com/TrogonStack/t3code/pull/27)

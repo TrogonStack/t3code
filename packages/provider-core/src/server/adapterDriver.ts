@@ -36,7 +36,7 @@ export interface ProviderAdapterDriver<Config, R = never> {
   readonly create: (
     input: ProviderAdapterDriverCreateInput<Config>,
   ) => Effect.Effect<
-    ProviderAdapter.ProviderAdapterV2Shape,
+    ProviderAdapter.ProviderAdapterV2["Service"],
     ProviderAdapterDriverCreateError,
     R | Scope.Scope
   >;

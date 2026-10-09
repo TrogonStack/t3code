@@ -21,8 +21,8 @@
 
 ## Why
 
-Settings answers one question: is this provider working. Entry 0015 taught it to
-notice an install that holds no credential at all, but a credential that exists
+Settings answers one question: is this provider working. Upstream already
+notices an install that holds no credential at all, but a credential that exists
 and no longer works looked identical to one that does, and that is the more
 common failure. Setup tokens expire on their own schedule and get revoked out
 from under you.
@@ -36,10 +36,10 @@ that makes the rest of the page worth reading.
 ## Upstream considerations
 
 Nothing here is fork-specific and it belongs upstream, but it is a weaker
-candidate than 0015 because it puts a direct Anthropic request in the provider
+candidate than the logged-out check upstream already took, because it puts a direct Anthropic request in the provider
 status path and relies on an authentication mode Anthropic has not published.
 Both are reasons upstream might decline, so expect to carry it.
 
 The rebase burden is small and well contained: the request lives in its own
-module, and the status check gains one branch after the decision entry 0015
-already introduced. A sync must not drop that branch.
+module, and the status check gains one branch after upstream's logged-out
+decision. A sync must not drop that branch.
