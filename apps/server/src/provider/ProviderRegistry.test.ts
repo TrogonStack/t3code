@@ -3296,6 +3296,7 @@ it.layer(
                 email: undefined,
                 subscriptionType: undefined,
                 tokenSource: undefined,
+                apiKeySource: undefined,
                 apiProvider: undefined,
                 slashCommands: [],
                 usage: { rate_limits_available: true, rate_limits: {} },
