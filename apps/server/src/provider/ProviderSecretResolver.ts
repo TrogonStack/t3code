@@ -17,7 +17,7 @@ import type { OnePasswordAccountSummary, ProviderInstanceEnvironment } from "@t3
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-import type { ResolvedProviderEnvironment } from "./ProviderInstanceEnvironment.ts";
+import type { ResolvedProviderEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type { ProviderSecretReference } from "./ProviderSecretReference.ts";
 
 /**
