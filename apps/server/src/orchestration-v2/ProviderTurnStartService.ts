@@ -383,6 +383,7 @@ export const layer: Layer.Layer<
         readonly signal: string;
         readonly title: string;
         readonly error: Error;
+        readonly message?: string;
       }) =>
         Effect.gen(function* () {
           const nestedCause = "cause" in failed.error ? failed.error.cause : undefined;
@@ -398,11 +399,12 @@ export const layer: Layer.Layer<
               failure: makeProviderFailure({
                 cause: failed.error,
                 message:
-                  nestedCause instanceof Error
+                  failed.message ??
+                  (nestedCause instanceof Error
                     ? nestedCause.message
                     : typeof nestedCause === "string"
                       ? nestedCause
-                      : failed.error.message,
+                      : failed.error.message),
                 class: "provider_error",
               }),
             },
@@ -524,6 +526,7 @@ export const layer: Layer.Layer<
                 signal: "worktree-recreate-failure",
                 title: "Couldn't recreate thread workspace",
                 error: recreateResult.failure,
+                message: recreateResult.failure.message,
               });
               return;
             }

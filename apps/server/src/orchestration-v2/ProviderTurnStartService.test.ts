@@ -420,7 +420,7 @@ function makeRecreateFailureHarness() {
   };
 }
 
-it("settles the run with git's own failure reason instead of the generic workspace-missing error", async () => {
+it("settles the run with the recreate failure, not raw git output or the generic workspace-missing error", async () => {
   const harness = makeRecreateFailureHarness();
 
   await Effect.gen(function* () {
@@ -432,10 +432,11 @@ it("settles the run with git's own failure reason instead of the generic workspa
     expect(harness.projectionReadCount()).toBe(1);
     expect(harness.createWorktree).toHaveBeenCalledOnce();
     expect(harness.writeIfRunCurrent).toHaveBeenCalledOnce();
-    expect(harness.writtenFailureMessage()).toContain(
-      "fatal: invalid reference: t3/deleted-feature",
+    expect(harness.writtenFailureMessage()).toBe(
+      "Could not recreate the worktree for branch 't3/deleted-feature' at /tmp/missing-provider-turn-start-worktree-recreate-failure.",
     );
     expect(harness.writtenFailureMessage()).not.toContain("Restore the folder");
+    expect(harness.writtenFailureMessage()).not.toContain("fatal:");
     expect(harness.startRootRun).not.toHaveBeenCalled();
   }).pipe(Effect.provide(harness.layer), Effect.runPromise);
 });

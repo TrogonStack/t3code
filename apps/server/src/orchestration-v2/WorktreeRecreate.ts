@@ -16,11 +16,7 @@ export class WorktreeRecreateError extends Schema.TaggedError<WorktreeRecreateEr
     if (this.reason === "no-base-ref") {
       return `Could not recreate branch '${this.branch}' at ${this.worktreePath}: the project workspace has no current branch to start it from (detached HEAD?).`;
     }
-    const cause = this.cause;
-    const detail = cause instanceof Error ? cause.message : undefined;
-    return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}${
-      detail === undefined ? "." : `: ${detail}`
-    }`;
+    return `Could not recreate the worktree for branch '${this.branch}' at ${this.worktreePath}.`;
   }
 }
 
