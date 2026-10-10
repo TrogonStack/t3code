@@ -54,11 +54,7 @@ export function selectProjectAxis(search: SettingsScopeSearch, value: string): S
   return next;
 }
 
-/**
- * Provider configuration always belongs to one environment. A project or
- * checkout only picks which one when no machine is chosen and never reaches
- * the result, so a stale project cannot leave the page without a target.
- */
+/** Provider configuration always belongs to one environment, including project scopes. */
 export function selectSingleEnvironmentScope(
   search: SettingsScopeSearch,
   scope: ResolvedSettingsScope,
@@ -68,14 +64,14 @@ export function selectSingleEnvironmentScope(
   }[],
   primaryEnvironmentId: string | null,
 ): SettingsScopeSearch {
-  if (search.machine) return { machine: search.machine };
-  const selectedIds = scope.kind === "unavailable" ? null : new Set(scope.environmentIds);
-  const candidates = selectedIds
-    ? environments.filter((environment) => selectedIds.has(environment.environmentId))
-    : environments;
+  if (search.machine || scope.kind === "unavailable") return search;
+  const selectedIds = new Set(scope.environmentIds);
+  const candidates = environments.filter((environment) =>
+    selectedIds.has(environment.environmentId),
+  );
   const selected =
     candidates.find((environment) => environment.environmentId === primaryEnvironmentId) ??
     candidates.find((environment) => environment.connection.phase === "connected") ??
     candidates[0];
-  return selected ? { machine: selected.environmentId } : {};
+  return selected ? { ...search, machine: selected.environmentId } : search;
 }
