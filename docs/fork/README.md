@@ -41,3 +41,5 @@ Each entry uses these sections:
   active, [#38](https://github.com/TrogonStack/t3code/pull/38)
 - **0026** [Telemetry says which app sent it](./0026-telemetry-says-which-app-sent-it.md)
   active, [#68](https://github.com/TrogonStack/t3code/pull/68)
+- **0029** [Provider settings say they apply to one machine](./0029-providers-settings-target-one-machine.md)
+  submitted, [#94](https://github.com/TrogonStack/t3code/pull/94)
