@@ -43,3 +43,5 @@ Each entry uses these sections:
   active, [#68](https://github.com/TrogonStack/t3code/pull/68)
 - **0028** [A thread whose worktree was deleted recovers on the next message](./0028-a-thread-with-a-deleted-worktree-recovers.md)
   active, [#89](https://github.com/TrogonStack/t3code/pull/89)
+- **0029** [Provider settings say they apply to one machine](./0029-providers-settings-target-one-machine.md)
+  submitted, [#94](https://github.com/TrogonStack/t3code/pull/94)
