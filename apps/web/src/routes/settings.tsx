@@ -1,5 +1,5 @@
 import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
@@ -155,14 +155,10 @@ function SettingsRouteLayout() {
   const navigate = Route.useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const environmentOnly = SETTINGS_ENVIRONMENT_ONLY_PATHS.has(pathname);
-  const search = useMemo(
-    () => (environmentOnly ? (rawSearch.machine ? { machine: rawSearch.machine } : {}) : rawSearch),
-    [environmentOnly, rawSearch],
-  );
   return (
     <SettingsScopeProvider
-      search={search}
-      singleEnvironment={pathname === "/settings/providers"}
+      search={rawSearch}
+      singleEnvironment={environmentOnly}
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target
         // even when the choice is "all", which is the absence of a key.
