@@ -9,7 +9,7 @@ import {
   ProviderSetupError,
   type ProviderInstanceConfigMap,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -382,9 +382,9 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
       defaultConfig: () => ({}),
       create: (input) =>
         Effect.gen(function* () {
-          const environment = mergeProviderInstanceEnvironment(
+          const environment = yield* mergeProviderInstanceEnvironment(
             input.environment,
-            yield* HostProcessEnvironment,
+            yield* HostProcess.Environment,
           );
           return {
             ...makeInstance(input.instanceId, {
@@ -433,7 +433,7 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
         },
       }).pipe(
         Effect.provideService(ProviderSecretResolver.ProviderSecretResolver, resolver),
-        Effect.provideService(HostProcessEnvironment, {
+        Effect.provideService(HostProcess.Environment, {
           PATH: "/bin",
           ANTHROPIC_API_KEY: "inherited-key",
         }),

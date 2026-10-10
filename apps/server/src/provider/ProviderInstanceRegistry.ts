@@ -57,7 +57,7 @@ import {
   type ProviderDriverKind,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -354,7 +354,7 @@ const buildEntry = <R>(input: {
       .pipe(
         Effect.provideService(Scope.Scope, childScope),
         Effect.provideService(
-          HostProcessEnvironment,
+          HostProcess.Environment,
           hostEnvironmentWithout(hostEnvironment, resolvedEnvironment.unresolved),
         ),
         Effect.result,
@@ -543,7 +543,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // consumers — we materialize that here.
     const driverContext = yield* Effect.context<R>();
     const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
-    const hostEnvironment = yield* HostProcessEnvironment;
+    const hostEnvironment = yield* HostProcess.Environment;
 
     const entries = yield* Ref.make<ReadonlyMap<ProviderInstanceId, LiveEntry>>(new Map());
     const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());

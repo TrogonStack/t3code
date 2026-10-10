@@ -1,5 +1,4 @@
 import { ProviderDriverKind, TextGenerationError, type CodexSettings } from "@t3tools/contracts";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Option from "effect/Option";
@@ -37,7 +36,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     instanceId,
     enabled,
     config,
-    environment: mergeProviderInstanceEnvironment(input.environment, yield* HostProcessEnvironment),
+    environment: yield* mergeProviderInstanceEnvironment(input.environment),
   });
   const continuationIdentity = codexContinuationIdentity(runtime.homeLayout);
   const stamp = withInstanceIdentity({
