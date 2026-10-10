@@ -36,6 +36,11 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/connections",
 ]);
 
+/** Pages saved per environment that ignore the project, so only the environment is a target. */
+export const SETTINGS_ENVIRONMENT_ONLY_PATHS: ReadonlySet<string> = new Set([
+  "/settings/providers",
+]);
+
 interface SettingsScopeMenuProps {
   readonly value: SettingsScopeSearch;
   readonly groups: readonly SidebarProjectSnapshot[];
@@ -62,6 +67,14 @@ export function SettingsScopeSentence() {
     environments,
     onChange: scope.selectScope,
   };
+  if (SETTINGS_ENVIRONMENT_ONLY_PATHS.has(pathname)) {
+    return (
+      <p className="flex min-w-0 items-center gap-1.5 px-3 text-base text-muted-foreground sm:px-4">
+        <span className="shrink-0">Applying settings on</span>
+        <EnvironmentScopeMenu {...props} />
+      </p>
+    );
+  }
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-base text-muted-foreground sm:px-4">
       {/* Each connective stays with its picker so a wrap never strands "on". */}
