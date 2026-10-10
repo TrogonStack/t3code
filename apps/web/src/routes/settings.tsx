@@ -1,5 +1,5 @@
 import { Outlet, createFileRoute, redirect, useLocation } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { RotateCcwIcon } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useSettingsRestore } from "../components/settings/SettingsPanels";
@@ -16,7 +16,10 @@ import {
 } from "../components/settings/SettingsScopeContext";
 import { useEnvironments } from "../state/environments";
 import { SettingsScopeNotice } from "../components/settings/SettingsScopeNotice";
-import { SETTINGS_DEVICE_ONLY_PATHS } from "../components/settings/SettingsScopeSentence";
+import {
+  SETTINGS_DEVICE_ONLY_PATHS,
+  SETTINGS_ENVIRONMENT_ONLY_PATHS,
+} from "../components/settings/SettingsScopeSentence";
 import { SettingsPageContainer } from "../components/settings/settingsLayout";
 import {
   retainSettingsScope,
@@ -151,9 +154,14 @@ function SettingsRouteLayout() {
   const rawSearch = Route.useSearch();
   const navigate = Route.useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
+  const environmentOnly = SETTINGS_ENVIRONMENT_ONLY_PATHS.has(pathname);
+  const search = useMemo(
+    () => (environmentOnly ? (rawSearch.machine ? { machine: rawSearch.machine } : {}) : rawSearch),
+    [environmentOnly, rawSearch],
+  );
   return (
     <SettingsScopeProvider
-      search={rawSearch}
+      search={search}
       singleEnvironment={pathname === "/settings/providers"}
       onChange={(next) => {
         // Send every axis so the retain middleware sees an explicit target

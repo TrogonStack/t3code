@@ -6,8 +6,7 @@ import { useSettingsScope } from "../components/settings/SettingsScopeContext";
 
 /**
  * Providers are machine state, so the page shows one environment at a time:
- * the chosen one from the settings scope selector.
- * A project crumb narrows candidates to where that project is registered.
+ * the chosen one from the settings scope selector. The project is ignored.
  */
 function SettingsProvidersRoute() {
   const target = Route.useSearch();

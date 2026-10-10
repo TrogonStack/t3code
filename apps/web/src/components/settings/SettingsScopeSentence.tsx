@@ -71,10 +71,7 @@ export function SettingsScopeSentence() {
     return (
       <p className="flex min-w-0 items-center gap-1.5 px-3 text-base text-muted-foreground sm:px-4">
         <span className="shrink-0">Applying settings on</span>
-        <EnvironmentScopeMenu
-          {...props}
-          onChange={(next) => scope.selectScope(next.machine ? { machine: next.machine } : {})}
-        />
+        <EnvironmentScopeMenu {...props} />
       </p>
     );
   }
