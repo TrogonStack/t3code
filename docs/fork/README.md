@@ -33,7 +33,6 @@ Each entry uses these sections:
   active, [#19](https://github.com/TrogonStack/t3code/pull/19)
 - **0012** [The timeline scrolls only as far as its content](./0012-timeline-scrolls-only-as-far-as-its-content.md)
   active, [#21](https://github.com/TrogonStack/t3code/pull/21)
-  active, [#26](https://github.com/TrogonStack/t3code/pull/26)
 - **0016** [Provider secrets can live in 1Password](./0016-provider-secrets-live-in-1password.md)
   active, [#27](https://github.com/TrogonStack/t3code/pull/27)
 - **0017** [A revoked Claude token reads as revoked](./0017-a-revoked-claude-token-reads-as-revoked.md)
