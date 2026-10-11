@@ -6,6 +6,7 @@ import type {
   SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { resolveSettingsScope, validateSettingsScopeSearch } from "./settingsScope";
+import { selectSingleEnvironmentScope } from "./settingsScopeAxis";
 
 const laptopId = EnvironmentId.make("laptop");
 const serverId = EnvironmentId.make("server");
@@ -201,5 +202,35 @@ describe("settings scope resolution", () => {
       members: [],
       environmentIds: [],
     });
+  });
+});
+
+describe("single-environment scope", () => {
+  const connected = environments.map((environment) => ({
+    ...environment,
+    connection: { phase: "connected" as const },
+  }));
+  const select = (search: Parameters<typeof resolveSettingsScope>[0]) =>
+    selectSingleEnvironmentScope(
+      search,
+      resolveSettingsScope(search, groups, environments),
+      connected,
+      laptopId,
+    );
+
+  it("targets the checkout's environment for a link without a machine", () => {
+    expect(select({ project: "t3code", checkout: third.physicalProjectKey })).toEqual({
+      project: "t3code",
+      checkout: third.physicalProjectKey,
+      machine: serverId,
+    });
+  });
+
+  it("narrows to where the project is registered and keeps the project in scope", () => {
+    expect(select({ project: "other" })).toEqual({ project: "other", machine: serverId });
+  });
+
+  it("falls back to the primary environment when the project is gone", () => {
+    expect(select({ project: "missing" })).toEqual({ machine: laptopId });
   });
 });
