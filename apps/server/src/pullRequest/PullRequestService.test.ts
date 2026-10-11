@@ -3058,11 +3058,11 @@ it.effect("carries the host's refusal out to the client, not just its sentence",
         project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
       ],
       providers: [
-        fakeProvider("github", {
+        fakeProvider(SourceControlProviderKind.make("github"), {
           runAction: () =>
             Effect.fail(
               new PullRequestProviderError({
-                provider: "github",
+                provider: SourceControlProviderKind.make("github"),
                 operation: "runAction",
                 reason: "failed",
                 refusal: "merge-blocked",
@@ -3127,7 +3127,7 @@ it.effect("only lets a merge past the branch's rules when host and account both 
           }),
         ],
         providers: [
-          fakeProvider("github", {
+          fakeProvider(SourceControlProviderKind.make("github"), {
             runAction: (input) => {
               bypasses.push(input.bypassRules);
               return Effect.void;

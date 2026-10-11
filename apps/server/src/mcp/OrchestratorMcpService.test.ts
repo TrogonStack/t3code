@@ -1295,6 +1295,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       let delegated = false;
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           hasReceipt: () => Effect.succeed(false),
           isProviderInstanceEnabledForProject: ({ instanceId }) =>
@@ -1431,6 +1432,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     Effect.gen(function* () {
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           hasReceipt: () => Effect.succeed(false),
           getThreadRecords: () => Effect.succeed(parentProjection([])),
@@ -1478,6 +1480,7 @@ describe("OrchestratorMcpService provider resolution", () => {
     Effect.gen(function* () {
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           hasReceipt: () => Effect.succeed(false),
           getThreadRecords: () => Effect.succeed(parentProjection([])),
@@ -1546,6 +1549,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       let delegated = false;
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           hasReceipt: () => Effect.succeed(false),
           getThreadRecords: (threadId) =>
@@ -1653,6 +1657,7 @@ describe("OrchestratorMcpService provider resolution", () => {
         };
         const layerDependencies = Layer.mergeAll(
           NodeServices.layer,
+          ServerSettings.layerTest(),
           Layer.mock(ThreadManagementService.ThreadManagementService)({
             getThreadRecords: (threadId) =>
               Ref.get(accepted).pipe(
@@ -1757,6 +1762,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       const everyCandidateDisabled = yield* Ref.make(false);
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getThreadRecords: (threadId) =>
             Effect.succeed(threadId === parentThreadId ? parentProjection([]) : childProjection),
