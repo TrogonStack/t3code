@@ -1,6 +1,6 @@
 # 0031: Harness telemetry says T3 Code launched it
 
-- PR: [TrogonStack/t3code#PR](https://github.com/TrogonStack/t3code/pull/PR)
+- PR: [TrogonStack/t3code#97](https://github.com/TrogonStack/t3code/pull/97)
 - Status: submitted
 
 ## What you can do now
