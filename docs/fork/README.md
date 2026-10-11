@@ -43,7 +43,5 @@ Each entry uses these sections:
   active, [#68](https://github.com/TrogonStack/t3code/pull/68)
 - **0028** [A thread whose worktree was deleted recovers on the next message](./0028-a-thread-with-a-deleted-worktree-recovers.md)
   active, [#89](https://github.com/TrogonStack/t3code/pull/89)
-- **0030** [Providers can be turned on or off per project](./0030-providers-turn-on-or-off-per-project.md)
-  submitted, [#96](https://github.com/TrogonStack/t3code/pull/96)
 - **0031** [Harness telemetry says T3 Code launched it](./0031-harness-telemetry-says-t3code-launched-it.md)
   submitted, [#97](https://github.com/TrogonStack/t3code/pull/97)
