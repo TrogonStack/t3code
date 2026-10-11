@@ -1145,21 +1145,26 @@ const make = Effect.gen(function* () {
       let instanceId = requestedInstanceId;
 
       if (instanceId === undefined && requestedDriver !== undefined) {
-        const candidates = yield* Effect.filter(
-          input.providers.filter(
-            (provider) =>
-              provider.driver === requestedDriver &&
-              orchestrationCapableInstanceIds.has(provider.instanceId),
-          ),
+        const registered = input.providers.filter(
           (provider) =>
-            assertEnabledForProject(provider.instanceId).pipe(
-              Effect.match({ onFailure: () => false, onSuccess: () => true }),
-            ),
+            provider.driver === requestedDriver &&
+            orchestrationCapableInstanceIds.has(provider.instanceId),
         );
-        if (candidates.length === 0) {
+        if (registered.length === 0) {
           return yield* failure(
             "provider_unavailable",
             `No V2 provider adapter is registered for driver ${requestedDriver}.`,
+          );
+        }
+        const candidates = yield* Effect.filter(registered, (provider) =>
+          assertEnabledForProject(provider.instanceId).pipe(
+            Effect.match({ onFailure: () => false, onSuccess: () => true }),
+          ),
+        );
+        if (candidates.length === 0) {
+          return yield* failure(
+            "invalid_request",
+            `Every ${requestedDriver} instance is turned off for this project.`,
           );
         }
         // Inherit the parent's instance only when it can actually serve the
