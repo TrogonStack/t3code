@@ -345,7 +345,11 @@ const make = Effect.gen(function* () {
               ? settings.textGenerationModelSelection
               : ServerSettings.resolveSourceControlWriterModelSelection(
                   settings,
-                  yield* providerRegistry.getProviders,
+                  ServerSettings.filterProvidersForProject(
+                    settings,
+                    yield* providerRegistry.getProviders,
+                    input.projectId,
+                  ),
                 );
           return yield* textGeneration
             .generateBranchName({
