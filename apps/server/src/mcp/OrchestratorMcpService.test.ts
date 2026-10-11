@@ -1692,6 +1692,78 @@ describe("OrchestratorMcpService provider resolution", () => {
       }),
   );
 
+  it.effect("a retried thread creation replays after the project turns its provider off", () =>
+    Effect.gen(function* () {
+      const altInstanceId = ProviderInstanceId.make("codex-alt");
+      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const accepted = yield* Ref.make(false);
+      const everyCandidateDisabled = yield* Ref.make(false);
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadRecords: (threadId) =>
+            Effect.succeed(threadId === parentThreadId ? parentProjection([]) : childProjection),
+          // A command id already accepted once, even if the project later
+          // disables every candidate: its retry must replay, not re-resolve.
+          hasReceipt: () => Ref.get(accepted),
+          isProviderInstanceEnabledForProject: () =>
+            Ref.get(everyCandidateDisabled).pipe(Effect.map((disabled) => !disabled)),
+          assertProviderInstanceEnabled: () => Effect.void,
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.andThen(
+                command.type === "thread.create" ? Ref.set(accepted, true) : Effect.void,
+              ),
+              Effect.as({ sequence: 1, storedEvents: [] } as never),
+            ),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+          providerSnapshot({
+            instanceId: altInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+        ]),
+        adapterRegistryLayer([codexInstanceId, altInstanceId]),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const first = yield* service.createThreads(scope, {
+          threads: [{ target: { driverKind: ProviderDriverKind.make("codex") } }],
+          clientRequestId: "create-thread-retry-after-disable-1",
+        });
+        assert.equal(first.threads.length, 1);
+
+        // The project turns off every instance of this driver only after
+        // the thread creation above was already accepted.
+        yield* Ref.set(everyCandidateDisabled, true);
+
+        const retry = yield* service.createThreads(scope, {
+          threads: [{ target: { driverKind: ProviderDriverKind.make("codex") } }],
+          clientRequestId: "create-thread-retry-after-disable-1",
+        });
+        assert.equal(retry.threads.length, 1);
+
+        const commands = yield* Ref.get(dispatched);
+        const createCommands = commands.filter(
+          (command): command is { type: string; modelSelection: { instanceId: string } } =>
+            (command as { type: string }).type === "thread.create",
+        );
+        assert.equal(createCommands.length, 2);
+        assert.equal(createCommands[1]?.modelSelection.instanceId, codexInstanceId);
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(layerDependencies))));
+    }),
+  );
+
   it.effect("re-probes an unavailable target once before refusing it", () =>
     Effect.gen(function* () {
       const claudeInstanceId = ProviderInstanceId.make("claudeAgent");
