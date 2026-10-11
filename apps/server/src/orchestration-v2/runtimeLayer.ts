@@ -245,6 +245,7 @@ const layerThreadManagementProvided = ThreadManagementService.layerWithLegacyImp
       layerOrchestratorProvided,
       layerLegacyV1ThreadImporterProvided,
       layerCommandReceiptStoreProvided,
+      layerProviderSessionManagerProvided,
     ),
   ),
 );
