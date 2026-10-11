@@ -791,7 +791,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         assert.deepEqual(next.sourceControlWriterModelSelection, sourceControlWriterModelSelection);
         assert.deepEqual(
-          ServerSettingsModule.resolveSourceControlWriterModelSelection(next),
+          ServerSettingsModule.resolveSourceControlWriterModelSelection(next, undefined, null),
           next.textGenerationModelSelection,
         );
         assert.deepEqual(
@@ -815,7 +815,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
         });
         assert.deepEqual(
-          ServerSettingsModule.resolveSourceControlWriterModelSelection(restored),
+          ServerSettingsModule.resolveSourceControlWriterModelSelection(restored, undefined, null),
           sourceControlWriterModelSelection,
         );
       }).pipe(Effect.provide(layerServerSettings())),
