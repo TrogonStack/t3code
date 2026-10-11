@@ -269,7 +269,6 @@ const layerReceiptsTest = CommandReceiptStore.layer.pipe(
 
 const layerThreadManagementTest = (settingsLayer: ReturnType<typeof ServerSettings.layerTest>) =>
   ThreadManagementService.layer.pipe(
-    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
     Layer.provide(Layer.mock(Orchestrator.OrchestratorV2)({})),
     Layer.provide(settingsLayer),
     Layer.provide(layerReceiptsTest),
