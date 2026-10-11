@@ -117,7 +117,7 @@ import {
 } from "./settingsLayout";
 import {
   buildProviderEnvironmentOptions,
-  buildProviderInstanceEnablementOverridePatch,
+  buildProviderInstanceOverridePatch,
   classifyProviderEnvironmentAccess,
   isProviderSettingsEnvironmentAvailable,
   type ProviderEnvironmentAccess,
@@ -973,9 +973,9 @@ export function EnvironmentProviderSettings({
     );
     const resetLabel = driverOption?.label ?? String(row.driver);
     const representativeProjectId = projectIds[0];
-    const writeProjectEnablement = (next: boolean | undefined) => {
+    const writeProjectOverride = (next: boolean | undefined) => {
       updateSettings({
-        projectSettingsOverrides: buildProviderInstanceEnablementOverridePatch(
+        projectSettingsOverrides: buildProviderInstanceOverridePatch(
           settings,
           projectIds,
           row.instanceId,
@@ -983,20 +983,21 @@ export function EnvironmentProviderSettings({
         ),
       });
     };
-    const projectEnablement =
+    const projectOverride =
       representativeProjectId === undefined
         ? undefined
         : {
             value:
-              settings.projectSettingsOverrides[representativeProjectId]
-                ?.providerInstanceEnablement?.[row.instanceId],
+              settings.projectSettingsOverrides[representativeProjectId]?.providerInstances?.[
+                row.instanceId
+              ]?.enabled,
             effectiveEnabled: resolveProjectProviderInstanceEnabled(
               settings,
               representativeProjectId,
               row.instanceId,
             ),
-            onChange: (next: boolean) => writeProjectEnablement(next),
-            onReset: () => writeProjectEnablement(undefined),
+            onChange: (next: boolean) => writeProjectOverride(next),
+            onReset: () => writeProjectOverride(undefined),
           };
 
     return (
@@ -1004,7 +1005,7 @@ export function EnvironmentProviderSettings({
         key={row.instanceId}
         environmentId={environmentId}
         acpProjects={projects}
-        projectEnablement={projectEnablement}
+        projectOverride={projectOverride}
         onAcceptUrlAuth={
           readOnly ? undefined : (action) => acceptUrlAuthentication(row.instanceId, action)
         }

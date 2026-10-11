@@ -523,7 +523,7 @@ describe("serverSettings helpers", () => {
         [instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: true, config: {} },
       },
       projectSettingsOverrides: {
-        [projectId]: { providerInstanceEnablement: { [instanceId]: false } },
+        [projectId]: { providerInstances: { [instanceId]: { enabled: false } } },
       },
       sourceControlWriterModelSelection,
     };
@@ -560,7 +560,7 @@ describe("serverSettings helpers", () => {
         [instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: false, config: {} },
       },
       projectSettingsOverrides: {
-        [projectId]: { providerInstanceEnablement: { [instanceId]: true } },
+        [projectId]: { providerInstances: { [instanceId]: { enabled: true } } },
       },
       sourceControlWriterModelSelection,
     };
