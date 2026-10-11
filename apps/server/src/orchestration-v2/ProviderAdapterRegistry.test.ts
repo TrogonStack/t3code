@@ -462,6 +462,7 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
       PATH: "/bin",
       OPENAI_API_KEY: "sk-first",
       CODEX_PROFILE: "work",
+      OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
     });
     assert.strictEqual(rotated?.OPENAI_API_KEY, "sk-rotated");
   }).pipe(Effect.scoped),
