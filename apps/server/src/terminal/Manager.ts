@@ -66,7 +66,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ServerConfig from "../config.ts";
 import {
   literalProviderInstanceEnvironment,
-  mergeProviderInstanceEnvironment,
+  overlayProviderInstanceEnvironment,
 } from "@t3tools/provider-core/server/instanceEnvironment";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
@@ -1413,7 +1413,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
   }
 
-  let resolved = yield* mergeProviderInstanceEnvironment(
+  let resolved = yield* overlayProviderInstanceEnvironment(
     literalProviderInstanceEnvironment(instance.environment),
     input.env ?? {},
   );

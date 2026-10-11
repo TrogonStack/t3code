@@ -45,3 +45,5 @@ Each entry uses these sections:
   active, [#89](https://github.com/TrogonStack/t3code/pull/89)
 - **0029** [Provider settings say they apply to one machine](./0029-providers-settings-target-one-machine.md)
   submitted, [#94](https://github.com/TrogonStack/t3code/pull/94)
+- **0031** [Harness telemetry says T3 Code launched it](./0031-harness-telemetry-says-t3code-launched-it.md)
+  submitted, [#PR](https://github.com/TrogonStack/t3code/pull/PR)
