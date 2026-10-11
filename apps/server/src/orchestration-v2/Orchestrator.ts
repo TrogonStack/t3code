@@ -53,6 +53,7 @@ import {
   orchestrationV2RunWorkStartedAt,
   ProviderInstanceId,
   ProviderInteractionMode,
+  resolveProjectProviderInstanceEnabled,
   type ProviderSessionId,
   RunId,
   RuntimeMode,
@@ -146,6 +147,7 @@ import {
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ServerSettings from "../serverSettings.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -856,6 +858,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
   const threadDispatch = yield* ThreadCommandExecutor.ThreadCommandExecutor;
@@ -1333,10 +1336,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         failedRun?.id === options?.failedRunId
           ? latestRootProviderFailure(failedRun, projection.turnItems)?.class
           : undefined;
+      // A project can turn a provider off while a message waits in the queue,
+      // including between a run ending and this check, or while the queue is
+      // held and someone clicks resume. Neither path may start that run.
+      const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
+      const instanceDisabledForProject = !resolveProjectProviderInstanceEnabled(
+        settings,
+        projection.thread.projectId,
+        queuedRun.providerInstanceId,
+      );
       if (
-        failureClass !== undefined &&
-        failureClass !== "validation_error" &&
-        failedRun?.providerInstanceId === queuedRun.providerInstanceId
+        instanceDisabledForProject ||
+        (failureClass !== undefined &&
+          failureClass !== "validation_error" &&
+          failedRun?.providerInstanceId === queuedRun.providerInstanceId)
       ) {
         const now = yield* DateTime.now;
         yield* writeSystemEvents(
@@ -11416,6 +11429,7 @@ export const layer: Layer.Layer<
   | ProviderSwitchServiceV2
   | ProjectionStoreV2
   | RuntimePolicyV2
+  | ServerSettings.ServerSettingsService
   | ThreadForkServiceV2
 > = Layer.effect(OrchestratorV2, makeOrchestrator()).pipe(
   Layer.provide(ThreadCommandExecutor.layer),
