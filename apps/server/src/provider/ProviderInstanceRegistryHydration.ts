@@ -27,6 +27,7 @@
  */
 import {
   defaultInstanceIdForDriver,
+  providerInstanceConfigEnabledFlag,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
@@ -92,7 +93,13 @@ export const deriveProviderInstanceConfigMap = (
       const instanceId = rawInstanceId as ProviderInstanceId;
       const existing = merged[instanceId];
       if (existing === undefined || resolveProviderInstanceEnabled(existing)) continue;
-      merged[instanceId] = { ...existing, enabled: true };
+      merged[instanceId] = {
+        ...existing,
+        enabled: true,
+        ...(providerInstanceConfigEnabledFlag(existing.config) === false
+          ? { config: { ...(existing.config as Record<string, unknown>), enabled: true } }
+          : {}),
+      };
     }
   }
 
