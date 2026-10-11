@@ -13,7 +13,7 @@ import {
   overlayProviderInstanceEnvironment,
 } from "./instanceEnvironment.ts";
 
-const LAUNCHED_BY = "t3code.launched_by=t3code";
+const LAUNCHED = "t3code.launched=true";
 
 describe("mergeProviderInstanceEnvironment", () => {
   it.effect.each([
@@ -39,7 +39,7 @@ describe("mergeProviderInstanceEnvironment", () => {
         CODEX_HOME: path.join("/home/ada", tail),
         CLAUDE_CONFIG_DIR: path.join("/home/ada", tail),
         CUSTOM_VALUE: value,
-        OTEL_RESOURCE_ATTRIBUTES: LAUNCHED_BY,
+        OTEL_RESOURCE_ATTRIBUTES: LAUNCHED,
       });
       expect(baseEnv).toEqual({
         CODEX_HOME: "~/.inherited-codex",
@@ -60,7 +60,7 @@ describe("mergeProviderInstanceEnvironment", () => {
           [{ name: "CUSTOM_VALUE", value: "~/.custom", sensitive: false }],
           baseEnv,
         ),
-      ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom", OTEL_RESOURCE_ATTRIBUTES: LAUNCHED_BY });
+      ).toEqual({ ...baseEnv, CUSTOM_VALUE: "~/.custom", OTEL_RESOURCE_ATTRIBUTES: LAUNCHED });
     }),
   );
 
@@ -83,14 +83,14 @@ describe("mergeProviderInstanceEnvironment", () => {
   );
 });
 
-describe("launched-by resource attribute", () => {
+describe("launched resource attribute", () => {
   it.effect("marks a process launched without configured variables", () =>
     Effect.gen(function* () {
       const baseEnv = { PATH: "/bin" };
 
       expect(yield* mergeProviderInstanceEnvironment(undefined, baseEnv)).toEqual({
         PATH: "/bin",
-        OTEL_RESOURCE_ATTRIBUTES: LAUNCHED_BY,
+        OTEL_RESOURCE_ATTRIBUTES: LAUNCHED,
       });
       expect(baseEnv).toEqual({ PATH: "/bin" });
     }),
@@ -103,7 +103,7 @@ describe("launched-by resource attribute", () => {
           OTEL_RESOURCE_ATTRIBUTES: "org.name=Acme,deployment.environment.name=dev",
         }),
       ).toEqual({
-        OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,deployment.environment.name=dev,${LAUNCHED_BY}`,
+        OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,deployment.environment.name=dev,${LAUNCHED}`,
       });
     }),
   );
@@ -115,14 +115,14 @@ describe("launched-by resource attribute", () => {
           [{ name: "OTEL_RESOURCE_ATTRIBUTES", value: "org.name=Acme", sensitive: false }],
           { OTEL_RESOURCE_ATTRIBUTES: "org.name=Inherited" },
         ),
-      ).toEqual({ OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,${LAUNCHED_BY}` });
+      ).toEqual({ OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,${LAUNCHED}` });
     }).pipe(Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
   );
 
   it.effect.each([
-    "t3code.launched_by=custom",
-    "org.name=Acme, t3code.launched_by=custom",
-    "t3code%2Elaunched_by=custom",
+    "t3code.launched=false",
+    "org.name=Acme, t3code.launched=false",
+    "t3code%2Elaunched=false",
   ])("keeps a value already set in %s", (attributes) =>
     Effect.gen(function* () {
       expect(

@@ -46,7 +46,7 @@ const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
  * Claude Code or Codex reports which of its sessions T3 Code drove. A value the
  * user already set for the key wins.
  */
-export const LAUNCHED_BY_ATTRIBUTE = { key: "t3code.launched_by", value: "t3code" } as const;
+export const LAUNCHED_ATTRIBUTE = { key: "t3code.launched", value: "true" } as const;
 
 const hasResourceAttribute = (attributes: string, key: string): boolean =>
   attributes.split(",").some((entry) => {
@@ -60,10 +60,10 @@ const hasResourceAttribute = (attributes: string, key: string): boolean =>
 
 const withLaunchedByAttribute = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const attributes = environment[RESOURCE_ATTRIBUTES]?.trim() ?? "";
-  if (hasResourceAttribute(attributes, LAUNCHED_BY_ATTRIBUTE.key)) {
+  if (hasResourceAttribute(attributes, LAUNCHED_ATTRIBUTE.key)) {
     return environment;
   }
-  const entry = `${encodeURIComponent(LAUNCHED_BY_ATTRIBUTE.key)}=${encodeURIComponent(LAUNCHED_BY_ATTRIBUTE.value)}`;
+  const entry = `${encodeURIComponent(LAUNCHED_ATTRIBUTE.key)}=${encodeURIComponent(LAUNCHED_ATTRIBUTE.value)}`;
   return {
     ...environment,
     [RESOURCE_ATTRIBUTES]: attributes === "" ? entry : `${attributes},${entry}`,

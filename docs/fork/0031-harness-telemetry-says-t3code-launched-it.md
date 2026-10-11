@@ -7,11 +7,11 @@
 
 - Filter the metrics, traces, and logs that Claude Code, Codex, or any other
   harness exports to the sessions T3 Code drove, with
-  `t3code.launched_by=t3code`.
+  `t3code.launched=true`.
 - Keep your own `OTEL_RESOURCE_ATTRIBUTES`, inherited or set on a provider
   instance; the attribute is added after them, never in their place.
-- Set `t3code.launched_by` yourself to tell one installation's harnesses from
-  another's.
+- Set `t3code.launched=false` on a provider instance to leave its harness
+  unmarked.
 
 ## Why
 
