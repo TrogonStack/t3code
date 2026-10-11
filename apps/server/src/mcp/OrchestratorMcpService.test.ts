@@ -1377,15 +1377,17 @@ describe("OrchestratorMcpService provider resolution", () => {
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           hasReceipt: () => Effect.succeed(false),
           getThreadRecords: () => Effect.succeed(parentProjection([])),
-          // ThreadManagementService.dispatch is the chokepoint now: it is the
-          // one that refuses, not a separate pre-dispatch assert.
-          dispatch: () =>
+          // resolveTarget's own pre-dispatch assert is the one that refuses
+          // here; it is also what guards createThreads, which has no
+          // dispatch-level chokepoint of its own for thread.create.
+          assertProviderInstanceEnabled: ({ projectId, instanceId }) =>
             Effect.fail(
               new ThreadManagementService.ThreadManagementProviderInstanceDisabledError({
                 projectId,
-                instanceId: codexInstanceId,
+                instanceId,
               }),
             ),
+          dispatch: () => Effect.die("a refused delegation must not dispatch"),
         }),
         providerRegistryLayer([
           providerSnapshot({
