@@ -39,9 +39,46 @@ export function literalProviderInstanceEnvironment(
   return literals;
 }
 
-export const mergeProviderInstanceEnvironment = Effect.fn(function* (
+const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
+
+/**
+ * Marks the telemetry of every process T3 Code launches, so a harness such as
+ * Claude Code or Codex reports which of its sessions T3 Code drove. A value the
+ * user already set for the key wins.
+ */
+export const LAUNCHED_ATTRIBUTE = { key: "t3code.launched", value: "true" } as const;
+
+const hasResourceAttribute = (attributes: string, key: string): boolean =>
+  attributes.split(",").some((entry) => {
+    const name = entry.split("=", 1)[0]?.trim() ?? "";
+    try {
+      return decodeURIComponent(name) === key;
+    } catch {
+      return name === key;
+    }
+  });
+
+const withLaunchedByAttribute = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
+  const attributes = environment[RESOURCE_ATTRIBUTES]?.trim() ?? "";
+  if (hasResourceAttribute(attributes, LAUNCHED_ATTRIBUTE.key)) {
+    return environment;
+  }
+  const entry = `${encodeURIComponent(LAUNCHED_ATTRIBUTE.key)}=${encodeURIComponent(LAUNCHED_ATTRIBUTE.value)}`;
+  return {
+    ...environment,
+    [RESOURCE_ATTRIBUTES]: attributes === "" ? entry : `${attributes},${entry}`,
+  };
+};
+
+/**
+ * Lays the configured variables over `baseEnv` without marking the result as
+ * launched by T3 Code. Callers whose `baseEnv` is only a set of overrides use
+ * this, since adding `OTEL_RESOURCE_ATTRIBUTES` there would replace the
+ * inherited value instead of extending it.
+ */
+export const overlayProviderInstanceEnvironment = Effect.fn(function* (
   environment: ResolvedProviderEnvironment | undefined,
-  baseEnv: NodeJS.ProcessEnv = process.env,
+  baseEnv: NodeJS.ProcessEnv,
 ) {
   if (!environment || environment.length === 0) {
     return baseEnv;
@@ -57,4 +94,11 @@ export const mergeProviderInstanceEnvironment = Effect.fn(function* (
         : variable.value;
   }
   return next;
+});
+
+export const mergeProviderInstanceEnvironment = Effect.fn(function* (
+  environment: ResolvedProviderEnvironment | undefined,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+) {
+  return withLaunchedByAttribute(yield* overlayProviderInstanceEnvironment(environment, baseEnv));
 });

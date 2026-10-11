@@ -621,6 +621,13 @@ full user agent. Its `deployment.environment.name` follows the build: `developme
 server and `production` otherwise. The server's `t3code.server.managed_by` is `desktop` when the
 desktop app launched it and `standalone` otherwise.
 
+Every process T3 Code launches for a provider, such as Claude Code or Codex, inherits
+`t3code.launched=true` in `OTEL_RESOURCE_ATTRIBUTES`, added after any attributes already there.
+A harness that exports its own telemetry reports it on every signal, so its sessions driven from T3 Code
+can be told apart from the ones started in a terminal. A value already set for `t3code.launched`,
+in the environment or a provider instance's variables, is kept, so `false` opts a harness out.
+Integrated terminals do not add it, though they keep one already in those variables.
+
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
 on stdout only.
 
