@@ -1209,6 +1209,102 @@ describe("OrchestratorMcpService provider resolution", () => {
     }),
   );
 
+  it.effect("resolves a driverKind target past an instance the project turned off", () =>
+    Effect.gen(function* () {
+      const dispatched = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const workInstanceId = ProviderInstanceId.make("codex_work");
+      const task = {
+        id: taskId,
+        threadId: parentThreadId,
+        runId: parentRunId,
+        parentNodeId,
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: workInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Summarize the diff.",
+        title: null,
+        model: "gpt-5.4",
+        status: "running",
+        result: null,
+        startedAt: null,
+        completedAt: null,
+      };
+      let delegated = false;
+      const layerDependencies = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          assertProviderInstanceEnabled: ({ projectId, instanceId }) =>
+            instanceId === codexInstanceId
+              ? Effect.fail(
+                  new ThreadManagementService.ThreadManagementProviderInstanceDisabledError({
+                    projectId,
+                    instanceId,
+                  }),
+                )
+              : Effect.void,
+          getThreadRecords: (threadId) =>
+            Effect.succeed(
+              threadId === parentThreadId
+                ? parentProjection(delegated ? [task] : [])
+                : childProjection,
+            ),
+          dispatch: (command) =>
+            Ref.update(dispatched, (commands) => [...commands, command]).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  delegated = true;
+                }),
+              ),
+              Effect.as({
+                sequence: 1,
+                storedEvents: [
+                  {
+                    sequence: 1,
+                    commandId: null,
+                    event: { type: "subagent.updated", payload: task },
+                  },
+                ],
+              } as never),
+            ),
+        }),
+        providerRegistryLayer([
+          providerSnapshot({
+            instanceId: codexInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+          providerSnapshot({
+            instanceId: workInstanceId,
+            driver: ProviderDriverKind.make("codex"),
+            model: "gpt-5.4",
+          }),
+        ]),
+        adapterRegistryLayer([codexInstanceId, workInstanceId]),
+        Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+      );
+
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        yield* service.delegateTask(scope, {
+          task: "Summarize the diff.",
+          target: { driverKind: ProviderDriverKind.make("codex") },
+          mode: "async",
+          clientRequestId: "delegate-codex-driver-disabled-1",
+        });
+        const commands = yield* Ref.get(dispatched);
+        assert.equal(commands.length, 1);
+        const request = commands[0] as { modelSelection: { instanceId: string } };
+        assert.equal(request.modelSelection.instanceId, workInstanceId);
+      }).pipe(Effect.provide(OrchestratorMcpService.layer.pipe(Layer.provide(layerDependencies))));
+    }),
+  );
+
   it.effect("rejects delegation to a provider without a registered adapter", () =>
     Effect.gen(function* () {
       const forkOnlyInstanceId = ProviderInstanceId.make("forkOnly");
@@ -1221,6 +1317,7 @@ describe("OrchestratorMcpService provider resolution", () => {
       const layerDependencies = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(ThreadManagementService.ThreadManagementService)({
+          assertProviderInstanceEnabled: () => Effect.void,
           getThreadRecords: () => Effect.succeed(parentProjection([])),
         }),
         providerRegistryLayer([

@@ -48,6 +48,7 @@ import {
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
+  type ProviderInstanceId,
   type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
@@ -1106,19 +1107,6 @@ const make = Effect.gen(function* () {
    * unattended agent can see a provider as unavailable after it was fixed.
    * Re-probe the requested instance once before refusing it.
    */
-  const assertTargetEnabledForProject = (
-    parent: Pick<OrchestrationV2ThreadProjection, "thread">,
-    commandId: CommandId,
-    target: ResolvedTarget,
-  ) =>
-    threadManagement
-      .assertProviderInstanceEnabled({
-        projectId: parent.thread.projectId,
-        commandId,
-        instanceId: target.modelSelection.instanceId,
-      })
-      .pipe(Effect.mapError(threadManagementFailure));
-
   const resolveTargetRechecking = (input: Parameters<typeof resolveTarget>[0]) => {
     const instanceId =
       input.target?.providerInstanceId ??
@@ -1142,18 +1130,31 @@ const make = Effect.gen(function* () {
     readonly parent: Pick<OrchestrationV2ThreadProjection, "thread">;
     readonly target: OrchestratorMcpTarget | undefined;
     readonly providers: ReadonlyArray<ServerProvider>;
+    readonly commandId: CommandId;
   }): Effect.Effect<ResolvedTarget, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
+      const assertEnabledForProject = (instanceId: ProviderInstanceId) =>
+        threadManagement.assertProviderInstanceEnabled({
+          projectId: input.parent.thread.projectId,
+          commandId: input.commandId,
+          instanceId,
+        });
       const requestedInstanceId = input.target?.providerInstanceId;
       const requestedDriver = input.target?.driverKind;
       const orchestrationCapableInstanceIds = yield* loadOrchestrationCapableInstanceIds();
       let instanceId = requestedInstanceId;
 
       if (instanceId === undefined && requestedDriver !== undefined) {
-        const candidates = input.providers.filter(
+        const candidates = yield* Effect.filter(
+          input.providers.filter(
+            (provider) =>
+              provider.driver === requestedDriver &&
+              orchestrationCapableInstanceIds.has(provider.instanceId),
+          ),
           (provider) =>
-            provider.driver === requestedDriver &&
-            orchestrationCapableInstanceIds.has(provider.instanceId),
+            assertEnabledForProject(provider.instanceId).pipe(
+              Effect.match({ onFailure: () => false, onSuccess: () => true }),
+            ),
         );
         if (candidates.length === 0) {
           return yield* failure(
@@ -1181,6 +1182,7 @@ const make = Effect.gen(function* () {
         }
       }
       instanceId ??= input.parent.thread.modelSelection.instanceId;
+      yield* assertEnabledForProject(instanceId).pipe(Effect.mapError(threadManagementFailure));
 
       const provider = input.providers.find((candidate) => candidate.instanceId === instanceId);
       if (provider === undefined) {
@@ -1893,23 +1895,23 @@ const make = Effect.gen(function* () {
           );
         }
         const providers = yield* loadProviders;
-        const target = yield* resolveTargetRechecking({
-          parent,
-          target: input.target,
-          providers,
-        });
-        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
-        const interactionMode = yield* resolveInteractionMode(
-          parent.thread.interactionMode,
-          input.interactionMode,
-        );
         const key = yield* requestKey(input.clientRequestId);
         const commandId = stableCommandId({
           scope,
           requestKey: key,
           operation: "delegate-task",
         });
-        yield* assertTargetEnabledForProject(parent, commandId, target);
+        const target = yield* resolveTargetRechecking({
+          parent,
+          target: input.target,
+          providers,
+          commandId,
+        });
+        const runtimeMode = yield* resolveRuntimeMode(parent.thread.runtimeMode, input.runtimeMode);
+        const interactionMode = yield* resolveInteractionMode(
+          parent.thread.interactionMode,
+          input.interactionMode,
+        );
         const result = yield* threadManagement
           .dispatch({
             type: "delegated_task.request",
@@ -2180,6 +2182,12 @@ const make = Effect.gen(function* () {
                 parent,
                 target: request.target,
                 providers,
+                commandId: stableCommandId({
+                  scope,
+                  requestKey: key,
+                  operation: "create-thread",
+                  index,
+                }),
               });
               const runtimeMode = yield* resolveRuntimeMode(
                 parent.thread.runtimeMode,
@@ -2194,11 +2202,6 @@ const make = Effect.gen(function* () {
                 requestKey: key,
                 index,
               });
-              yield* assertTargetEnabledForProject(
-                parent,
-                stableCommandId({ scope, requestKey: key, operation: "create-thread", index }),
-                target,
-              );
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
