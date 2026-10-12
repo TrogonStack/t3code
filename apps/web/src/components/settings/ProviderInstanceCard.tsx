@@ -53,6 +53,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
+import { SecretInput } from "./SecretInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -415,11 +416,7 @@ function ProviderEnvironmentFieldRow(props: {
     (typeof configuredValue !== "string" || isLegacyOnePasswordReference(props.variable));
   const value =
     props.variable?.valueRedacted || typeof configuredValue !== "string" ? "" : configuredValue;
-  const placeholder = readFromSecretStore
-    ? "Read from 1Password - edit it under Environment"
-    : props.variable?.valueRedacted
-      ? "Stored secret - enter a new value to replace"
-      : props.field.placeholder;
+  const secretStorePlaceholder = "Read from 1Password - edit it under Environment";
 
   return (
     <SettingsRow
@@ -427,18 +424,31 @@ function ProviderEnvironmentFieldRow(props: {
       description={props.field.description}
       control={
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
-          <DraftInput
-            id={inputId}
-            size="sm"
-            className="min-w-0 flex-1"
-            type={props.field.sensitive === false ? undefined : "password"}
-            autoComplete="off"
-            value={value}
-            onCommit={(next) => props.onCommit(props.field, next)}
-            placeholder={placeholder}
-            disabled={readFromSecretStore}
-            spellCheck={false}
-          />
+          {props.field.sensitive === false ? (
+            <DraftInput
+              id={inputId}
+              size="sm"
+              className="min-w-0 flex-1"
+              autoComplete="off"
+              value={value}
+              onCommit={(next) => props.onCommit(props.field, next)}
+              placeholder={readFromSecretStore ? secretStorePlaceholder : props.field.placeholder}
+              disabled={readFromSecretStore}
+              spellCheck={false}
+            />
+          ) : (
+            <SecretInput
+              id={inputId}
+              size="sm"
+              className="min-w-0 flex-1"
+              value={value}
+              onCommit={(next) => props.onCommit(props.field, next)}
+              placeholder={readFromSecretStore ? secretStorePlaceholder : props.field.placeholder}
+              configured={props.variable?.valueRedacted === true}
+              disabled={readFromSecretStore}
+              spellCheck={false}
+            />
+          )}
           {props.variable && !readFromSecretStore ? (
             <Button
               type="button"
@@ -725,22 +735,31 @@ export function ProviderEnvironmentSection(props: {
                   </>
                 ) : (
                   <>
-                    <DraftInput
-                      size="sm"
-                      font="mono"
-                      className="col-span-2 min-w-0"
-                      value={variable.valueRedacted ? "" : variable.value}
-                      onCommit={(value) => updateVariable(variable.id, { value })}
-                      type={variable.sensitive ? "password" : undefined}
-                      autoComplete="off"
-                      placeholder={
-                        variable.valueRedacted
-                          ? "Stored secret, enter a new value to replace"
-                          : "value"
-                      }
-                      spellCheck={false}
-                      aria-label={`Environment variable value ${index + 1}`}
-                    />
+                    {variable.sensitive ? (
+                      <SecretInput
+                        size="sm"
+                        font="mono"
+                        className="col-span-2 min-w-0"
+                        value={variable.valueRedacted ? "" : variable.value}
+                        onCommit={(value) => updateVariable(variable.id, { value })}
+                        placeholder="value"
+                        configured={variable.valueRedacted === true}
+                        spellCheck={false}
+                        aria-label={`Environment variable value ${index + 1}`}
+                      />
+                    ) : (
+                      <DraftInput
+                        size="sm"
+                        font="mono"
+                        className="col-span-2 min-w-0"
+                        value={variable.valueRedacted ? "" : variable.value}
+                        onCommit={(value) => updateVariable(variable.id, { value })}
+                        autoComplete="off"
+                        placeholder="value"
+                        spellCheck={false}
+                        aria-label={`Environment variable value ${index + 1}`}
+                      />
+                    )}
                     <Tooltip>
                       <TooltipTrigger
                         render={
