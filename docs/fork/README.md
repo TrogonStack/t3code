@@ -45,3 +45,5 @@ Each entry uses these sections:
   active, [#89](https://github.com/TrogonStack/t3code/pull/89)
 - **0031** [Harness telemetry says T3 Code launched it](./0031-harness-telemetry-says-t3code-launched-it.md)
   submitted, [#97](https://github.com/TrogonStack/t3code/pull/97)
+- **0032** [The model picker reopens where you last picked from](./0032-model-picker-reopens-where-you-left-it.md)
+  active, [#103](https://github.com/TrogonStack/t3code/pull/103)

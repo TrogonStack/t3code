@@ -14,6 +14,11 @@ import { memo, useMemo, useState, useCallback, useEffect, useLayoutEffect, useRe
 import { ChevronRightIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
 import { ModelPickerSidebar } from "./ModelPickerSidebar";
+import {
+  type ModelPickerOrigin,
+  readModelPickerOrigin,
+  writeModelPickerOrigin,
+} from "./modelPickerOrigin";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
   modelPickerLegacySectionKey,
@@ -119,6 +124,22 @@ export function shouldOfferModelPickerSetup(
       entry.snapshot.auth.status === "unauthenticated" ||
       !options.some((option) => !option.isUnavailable))
   );
+}
+
+/** Reopens on the rail tab the last model was picked from. */
+export function initialModelPickerProvider(input: {
+  activeInstanceId: ProviderInstanceId;
+  keepActiveInstance: boolean;
+  activeInstanceVisible: boolean;
+  hasFavorites: boolean;
+  lastOrigin: ModelPickerOrigin | null;
+}): ProviderInstanceId | "favorites" {
+  if (input.keepActiveInstance || !input.hasFavorites) {
+    return input.activeInstanceId;
+  }
+  return !input.activeInstanceVisible || input.lastOrigin === "favorites"
+    ? "favorites"
+    : input.activeInstanceId;
 }
 
 export function adjacentModelPickerProvider(input: {
@@ -256,19 +277,24 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       activeEntry,
       modelOptionsByInstance.get(props.activeInstanceId) ?? [],
     );
-  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
-    () => {
-      if (
+  const [lastOrigin] = useState(readModelPickerOrigin);
+  const [chosenInstanceId, setChosenInstanceId] = useState<ProviderInstanceId | "favorites" | null>(
+    null,
+  );
+  // Favorites can arrive after the picker opens, so follow them until the user picks a tab.
+  const selectedInstanceId =
+    chosenInstanceId ??
+    initialModelPickerProvider({
+      activeInstanceId: props.activeInstanceId,
+      keepActiveInstance:
         props.lockedProvider !== null ||
         activeInstanceHasSelectableUnavailableModel ||
-        activeInstanceNeedsSetup
-      ) {
-        // Keep the active instance visible when it is locked or needs setup.
-        return props.activeInstanceId;
-      }
-      return favorites.length > 0 ? "favorites" : props.activeInstanceId;
-    },
-  );
+        activeInstanceNeedsSetup,
+      activeInstanceVisible:
+        activeEntry !== undefined && isProviderInstancePickerVisible(activeEntry),
+      hasFavorites: favorites.length > 0,
+      lastOrigin,
+    });
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
     () =>
       new Set<ProviderInstanceId>(
@@ -290,12 +316,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   const handleSelectInstance = useCallback(
     (instanceId: ProviderInstanceId | "favorites") => {
-      setSelectedInstanceId(instanceId);
+      setChosenInstanceId(instanceId);
       window.requestAnimationFrame(() => {
         focusSearchInput();
       });
     },
-    [focusSearchInput],
+    [focusSearchInput, setChosenInstanceId],
   );
 
   useLayoutEffect(() => {
@@ -641,6 +667,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       // normalization rules, so pass the driver kind here.
       const resolvedModel = resolveSelectableModel(entry.driverKind, modelSlug, options);
       if (resolvedModel) {
+        if (!isSearching) {
+          writeModelPickerOrigin(selectedInstanceId === "favorites" ? "favorites" : "instance");
+        }
         if (additive && onToggleModel) {
           onToggleModel(instanceId, resolvedModel);
         } else {
@@ -651,9 +680,11 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     [
       entryByInstanceId,
       getModelDisabledReason,
+      isSearching,
       modelOptionsByInstance,
       onInstanceModelChange,
       onToggleModel,
+      selectedInstanceId,
     ],
   );
 
