@@ -277,20 +277,24 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       activeEntry,
       modelOptionsByInstance.get(props.activeInstanceId) ?? [],
     );
-  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
-    () =>
-      initialModelPickerProvider({
-        activeInstanceId: props.activeInstanceId,
-        keepActiveInstance:
-          props.lockedProvider !== null ||
-          activeInstanceHasSelectableUnavailableModel ||
-          activeInstanceNeedsSetup,
-        activeInstanceVisible:
-          activeEntry !== undefined && isProviderInstancePickerVisible(activeEntry),
-        hasFavorites: favorites.length > 0,
-        lastOrigin: readModelPickerOrigin(),
-      }),
+  const [lastOrigin] = useState(readModelPickerOrigin);
+  const [chosenInstanceId, setChosenInstanceId] = useState<ProviderInstanceId | "favorites" | null>(
+    null,
   );
+  // Favorites can arrive after the picker opens, so follow them until the user picks a tab.
+  const selectedInstanceId =
+    chosenInstanceId ??
+    initialModelPickerProvider({
+      activeInstanceId: props.activeInstanceId,
+      keepActiveInstance:
+        props.lockedProvider !== null ||
+        activeInstanceHasSelectableUnavailableModel ||
+        activeInstanceNeedsSetup,
+      activeInstanceVisible:
+        activeEntry !== undefined && isProviderInstancePickerVisible(activeEntry),
+      hasFavorites: favorites.length > 0,
+      lastOrigin,
+    });
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
     () =>
       new Set<ProviderInstanceId>(
@@ -312,12 +316,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
   const handleSelectInstance = useCallback(
     (instanceId: ProviderInstanceId | "favorites") => {
-      setSelectedInstanceId(instanceId);
+      setChosenInstanceId(instanceId);
       window.requestAnimationFrame(() => {
         focusSearchInput();
       });
     },
-    [focusSearchInput],
+    [focusSearchInput, setChosenInstanceId],
   );
 
   useLayoutEffect(() => {
