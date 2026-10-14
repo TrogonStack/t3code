@@ -7,6 +7,7 @@ import {
   type OrchestrationV2RestartCancelledBackgroundWork,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
+  isOrchestrationV2WorkActive,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -60,21 +61,6 @@ export interface ProviderRuntimeReconciliationSummary {
   readonly closedRequests: number;
   readonly retiredEffects: number;
   readonly requeuedEffects: number;
-}
-
-/**
- * Why a projection is being reconciled. Both assume every provider process in
- * the projection is dead.
- */
-export type ReconciliationTrigger = "startup" | "shutdown";
-
-export interface ThreadReconciliationPlan {
-  readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
-  readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
-  readonly detail: string;
-  readonly terminalizedRuns: number;
-  readonly stoppedSessions: number;
-  readonly closedRequests: number;
 }
 
 export class ProviderRuntimeRecoveryService extends Context.Service<
@@ -195,457 +181,6 @@ function latestStartedRun(
   );
 }
 
-function reconciliationDetail(trigger: ReconciliationTrigger): string {
-  switch (trigger) {
-    case "startup":
-      return "Cancelled because the server restarted before the provider work completed.";
-    case "shutdown":
-      return "Cancelled because the server shut down before the provider work completed.";
-  }
-}
-
-function reconciliationRequestReason(trigger: ReconciliationTrigger): string {
-  switch (trigger) {
-    case "startup":
-      return "The server restarted before this runtime request was resolved.";
-    case "shutdown":
-      return "The server shut down before this runtime request was resolved.";
-  }
-}
-
-/**
- * Build the events and effects that cancel a projection's open work. Pure
- * planning only: the caller decides how to commit (a standalone reconcile
- * command, or folded into a larger command's own commit).
- */
-const planThreadReconciliation = Effect.fn(
-  "ProviderRuntimeRecoveryService.planThreadReconciliation",
-)(function* (input: {
-  readonly projection: ProjectionStore.ProjectionRuntimeRecoveryState;
-  readonly trigger: ReconciliationTrigger;
-  readonly continueAfterRestart: boolean;
-  readonly commandId: CommandId;
-  readonly now: DateTime.Utc;
-  readonly ids: IdAllocator.IdAllocatorV2["Service"];
-  readonly outbox: EffectOutbox.EffectOutboxV2Shape;
-  readonly projections: ProjectionStore.ProjectionStoreV2Shape;
-}) {
-  const { projection, trigger, continueAfterRestart, commandId, now, ids, outbox, projections } =
-    input;
-  const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
-  for (const run of nonterminalRuns(projection)) {
-    if (run.status === "waiting") {
-      const checkpointEffects = yield* outbox
-        .listByCommandId(CommandId.make(`command:effect:checkpoint.capture:${run.id}`))
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new ProviderRuntimeRecoveryError({
-                operation: "reconcile",
-                threadId: projection.thread.id,
-                cause,
-              }),
-          ),
-        );
-      const hasReplayableCheckpoint = checkpointEffects.some(
-        (effect) =>
-          effect.request.type === "checkpoint.capture" &&
-          effect.request.runId === run.id &&
-          (effect.status === "pending" || effect.status === "running"),
-      );
-      if (hasReplayableCheckpoint) continue;
-    }
-    runs.push(run);
-  }
-  const messageRequestNodeIds = new Set(
-    projection.runtimeRequests
-      .filter(
-        (request) => request.status === "pending" && request.responseCapability.type === "message",
-      )
-      .map((request) => request.nodeId),
-  );
-  const requests = projection.runtimeRequests.filter(
-    (request) => request.status === "pending" && request.responseCapability.type !== "message",
-  );
-  // Delegated task rows, items and nodes stay open: the child settles them.
-  const delegatedTaskNodeIds = new Set<string>([
-    ...(projection.subagents ?? []).filter(isAppOwnedDelegation).map((subagent) => subagent.id),
-    ...(projection.turnItems ?? []).flatMap((item) =>
-      item.type === "subagent" && isAppOwnedDelegation(item) ? [item.subagentId] : [],
-    ),
-  ]);
-  const detail = reconciliationDetail(trigger);
-  const allocateEventId = () =>
-    ids.allocate.event({ threadId: projection.thread.id, commandId }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderRuntimeRecoveryError({
-            operation: "reconcile",
-            threadId: projection.thread.id,
-            cause,
-          }),
-      ),
-    );
-  const events: Array<OrchestrationV2DomainEvent> = [];
-  // Background work that outlived its settled turn. The provider transcript
-  // cannot record its death, so the next provider turn is told instead.
-  // Shutdown records it too: a graceful restart cancels it there first.
-  // Keyed by the provider thread that lost the work: only its turns are told.
-  const cancelledBackgroundWork = new Map<
-    ProviderThreadId,
-    Array<OrchestrationV2RestartCancelledBackgroundWork>
-  >();
-  const cancelledBackgroundNativeIds = new Set<string>();
-  const recordCancelledBackgroundWork = (
-    providerThreadId: ProviderThreadId | null | undefined,
-    work: OrchestrationV2RestartCancelledBackgroundWork,
-  ) => {
-    if (providerThreadId == null) return;
-    const existing = cancelledBackgroundWork.get(providerThreadId);
-    if (existing === undefined) cancelledBackgroundWork.set(providerThreadId, [work]);
-    else existing.push(work);
-  };
-  const recordCancelledBackgroundItem = (
-    item: OrchestrationV2ThreadProjection["turnItems"][number],
-  ) => {
-    if (!isBackgroundCapableTurnItemType(item.type)) return;
-    const work = cancelledTurnItemWork(item);
-    if (work === undefined) return;
-    recordCancelledBackgroundWork(
-      item.providerThreadId ??
-        projection.runs.find((run) => run.id === item.runId)?.providerThreadId,
-      work,
-    );
-    if (item.nativeItemRef?.nativeId != null) {
-      cancelledBackgroundNativeIds.add(item.nativeItemRef.nativeId);
-    }
-  };
-  const queuedRuns = projection.runs.filter((run) => run.status === "queued");
-  const queuedMessages =
-    queuedRuns.length === 0
-      ? []
-      : (yield* projections
-          .getThreadRecords(projection.thread.id, ["messages"], {
-            messageIds: queuedRuns.map((run) => run.userMessageId),
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderRuntimeRecoveryError({
-                  operation: "read-projections",
-                  threadId: projection.thread.id,
-                  cause,
-                }),
-            ),
-          )).messages;
-  const bufferedMessageIds = new Set(
-    queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
-  );
-  // Buffered wakes lost their output with the process. Durable queued messages
-  // keep their execution identities and order until the user resumes them.
-  for (const run of queuedRuns) {
-    if (bufferedMessageIds.has(run.userMessageId)) {
-      runs.push(run);
-      continue;
-    }
-    if (run.queueHeld === true) continue;
-    events.push({
-      id: yield* allocateEventId(),
-      type: "run.updated",
-      threadId: projection.thread.id,
-      runId: run.id,
-      providerInstanceId: run.providerInstanceId,
-      occurredAt: now,
-      payload: { ...run, queueHeld: true },
-    });
-  }
-  for (const request of requests) {
-    events.push({
-      id: yield* allocateEventId(),
-      type: "runtime-request.updated",
-      threadId: projection.thread.id,
-      nodeId: request.nodeId,
-      occurredAt: now,
-      payload: {
-        ...request,
-        status: trigger === "startup" ? "expired" : "cancelled",
-        responseCapability: {
-          type: "not_resumable",
-          reason: reconciliationRequestReason(trigger),
-        },
-        resolvedAt: now,
-      },
-    });
-  }
-  for (const run of runs) {
-    events.push({
-      id: yield* allocateEventId(),
-      type: "run.updated",
-      threadId: projection.thread.id,
-      runId: run.id,
-      providerInstanceId: run.providerInstanceId,
-      occurredAt: now,
-      payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
-    });
-    for (const attempt of projection.attempts.filter(
-      (candidate) =>
-        candidate.runId === run.id &&
-        (candidate.status === "pending" || candidate.status === "running"),
-    )) {
-      events.push({
-        id: yield* allocateEventId(),
-        type: "run-attempt.updated",
-        threadId: projection.thread.id,
-        runId: run.id,
-        nodeId: attempt.rootNodeId,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...attempt, status: "cancelled", completedAt: now },
-      });
-    }
-    for (const node of projection.nodes.filter(
-      (candidate) =>
-        candidate.runId === run.id &&
-        !messageRequestNodeIds.has(candidate.id) &&
-        !delegatedTaskNodeIds.has(candidate.id) &&
-        (candidate.status === "pending" ||
-          candidate.status === "running" ||
-          candidate.status === "waiting"),
-    )) {
-      events.push({
-        id: yield* allocateEventId(),
-        type: "node.updated",
-        threadId: projection.thread.id,
-        runId: run.id,
-        nodeId: node.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...node, status: "cancelled", completedAt: now },
-      });
-    }
-    for (const providerTurn of projection.providerTurns.filter(
-      (candidate) =>
-        candidate.runAttemptId !== null &&
-        projection.attempts.some(
-          (attempt) => attempt.id === candidate.runAttemptId && attempt.runId === run.id,
-        ) &&
-        (candidate.status === "pending" || candidate.status === "running"),
-    )) {
-      events.push({
-        id: yield* allocateEventId(),
-        type: "provider-turn.updated",
-        threadId: projection.thread.id,
-        runId: run.id,
-        nodeId: providerTurn.nodeId,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...providerTurn, status: "cancelled", completedAt: now },
-      });
-    }
-    for (const message of projection.messages.filter(
-      (candidate) => candidate.runId === run.id && candidate.streaming,
-    )) {
-      events.push({
-        id: yield* allocateEventId(),
-        type: "message.updated",
-        threadId: projection.thread.id,
-        runId: run.id,
-        ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: { ...message, streaming: false, updatedAt: now },
-      });
-    }
-    for (const item of projection.turnItems.filter(
-      (candidate) =>
-        candidate.runId === run.id &&
-        (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
-        !isAppOwnedDelegationItem(candidate) &&
-        (candidate.status === "pending" ||
-          candidate.status === "running" ||
-          candidate.status === "waiting"),
-    )) {
-      // A waiting run's provider turn already settled; its open items are
-      // background work. A running run's items die with its turn.
-      if (run.status === "waiting") recordCancelledBackgroundItem(item);
-      events.push({
-        id: yield* allocateEventId(),
-        type: "turn-item.updated",
-        threadId: projection.thread.id,
-        runId: run.id,
-        ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: cancelledItem(item, now),
-      });
-    }
-  }
-  // Process loss also orphans background-capable turn items on already-
-  // settled runs (e.g. post-settle Waiting work). Skip items already
-  // cancelled above for recovered nonterminal runs to avoid duplicate
-  // cancellation events.
-  const recoveredNonterminalRunIds = new Set(runs.map((run) => run.id));
-  const cancelledStaleNodeIds = new Set<string>();
-  for (const item of projection.turnItems ?? []) {
-    if (item.runId !== null && recoveredNonterminalRunIds.has(item.runId)) {
-      continue;
-    }
-    if (!isBackgroundCapableTurnItemType(item.type)) {
-      continue;
-    }
-    if (!isNonterminalTurnItemStatus(item.status) || isAppOwnedDelegationItem(item)) {
-      continue;
-    }
-    const providerInstanceId = resolveStaleBackgroundItemProviderInstanceId(item, projection);
-    recordCancelledBackgroundItem(item);
-    events.push({
-      id: yield* allocateEventId(),
-      type: "turn-item.updated",
-      threadId: projection.thread.id,
-      ...(item.runId === null ? {} : { runId: item.runId }),
-      ...(item.nodeId === null || item.nodeId === undefined ? {} : { nodeId: item.nodeId }),
-      providerInstanceId,
-      occurredAt: now,
-      payload: cancelledItem(item, now),
-    });
-    if (item.nodeId !== null && item.nodeId !== undefined) {
-      const staleItemNode = projection.nodes.find(
-        (candidate) => candidate.id === item.nodeId && isNonterminalNodeStatus(candidate.status),
-      );
-      if (staleItemNode !== undefined && !cancelledStaleNodeIds.has(staleItemNode.id)) {
-        cancelledStaleNodeIds.add(staleItemNode.id);
-        events.push({
-          id: yield* allocateEventId(),
-          type: "node.updated",
-          threadId: projection.thread.id,
-          ...(item.runId === null ? {} : { runId: item.runId }),
-          nodeId: staleItemNode.id,
-          providerInstanceId,
-          occurredAt: now,
-          payload: { ...staleItemNode, status: "cancelled", completedAt: now },
-        });
-      }
-    }
-  }
-  // No provider process outlives the server, so a native subagent still open
-  // here never reports its end, whatever state its run and item are in.
-  for (const subagent of projection.subagents ?? []) {
-    events.push(
-      ...(yield* endOrphanedNativeSubagent({
-        projection,
-        subagentId: subagent.id,
-        status: "cancelled",
-        now,
-        emitted: events,
-        allocateEventId,
-      })),
-    );
-  }
-  // A provider-native subagent thread has no runs; left running, the child
-  // would show as working forever.
-  events.push(
-    ...(yield* endRunlessRootTurns({
-      threadId: projection.thread.id,
-      providerInstanceId: projection.thread.providerInstanceId,
-      projection,
-      status: "cancelled",
-      now,
-      emitted: events,
-      allocateEventId,
-    })),
-  );
-  // All provider processes are gone on startup/shutdown: clear any
-  // persisted Waiting roster (including idle threads from settled roots)
-  // and idle active threads without resurrecting active status.
-  for (const providerThread of projection.providerThreads ?? []) {
-    const needsIdle = providerThread.status === "active";
-    const needsRosterClear = providerThreadHasPendingBackgroundTasks(providerThread);
-    if (!needsIdle && !needsRosterClear) {
-      continue;
-    }
-    if (providerThread.ownerNodeId === null) {
-      for (const task of providerThread.pendingBackgroundTasks ?? []) {
-        if (cancelledBackgroundNativeIds.has(task.taskId)) continue;
-        cancelledBackgroundNativeIds.add(task.taskId);
-        recordCancelledBackgroundWork(providerThread.id, cancelledRosterTaskWork(task));
-      }
-    }
-    events.push({
-      id: yield* allocateEventId(),
-      type: "provider-thread.updated",
-      threadId: projection.thread.id,
-      driver: providerThread.driver,
-      providerInstanceId: providerThread.providerInstanceId,
-      occurredAt: now,
-      payload: {
-        ...providerThread,
-        status: needsIdle ? "idle" : providerThread.status,
-        pendingBackgroundTasks: [],
-        updatedAt: now,
-      },
-    });
-  }
-  for (const session of projection.providerSessions.filter(
-    (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
-  )) {
-    events.push({
-      id: yield* allocateEventId(),
-      type: "provider-session.updated",
-      threadId: projection.thread.id,
-      driver: session.driver,
-      providerInstanceId: session.providerInstanceId,
-      occurredAt: now,
-      payload: { ...session, status: "stopped", updatedAt: now, lastError: null },
-    });
-  }
-  for (const [providerThreadId, work] of cancelledBackgroundWork) {
-    const noteRun = latestStartedRun(projection, providerThreadId);
-    if (noteRun === undefined) continue;
-    // Its own event: a run snapshot read before this commit could regress
-    // a lifecycle change (e.g. a checkpoint completing the run) made since.
-    events.push({
-      id: yield* allocateEventId(),
-      type: "run.background-work-cancelled",
-      threadId: projection.thread.id,
-      runId: noteRun.id,
-      providerInstanceId: noteRun.providerInstanceId,
-      occurredAt: now,
-      payload: {
-        runId: noteRun.id,
-        restartCancelledBackgroundWork: mergeRestartCancelledBackgroundWork(
-          noteRun.restartCancelledBackgroundWork ?? [],
-          work,
-        ),
-      },
-    });
-  }
-  const continuationRun =
-    continueAfterRestart && trigger === "startup"
-      ? restartContinuationRun(projection, now)
-      : undefined;
-  const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
-    ? [
-        {
-          id: `effect:restart-continuation:${continuationRun.id}`,
-          commandId,
-          threadId: projection.thread.id,
-          request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
-        },
-      ]
-    : [];
-  const stoppedSessions = projection.providerSessions.filter(
-    (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
-  ).length;
-  return {
-    events,
-    effects,
-    detail,
-    terminalizedRuns: runs.length,
-    stoppedSessions,
-    closedRequests: requests.length,
-  } satisfies ThreadReconciliationPlan;
-});
-
 export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -659,26 +194,447 @@ export const make = Effect.gen(function* () {
       continueAfterRestart: boolean,
     ) {
       const now = yield* DateTime.now;
+      const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
+      for (const run of nonterminalRuns(projection)) {
+        if (run.status === "waiting") {
+          const checkpointEffects = yield* outbox
+            .listByCommandId(CommandId.make(`command:effect:checkpoint.capture:${run.id}`))
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderRuntimeRecoveryError({
+                    operation: "reconcile",
+                    threadId: projection.thread.id,
+                    cause,
+                  }),
+              ),
+            );
+          const hasReplayableCheckpoint = checkpointEffects.some(
+            (effect) =>
+              effect.request.type === "checkpoint.capture" &&
+              effect.request.runId === run.id &&
+              (effect.status === "pending" || effect.status === "running"),
+          );
+          if (hasReplayableCheckpoint) continue;
+        }
+        runs.push(run);
+      }
+      const messageRequestNodeIds = new Set(
+        projection.runtimeRequests
+          .filter(
+            (request) =>
+              request.status === "pending" && request.responseCapability.type === "message",
+          )
+          .map((request) => request.nodeId),
+      );
+      const requests = projection.runtimeRequests.filter(
+        (request) => request.status === "pending" && request.responseCapability.type !== "message",
+      );
+      // Delegated task rows, items and nodes stay open: the child settles them.
+      const delegatedTaskNodeIds = new Set<string>([
+        ...(projection.subagents ?? []).filter(isAppOwnedDelegation).map((subagent) => subagent.id),
+        ...(projection.turnItems ?? []).flatMap((item) =>
+          item.type === "subagent" && isAppOwnedDelegation(item) ? [item.subagentId] : [],
+        ),
+      ]);
+      const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
       );
-      const plan = yield* planThreadReconciliation({
-        projection,
-        trigger,
-        continueAfterRestart,
-        commandId,
-        now,
-        ids,
-        outbox,
-        projections,
-      });
+      const allocateEventId = () =>
+        ids.allocate.event({ threadId: projection.thread.id, commandId }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderRuntimeRecoveryError({
+                operation: "reconcile",
+                threadId: projection.thread.id,
+                cause,
+              }),
+          ),
+        );
+      const events: Array<OrchestrationV2DomainEvent> = [];
+      // Background work that outlived its settled turn. The provider transcript
+      // cannot record its death, so the next provider turn is told instead.
+      // Shutdown records it too: a graceful restart cancels it there first.
+      // Keyed by the provider thread that lost the work: only its turns are told.
+      const cancelledBackgroundWork = new Map<
+        ProviderThreadId,
+        Array<OrchestrationV2RestartCancelledBackgroundWork>
+      >();
+      const cancelledBackgroundNativeIds = new Set<string>();
+      const recordCancelledBackgroundWork = (
+        providerThreadId: ProviderThreadId | null | undefined,
+        work: OrchestrationV2RestartCancelledBackgroundWork,
+      ) => {
+        if (providerThreadId == null) return;
+        const existing = cancelledBackgroundWork.get(providerThreadId);
+        if (existing === undefined) cancelledBackgroundWork.set(providerThreadId, [work]);
+        else existing.push(work);
+      };
+      const recordCancelledBackgroundItem = (
+        item: OrchestrationV2ThreadProjection["turnItems"][number],
+      ) => {
+        if (!isBackgroundCapableTurnItemType(item.type)) return;
+        const work = cancelledTurnItemWork(item);
+        if (work === undefined) return;
+        recordCancelledBackgroundWork(
+          item.providerThreadId ??
+            projection.runs.find((run) => run.id === item.runId)?.providerThreadId,
+          work,
+        );
+        if (item.nativeItemRef?.nativeId != null) {
+          cancelledBackgroundNativeIds.add(item.nativeItemRef.nativeId);
+        }
+      };
+      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
+      const queuedMessages =
+        queuedRuns.length === 0
+          ? []
+          : (yield* projections
+              .getThreadRecords(projection.thread.id, ["messages"], {
+                messageIds: queuedRuns.map((run) => run.userMessageId),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderRuntimeRecoveryError({
+                      operation: "read-projections",
+                      threadId: projection.thread.id,
+                      cause,
+                    }),
+                ),
+              )).messages;
+      const bufferedMessageIds = new Set(
+        queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
+      );
+      // Buffered wakes lost their output with the process. Durable queued messages
+      // keep their execution identities and order until the user resumes them.
+      for (const run of queuedRuns) {
+        if (bufferedMessageIds.has(run.userMessageId)) {
+          runs.push(run);
+          continue;
+        }
+        if (run.queueHeld === true) continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "run.updated",
+          threadId: projection.thread.id,
+          runId: run.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, queueHeld: true },
+        });
+      }
+      for (const request of requests) {
+        events.push({
+          id: yield* allocateEventId(),
+          type: "runtime-request.updated",
+          threadId: projection.thread.id,
+          nodeId: request.nodeId,
+          occurredAt: now,
+          payload: {
+            ...request,
+            status: trigger === "startup" ? "expired" : "cancelled",
+            responseCapability: {
+              type: "not_resumable",
+              reason: `The server ${trigger === "startup" ? "restarted" : "shut down"} before this runtime request was resolved.`,
+            },
+            resolvedAt: now,
+          },
+        });
+      }
+      for (const run of runs) {
+        events.push({
+          id: yield* allocateEventId(),
+          type: "run.updated",
+          threadId: projection.thread.id,
+          runId: run.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
+        });
+        for (const attempt of projection.attempts.filter(
+          (candidate) =>
+            candidate.runId === run.id &&
+            (candidate.status === "pending" || candidate.status === "running"),
+        )) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "run-attempt.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            nodeId: attempt.rootNodeId,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...attempt, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const node of projection.nodes.filter(
+          (candidate) =>
+            candidate.runId === run.id &&
+            !messageRequestNodeIds.has(candidate.id) &&
+            !delegatedTaskNodeIds.has(candidate.id) &&
+            (candidate.status === "pending" ||
+              candidate.status === "running" ||
+              candidate.status === "waiting"),
+        )) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            nodeId: node.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...node, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const providerTurn of projection.providerTurns.filter(
+          (candidate) =>
+            candidate.runAttemptId !== null &&
+            projection.attempts.some(
+              (attempt) => attempt.id === candidate.runAttemptId && attempt.runId === run.id,
+            ) &&
+            (candidate.status === "pending" || candidate.status === "running"),
+        )) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "provider-turn.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            nodeId: providerTurn.nodeId,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...providerTurn, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const message of projection.messages.filter(
+          (candidate) => candidate.runId === run.id && candidate.streaming,
+        )) {
+          events.push({
+            id: yield* allocateEventId(),
+            type: "message.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            ...(message.nodeId === null ? {} : { nodeId: message.nodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: { ...message, streaming: false, updatedAt: now },
+          });
+        }
+        for (const item of projection.turnItems.filter(
+          (candidate) =>
+            candidate.runId === run.id &&
+            (candidate.nodeId === null || !messageRequestNodeIds.has(candidate.nodeId)) &&
+            !isAppOwnedDelegationItem(candidate) &&
+            (candidate.status === "pending" ||
+              candidate.status === "running" ||
+              candidate.status === "waiting"),
+        )) {
+          // A waiting run's provider turn already settled; its open items are
+          // background work. A running run's items die with its turn.
+          if (run.status === "waiting") recordCancelledBackgroundItem(item);
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            ...(item.nodeId === null ? {} : { nodeId: item.nodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: cancelledItem(item, now),
+          });
+        }
+      }
+      // A blocking delegate_task wait dies with the turn that made it, and its
+      // continuation never got the tool result. Let the child's result wake
+      // the parent like an async task, so it reaches the continued turn.
+      const cutRunIds = new Set(runs.map((run) => run.id));
+      for (const task of projection.subagents ?? []) {
+        if (
+          task.origin !== "app_owned" ||
+          task.runId === null ||
+          !cutRunIds.has(task.runId) ||
+          task.completionWake !== "settled_only" ||
+          !isOrchestrationV2WorkActive(task.status)
+        )
+          continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "subagent.updated",
+          threadId: projection.thread.id,
+          runId: task.runId,
+          nodeId: task.id,
+          driver: task.driver,
+          providerInstanceId: task.providerInstanceId,
+          occurredAt: now,
+          payload: { ...task, completionWake: "always", updatedAt: now },
+        });
+      }
+      // Process loss also orphans background-capable turn items on already-
+      // settled runs (e.g. post-settle Waiting work). Skip items already
+      // cancelled above for recovered nonterminal runs to avoid duplicate
+      // cancellation events.
+      const recoveredNonterminalRunIds = new Set(runs.map((run) => run.id));
+      const cancelledStaleNodeIds = new Set<string>();
+      for (const item of projection.turnItems ?? []) {
+        if (item.runId !== null && recoveredNonterminalRunIds.has(item.runId)) {
+          continue;
+        }
+        if (!isBackgroundCapableTurnItemType(item.type)) {
+          continue;
+        }
+        if (!isNonterminalTurnItemStatus(item.status) || isAppOwnedDelegationItem(item)) {
+          continue;
+        }
+        const providerInstanceId = resolveStaleBackgroundItemProviderInstanceId(item, projection);
+        recordCancelledBackgroundItem(item);
+        events.push({
+          id: yield* allocateEventId(),
+          type: "turn-item.updated",
+          threadId: projection.thread.id,
+          ...(item.runId === null ? {} : { runId: item.runId }),
+          ...(item.nodeId === null || item.nodeId === undefined ? {} : { nodeId: item.nodeId }),
+          providerInstanceId,
+          occurredAt: now,
+          payload: cancelledItem(item, now),
+        });
+        if (item.nodeId !== null && item.nodeId !== undefined) {
+          const staleItemNode = projection.nodes.find(
+            (candidate) =>
+              candidate.id === item.nodeId && isNonterminalNodeStatus(candidate.status),
+          );
+          if (staleItemNode !== undefined && !cancelledStaleNodeIds.has(staleItemNode.id)) {
+            cancelledStaleNodeIds.add(staleItemNode.id);
+            events.push({
+              id: yield* allocateEventId(),
+              type: "node.updated",
+              threadId: projection.thread.id,
+              ...(item.runId === null ? {} : { runId: item.runId }),
+              nodeId: staleItemNode.id,
+              providerInstanceId,
+              occurredAt: now,
+              payload: { ...staleItemNode, status: "cancelled", completedAt: now },
+            });
+          }
+        }
+      }
+      // No provider process outlives the server, so a native subagent still open
+      // here never reports its end, whatever state its run and item are in.
+      for (const subagent of projection.subagents ?? []) {
+        events.push(
+          ...(yield* endOrphanedNativeSubagent({
+            projection,
+            subagentId: subagent.id,
+            status: "cancelled",
+            now,
+            emitted: events,
+            allocateEventId,
+          })),
+        );
+      }
+      // A provider-native subagent thread has no runs; left running, the child
+      // would show as working forever.
+      events.push(
+        ...(yield* endRunlessRootTurns({
+          threadId: projection.thread.id,
+          providerInstanceId: projection.thread.providerInstanceId,
+          projection,
+          status: "cancelled",
+          now,
+          emitted: events,
+          allocateEventId,
+        })),
+      );
+      // All provider processes are gone on startup/shutdown: clear any
+      // persisted Waiting roster (including idle threads from settled roots)
+      // and idle active threads without resurrecting active status.
+      for (const providerThread of projection.providerThreads ?? []) {
+        const needsIdle = providerThread.status === "active";
+        const needsRosterClear = providerThreadHasPendingBackgroundTasks(providerThread);
+        if (!needsIdle && !needsRosterClear) {
+          continue;
+        }
+        if (providerThread.ownerNodeId === null) {
+          for (const task of providerThread.pendingBackgroundTasks ?? []) {
+            if (cancelledBackgroundNativeIds.has(task.taskId)) continue;
+            cancelledBackgroundNativeIds.add(task.taskId);
+            recordCancelledBackgroundWork(providerThread.id, cancelledRosterTaskWork(task));
+          }
+        }
+        events.push({
+          id: yield* allocateEventId(),
+          type: "provider-thread.updated",
+          threadId: projection.thread.id,
+          driver: providerThread.driver,
+          providerInstanceId: providerThread.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...providerThread,
+            status: needsIdle ? "idle" : providerThread.status,
+            pendingBackgroundTasks: [],
+            updatedAt: now,
+          },
+        });
+      }
+      for (const session of projection.providerSessions.filter(
+        (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
+      )) {
+        events.push({
+          id: yield* allocateEventId(),
+          type: "provider-session.updated",
+          threadId: projection.thread.id,
+          driver: session.driver,
+          providerInstanceId: session.providerInstanceId,
+          occurredAt: now,
+          payload: { ...session, status: "stopped", updatedAt: now, lastError: null },
+        });
+      }
+      for (const [providerThreadId, work] of cancelledBackgroundWork) {
+        const noteRun = latestStartedRun(projection, providerThreadId);
+        if (noteRun === undefined) continue;
+        // Its own event: a run snapshot read before this commit could regress
+        // a lifecycle change (e.g. a checkpoint completing the run) made since.
+        events.push({
+          id: yield* allocateEventId(),
+          type: "run.background-work-cancelled",
+          threadId: projection.thread.id,
+          runId: noteRun.id,
+          providerInstanceId: noteRun.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            runId: noteRun.id,
+            restartCancelledBackgroundWork: mergeRestartCancelledBackgroundWork(
+              noteRun.restartCancelledBackgroundWork ?? [],
+              work,
+            ),
+          },
+        });
+      }
+      const continuationRun =
+        continueAfterRestart && trigger === "startup"
+          ? restartContinuationRun(projection, now)
+          : undefined;
+      const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = continuationRun
+        ? [
+            {
+              id: `effect:restart-continuation:${continuationRun.id}`,
+              commandId,
+              threadId: projection.thread.id,
+              request: { type: "provider-runtime.continue", sourceRunId: continuationRun.id },
+            },
+          ]
+        : [];
+      const stoppedSessions = projection.providerSessions.filter(
+        (candidate) => candidate.status !== "stopped" && candidate.status !== "error",
+      ).length;
       let retiredEffects: number;
-      if (plan.events.length === 0) {
+      if (events.length === 0) {
         const retiredEffectIds = yield* outbox
           .cancelUnsettled({
             threadId: projection.thread.id,
             effectTypes: EffectOutbox.PROCESS_BOUND_EFFECT_TYPES,
-            reason: plan.detail,
+            reason: detail,
           })
           .pipe(
             Effect.mapError(
@@ -686,7 +642,7 @@ export const make = Effect.gen(function* () {
                 new ProviderRuntimeRecoveryError({
                   operation: "reconcile",
                   threadId: projection.thread.id,
-                  cause: { detail: plan.detail, cause },
+                  cause: { detail, cause },
                 }),
             ),
           );
@@ -699,11 +655,11 @@ export const make = Effect.gen(function* () {
             threadId: projection.thread.id,
             commandType: "provider-runtime.reconcile",
             acceptedAt: now,
-            events: plan.events,
-            effects: plan.effects,
+            events,
+            effects,
             cancelUnsettledEffects: {
               effectTypes: EffectOutbox.PROCESS_BOUND_EFFECT_TYPES,
-              reason: plan.detail,
+              reason: detail,
             },
           })
           .pipe(
@@ -719,9 +675,9 @@ export const make = Effect.gen(function* () {
         retiredEffects = result.cancelledEffectCount;
       }
       return {
-        terminalizedRuns: plan.terminalizedRuns,
-        stoppedSessions: plan.stoppedSessions,
-        closedRequests: plan.closedRequests,
+        terminalizedRuns: runs.length,
+        stoppedSessions,
+        closedRequests: requests.length,
         retiredEffects,
       };
     },

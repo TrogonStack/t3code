@@ -19,6 +19,7 @@ import {
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
 const coreFields = {
+  reviewRequestTeams: [],
   checksTruncated: false,
   comparison: { behindBy: 0, viewerCanUpdate: true },
   viewerAccess: {
