@@ -33,11 +33,22 @@ import {
   type SecretProviderDraftField,
 } from "./AddSecretProviderDialog.logic";
 import { SecretInput } from "./SecretInput";
+import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
 const KIND_OPTIONS: ReadonlyArray<{ readonly kind: SecretProviderKind; readonly label: string }> = [
   { kind: "1password", label: "1Password CLI" },
   { kind: "openbao", label: "OpenBao" },
 ];
+
+function SecretProviderKindLabel({ kind }: { readonly kind: SecretProviderKind }) {
+  const label = KIND_OPTIONS.find((option) => option.kind === kind)?.label;
+  return (
+    <span className="flex items-center gap-2">
+      <SecretProviderKindIcon kind={kind} className="size-4 shrink-0" aria-hidden />
+      {label}
+    </span>
+  );
+}
 
 const AUTH_OPTIONS: ReadonlyArray<{
   readonly auth: OpenBaoAuth;
@@ -146,13 +157,13 @@ export function AddSecretProviderDialog({
               >
                 <SelectTrigger id="secret-provider-kind">
                   <SelectValue>
-                    {KIND_OPTIONS.find((option) => option.kind === draft.kind)?.label}
+                    <SecretProviderKindLabel kind={draft.kind} />
                   </SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   {KIND_OPTIONS.map((option) => (
                     <SelectItem key={option.kind} value={option.kind}>
-                      {option.label}
+                      <SecretProviderKindLabel kind={option.kind} />
                     </SelectItem>
                   ))}
                 </SelectPopup>

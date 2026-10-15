@@ -1,4 +1,8 @@
-import type { SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
+import type {
+  SecretProviderConfig,
+  SecretProviderId,
+  SecretProviderKind,
+} from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -22,6 +26,7 @@ import {
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -107,7 +112,7 @@ function EnvironmentSecretProviders({
           entries.map(([id, config]) => (
             <SettingsRow
               key={id}
-              title={config.label}
+              title={<SecretProviderTitle kind={config.kind} label={config.label} />}
               description={<span className="break-all">{secretProviderDescription(config)}</span>}
               control={
                 !readOnly ? (
@@ -131,6 +136,25 @@ function EnvironmentSecretProviders({
         />
       ) : null}
     </>
+  );
+}
+
+function SecretProviderTitle({
+  kind,
+  label,
+}: {
+  readonly kind: SecretProviderKind;
+  readonly label: string;
+}) {
+  return (
+    <span className="flex items-center gap-2">
+      <SecretProviderKindIcon
+        kind={kind}
+        className="size-4.5 shrink-0 text-foreground/80"
+        aria-hidden
+      />
+      {label}
+    </span>
   );
 }
 

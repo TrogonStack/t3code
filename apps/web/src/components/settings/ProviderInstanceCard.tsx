@@ -31,6 +31,7 @@ import {
   type ProviderInstanceConfig,
   type ProviderSecretSource,
   type SecretProviderConfig,
+  type SecretProviderKind,
   type UnifiedSettings,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
@@ -74,6 +75,7 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 import {
   SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
   secretProviderReferenceIssue,
@@ -134,6 +136,7 @@ type EnvironmentSourceOption = {
   readonly label: string;
   readonly detail?: string;
   readonly secret: boolean;
+  readonly kind?: SecretProviderKind;
 };
 
 function lookupSecretProvider(
@@ -160,6 +163,7 @@ function environmentSourceOptions(
       label: config.label,
       detail: secretProviderSummary(config),
       secret: true,
+      kind: config.kind,
     })),
   ];
   if (
@@ -179,6 +183,7 @@ function environmentSourceOptions(
       label: row.account.length > 0 ? row.account : "1Password",
       detail: "1Password account set on this variable",
       secret: true,
+      kind: "1password",
     });
   }
   return options;
@@ -188,7 +193,11 @@ function EnvironmentSourceOptionLabel(props: { readonly option: EnvironmentSourc
   const Icon = props.option.secret ? KeyRoundIcon : TypeIcon;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Icon className="size-3.5 shrink-0" />
+      {props.option.kind !== undefined ? (
+        <SecretProviderKindIcon kind={props.option.kind} className="size-3.5 shrink-0" />
+      ) : (
+        <Icon className="size-3.5 shrink-0" />
+      )}
       <span className="truncate">{props.option.label}</span>
     </span>
   );
