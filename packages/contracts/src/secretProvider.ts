@@ -69,9 +69,13 @@ export const OpenBaoNamespace = TrimmedNonEmptyString.check(
 );
 export type OpenBaoNamespace = typeof OpenBaoNamespace.Type;
 
-/** Empty means the `bao` CLI uses its own login. */
+/** Empty means the server falls back to `BAO_TOKEN` or the token the `bao` CLI saved. */
 export const OpenBaoToken = TrimmedString;
 export type OpenBaoToken = typeof OpenBaoToken.Type;
+
+/** `api` reads KV v2 over HTTP; `cli` opts into running the `bao` binary instead. */
+export const OpenBaoAccess = Schema.Literals(["api", "cli"]);
+export type OpenBaoAccess = typeof OpenBaoAccess.Type;
 
 export const OnePasswordSecretProviderConfig = Schema.Struct({
   kind: Schema.Literal("1password"),
@@ -87,6 +91,7 @@ export const OpenBaoSecretProviderConfig = Schema.Struct({
   mount: OpenBaoMount.pipe(Schema.withDecodingDefault(Effect.succeed("secret"))),
   namespace: Schema.optionalKey(OpenBaoNamespace),
   token: Schema.optionalKey(OpenBaoToken).pipe(secretSetting),
+  access: OpenBaoAccess.pipe(Schema.withDecodingDefault(Effect.succeed("api" as const))),
 });
 export type OpenBaoSecretProviderConfig = typeof OpenBaoSecretProviderConfig.Type;
 

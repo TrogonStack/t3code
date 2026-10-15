@@ -1,17 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off -- the op inject separator only needs a random token at this subprocess boundary
 /**
  * ProviderSecretResolverLive: implementation of `ProviderSecretResolver` that
- * shells out to each secret store's own CLI.
+ * reads each secret store through its HTTP API or its own CLI.
  *
  * A named secret provider is looked up in `settings.secretProviders` when its
  * secret is read, not when the reference is collected, so the reference stays
  * a pure value and the provider's current configuration is what gets used.
  * Removing a provider leaves its references unresolved rather than failing.
  *
- * OpenBao is `bao kv get -mount=<mount> -field=<field> <path>` against the
- * provider's address. Without a configured token the CLI's own login (token
- * helper or `BAO_TOKEN` in the server's environment) applies, the same way
- * `op` uses the user's existing session.
+ * OpenBao reads the KV v2 secret over its HTTP API by default
+ * (`access: "api"`): `GET <address>/v1/<mount>/data/<path>` with the token in
+ * `X-Vault-Token`. The token is the provider's own, else the first of
+ * `BAO_TOKEN`, `VAULT_TOKEN`, the file named by `BAO_TOKEN_PATH` or
+ * `VAULT_TOKEN_PATH`, and `~/.vault-token`, where `bao login` saves it. With
+ * `access: "cli"` it runs `bao kv get -mount=<mount> -field=<field> <path>`
+ * instead and the CLI's own login applies, the same way `op` uses the user's
+ * existing session.
  *
  * 1Password resolution is `op read --account <account> <reference>`, which is the same
  * command the user would run by hand and inherits their existing `op` session,
@@ -48,6 +52,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as NodeCrypto from "node:crypto";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
@@ -58,6 +64,7 @@ import {
   type NamedProviderSecretReference,
   type ProviderSecretReference,
 } from "./ProviderSecretReference.ts";
+import { expandHomePath } from "../os-jank.ts";
 import * as Settings from "../serverSettings.ts";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import {
@@ -229,6 +236,124 @@ function parseOpenBaoReference(reference: string) {
   return { path, field };
 }
 
+const OpenBaoErrorBody = Schema.Struct({ errors: Schema.optional(Schema.Array(Schema.String)) });
+const OpenBaoSecretBody = Schema.Struct({
+  data: Schema.Struct({ data: Schema.Record(Schema.String, Schema.Unknown) }),
+});
+const decodeOpenBaoErrorBody = Schema.decodeUnknownOption(OpenBaoErrorBody);
+const decodeOpenBaoSecretBody = Schema.decodeUnknownOption(OpenBaoSecretBody);
+
+const nonEmpty = (value: string | undefined) =>
+  value === undefined || value.length === 0 ? undefined : value;
+
+/**
+ * The token the API read authenticates with, in the order OpenBao's own CLI
+ * would find it. The file is the CLI's token helper, so a `bao login` the user
+ * already did applies without configuring anything here. A missing file is
+ * not an error, it just means there is no saved login.
+ */
+const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
+  config: OpenBaoSecretProviderConfig,
+) {
+  const configured = nonEmpty(config.token);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const env = yield* HostProcess.Environment;
+  const fromEnv = nonEmpty(env.BAO_TOKEN) ?? nonEmpty(env.VAULT_TOKEN);
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const tokenFile =
+    nonEmpty(env.BAO_TOKEN_PATH) ??
+    nonEmpty(env.VAULT_TOKEN_PATH) ??
+    (yield* expandHomePath("~/.vault-token"));
+  const contents = yield* fileSystem.readFileString(tokenFile).pipe(Effect.option);
+  return Option.match(contents, {
+    onNone: () => undefined,
+    onSome: (text) => nonEmpty(text.trim()),
+  });
+});
+
+/** Percent-encode each path segment and keep `/` as the separator. */
+const encodeOpenBaoPath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+
+const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
+  function* (
+    provider: SecretProviderId,
+    config: OpenBaoSecretProviderConfig,
+    location: { readonly path: string; readonly field: string },
+    reference: string,
+  ) {
+    const token = yield* resolveOpenBaoToken(config);
+    if (token === undefined) {
+      yield* Effect.logWarning(
+        "No OpenBao token: set one on the provider, export BAO_TOKEN, or log in with `bao login`",
+        { provider, reference },
+      );
+      return undefined;
+    }
+    const client = yield* HttpClient.HttpClient;
+    const url = `${config.address.replace(/\/+$/, "")}/v1/${encodeOpenBaoPath(config.mount)}/data/${encodeOpenBaoPath(location.path)}`;
+    const request = HttpClientRequest.get(url).pipe(
+      HttpClientRequest.setHeaders({
+        "X-Vault-Token": token,
+        ...(config.namespace === undefined || config.namespace.length === 0
+          ? {}
+          : { "X-Vault-Namespace": config.namespace }),
+      }),
+    );
+    // Trace headers would tell the vault which of our spans made the request.
+    const response = yield* client
+      .execute(request)
+      .pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
+    const body: unknown = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
+    if (response.status < 200 || response.status >= 300) {
+      // OpenBao's `errors` array names the failure and never carries a secret.
+      yield* Effect.logWarning("Could not read provider secret from OpenBao", {
+        provider,
+        reference,
+        status: response.status,
+        errors: decodeOpenBaoErrorBody(body).pipe(
+          Option.flatMap((decoded) => Option.fromNullishOr(decoded.errors)),
+          Option.getOrElse(() => []),
+        ),
+      });
+      return undefined;
+    }
+    const value = decodeOpenBaoSecretBody(body).pipe(
+      Option.map((decoded) => decoded.data.data[location.field]),
+      Option.getOrUndefined,
+    );
+    const secret =
+      typeof value === "string"
+        ? value
+        : typeof value === "number" || typeof value === "boolean"
+          ? String(value)
+          : undefined;
+    if (secret === undefined || secret.length === 0) {
+      yield* Effect.logWarning("OpenBao secret has no usable value for the requested field", {
+        provider,
+        reference,
+        status: response.status,
+      });
+      return undefined;
+    }
+    return secret;
+  },
+  (effect, provider, _config, _location, reference) =>
+    effect.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not read provider secret from OpenBao", {
+          provider,
+          reference,
+          detail: String(error),
+        }).pipe(Effect.as(undefined)),
+      ),
+    ),
+);
+
 const readOpenBaoSecret = Effect.fn("readOpenBaoSecret")(function* (
   provider: SecretProviderId,
   config: OpenBaoSecretProviderConfig,
@@ -241,6 +366,9 @@ const readOpenBaoSecret = Effect.fn("readOpenBaoSecret")(function* (
       reference,
     });
     return undefined;
+  }
+  if (config.access === "api") {
+    return yield* readOpenBaoSecretOverApi(provider, config, location, reference);
   }
   const spawnCommand = yield* resolveSpawnCommand(OPENBAO_BINARY, [
     "kv",

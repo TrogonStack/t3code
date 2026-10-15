@@ -1,6 +1,7 @@
 import {
   OnePasswordAccount,
   OnePasswordSecretReference,
+  OpenBaoAccess,
   OpenBaoAddress,
   OpenBaoMount,
   OpenBaoNamespace,
@@ -19,8 +20,8 @@ export const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<SecretProviderKind, st
 
 export const SECRET_PROVIDER_REFERENCE_PLACEHOLDERS: Readonly<Record<SecretProviderKind, string>> =
   {
-    "1password": "op://vault/item/field",
-    openbao: "path/to/secret#field",
+    "1password": "op://Private/OpenAI/credential",
+    openbao: "apps/openai#api_key",
   };
 
 export const DEFAULT_OPENBAO_MOUNT = "secret";
@@ -75,6 +76,7 @@ export interface SecretProviderDraft {
   readonly mount: string;
   readonly namespace: string;
   readonly token: string;
+  readonly access: OpenBaoAccess;
 }
 
 export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
@@ -85,6 +87,7 @@ export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
   mount: DEFAULT_OPENBAO_MOUNT,
   namespace: "",
   token: "",
+  access: "api",
 };
 
 function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
@@ -177,6 +180,7 @@ export function secretProviderFromDraft(
       mount: mount.success,
       ...(namespace === undefined ? {} : { namespace: namespace.success }),
       ...(token.length === 0 ? {} : { token }),
+      access: draft.access,
     },
   });
 }

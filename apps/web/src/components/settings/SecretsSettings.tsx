@@ -31,6 +31,7 @@ function secretProviderDescription(config: SecretProviderConfig): string {
     secretProviderSummary(config),
     `mount ${config.mount}`,
     ...(config.namespace === undefined ? [] : [`namespace ${config.namespace}`]),
+    ...(config.access === "cli" ? ["bao CLI"] : []),
   ].join(" · ");
 }
 

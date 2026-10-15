@@ -7,6 +7,10 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -49,13 +53,22 @@ const onePassword = (reference: string, account: string) => {
  * The live resolver over a fake spawner. `secretProviders` seeds the settings
  * the resolver looks named providers up in.
  */
+const noHttpClient = HttpClient.make(() => Effect.die("unexpected HTTP request"));
+
 const resolverLayer = (
   spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
   secretProviders: ServerSettings["secretProviders"] = {},
+  httpClient: HttpClient.HttpClient = noHttpClient,
 ) =>
   ProviderSecretResolverLive.pipe(
     Layer.provide(
-      Layer.mergeAll(spawner, NodeFileSystem.layer, Settings.layerTest({ secretProviders })),
+      Layer.mergeAll(
+        spawner,
+        NodeFileSystem.layer,
+        NodePath.layer,
+        Layer.succeed(HttpClient.HttpClient, httpClient),
+        Settings.layerTest({ secretProviders }),
+      ),
     ),
   );
 
@@ -597,13 +610,48 @@ const onePasswordProvider = {
   account: OnePasswordAccount.make(HOME_ACCOUNT),
 };
 
-const openBaoProvider = (overrides: { namespace?: string; token?: string } = {}) => ({
+const openBaoProvider = (
+  overrides: { namespace?: string; token?: string; access?: "api" | "cli"; address?: string } = {},
+) => ({
   kind: "openbao" as const,
   label: "Team vault",
   address: BAO_ADDRESS,
   mount: "kv",
+  access: "cli" as const,
   ...overrides,
 });
+
+interface RecordedRequest {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/** HTTP client that answers every request with `status` and `body`, recording what it was sent. */
+const recordingHttpClient = (status: number, body: unknown) => {
+  const requests: Array<RecordedRequest> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({ url: request.url, headers: { ...request.headers } });
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+  });
+  return { client, requests };
+};
+
+const hostLayer = (env: NodeJS.ProcessEnv, home: string) =>
+  Layer.mergeAll(
+    Layer.succeed(HostProcess.Environment, env),
+    Layer.succeed(HostProcess.HomeDirectory, home),
+  );
+
+const apiRead = (reference = "agents/codex#api_key") =>
+  decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, reference)]);
 
 describe("ProviderSecretResolverLive with named secret providers", () => {
   it.effect("reads a named 1Password provider from the account it is configured with", () => {
@@ -755,6 +803,178 @@ describe("ProviderSecretResolverLive with named secret providers", () => {
           [HOME_PROVIDER]: onePasswordProvider,
           [VAULT_PROVIDER]: openBaoProvider(),
         }),
+      ),
+    );
+  });
+});
+
+describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
+  const apiProvider = (overrides: { namespace?: string; token?: string; address?: string } = {}) =>
+    openBaoProvider({ access: "api", ...overrides });
+
+  it.effect("reads the KV v2 field with the configured token and namespace", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api", port: 8200 } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-api", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(http.requests, [
+        {
+          url: `${BAO_ADDRESS}/v1/kv/data/agents/codex`,
+          headers: { "x-vault-token": "s.configured", "x-vault-namespace": "team" },
+        },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ namespace: "team", token: "s.configured" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("joins a trailing slash address and encodes unsafe path characters", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "x" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(apiRead("my team/co dex?#api_key"));
+
+      assert.deepStrictEqual(
+        http.requests.map((request) => [request.url, "x-vault-namespace" in request.headers]),
+        [[`${BAO_ADDRESS}/v1/kv/data/my%20team/co%20dex%3F`, false]],
+      );
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t", address: `${BAO_ADDRESS}/` }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("falls back to BAO_TOKEN from the environment", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(
+        http.requests.map((request) => request.headers["x-vault-token"]),
+        ["s.from-env"],
+      );
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider() }, http.client).pipe(
+          Layer.provide(
+            hostLayer({ BAO_TOKEN: "s.from-env", VAULT_TOKEN: "s.other" }, "/nonexistent"),
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("falls back to the token file `bao login` saves in the home directory", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3code-bao-home-" });
+      yield* fileSystem.writeFileString(`${home}/.vault-token`, "s.from-file\n");
+      const resolver = yield* ProviderSecretResolver.pipe(
+        Effect.provide(
+          resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider() }, http.client).pipe(
+            Layer.provide(hostLayer({}, home)),
+          ),
+        ),
+      );
+
+      yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(
+        http.requests.map((request) => request.headers["x-vault-token"]),
+        ["s.from-file"],
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeFileSystem.layer));
+  });
+
+  it.effect("reports a 403 unresolved without running bao", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(403, { errors: ["permission denied"] });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 1);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a missing, non-scalar, or tokenless read unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { nested: { a: 1 } } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("MISSING", VAULT_PROVIDER, "agents/codex#api_key"),
+          namedVariable("OBJECT", VAULT_PROVIDER, "agents/codex#nested"),
+        ]),
+      );
+
+      assert.deepStrictEqual(Array.from(resolved.unresolved), ["MISSING", "OBJECT"]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a read with no token anywhere unresolved without a request", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider() }, http.client).pipe(
+          Layer.provide(hostLayer({}, "/nonexistent-home")),
+        ),
       ),
     );
   });

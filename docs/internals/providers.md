@@ -163,7 +163,7 @@ store?" without depending on the resolver.
 [`ProviderSecretResolverLive`](../../apps/server/src/provider/ProviderSecretResolverLive.ts)
 is the half that fetches values. A `secret-provider` source names an entry under the `secretProviders`
 server setting, and the resolver dispatches on that entry's kind: the 1Password CLI for `op`, the
-`bao` CLI for OpenBao. The older 1Password source resolves as if it named a 1Password provider for its
+OpenBao HTTP API by default, or the `bao` CLI when the provider sets `access: "cli"`. The older 1Password source resolves as if it named a 1Password provider for its
 account. The provider id or account is part of the cache key, because the same reference in two
 stores is two different secrets. A reference naming a provider that no longer exists is unresolved.
 Changing `secretProviders` invalidates the cache and rebuilds the instances that read from it, since

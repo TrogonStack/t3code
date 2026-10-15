@@ -73,6 +73,7 @@ describe("secretProviderFromDraft", () => {
           label: "Homelab",
           address: "https://bao.example:8200",
           mount: "secret",
+          access: "api",
         },
       }),
     );
@@ -98,6 +99,7 @@ describe("secretProviderFromDraft", () => {
       mount: "kv",
       namespace: "team-a",
       token: "s.token",
+      access: "api",
     });
   });
 

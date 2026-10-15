@@ -14,7 +14,8 @@ values.
 1. Open Settings, then Secrets, and choose Add provider.
 2. Pick 1Password CLI or OpenBao, give it a name, and fill in its details. 1Password needs the
    account sign-in address, such as `my.1password.com`. OpenBao needs its address and mount, and
-   optionally a namespace and a token.
+   optionally a namespace and a token. Check Use the bao CLI only if you want the server to run the
+   `bao` command instead of calling the OpenBao HTTP API.
 3. In a provider's Variables section, add the variable, choose your named provider as its source, and
    fill in the reference.
 
@@ -27,7 +28,7 @@ Reference: op://Private/claude-code/credential
 You can add as many providers as you need, for example two 1Password accounts and an OpenBao server.
 Each variable names the one it reads from.
 
-T3 Code reads the value with the provider's CLI right before it starts the agent, and hands the
+T3 Code reads the value from your secret manager right before it starts the agent, and hands the
 resolved value to the agent process only. The reference is what T3 Code stores; the secret itself
 never lands in your settings file or in T3 Code's secret store.
 
@@ -43,23 +44,25 @@ source.
 
 - **1Password:** `op://vault/item/field`. To copy one, open the item, use the field's overflow menu,
   and choose **Copy Secret Reference**.
-- **OpenBao:** `path/to/secret#field`. The path is inside the mount set on the provider, and the part
+- **OpenBao:** `apps/openai#api_key`. The path is inside the mount set on the provider, and the part
   after `#` is the key to read. A reference without a key cannot be resolved.
 
 ## What Do I Need Installed
 
-The command line tool for each store you use, on the machine running the T3 Code server.
+What each store needs, on the machine running the T3 Code server.
 
 - **1Password:** the [1Password CLI](https://developer.1password.com/docs/cli/get-started/) (`op`),
   signed in.
-- **OpenBao:** the `bao` CLI. Either put a token in the provider, or leave it empty and T3 Code uses
-  whatever login the `bao` CLI already has on that machine.
+- **OpenBao:** a token, and network access to the OpenBao server. By default T3 Code calls the
+  OpenBao HTTP API (KV v2). It uses the provider's Token field, else `BAO_TOKEN` on the server, else
+  the token `bao login` saved in `~/.vault-token`. The `bao` CLI is only needed when Use the bao CLI
+  is checked, and then it uses its own login unless the provider has a token.
 
 Confirm it works from a normal shell first:
 
 ```bash
 op read --account my.1password.com --no-newline "op://Private/claude-code/credential"
-BAO_ADDR=https://bao.example:8200 bao kv get -mount=secret -field=token path/to/secret
+curl -H "X-Vault-Token: $BAO_TOKEN" https://bao.example:8200/v1/secret/data/apps/openai
 ```
 
 If the command prints your secret, T3 Code can read it too. If it asks you to sign in, sign in first,
@@ -113,7 +116,7 @@ Work through it in this order:
    typo in the reference.
 2. Confirm the provider still exists under Settings, Secrets. A variable naming a removed provider
    cannot be read.
-3. Confirm `op` or `bao` is on the `PATH` of whoever launched the T3 Code server. A CLI installed only for
+3. Confirm `op` (or `bao`, when Use the bao CLI is checked) is on the `PATH` of whoever launched the T3 Code server. A CLI installed only for
    your interactive shell is not always visible to a background service.
 4. Refresh provider status once the underlying problem is fixed. A failed read is remembered exactly
    like a successful one, so nothing retries on its own.

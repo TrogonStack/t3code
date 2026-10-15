@@ -13,6 +13,7 @@ import {
   AutocompletePopup,
 } from "../ui/autocomplete";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -41,7 +42,7 @@ const KIND_OPTIONS: ReadonlyArray<{ readonly kind: SecretProviderKind; readonly 
 
 /**
  * Adds a named secret provider to one environment. Provider variables on that
- * environment pick it by name; the server runs its CLI when a provider starts.
+ * environment pick it by name; values are read on the server when a provider starts.
  */
 export function AddSecretProviderDialog({
   open,
@@ -99,8 +100,8 @@ export function AddSecretProviderDialog({
         <DialogHeader>
           <DialogTitle>Add a secret provider</DialogTitle>
           <DialogDescription>
-            Provider variables on {environmentLabel} can read values from it by name. Its CLI runs
-            on that server.
+            Provider variables on {environmentLabel} can read values from it by name. Values are
+            read on that server when a provider starts.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -259,6 +260,7 @@ export function AddSecretProviderDialog({
                   <Label htmlFor="secret-provider-namespace">Namespace (optional)</Label>
                   <Input
                     id="secret-provider-namespace"
+                    placeholder="admin/platform"
                     value={draft.namespace}
                     onChange={(event) => update({ namespace: event.target.value })}
                     spellCheck={false}
@@ -281,13 +283,33 @@ export function AddSecretProviderDialog({
                   <Label htmlFor="secret-provider-token">Token (optional)</Label>
                   <SecretInput
                     id="secret-provider-token"
+                    placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
                     value={draft.token}
                     onChange={(event) => update({ token: event.target.value })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Leave empty to use the bao CLI's own login.
+                    {draft.access === "cli"
+                      ? "Leave empty to use the bao CLI's own login."
+                      : "Leave empty to use BAO_TOKEN or the token saved by bao login on that server."}
                   </p>
                 </div>
+                <label className="flex cursor-pointer items-start gap-3">
+                  <Checkbox
+                    className="mt-0.5"
+                    checked={draft.access === "cli"}
+                    onCheckedChange={(checked) =>
+                      update({ access: checked === true ? "cli" : "api" })
+                    }
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-foreground">
+                      Use the bao CLI
+                    </span>
+                    <span className="block text-xs leading-snug text-muted-foreground">
+                      Run the bao command on the server instead of calling the HTTP API.
+                    </span>
+                  </span>
+                </label>
               </>
             )}
           </form>
