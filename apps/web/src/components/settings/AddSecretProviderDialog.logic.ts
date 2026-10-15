@@ -99,20 +99,44 @@ function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
     : Result.succeed(decoded.success);
 }
 
-/** The settings entry a draft adds, or the first reason it cannot be added yet. */
+export type SecretProviderDraftField = "name" | "account" | "address" | "mount" | "namespace";
+
+export type SecretProviderDraftIssues = Partial<Readonly<Record<SecretProviderDraftField, string>>>;
+
+/**
+ * The settings entry a draft adds, or every field that blocks it. Only the
+ * fields of the draft's kind are checked, and each field reports one message.
+ */
 export function secretProviderFromDraft(
   draft: SecretProviderDraft,
   existingIds: ReadonlySet<string>,
-): Result.Result<{ readonly id: SecretProviderId; readonly config: SecretProviderConfig }, string> {
+): Result.Result<
+  { readonly id: SecretProviderId; readonly config: SecretProviderConfig },
+  SecretProviderDraftIssues
+> {
+  const issues: { -readonly [Field in SecretProviderDraftField]?: string } = {};
+
   const label = decodeField(SecretProviderLabel, draft.name, "Enter a name.");
-  if (Result.isFailure(label)) return Result.fail(label.failure);
-  const id = secretProviderIdFromName(label.success);
-  if (id === null) return Result.fail("The name needs at least one letter or digit.");
-  if (existingIds.has(id)) return Result.fail(`A secret provider named ${label.success} exists.`);
+  const id = Result.isSuccess(label) ? secretProviderIdFromName(label.success) : null;
+  if (Result.isFailure(label)) {
+    issues.name = label.failure;
+  } else if (id === null) {
+    issues.name = "The name needs at least one letter or digit.";
+  } else if (existingIds.has(id)) {
+    issues.name = `A secret provider named ${label.success} exists.`;
+  }
 
   if (draft.kind === "1password") {
-    const account = decodeField(OnePasswordAccount, draft.account, "Choose a 1Password account.");
-    if (Result.isFailure(account)) return Result.fail(account.failure);
+    const account = decodeField(OnePasswordAccount, draft.account, "Enter the 1Password account.");
+    if (Result.isFailure(account)) issues.account = account.failure;
+    if (
+      issues.name !== undefined ||
+      Result.isFailure(label) ||
+      id === null ||
+      Result.isFailure(account)
+    ) {
+      return Result.fail(issues);
+    }
     return Result.succeed({
       id,
       config: { kind: "1password", label: label.success, account: account.success },
@@ -120,17 +144,29 @@ export function secretProviderFromDraft(
   }
 
   const address = decodeField(OpenBaoAddress, draft.address, "Enter the OpenBao address.");
-  if (Result.isFailure(address)) return Result.fail(address.failure);
+  if (Result.isFailure(address)) issues.address = address.failure;
   const mount = decodeField(
     OpenBaoMount,
     draft.mount.trim() || DEFAULT_OPENBAO_MOUNT,
     "Enter the mount.",
   );
-  if (Result.isFailure(mount)) return Result.fail(mount.failure);
+  if (Result.isFailure(mount)) issues.mount = mount.failure;
   const namespaceText = draft.namespace.trim();
   const namespace =
     namespaceText.length === 0 ? undefined : decodeField(OpenBaoNamespace, namespaceText, "");
-  if (namespace !== undefined && Result.isFailure(namespace)) return Result.fail(namespace.failure);
+  if (namespace !== undefined && Result.isFailure(namespace)) {
+    issues.namespace = namespace.failure;
+  }
+  if (
+    issues.name !== undefined ||
+    Result.isFailure(label) ||
+    id === null ||
+    Result.isFailure(address) ||
+    Result.isFailure(mount) ||
+    (namespace !== undefined && Result.isFailure(namespace))
+  ) {
+    return Result.fail(issues);
+  }
   const token = draft.token.trim();
   return Result.succeed({
     id,

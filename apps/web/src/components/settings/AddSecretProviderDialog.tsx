@@ -30,6 +30,7 @@ import {
   EMPTY_SECRET_PROVIDER_DRAFT,
   secretProviderFromDraft,
   type SecretProviderDraft,
+  type SecretProviderDraftField,
 } from "./AddSecretProviderDialog.logic";
 import { SecretInput } from "./SecretInput";
 
@@ -65,7 +66,13 @@ export function AddSecretProviderDialog({
   );
   const listedAccounts = accounts.data ?? [];
   const result = secretProviderFromDraft(draft, existingIds);
-  const issue = Result.isFailure(result) ? result.failure : undefined;
+  const issues = Result.isFailure(result) ? result.failure : {};
+  const fieldError = (field: SecretProviderDraftField) => (submitted ? issues[field] : undefined);
+  const nameError = fieldError("name");
+  const accountError = fieldError("account");
+  const addressError = fieldError("address");
+  const mountError = fieldError("mount");
+  const namespaceError = fieldError("namespace");
 
   const update = (patch: Partial<SecretProviderDraft>) => setDraft({ ...draft, ...patch });
   const close = () => {
@@ -133,8 +140,21 @@ export function AddSecretProviderDialog({
                 placeholder={draft.kind === "1password" ? "Personal" : "Homelab"}
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
+                aria-invalid={nameError !== undefined}
+                aria-describedby={
+                  nameError !== undefined ? "secret-provider-name-error" : undefined
+                }
                 autoFocus
               />
+              {nameError !== undefined ? (
+                <p
+                  id="secret-provider-name-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {nameError}
+                </p>
+              ) : null}
             </div>
             {draft.kind === "1password" ? (
               <div className="grid gap-1.5">
@@ -152,6 +172,10 @@ export function AddSecretProviderDialog({
                     placeholder="my.1password.com"
                     spellCheck={false}
                     showTrigger={listedAccounts.length > 0}
+                    aria-invalid={accountError !== undefined}
+                    aria-describedby={
+                      accountError !== undefined ? "secret-provider-account-error" : undefined
+                    }
                   />
                   {listedAccounts.length > 0 ? (
                     <AutocompletePopup>
@@ -170,6 +194,15 @@ export function AddSecretProviderDialog({
                     </AutocompletePopup>
                   ) : null}
                 </Autocomplete>
+                {accountError !== undefined ? (
+                  <p
+                    id="secret-provider-account-error"
+                    role="alert"
+                    className="text-xs text-destructive"
+                  >
+                    {accountError}
+                  </p>
+                ) : null}
                 <p className="text-xs text-muted-foreground">
                   Accounts the op CLI is signed into are suggested. Type any other sign-in address.
                 </p>
@@ -184,7 +217,20 @@ export function AddSecretProviderDialog({
                     value={draft.address}
                     onChange={(event) => update({ address: event.target.value })}
                     spellCheck={false}
+                    aria-invalid={addressError !== undefined}
+                    aria-describedby={
+                      addressError !== undefined ? "secret-provider-address-error" : undefined
+                    }
                   />
+                  {addressError !== undefined ? (
+                    <p
+                      id="secret-provider-address-error"
+                      role="alert"
+                      className="text-xs text-destructive"
+                    >
+                      {addressError}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="secret-provider-mount">Mount</Label>
@@ -194,7 +240,20 @@ export function AddSecretProviderDialog({
                     value={draft.mount}
                     onChange={(event) => update({ mount: event.target.value })}
                     spellCheck={false}
+                    aria-invalid={mountError !== undefined}
+                    aria-describedby={
+                      mountError !== undefined ? "secret-provider-mount-error" : undefined
+                    }
                   />
+                  {mountError !== undefined ? (
+                    <p
+                      id="secret-provider-mount-error"
+                      role="alert"
+                      className="text-xs text-destructive"
+                    >
+                      {mountError}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="secret-provider-namespace">Namespace (optional)</Label>
@@ -203,7 +262,20 @@ export function AddSecretProviderDialog({
                     value={draft.namespace}
                     onChange={(event) => update({ namespace: event.target.value })}
                     spellCheck={false}
+                    aria-invalid={namespaceError !== undefined}
+                    aria-describedby={
+                      namespaceError !== undefined ? "secret-provider-namespace-error" : undefined
+                    }
                   />
+                  {namespaceError !== undefined ? (
+                    <p
+                      id="secret-provider-namespace-error"
+                      role="alert"
+                      className="text-xs text-destructive"
+                    >
+                      {namespaceError}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="secret-provider-token">Token (optional)</Label>
@@ -218,18 +290,13 @@ export function AddSecretProviderDialog({
                 </div>
               </>
             )}
-            {submitted && issue !== undefined ? (
-              <p role="alert" className="text-xs text-destructive">
-                {issue}
-              </p>
-            ) : null}
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="outline" onClick={close}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={submitted && issue !== undefined}>
+          <Button onClick={save} disabled={submitted && Result.isFailure(result)}>
             Add provider
           </Button>
         </DialogFooter>

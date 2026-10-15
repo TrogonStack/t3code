@@ -36,20 +36,20 @@ describe("secretProviderFromDraft", () => {
 
   it("rejects an empty name and a name that is already taken", () => {
     expect(secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "  " }, NO_IDS)).toEqual(
-      Result.fail("Enter a name."),
+      Result.fail({ name: "Enter a name.", account: "Enter the 1Password account." }),
     );
     expect(
       secretProviderFromDraft(
         { ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Work Vault", account: "my" },
         new Set(["work-vault"]),
       ),
-    ).toEqual(Result.fail("A secret provider named Work Vault exists."));
+    ).toEqual(Result.fail({ name: "A secret provider named Work Vault exists." }));
   });
 
   it("requires a 1Password account", () => {
     expect(
       secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Ops" }, NO_IDS),
-    ).toEqual(Result.fail("Choose a 1Password account."));
+    ).toEqual(Result.fail({ account: "Enter the 1Password account." }));
   });
 
   it("builds an OpenBao provider, defaulting the mount and omitting blank optional fields", () => {
@@ -106,7 +106,17 @@ describe("secretProviderFromDraft", () => {
       { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: "openbao", name: "Bao", address: "bao.local" },
       NO_IDS,
     );
-    expect(Result.isFailure(result)).toBe(true);
+    expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["address"]);
+  });
+
+  it("reports every invalid field together", () => {
+    const result = secretProviderFromDraft(
+      { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: "openbao", name: " ", address: " " },
+      NO_IDS,
+    );
+    expect(result).toEqual(
+      Result.fail({ name: "Enter a name.", address: "Enter the OpenBao address." }),
+    );
   });
 });
 
