@@ -1,14 +1,19 @@
+import { OnePasswordAccount, SecretProviderId } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   EMPTY_SECRET_PROVIDER_DRAFT,
+  secretProviderDraftFromConfig,
   secretProviderFromDraft,
   secretProviderIdFromName,
   secretProviderReferenceIssue,
-} from "./AddSecretProviderDialog.logic";
+  type SecretProviderTarget,
+} from "./SecretProviderDialog.logic";
 
 const NO_IDS: ReadonlySet<string> = new Set();
+const STORED = "stored-placeholder";
+const ADD: SecretProviderTarget = { mode: "add" };
 
 describe("secretProviderIdFromName", () => {
   it("slugs the name so the id stays readable in settings.json", () => {
@@ -25,6 +30,7 @@ describe("secretProviderFromDraft", () => {
     const result = secretProviderFromDraft(
       { ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Personal", account: "my.1password.com" },
       NO_IDS,
+      ADD,
     );
     expect(result).toEqual(
       Result.succeed({
@@ -35,20 +41,21 @@ describe("secretProviderFromDraft", () => {
   });
 
   it("rejects an empty name and a name that is already taken", () => {
-    expect(secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "  " }, NO_IDS)).toEqual(
-      Result.fail({ name: "Enter a name.", account: "Enter the 1Password account." }),
-    );
+    expect(
+      secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "  " }, NO_IDS, ADD),
+    ).toEqual(Result.fail({ name: "Enter a name.", account: "Enter the 1Password account." }));
     expect(
       secretProviderFromDraft(
         { ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Work Vault", account: "my" },
         new Set(["work-vault"]),
+        ADD,
       ),
     ).toEqual(Result.fail({ name: "A secret provider named Work Vault exists." }));
   });
 
   it("requires a 1Password account", () => {
     expect(
-      secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Ops" }, NO_IDS),
+      secretProviderFromDraft({ ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Ops" }, NO_IDS, ADD),
     ).toEqual(Result.fail({ account: "Enter the 1Password account." }));
   });
 
@@ -64,6 +71,7 @@ describe("secretProviderFromDraft", () => {
         auth: "env",
       },
       NO_IDS,
+      ADD,
     );
     expect(result).toEqual(
       Result.succeed({
@@ -91,6 +99,7 @@ describe("secretProviderFromDraft", () => {
         token: "s.token",
       },
       NO_IDS,
+      ADD,
     );
     expect(Result.isSuccess(result) && result.success.config).toEqual({
       kind: "openbao",
@@ -113,6 +122,7 @@ describe("secretProviderFromDraft", () => {
         token: " ",
       },
       NO_IDS,
+      ADD,
     );
     expect(result).toEqual(Result.fail({ token: "Enter the OpenBao token." }));
   });
@@ -129,6 +139,7 @@ describe("secretProviderFromDraft", () => {
           auth,
         },
         NO_IDS,
+        ADD,
       );
       expect(Result.isSuccess(result) && result.success.config).toEqual({
         kind: "openbao",
@@ -150,6 +161,7 @@ describe("secretProviderFromDraft", () => {
         token: "s.token",
       },
       NO_IDS,
+      ADD,
     );
     expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["address"]);
   });
@@ -158,6 +170,7 @@ describe("secretProviderFromDraft", () => {
     const result = secretProviderFromDraft(
       { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: "openbao", name: " ", address: " " },
       NO_IDS,
+      ADD,
     );
     expect(result).toEqual(
       Result.fail({
@@ -174,7 +187,7 @@ describe("secretProviderFromDraft for AWS Secrets Manager", () => {
 
   it("builds a provider without a profile", () => {
     expect(
-      secretProviderFromDraft({ ...aws, name: "Production", region: " us-east-1 " }, NO_IDS),
+      secretProviderFromDraft({ ...aws, name: "Production", region: " us-east-1 " }, NO_IDS, ADD),
     ).toEqual(
       Result.succeed({
         id: "production",
@@ -187,6 +200,7 @@ describe("secretProviderFromDraft for AWS Secrets Manager", () => {
     const result = secretProviderFromDraft(
       { ...aws, name: "Prod", region: "eu-west-1", profile: " production " },
       NO_IDS,
+      ADD,
     );
     expect(Result.isSuccess(result) && result.success.config).toEqual({
       kind: "aws-secrets-manager",
@@ -197,10 +211,14 @@ describe("secretProviderFromDraft for AWS Secrets Manager", () => {
   });
 
   it("requires a region shaped like us-east-1", () => {
-    expect(secretProviderFromDraft({ ...aws, name: "Prod" }, NO_IDS)).toEqual(
+    expect(secretProviderFromDraft({ ...aws, name: "Prod" }, NO_IDS, ADD)).toEqual(
       Result.fail({ region: "Enter the AWS region." }),
     );
-    const result = secretProviderFromDraft({ ...aws, name: "Prod", region: "useast1" }, NO_IDS);
+    const result = secretProviderFromDraft(
+      { ...aws, name: "Prod", region: "useast1" },
+      NO_IDS,
+      ADD,
+    );
     expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["region"]);
   });
 
@@ -209,6 +227,7 @@ describe("secretProviderFromDraft for AWS Secrets Manager", () => {
       const result = secretProviderFromDraft(
         { ...aws, name: "Prod", region: "us-east-1", profile },
         NO_IDS,
+        ADD,
       );
       expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["profile"]);
     }
@@ -242,6 +261,110 @@ describe("secretProviderReferenceIssue", () => {
     expect(secretProviderReferenceIssue("aws-secrets-manager", "prod/openai#")).toBe(format);
     expect(secretProviderReferenceIssue("aws-secrets-manager", "-x#key")).toBe(
       "AWS secret id must not start with -.",
+    );
+  });
+});
+
+describe("secretProviderDraftFromConfig", () => {
+  it("fills a 1Password draft", () => {
+    expect(
+      secretProviderDraftFromConfig({
+        kind: "1password",
+        label: "Personal",
+        account: OnePasswordAccount.make("my.1password.com"),
+      }),
+    ).toEqual({
+      ...EMPTY_SECRET_PROVIDER_DRAFT,
+      kind: "1password",
+      name: "Personal",
+      account: "my.1password.com",
+    });
+  });
+
+  it("keeps a stored OpenBao token out of the typed field", () => {
+    const draft = secretProviderDraftFromConfig({
+      kind: "openbao",
+      label: "Homelab",
+      address: "http://127.0.0.1:8200",
+      mount: "kv",
+      namespace: "team-a",
+      auth: "token",
+      token: STORED,
+    });
+    expect(draft).toMatchObject({
+      kind: "openbao",
+      name: "Homelab",
+      address: "http://127.0.0.1:8200",
+      mount: "kv",
+      namespace: "team-a",
+      auth: "token",
+      token: "",
+      storedToken: STORED,
+    });
+  });
+
+  it("has no stored token when the config carries none", () => {
+    const draft = secretProviderDraftFromConfig({
+      kind: "openbao",
+      label: "Homelab",
+      address: "http://127.0.0.1:8200",
+      mount: "secret",
+      auth: "env",
+    });
+    expect(draft).toMatchObject({ namespace: "", storedToken: "", token: "", auth: "env" });
+  });
+
+  it("fills an AWS draft", () => {
+    expect(
+      secretProviderDraftFromConfig({
+        kind: "aws-secrets-manager",
+        label: "Prod",
+        region: "us-east-1",
+        profile: "production",
+      }),
+    ).toMatchObject({
+      kind: "aws-secrets-manager",
+      name: "Prod",
+      region: "us-east-1",
+      profile: "production",
+    });
+  });
+});
+
+describe("secretProviderFromDraft in edit mode", () => {
+  const id = SecretProviderId.make("homelab");
+  const target: SecretProviderTarget = { mode: "edit", id };
+  const bao = {
+    ...EMPTY_SECRET_PROVIDER_DRAFT,
+    kind: "openbao",
+    name: "Homelab",
+    address: "http://127.0.0.1:8200",
+    storedToken: STORED,
+  } as const;
+
+  it("keeps the id and accepts its own name", () => {
+    const result = secretProviderFromDraft(bao, new Set(["homelab"]), target);
+    expect(Result.isSuccess(result) && result.success.id).toBe(id);
+  });
+
+  it("echoes the stored token when none is typed", () => {
+    const result = secretProviderFromDraft(bao, NO_IDS, target);
+    expect(Result.isSuccess(result) && result.success.config).toMatchObject({ token: STORED });
+  });
+
+  it("replaces the stored token with a typed one", () => {
+    const result = secretProviderFromDraft({ ...bao, token: " s.new " }, NO_IDS, target);
+    expect(Result.isSuccess(result) && result.success.config).toMatchObject({ token: "s.new" });
+  });
+
+  it("omits the token when authentication switches to env", () => {
+    const result = secretProviderFromDraft({ ...bao, auth: "env" }, NO_IDS, target);
+    expect(Result.isSuccess(result) && "token" in result.success.config).toBe(false);
+  });
+
+  it("still requires a token in add mode", () => {
+    expect(secretProviderFromDraft({ ...bao, storedToken: "" }, NO_IDS, ADD)).toEqual(
+      Result.fail({ token: "Enter the OpenBao token." }),
     );
   });
 });
