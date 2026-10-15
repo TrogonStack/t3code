@@ -5,6 +5,13 @@ import { useState } from "react";
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import {
+  Autocomplete,
+  AutocompleteInput,
+  AutocompleteItem,
+  AutocompleteList,
+  AutocompletePopup,
+} from "../ui/autocomplete";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -57,13 +64,7 @@ export function AddSecretProviderDialog({
       : null,
   );
   const listedAccounts = accounts.data ?? [];
-  // Without any account from the server there is nothing to pick, so it is typed.
-  const picksAccount = listedAccounts.length > 0;
-  const effectiveDraft: SecretProviderDraft =
-    picksAccount && draft.account.length === 0
-      ? { ...draft, account: listedAccounts[0]?.account ?? "" }
-      : draft;
-  const result = secretProviderFromDraft(effectiveDraft, existingIds);
+  const result = secretProviderFromDraft(draft, existingIds);
   const issue = Result.isFailure(result) ? result.failure : undefined;
 
   const update = (patch: Partial<SecretProviderDraft>) => setDraft({ ...draft, ...patch });
@@ -138,36 +139,40 @@ export function AddSecretProviderDialog({
             {draft.kind === "1password" ? (
               <div className="grid gap-1.5">
                 <Label htmlFor="secret-provider-account">Account</Label>
-                {picksAccount ? (
-                  <Select
-                    value={effectiveDraft.account}
-                    onValueChange={(account) => {
-                      if (account !== null) update({ account });
-                    }}
-                  >
-                    <SelectTrigger id="secret-provider-account">
-                      <SelectValue>{effectiveDraft.account}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup>
-                      {listedAccounts.map(({ account, email }) => (
-                        <SelectItem key={account} value={account}>
-                          <span className="flex min-w-0 flex-col">
-                            <span className="truncate">{account}</span>
-                            <span className="truncate text-xs text-muted-foreground">{email}</span>
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                ) : (
-                  <Input
+                <Autocomplete
+                  items={listedAccounts}
+                  itemToStringValue={(item) => item.account}
+                  mode="none"
+                  openOnInputClick
+                  value={draft.account}
+                  onValueChange={(account) => update({ account })}
+                >
+                  <AutocompleteInput
                     id="secret-provider-account"
                     placeholder="my.1password.com"
-                    value={draft.account}
-                    onChange={(event) => update({ account: event.target.value })}
                     spellCheck={false}
+                    showTrigger={listedAccounts.length > 0}
                   />
-                )}
+                  {listedAccounts.length > 0 ? (
+                    <AutocompletePopup>
+                      <AutocompleteList className="max-h-72">
+                        {listedAccounts.map((item) => (
+                          <AutocompleteItem key={item.account} value={item}>
+                            <span className="min-w-0 truncate text-sm font-medium">
+                              {item.account}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                              {item.email}
+                            </span>
+                          </AutocompleteItem>
+                        ))}
+                      </AutocompleteList>
+                    </AutocompletePopup>
+                  ) : null}
+                </Autocomplete>
+                <p className="text-xs text-muted-foreground">
+                  Accounts the op CLI is signed into are suggested. Type any other sign-in address.
+                </p>
               </div>
             ) : (
               <>
