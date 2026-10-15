@@ -156,7 +156,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const homeDirectory = input.homeDirectory;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
-  const appDataDirectory =
+  const platformAppDataDirectory =
     input.platform === "win32"
       ? Option.getOrElse(config.appDataDirectory, () =>
           path.join(homeDirectory, "AppData", "Roaming"),
@@ -164,6 +164,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+  // Chromium locks its profile per running app, so a second dev app (a worktree
+  // next to the main checkout) needs its own. The dev runner points this at the
+  // isolated T3 home it already selected.
+  const appDataDirectory = isDevelopment
+    ? Option.getOrElse(config.devAppDataDirectory, () => platformAppDataDirectory)
+    : platformAppDataDirectory;
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
