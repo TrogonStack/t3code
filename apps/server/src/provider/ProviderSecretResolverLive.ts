@@ -247,7 +247,9 @@ const nonEmpty = (value: string | undefined) =>
 /**
  * The token the API read authenticates with, from the one source the
  * provider's `auth` names. `cli` asks `bao print token`, which owns where its
- * login lives, so nothing here reads a token file or a `VAULT_*` variable.
+ * login lives, so nothing here reads a token file or a `VAULT_*` variable, and
+ * the token variables are withheld from that child so it reports the login
+ * rather than the server's environment.
  * Returns `undefined`, after logging why, when that source has no token.
  */
 const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
@@ -279,6 +281,11 @@ const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
           env: {
             BAO_ADDR: config.address,
             ...(config.namespace === undefined ? {} : { BAO_NAMESPACE: config.namespace }),
+            // `bao` prefers these over its saved login, which would turn the
+            // CLI policy back into the environment one. Node drops a key whose
+            // value is undefined, so the child never sees them.
+            BAO_TOKEN: undefined,
+            VAULT_TOKEN: undefined,
           },
           extendEnv: true,
         }),

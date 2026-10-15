@@ -905,7 +905,12 @@ describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
       assert.deepStrictEqual(spawner.commands, ["bao"]);
       assert.deepStrictEqual(spawner.invocations, [["print", "token"]]);
       assert.deepStrictEqual(spawner.environments, [
-        { BAO_ADDR: BAO_ADDRESS, BAO_NAMESPACE: "team" },
+        {
+          BAO_ADDR: BAO_ADDRESS,
+          BAO_NAMESPACE: "team",
+          BAO_TOKEN: undefined,
+          VAULT_TOKEN: undefined,
+        },
       ]);
       assert.deepStrictEqual(
         http.requests.map((request) => request.headers["x-vault-token"]),
@@ -917,7 +922,7 @@ describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
           spawner.layer,
           { [VAULT_PROVIDER]: apiProvider({ auth: "cli", namespace: "team", token: "s.ignored" }) },
           http.client,
-        ),
+        ).pipe(Layer.provide(hostLayer({ BAO_TOKEN: "s.from-env", VAULT_TOKEN: "s.other" }))),
       ),
     );
   });
