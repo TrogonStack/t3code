@@ -19,6 +19,9 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { SecretProviderConfig } from "./secretProvider.ts";
+import { SecretProviderId } from "./secretProviderId.ts";
+import { secretSetting } from "./settingsSecret.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -45,6 +48,8 @@ import {
   ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+
+export { isSecretSetting, secretSetting, secretSettingsFields } from "./settingsSecret.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -555,15 +560,6 @@ export interface ProviderSettingsFormAnnotation {
   readonly options?: ReadonlyArray<ProviderSettingsFormOption> | undefined;
 }
 
-/** Secret fields declared by a settings schema, shared by persistence and client redaction. */
-export function secretSettingsFields(schema: {
-  readonly fields: Readonly<Record<string, Schema.Top>>;
-}): ReadonlyArray<string> {
-  return Object.entries(schema.fields).flatMap(([field, fieldSchema]) => {
-    return isSecretSetting(fieldSchema) ? [field] : [];
-  });
-}
-
 export interface ProviderSettingsFormSchemaAnnotation {
   readonly order?: readonly string[] | undefined;
 }
@@ -571,22 +567,10 @@ export interface ProviderSettingsFormSchemaAnnotation {
 declare module "effect/Schema" {
   namespace Annotations {
     interface Annotations {
-      /** Store this credential separately and expose only whether it is configured to clients. */
-      readonly settingsSecret?: boolean | undefined;
       readonly providerSettingsForm?: ProviderSettingsFormAnnotation | undefined;
       readonly providerSettingsFormSchema?: ProviderSettingsFormSchemaAnnotation | undefined;
     }
   }
-}
-
-/** Mark a string or a record of strings as a credential in its settings schema. */
-export function secretSetting<S extends Schema.Top>(schema: S): S["Rebuild"] {
-  return schema.annotateKey({ settingsSecret: true });
-}
-
-export function isSecretSetting(schema: Schema.Top): boolean {
-  const annotations = Schema.resolveAnnotationsKey(schema) ?? Schema.resolveAnnotations(schema);
-  return annotations?.settingsSecret === true;
 }
 
 export type ProviderSettingsOrder<Fields extends Schema.Struct.Fields> = readonly Extract<
@@ -1332,6 +1316,10 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Named secret stores that provider environment variables read from, keyed by a user-chosen id. */
+  secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   /** Allows this server to read the Cursor CLI's macOS Keychain login for account usage. */
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
@@ -1638,6 +1626,10 @@ export const ServerSettingsPatch = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
+  /** Per-entry like `usageLimitSources`; `null` removes a provider. */
+  secretProviders: Schema.optionalKey(
+    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfig)),
+  ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
   /** Each entry replaces one model's rates; `null` restores automatic pricing. */
   usagePriceOverrides: Schema.optionalKey(
@@ -1658,7 +1650,12 @@ export function requiredScopesForServerSettingsPatch(
   let changesSettings = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (key === "providers" || key === "providerInstances" || key === "usageLimitSources") {
+    if (
+      key === "providers" ||
+      key === "providerInstances" ||
+      key === "usageLimitSources" ||
+      key === "secretProviders"
+    ) {
       changesProviders = true;
     } else {
       changesSettings = true;

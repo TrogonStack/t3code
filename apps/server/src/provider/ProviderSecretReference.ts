@@ -1,12 +1,14 @@
 /**
  * Provider environment values that name a secret instead of carrying one.
  *
- * A user who keeps a provider credential in 1Password configures the variable
- * with a 1Password secret source (`{ kind: "1password", reference, account }`)
- * instead of the secret itself. `ProviderSecretResolver` swaps the source for
- * the real value on the way into the provider process, so the credential never
- * lands in `settings.json` or the on-disk secret store, and rotating it in
- * 1Password rotates it here.
+ * A user who keeps a provider credential in a secret store configures the
+ * variable with a secret source instead of the secret itself: either a named
+ * secret provider from `settings.secretProviders`
+ * (`{ kind: "secret-provider", provider, reference }`) or the older inline
+ * 1Password source (`{ kind: "1password", reference, account }`).
+ * `ProviderSecretResolver` swaps the source for the real value on the way into
+ * the provider process, so the credential never lands in `settings.json` or
+ * the on-disk secret store, and rotating it in the store rotates it here.
  *
  * These helpers are pure so the instance registry can ask "does this
  * environment read from a secret store?" without depending on the resolver.
@@ -17,6 +19,7 @@ import type {
   OnePasswordAccount,
   ProviderInstanceEnvironment,
   ProviderInstanceEnvironmentVariable,
+  SecretProviderId,
 } from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as Equal from "effect/Equal";
@@ -30,8 +33,19 @@ export class OnePasswordSecretReference extends Data.TaggedClass("1password")<{
   readonly account: OnePasswordAccount;
 }> {}
 
+/**
+ * One secret to read through a named provider. The provider id is part of the
+ * cache key, so the same reference behind two providers is two secrets. What
+ * the reference means depends on the provider's kind, which is looked up when
+ * the secret is read.
+ */
+export class NamedProviderSecretReference extends Data.TaggedClass("secret-provider")<{
+  readonly provider: SecretProviderId;
+  readonly reference: string;
+}> {}
+
 /** Every secret a provider environment value can name. */
-export type ProviderSecretReference = OnePasswordSecretReference;
+export type ProviderSecretReference = OnePasswordSecretReference | NamedProviderSecretReference;
 
 /**
  * The secret an environment value names, or `undefined` when the value is a
@@ -48,6 +62,11 @@ export function providerSecretReference(
       return new OnePasswordSecretReference({
         reference: value.reference,
         account: value.account,
+      });
+    case "secret-provider":
+      return new NamedProviderSecretReference({
+        provider: value.provider,
+        reference: value.reference,
       });
   }
 }

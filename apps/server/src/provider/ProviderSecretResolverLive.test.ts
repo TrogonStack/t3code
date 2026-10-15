@@ -1,6 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off - asserts against the fake op CLI script this test writes to disk.
 import { describe, it, assert } from "@effect/vitest";
-import { OnePasswordAccount, ProviderInstanceEnvironment } from "@t3tools/contracts";
+import {
+  OnePasswordAccount,
+  ProviderInstanceEnvironment,
+  SecretProviderId,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -10,7 +15,11 @@ import { ChildProcessSpawner } from "effect/process";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeFS from "node:fs";
 
-import { OnePasswordSecretReference } from "./ProviderSecretReference.ts";
+import * as Settings from "../serverSettings.ts";
+import {
+  NamedProviderSecretReference,
+  OnePasswordSecretReference,
+} from "./ProviderSecretReference.ts";
 import { ProviderSecretResolverLive } from "./ProviderSecretResolverLive.ts";
 import { ProviderSecretResolver } from "./ProviderSecretResolver.ts";
 
@@ -30,11 +39,25 @@ const onePasswordVariable = (name: string, reference: string, account: string) =
 const onePassword = (reference: string, account: string) => {
   const [variable] = decodeEnvironment([onePasswordVariable("TOKEN", reference, account)]);
   const source = variable?.value;
-  if (source === undefined || typeof source === "string") {
+  if (source === undefined || typeof source === "string" || source.kind !== "1password") {
     throw new Error("expected a 1Password source");
   }
   return new OnePasswordSecretReference({ reference: source.reference, account: source.account });
 };
+
+/**
+ * The live resolver over a fake spawner. `secretProviders` seeds the settings
+ * the resolver looks named providers up in.
+ */
+const resolverLayer = (
+  spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
+  secretProviders: ServerSettings["secretProviders"] = {},
+) =>
+  ProviderSecretResolverLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(spawner, NodeFileSystem.layer, Settings.layerTest({ secretProviders })),
+    ),
+  );
 
 /**
  * Spawner that answers every `op read` with `result` and records the argv it
@@ -90,13 +113,7 @@ describe("ProviderSecretResolverLive", () => {
         unresolved: [],
       });
       assert.strictEqual(spawner.invocations.length, 0);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("swaps a secret reference for the value 1Password returns", () => {
@@ -121,13 +138,7 @@ describe("ProviderSecretResolverLive", () => {
       assert.deepStrictEqual(spawner.invocations, [
         ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("reads a reference once and holds it until the caller invalidates", () => {
@@ -147,13 +158,7 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.invalidate;
       yield* resolver.resolve(environment);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("drops a variable whose reference cannot be read", () => {
@@ -183,13 +188,7 @@ describe("ProviderSecretResolverLive", () => {
       // leaving it out would hand the provider whatever the server itself was
       // started with under that name.
       assert.deepStrictEqual(resolved.unresolved, ["CLAUDE_CODE_OAUTH_TOKEN"]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("holds a failed read too, so a locked vault prompts once", () => {
@@ -204,13 +203,7 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.resolve(environment);
 
       assert.strictEqual(spawner.invocations.length, 1);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
@@ -236,16 +229,24 @@ function scriptedOpSpawner(
   ) => { stdout: string; stderr: string; code: number },
 ) {
   const invocations: Array<ReadonlyArray<string>> = [];
+  const commands: Array<string> = [];
+  const environments: Array<Readonly<Record<string, string | undefined>> | undefined> = [];
   const stdinUses: Array<boolean> = [];
   const layer = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) =>
       Effect.sync(() => {
         const cmd = command as unknown as {
+          command: string;
           args: ReadonlyArray<string>;
-          options?: { stdin?: Stream.Stream<Uint8Array> };
+          options?: {
+            stdin?: Stream.Stream<Uint8Array>;
+            env?: Readonly<Record<string, string | undefined>>;
+          };
         };
         invocations.push(cmd.args);
+        commands.push(cmd.command);
+        environments.push(cmd.options?.env);
         stdinUses.push(cmd.options?.stdin !== undefined);
         const inputPath = cmd.args[cmd.args.indexOf("-i") + 1];
         const template =
@@ -269,7 +270,7 @@ function scriptedOpSpawner(
       }),
     ),
   );
-  return { layer, invocations, stdinUses };
+  return { layer, invocations, commands, environments, stdinUses };
 }
 
 /** The separator `prime` chose, read back out of the template it built. */
@@ -321,13 +322,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       assert.strictEqual(claude.variables?.[0]?.value, "sk-claude-token");
       assert.strictEqual(codex.variables?.[0]?.value, "sk-codex-token");
       assert.strictEqual(spawner.invocations.length, 1);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("falls back to one read at a time when the batch fails", () => {
@@ -365,13 +360,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       assert.strictEqual(claude.variables?.[0]?.value, "sk-claude-token");
       assert.deepStrictEqual(Array.from(claude.unresolved), []);
       assert.deepStrictEqual(Array.from(codex.unresolved), ["CODEX_TOKEN"]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("hands the template to a file `op` will actually read", () => {
@@ -413,13 +402,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       // so a secret never reaches the disk.
       assert.isTrue(seenTemplate.includes(TOKEN_REFERENCE));
       assert.isTrue(seenTemplate.includes(SECOND_REFERENCE));
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("leaves no template behind once the batch is done", () => {
@@ -445,13 +428,7 @@ describe("ProviderSecretResolverLive.prime", () => {
 
       assert.isTrue(templatePath.length > 0);
       assert.isFalse(NodeFS.existsSync(templatePath));
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("does not spawn a batch for a single reference", () => {
@@ -464,13 +441,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       // One reference is one prompt either way, and `op read` names the
       // reference it could not resolve.
       assert.strictEqual(spawner.invocations.length, 0);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
@@ -491,13 +462,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
       assert.deepStrictEqual(spawner.invocations, [
         ["--cache=false", "read", "--account", WORK_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("keeps the same reference in two accounts apart", () => {
@@ -521,13 +486,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         { name: "WORK_TOKEN", value: "sk-work-token", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("primes one batch per account", () => {
@@ -571,23 +530,13 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         { name: "WORK_CLAUDE", value: "work-claude", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
 describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
   const provideResolver = (spawner: ReturnType<typeof recordingOpSpawner>) =>
-    Effect.provide(
-      ProviderSecretResolverLive.pipe(
-        Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-      ),
-    );
+    Effect.provide(resolverLayer(spawner.layer));
 
   it.effect("offers each signed-in account by the address `op --account` accepts", () => {
     const spawner = recordingOpSpawner({
@@ -627,5 +576,186 @@ describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
       const resolver = yield* ProviderSecretResolver;
       assert.deepStrictEqual(yield* resolver.listOnePasswordAccounts, []);
     }).pipe(provideResolver(spawner));
+  });
+});
+
+const HOME_PROVIDER = SecretProviderId.make("home-1password");
+const VAULT_PROVIDER = SecretProviderId.make("team-vault");
+const BAO_ADDRESS = "https://bao.example.com:8200";
+
+const namedVariable = (name: string, provider: SecretProviderId, reference: string) => ({
+  name,
+  value: { kind: "secret-provider" as const, provider, reference },
+});
+
+const named = (provider: SecretProviderId, reference: string) =>
+  new NamedProviderSecretReference({ provider, reference });
+
+const onePasswordProvider = {
+  kind: "1password" as const,
+  label: "Home",
+  account: OnePasswordAccount.make(HOME_ACCOUNT),
+};
+
+const openBaoProvider = (overrides: { namespace?: string; token?: string } = {}) => ({
+  kind: "openbao" as const,
+  label: "Team vault",
+  address: BAO_ADDRESS,
+  mount: "kv",
+  ...overrides,
+});
+
+describe("ProviderSecretResolverLive with named secret providers", () => {
+  it.effect("reads a named 1Password provider from the account it is configured with", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-home-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", HOME_PROVIDER, TOKEN_REFERENCE)]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-home-token", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.invocations, [
+        ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+      ]);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [HOME_PROVIDER]: onePasswordProvider })));
+  });
+
+  it.effect("reads an OpenBao field through `bao kv get` against the provider's address", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-bao-token\n", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, "agents/codex#api_key")]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-bao-token", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.commands, ["bao"]);
+      assert.deepStrictEqual(spawner.invocations, [
+        ["kv", "get", "-mount=kv", "-field=api_key", "agents/codex"],
+      ]);
+      assert.deepStrictEqual(spawner.environments, [
+        { BAO_ADDR: BAO_ADDRESS, BAO_NAMESPACE: "team", BAO_TOKEN: "s.configured" },
+      ]);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, {
+          [VAULT_PROVIDER]: openBaoProvider({ namespace: "team", token: "s.configured" }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("leaves BAO_TOKEN to the bao CLI's own login when no token is configured", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-bao-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, "agents/codex#api_key")]),
+      );
+
+      // An empty BAO_TOKEN would override the token helper and fail every read.
+      assert.deepStrictEqual(spawner.environments, [{ BAO_ADDR: BAO_ADDRESS }]);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: openBaoProvider({ token: "" }) }),
+      ),
+    );
+  });
+
+  it.effect("reports an OpenBao reference without a field unresolved without running bao", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "whole-secret", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("NO_FIELD", VAULT_PROVIDER, "agents/codex"),
+          namedVariable("NO_PATH", VAULT_PROVIDER, "#api_key"),
+          namedVariable("FLAG_PATH", VAULT_PROVIDER, "-address=evil#api_key"),
+        ]),
+      );
+
+      assert.deepStrictEqual(Array.from(resolved.unresolved), ["NO_FIELD", "NO_PATH", "FLAG_PATH"]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [VAULT_PROVIDER]: openBaoProvider() })));
+  });
+
+  it.effect("reports a reference to a provider that is not configured unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, "agents/codex#api_key")]),
+      );
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
+  });
+
+  it.effect("batches named 1Password references with legacy ones from the same account", () => {
+    const spawner = scriptedOpSpawner((args, template) => {
+      if (args.includes("inject")) {
+        return {
+          stdout: ["sk-shared", "sk-codex"].join(separatorOf(template)),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "should-not-be-read-one-at-a-time", stderr: "", code: 0 };
+    });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.prime([
+        onePassword(TOKEN_REFERENCE, HOME_ACCOUNT),
+        named(HOME_PROVIDER, TOKEN_REFERENCE),
+        named(HOME_PROVIDER, SECOND_REFERENCE),
+        named(VAULT_PROVIDER, "agents/codex#api_key"),
+      ]);
+
+      // OpenBao has no unlock prompt to save, so priming leaves it alone and
+      // the shared item is one slot in the template.
+      assert.strictEqual(spawner.invocations.length, 1);
+      assert.deepStrictEqual(Array.from(spawner.invocations[0] ?? []).slice(0, 5), [
+        "--cache=false",
+        "inject",
+        "--account",
+        HOME_ACCOUNT,
+        "-i",
+      ]);
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          onePasswordVariable("LEGACY", TOKEN_REFERENCE, HOME_ACCOUNT),
+          namedVariable("NAMED", HOME_PROVIDER, TOKEN_REFERENCE),
+          namedVariable("CODEX", HOME_PROVIDER, SECOND_REFERENCE),
+        ]),
+      );
+      assert.deepStrictEqual(resolved.variables, [
+        { name: "LEGACY", value: "sk-shared", sensitive: true },
+        { name: "NAMED", value: "sk-shared", sensitive: true },
+        { name: "CODEX", value: "sk-codex", sensitive: true },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 1);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, {
+          [HOME_PROVIDER]: onePasswordProvider,
+          [VAULT_PROVIDER]: openBaoProvider(),
+        }),
+      ),
+    );
   });
 });

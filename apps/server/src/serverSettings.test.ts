@@ -8,6 +8,7 @@ import {
   ProviderInstanceEnvironment,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
+  SecretProviderId,
   ServerSettings,
   ServerSettingsPatch,
   UsageLimitSourceId,
@@ -1514,6 +1515,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
               enabled: true,
             },
           },
+          secretProviders: {
+            [SecretProviderId.make("homelab")]: {
+              kind: "openbao",
+              label: "Homelab",
+              address: "https://bao.example.test",
+              mount: "secret",
+              token: "openbao-secret",
+            },
+          },
         });
         const values = [
           "config-secret",
@@ -1522,6 +1532,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           "bitbucket-secret",
           "gitcafe-secret",
           "quota-secret",
+          "openbao-secret",
         ];
         const client = ServerSettingsModule.redactServerSettingsForClient(saved);
         const disk = yield* fs.readFileString(config.settingsPath);
@@ -1532,10 +1543,12 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         }
         assert.include(JSON.stringify(client), "https://example.test");
         assert.include(JSON.stringify(client), "me@example.test");
+        assert.include(JSON.stringify(client), "https://bao.example.test");
         const echoed = yield* service.updateSettings({
           providerInstances: client.providerInstances,
           sourceControlHosts: client.sourceControlHosts,
           usageLimitSources: client.usageLimitSources,
+          secretProviders: client.secretProviders,
         });
         for (const value of values) assert.include(JSON.stringify(echoed), value);
         const renamed = yield* service.updateProviderInstance({
@@ -1585,6 +1598,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           }),
           sourceControlHostSecretName({ kind: "gitcafe", field: "token", serverHost: null }),
           "usage-limit-source-aHVi",
+          "secret-provider-aG9tZWxhYg-dG9rZW4",
         ];
         for (const name of secretNames) {
           assert.isTrue(Option.isSome(yield* store.get(name)), name);
@@ -1597,6 +1611,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             gitcafe: { token: "" },
           },
           usageLimitSources: { [UsageLimitSourceId.make("hub")]: null },
+          secretProviders: { [SecretProviderId.make("homelab")]: null },
         });
         for (const name of secretNames) {
           assert.isTrue(Option.isNone(yield* store.get(name)));

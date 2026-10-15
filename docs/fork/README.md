@@ -47,3 +47,5 @@ Each entry uses these sections:
   submitted, [#97](https://github.com/TrogonStack/t3code/pull/97)
 - **0032** [The model picker reopens where you last picked from](./0032-model-picker-reopens-where-you-left-it.md)
   active, [#103](https://github.com/TrogonStack/t3code/pull/103)
+- **0033** [Secret providers have names](./0033-secret-providers-have-names.md)
+  active, PR pending

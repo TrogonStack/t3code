@@ -50,7 +50,7 @@ seam another secret store would plug into, so the argument upstream is about
 whether to carry any secret-store integration at all rather than about
 1Password specifically.
 
-Rebase burden is moderate. It adds a call in each of the five drivers' `create`
-and one method on the provider instance registry, so a sync that reshapes
-driver creation or instance rebuilding will conflict. The conflicts are shallow
-and repetitive: the driver change is the same two lines in all five files.
+Rebase burden is moderate. Resolution happens once, in the provider instance
+registry, before a driver is created, so drivers are untouched. A sync that
+reshapes how the registry builds or rebuilds instances will conflict, and the
+conflicts are shallow.

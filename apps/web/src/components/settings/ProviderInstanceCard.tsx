@@ -26,9 +26,12 @@ import {
   OnePasswordAccount,
   OnePasswordSecretReference,
   resolveProviderInstanceEnabled,
-  type OnePasswordAccountSummary,
-  type OnePasswordSecretSource,
+  SecretProviderId,
+  SecretProviderReference,
   type ProviderInstanceConfig,
+  type ProviderSecretSource,
+  type SecretProviderConfig,
+  type UnifiedSettings,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type AcpRegistryUrlAuthAction,
@@ -44,9 +47,8 @@ import {
   readCustomModelEntries,
   toCustomModelSetting,
 } from "@t3tools/shared/model";
+import { Link } from "@tanstack/react-router";
 import { cn } from "../../lib/utils";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
@@ -72,6 +74,11 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
+import {
+  SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
+  secretProviderReferenceIssue,
+  secretProviderSummary,
+} from "./AddSecretProviderDialog.logic";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -101,36 +108,88 @@ function ProviderStatusDiagnostic({
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
 
-type EnvironmentDraftSource = "plain" | "1password";
+type EnvironmentDraftSource = "plain" | "1password" | "secret-provider";
+
+type SecretProviders = UnifiedSettings["secretProviders"];
 
 const PLAIN_SOURCE_OPTION = "plain";
-const EMPTY_ONE_PASSWORD_ACCOUNTS: ReadonlyArray<OnePasswordAccountSummary> = [];
+const EMPTY_SECRET_PROVIDERS: SecretProviders = {};
+const SECRET_PROVIDER_SOURCE_OPTION_PREFIX = "secret-provider:";
+/** Rows saved before named providers keep their own account; new rows cannot pick it. */
 const ONE_PASSWORD_SOURCE_OPTION_PREFIX = "1password:";
 
-/**
- * The source select's option for a row: a plain value, or the 1Password account
- * it reads from. When the account is typed instead, every 1Password row shares
- * one option.
- */
-function environmentDraftSourceOption(row: EnvironmentDraftRow, typesAccount: boolean): string {
-  if (row.source !== "1password") return PLAIN_SOURCE_OPTION;
-  return `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${typesAccount ? "" : row.account}`;
+function environmentDraftSourceOption(row: EnvironmentDraftRow): string {
+  switch (row.source) {
+    case "plain":
+      return PLAIN_SOURCE_OPTION;
+    case "secret-provider":
+      return `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${row.provider}`;
+    case "1password":
+      return `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${row.account}`;
+  }
 }
 
-function EnvironmentDraftSourceLabel(props: { readonly option: string }) {
-  if (!props.option.startsWith(ONE_PASSWORD_SOURCE_OPTION_PREFIX)) {
-    return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <TypeIcon className="size-3.5 shrink-0" />
-        Value
-      </span>
-    );
+type EnvironmentSourceOption = {
+  readonly value: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly secret: boolean;
+};
+
+function lookupSecretProvider(
+  secretProviders: SecretProviders,
+  id: string,
+): SecretProviderConfig | undefined {
+  return Object.hasOwn(secretProviders, id)
+    ? secretProviders[SecretProviderId.make(id)]
+    : undefined;
+}
+
+/**
+ * Value, then every configured provider. A row also keeps the option it is
+ * already on: a provider that was removed, or its legacy 1Password account.
+ */
+function environmentSourceOptions(
+  row: EnvironmentDraftRow,
+  secretProviders: SecretProviders,
+): ReadonlyArray<EnvironmentSourceOption> {
+  const options: EnvironmentSourceOption[] = [
+    { value: PLAIN_SOURCE_OPTION, label: "Value", secret: false },
+    ...Object.entries(secretProviders).map(([id, config]) => ({
+      value: `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${id}`,
+      label: config.label,
+      detail: secretProviderSummary(config),
+      secret: true,
+    })),
+  ];
+  if (
+    row.source === "secret-provider" &&
+    lookupSecretProvider(secretProviders, row.provider) === undefined
+  ) {
+    options.push({
+      value: environmentDraftSourceOption(row),
+      label: row.provider,
+      detail: "Not configured in Settings → Secrets",
+      secret: true,
+    });
   }
-  const account = props.option.slice(ONE_PASSWORD_SOURCE_OPTION_PREFIX.length);
+  if (row.source === "1password") {
+    options.push({
+      value: environmentDraftSourceOption(row),
+      label: row.account.length > 0 ? row.account : "1Password",
+      detail: "1Password account set on this variable",
+      secret: true,
+    });
+  }
+  return options;
+}
+
+function EnvironmentSourceOptionLabel(props: { readonly option: EnvironmentSourceOption }) {
+  const Icon = props.option.secret ? KeyRoundIcon : TypeIcon;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <KeyRoundIcon className="size-3.5 shrink-0" />
-      <span className="truncate">{account.length > 0 ? account : "1Password"}</span>
+      <Icon className="size-3.5 shrink-0" />
+      <span className="truncate">{props.option.label}</span>
     </span>
   );
 }
@@ -142,6 +201,7 @@ type EnvironmentDraftRow = {
   readonly value: string;
   readonly reference: string;
   readonly account: string;
+  readonly provider: string;
   readonly sensitive: boolean;
   readonly valueRedacted?: boolean;
   /** The name this row is saved under, so an unfinished edit can fall back to it. */
@@ -166,14 +226,16 @@ function makeEnvironmentDraftRow(
 ): EnvironmentDraftRow {
   const id = `${index}:${variable.name}`;
   if (typeof variable.value !== "string") {
+    const source = variable.value;
     return {
       id,
       name: variable.name,
-      source: "1password",
+      source: source.kind,
       savedName: variable.name,
       value: "",
-      reference: variable.value.reference,
-      account: variable.value.account,
+      reference: source.reference,
+      account: source.kind === "1password" ? source.account : "",
+      provider: source.kind === "secret-provider" ? source.provider : "",
       sensitive: false,
     };
   }
@@ -186,6 +248,7 @@ function makeEnvironmentDraftRow(
       value: "",
       reference: variable.value.trim(),
       account: "",
+      provider: "",
       sensitive: false,
     };
   }
@@ -197,6 +260,7 @@ function makeEnvironmentDraftRow(
     value: variable.value,
     reference: "",
     account: "",
+    provider: "",
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
@@ -204,22 +268,39 @@ function makeEnvironmentDraftRow(
 
 const decodeOnePasswordSecretReference = Schema.decodeUnknownResult(OnePasswordSecretReference);
 const decodeOnePasswordAccount = Schema.decodeUnknownResult(OnePasswordAccount);
+const decodeSecretProviderReference = Schema.decodeUnknownResult(SecretProviderReference);
 
 /**
- * The 1Password source a draft row describes, or the message explaining why
- * it is not one yet.
+ * The secret source a draft row describes, or the message explaining why it
+ * is not one yet. A row may name a provider that is not configured: it saves,
+ * and resolves once a provider with that name is added again.
  */
-function onePasswordSourceFromDraft(
-  row: EnvironmentDraftRow,
-): Result.Result<OnePasswordSecretSource, string> {
-  const reference = decodeOnePasswordSecretReference(row.reference);
+export function secretSourceFromDraft(
+  row: Pick<EnvironmentDraftRow, "source" | "reference" | "account" | "provider">,
+  secretProviders: SecretProviders,
+): Result.Result<ProviderSecretSource, string> {
+  if (row.source === "1password") {
+    const reference = decodeOnePasswordSecretReference(row.reference);
+    if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
+    const account = decodeOnePasswordAccount(row.account);
+    if (Result.isFailure(account)) return Result.fail(account.failure.message);
+    return Result.succeed({
+      kind: "1password",
+      reference: reference.success,
+      account: account.success,
+    });
+  }
+  if (row.provider.length === 0) return Result.fail("Choose a secret provider.");
+  const reference = decodeSecretProviderReference(row.reference);
   if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
-  const account = decodeOnePasswordAccount(row.account);
-  if (Result.isFailure(account)) return Result.fail(account.failure.message);
+  const config = lookupSecretProvider(secretProviders, row.provider);
+  const issue =
+    config === undefined ? undefined : secretProviderReferenceIssue(config.kind, reference.success);
+  if (issue !== undefined) return Result.fail(issue);
   return Result.succeed({
-    kind: "1password",
+    kind: "secret-provider",
+    provider: SecretProviderId.make(row.provider),
     reference: reference.success,
-    account: account.success,
   });
 }
 
@@ -228,8 +309,17 @@ function environmentValuesEqual(
   right: ProviderInstanceEnvironmentVariable["value"],
 ): boolean {
   if (typeof left === "string" || typeof right === "string") return left === right;
+  if (left.kind === "1password") {
+    return (
+      right.kind === "1password" &&
+      left.reference === right.reference &&
+      left.account === right.account
+    );
+  }
   return (
-    left.kind === right.kind && left.reference === right.reference && left.account === right.account
+    right.kind === "secret-provider" &&
+    left.provider === right.provider &&
+    left.reference === right.reference
   );
 }
 
@@ -425,7 +515,7 @@ function ProviderEnvironmentFieldRow(props: {
     (typeof configuredValue !== "string" || isLegacyOnePasswordReference(props.variable));
   const value =
     props.variable?.valueRedacted || typeof configuredValue !== "string" ? "" : configuredValue;
-  const secretStorePlaceholder = "Read from 1Password - edit it under Environment";
+  const secretStorePlaceholder = "Read from a secret provider. Edit it under Environment.";
 
   return (
     <SettingsRow
@@ -477,7 +567,7 @@ function ProviderEnvironmentFieldRow(props: {
 
 export function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-  readonly onePasswordAccounts: ReadonlyArray<OnePasswordAccountSummary>;
+  readonly secretProviders: SecretProviders;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
 }) {
   const [rows, setRows] = useState<ReadonlyArray<EnvironmentDraftRow>>(() =>
@@ -521,8 +611,8 @@ export function ProviderEnvironmentSection(props: {
         }
         continue;
       }
-      if (row.source === "1password") {
-        const source = onePasswordSourceFromDraft(row);
+      if (row.source !== "plain") {
+        const source = secretSourceFromDraft(row, props.secretProviders);
         if (Result.isSuccess(source)) {
           published.push({ name, value: source.success, sensitive: false });
           savedNames.set(row.id, name);
@@ -573,28 +663,7 @@ export function ProviderEnvironmentSection(props: {
     commitRows(nextRows);
   };
 
-  // Without any account from the server there is nothing to pick, so the
-  // account is typed instead.
-  const typesAccount = props.onePasswordAccounts.length === 0;
-  // Accounts already saved stay pickable even when this server's `op` no
-  // longer reports them, so opening settings never rewrites a row.
-  const onePasswordAccounts = typesAccount
-    ? [""]
-    : Arr.dedupe([
-        ...props.onePasswordAccounts.map(({ account }) => account as string),
-        ...Arr.filterMap(rows, (row) =>
-          row.source === "1password" && row.account.length > 0
-            ? Result.succeed(row.account)
-            : Result.failVoid,
-        ),
-      ]);
-  const sourceOptions = [
-    PLAIN_SOURCE_OPTION,
-    ...onePasswordAccounts.map((account) => `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${account}`),
-  ];
-  const emailByAccount = new Map(
-    props.onePasswordAccounts.map(({ account, email }) => [account as string, email]),
-  );
+  const hasSecretProviders = Object.keys(props.secretProviders).length > 0;
 
   const addVariable = () =>
     setRows([
@@ -606,6 +675,7 @@ export function ProviderEnvironmentSection(props: {
         value: "",
         reference: "",
         account: "",
+        provider: "",
         sensitive: true,
       },
     ]);
@@ -624,17 +694,29 @@ export function ProviderEnvironmentSection(props: {
       {rows.length > 0 ? (
         <div className="mt-3 flex min-w-0 flex-col gap-2 pb-2">
           {rows.map((variable, index) => {
-            const isOnePassword = variable.source === "1password";
+            const isSecret = variable.source !== "plain";
+            const isLegacyOnePassword = variable.source === "1password";
             const sourceIssue =
-              isOnePassword &&
+              isSecret &&
               (variable.name.length > 0 ||
                 variable.reference.length > 0 ||
                 variable.account.length > 0)
-                ? Result.match(onePasswordSourceFromDraft(variable), {
+                ? Result.match(secretSourceFromDraft(variable, props.secretProviders), {
                     onFailure: (message) => `Not saved yet. ${message}`,
                     onSuccess: () => undefined,
                   })
                 : undefined;
+            const sourceOptions = environmentSourceOptions(variable, props.secretProviders);
+            const selectedOption = environmentDraftSourceOption(variable);
+            const selectedSourceOption =
+              sourceOptions.find((option) => option.value === selectedOption) ?? sourceOptions[0]!;
+            const referencePlaceholder =
+              variable.source === "1password"
+                ? SECRET_PROVIDER_REFERENCE_PLACEHOLDERS["1password"]
+                : SECRET_PROVIDER_REFERENCE_PLACEHOLDERS[
+                    lookupSecretProvider(props.secretProviders, variable.provider)?.kind ??
+                      "1password"
+                  ];
             return (
               <div
                 key={variable.id}
@@ -651,26 +733,21 @@ export function ProviderEnvironmentSection(props: {
                   aria-label={`Environment variable name ${index + 1}`}
                 />
                 <Select
-                  value={environmentDraftSourceOption(variable, typesAccount)}
+                  value={selectedOption}
                   onValueChange={(option) => {
-                    if (
-                      option === null ||
-                      option === environmentDraftSourceOption(variable, typesAccount)
-                    ) {
-                      return;
-                    }
-                    if (!option.startsWith(ONE_PASSWORD_SOURCE_OPTION_PREFIX)) {
+                    if (option === null || option === selectedOption) return;
+                    if (option === PLAIN_SOURCE_OPTION) {
                       updateVariable(variable.id, { source: "plain", value: "", sensitive: true });
                       return;
                     }
-                    updateVariable(variable.id, {
-                      source: "1password",
-                      account: typesAccount
-                        ? variable.account
-                        : option.slice(ONE_PASSWORD_SOURCE_OPTION_PREFIX.length),
-                      value: "",
-                      sensitive: false,
-                    });
+                    if (option.startsWith(SECRET_PROVIDER_SOURCE_OPTION_PREFIX)) {
+                      updateVariable(variable.id, {
+                        source: "secret-provider",
+                        provider: option.slice(SECRET_PROVIDER_SOURCE_OPTION_PREFIX.length),
+                        value: "",
+                        sensitive: false,
+                      });
+                    }
                   }}
                 >
                   <SelectTrigger
@@ -679,29 +756,22 @@ export function ProviderEnvironmentSection(props: {
                     aria-label={`Environment variable source ${index + 1}`}
                   >
                     <SelectValue>
-                      <EnvironmentDraftSourceLabel
-                        option={environmentDraftSourceOption(variable, typesAccount)}
-                      />
+                      <EnvironmentSourceOptionLabel option={selectedSourceOption} />
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup>
-                    {sourceOptions.map((option) => {
-                      const email = emailByAccount.get(
-                        option.slice(ONE_PASSWORD_SOURCE_OPTION_PREFIX.length),
-                      );
-                      return (
-                        <SelectItem key={option} value={option}>
-                          <span className="flex min-w-0 flex-col">
-                            <EnvironmentDraftSourceLabel option={option} />
-                            {email !== undefined ? (
-                              <span className="truncate text-xs text-muted-foreground">
-                                {email}
-                              </span>
-                            ) : null}
-                          </span>
-                        </SelectItem>
-                      );
-                    })}
+                    {sourceOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        <span className="flex min-w-0 flex-col">
+                          <EnvironmentSourceOptionLabel option={option} />
+                          {option.detail !== undefined ? (
+                            <span className="truncate text-xs text-muted-foreground">
+                              {option.detail}
+                            </span>
+                          ) : null}
+                        </span>
+                      </SelectItem>
+                    ))}
                   </SelectPopup>
                 </Select>
                 <Button
@@ -713,22 +783,22 @@ export function ProviderEnvironmentSection(props: {
                 >
                   <XIcon className="size-3" />
                 </Button>
-                {isOnePassword ? (
+                {isSecret ? (
                   <>
                     <DraftInput
                       size="sm"
                       font="mono"
-                      className={cn("min-w-0", !typesAccount && "col-span-2")}
+                      className={cn("min-w-0", !isLegacyOnePassword && "col-span-2")}
                       value={variable.reference}
                       onCommit={(reference) =>
                         updateVariable(variable.id, { reference: reference.trim() })
                       }
-                      placeholder="op://vault/item/field"
+                      placeholder={referencePlaceholder}
                       spellCheck={false}
                       aria-invalid={sourceIssue !== undefined || undefined}
-                      aria-label={`Environment variable 1Password reference ${index + 1}`}
+                      aria-label={`Environment variable secret reference ${index + 1}`}
                     />
-                    {typesAccount ? (
+                    {isLegacyOnePassword ? (
                       <DraftInput
                         size="sm"
                         font="mono"
@@ -810,9 +880,18 @@ export function ProviderEnvironmentSection(props: {
             );
           })}
           <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app. 1Password
-            references are read with the 1Password CLI each time the provider starts.
+            Sensitive values are stored separately and never returned to the app. Values from a
+            secret provider are read through its CLI each time the provider starts.
           </p>
+          {hasSecretProviders ? null : (
+            <p className="text-xs text-muted-foreground">
+              Add a secret provider in{" "}
+              <Link to="/settings/secrets" className="underline underline-offset-2">
+                Settings → Secrets
+              </Link>{" "}
+              to read values from 1Password or OpenBao.
+            </p>
+          )}
         </div>
       ) : null}
     </SettingsRow>
@@ -958,6 +1037,7 @@ interface ProviderInstanceCardProps {
         readonly workspaceRoot: string;
       }>
     | undefined;
+  readonly secretProviders?: SecretProviders | undefined;
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
@@ -1013,6 +1093,7 @@ export function ProviderInstanceCard({
   environmentId,
   acpProjects = EMPTY_ACP_PROJECTS,
   projectOverride,
+  secretProviders = EMPTY_SECRET_PROVIDERS,
 }: ProviderInstanceCardProps) {
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
@@ -1160,11 +1241,6 @@ export function ProviderInstanceCard({
   // the generic editor only shows the remaining variables.
   const environmentFields = driverOption?.environmentFields ?? [];
   const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
-  const onePasswordAccounts = useEnvironmentQuery(
-    environmentId === undefined
-      ? null
-      : serverEnvironment.onePasswordAccounts({ environmentId, input: {} }),
-  );
   const { dedicated: dedicatedEnvironment, generic: genericEnvironment } =
     splitDedicatedProviderEnvironment(instance.environment, environmentFieldNames);
   const updateGenericEnvironment = (
@@ -1624,7 +1700,7 @@ export function ProviderInstanceCard({
       >
         <ProviderEnvironmentSection
           environment={genericEnvironment}
-          onePasswordAccounts={onePasswordAccounts.data ?? EMPTY_ONE_PASSWORD_ACCOUNTS}
+          secretProviders={secretProviders}
           onChange={updateGenericEnvironment}
         />
       </SettingsSection>

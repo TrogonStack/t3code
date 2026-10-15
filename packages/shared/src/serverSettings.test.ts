@@ -1,8 +1,10 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  OnePasswordAccount,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -730,6 +732,36 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
+  });
+
+  it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {
+    const personal = SecretProviderId.make("personal");
+    const homelab = SecretProviderId.make("homelab");
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      secretProviders: {
+        [personal]: {
+          kind: "1password" as const,
+          label: "Personal",
+          account: OnePasswordAccount.make("my.1password.com"),
+        },
+      },
+    };
+
+    const added = applyServerSettingsPatch(current, {
+      secretProviders: {
+        [homelab]: {
+          kind: "openbao",
+          label: "Homelab",
+          address: "https://bao.example:8200",
+          mount: "secret",
+        },
+      },
+    });
+    expect(Object.keys(added.secretProviders)).toEqual([personal, homelab]);
+
+    const removed = applyServerSettingsPatch(added, { secretProviders: { [personal]: null } });
+    expect(Object.keys(removed.secretProviders)).toEqual([homelab]);
   });
 
   it("replaces and removes individual usage prices without clobbering other models", () => {

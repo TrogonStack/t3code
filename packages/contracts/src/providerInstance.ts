@@ -37,6 +37,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { OnePasswordSecretSource } from "./onePassword.ts";
+import { SecretProviderSecretSource } from "./secretProvider.ts";
 
 const PROVIDER_SLUG_MAX_CHARS = 64;
 /**
@@ -106,7 +107,10 @@ export type ProviderInstanceEnvironmentVariableName =
  * An environment value read from an external secret store at the moment the
  * provider process starts, instead of a literal. Discriminated on `kind`.
  */
-export const ProviderSecretSource = Schema.Union([OnePasswordSecretSource]);
+export const ProviderSecretSource = Schema.Union([
+  OnePasswordSecretSource,
+  SecretProviderSecretSource,
+]);
 export type ProviderSecretSource = typeof ProviderSecretSource.Type;
 
 /**

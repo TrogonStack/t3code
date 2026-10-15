@@ -2,6 +2,7 @@ import {
   AntigravitySettings,
   ClaudeSettings,
   CodexSettings,
+  SecretProviderConfig,
   type ServerSettings,
   UsageLimitSourceConfig,
   secretSettingsFields,
@@ -31,6 +32,11 @@ const providerSecretFields = new Map([
   ),
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
+const secretProviderSecretFields = new Map(
+  SecretProviderConfig.members.map(
+    (member) => [member.fields.kind.literal, secretSettingsFields(member)] as const,
+  ),
+);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
 export interface SettingsSecret {
@@ -151,5 +157,18 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["usageLimitSources"];
 
-  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources };
+  const secretProviders = Object.fromEntries(
+    Object.entries(settings.secretProviders).map(([id, provider]) => [
+      id,
+      mapFields(
+        provider,
+        secretProviderSecretFields.get(provider.kind) ?? [],
+        (field, serverHost) =>
+          `secret-provider-${encode(id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ),
+    ]),
+  ) as ServerSettings["secretProviders"];
+
+  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources, secretProviders };
 }

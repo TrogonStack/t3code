@@ -17,6 +17,10 @@
  *   2. Fork a daemon fiber (lifetime tied to the layer's scope) that
  *      acquires `ServerSettingsService.subscribeChanges` and calls
  *      `ProviderInstanceRegistryMutator.reconcile` on every emission.
+ *      When a secret provider was added, edited, or removed, the cached
+ *      secrets are dropped first and every instance that reads through one
+ *      of those providers is rebuilt afterwards, since its own config, and
+ *      so `reconcile`'s diff, did not change.
  *
  * Failures inside the watcher are logged and swallowed so a single bad
  * settings emission cannot kill the registry. Unknown drivers and invalid
@@ -32,15 +36,20 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   type ProviderInstanceId,
+  type SecretProviderId,
   ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
-import { collectProviderSecretReferences } from "./ProviderSecretReference.ts";
+import {
+  collectProviderSecretReferences,
+  providerSecretReference,
+} from "./ProviderSecretReference.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderSecretResolver from "./ProviderSecretResolver.ts";
@@ -121,6 +130,33 @@ const primeConfigMapSecrets = (
   );
 
 /**
+ * Ids of the secret providers that were added, removed, or edited between two
+ * settings snapshots. Pure so the rule can be tested without layers.
+ */
+export const changedSecretProviderIds = (
+  previous: ServerSettings["secretProviders"],
+  next: ServerSettings["secretProviders"],
+): ReadonlySet<SecretProviderId> => {
+  const changed = new Set<SecretProviderId>();
+  for (const id of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    const providerId = id as SecretProviderId;
+    if (JSON.stringify(previous[providerId]) !== JSON.stringify(next[providerId])) {
+      changed.add(providerId);
+    }
+  }
+  return changed;
+};
+
+const readsThroughSecretProvider = (
+  entry: ProviderInstanceConfig,
+  providers: ReadonlySet<SecretProviderId>,
+) =>
+  entry.environment?.some((variable) => {
+    const reference = providerSecretReference(variable.value);
+    return reference?._tag === "secret-provider" && providers.has(reference.provider);
+  }) ?? false;
+
+/**
  * Layer that consumes `ProviderInstanceRegistryMutator` and forks a
  * settings-watcher fiber. The fiber's lifetime is tied to the enclosing
  * layer scope (process lifetime in production), so it is interrupted on
@@ -131,26 +167,49 @@ const primeConfigMapSecrets = (
  * configs, so the only way the watcher could fail is a settings stream
  * tear-down, which logs and exits cleanly.
  */
-const layerSettingsWatcher = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
-    const serverSettings = yield* Settings.ServerSettingsService;
-    const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
-    const settingsChanges = yield* serverSettings.subscribeChanges;
-    yield* settingsChanges.pipe(
-      Stream.runForEach((next) => {
-        const configMap = deriveProviderInstanceConfigMap(next);
-        return primeConfigMapSecrets(secretResolver, configMap).pipe(
-          Effect.andThen(mutator.reconcile(configMap)),
-          Effect.catchCause((cause) =>
-            Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
+const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProviders"]) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
+      const registry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+      const serverSettings = yield* Settings.ServerSettingsService;
+      const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
+      const secretProvidersRef = yield* Ref.make(initialSecretProviders);
+      const settingsChanges = yield* serverSettings.subscribeChanges;
+      yield* settingsChanges.pipe(
+        Stream.runForEach((next) =>
+          Effect.gen(function* () {
+            const configMap = deriveProviderInstanceConfigMap(next);
+            const changedProviders = changedSecretProviderIds(
+              yield* Ref.getAndSet(secretProvidersRef, next.secretProviders),
+              next.secretProviders,
+            );
+            if (changedProviders.size > 0) {
+              yield* secretResolver.invalidate;
+            }
+            yield* primeConfigMapSecrets(secretResolver, configMap);
+            yield* mutator.reconcile(configMap);
+            if (changedProviders.size > 0) {
+              const environments = yield* registry.listEnvironments;
+              yield* Effect.forEach(
+                environments.keys(),
+                (instanceId) =>
+                  registry.rebuildInstanceWhen(instanceId, (entry) =>
+                    readsThroughSecretProvider(entry, changedProviders),
+                  ),
+                { discard: true },
+              );
+            }
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
+            ),
           ),
-        );
-      }),
-      Effect.forkScoped,
-    );
-  }),
-);
+        ),
+        Effect.forkScoped,
+      );
+    }),
+  );
 
 /**
  * Hydrate `ProviderInstanceRegistry` from `ServerSettings` and keep it in
@@ -197,7 +256,9 @@ export const layer: Layer.Layer<
       Layer.provide(ProviderHostLive.layer),
     );
 
-    return layerSettingsWatcher.pipe(Layer.provideMerge(layerMutable));
+    return layerSettingsWatcher(initialSettings?.secretProviders ?? {}).pipe(
+      Layer.provideMerge(layerMutable),
+    );
   }),
 ) as Layer.Layer<
   ProviderInstanceRegistry.ProviderInstanceRegistry,

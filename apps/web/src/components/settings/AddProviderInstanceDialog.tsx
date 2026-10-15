@@ -22,8 +22,6 @@ import {
 } from "../../hooks/useSettings";
 
 import { cn } from "../../lib/utils";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
@@ -177,9 +175,6 @@ export function AddProviderInstanceDialog({
 
   const configDraft = configByDriver[driver] ?? EMPTY_CONFIG_DRAFT;
   const isLocalAcp = isAcpRegistry && isManualAcpConfiguration && configDraft.source === "local";
-  const onePasswordAccounts = useEnvironmentQuery(
-    isLocalAcp ? serverEnvironment.onePasswordAccounts({ environmentId, input: {} }) : null,
-  );
   const localCommandPath =
     typeof configDraft.commandPath === "string" ? configDraft.commandPath.trim() : "";
   const manualAgentId = typeof configDraft.agentId === "string" ? configDraft.agentId.trim() : "";
@@ -509,7 +504,7 @@ export function AddProviderInstanceDialog({
                         {isLocalAcp ? (
                           <ProviderEnvironmentSection
                             environment={localEnvironment}
-                            onePasswordAccounts={onePasswordAccounts.data ?? []}
+                            secretProviders={settings.secretProviders}
                             onChange={setLocalEnvironment}
                           />
                         ) : null}
