@@ -595,10 +595,20 @@ export const ProviderSecretResolverLive = Layer.effect(
         Effect.provideContext(primeContext),
       );
 
+    const invalidate: ProviderSecretResolverShape["invalidate"] = (providers) =>
+      providers === undefined
+        ? Cache.invalidateAll(cache)
+        : Effect.gen(function* () {
+            const stale = Array.from(yield* Cache.keys(cache)).filter(
+              (key) => key._tag === "secret-provider" && providers.has(key.provider),
+            );
+            yield* Effect.forEach(stale, (key) => Cache.invalidate(cache, key), { discard: true });
+          });
+
     return {
       resolve,
       prime,
-      invalidate: Cache.invalidateAll(cache),
+      invalidate,
       listOnePasswordAccounts,
     };
   }),

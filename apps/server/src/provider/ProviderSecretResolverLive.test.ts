@@ -169,7 +169,7 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.resolve(environment);
       assert.strictEqual(spawner.invocations.length, 1);
 
-      yield* resolver.invalidate;
+      yield* resolver.invalidate();
       yield* resolver.resolve(environment);
       assert.strictEqual(spawner.invocations.length, 2);
     }).pipe(Effect.provide(resolverLayer(spawner.layer)));
@@ -993,6 +993,42 @@ describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
         resolverLayer(
           spawner.layer,
           { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("invalidating one provider keeps the other providers' secrets cached", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-home-token", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    const environment = decodeEnvironment([
+      onePasswordVariable("LEGACY", TOKEN_REFERENCE, HOME_ACCOUNT),
+      namedVariable("HOME", HOME_PROVIDER, SECOND_REFERENCE),
+      namedVariable("VAULT", VAULT_PROVIDER, "agents/codex#api_key"),
+    ]);
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 2);
+      assert.strictEqual(http.requests.length, 1);
+
+      // An OpenBao edit must not cost a 1Password prompt, legacy or named.
+      yield* resolver.invalidate(new Set([VAULT_PROVIDER]));
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 2);
+      assert.strictEqual(http.requests.length, 2);
+
+      yield* resolver.invalidate(new Set([HOME_PROVIDER]));
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 3);
+      assert.strictEqual(http.requests.length, 2);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [HOME_PROVIDER]: onePasswordProvider, [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
           http.client,
         ),
       ),

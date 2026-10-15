@@ -185,7 +185,7 @@ const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProv
               next.secretProviders,
             );
             if (changedProviders.size > 0) {
-              yield* secretResolver.invalidate;
+              yield* secretResolver.invalidate(changedProviders);
             }
             yield* primeConfigMapSecrets(secretResolver, configMap);
             yield* mutator.reconcile(configMap);

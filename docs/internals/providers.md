@@ -166,8 +166,9 @@ server setting, and the resolver dispatches on that entry's kind: the 1Password 
 OpenBao HTTP API with the token from one explicit source: the stored token, `BAO_TOKEN`, or the `bao` CLI login. The older 1Password source resolves as if it named a 1Password provider for its
 account. The provider id or account is part of the cache key, because the same reference in two
 stores is two different secrets. A reference naming a provider that no longer exists is unresolved.
-Changing `secretProviders` invalidates the cache and rebuilds the instances that read from it, since
-their own config is unchanged.
+Changing `secretProviders` drops only the cached secrets read through the providers that changed
+and rebuilds the instances that read from them, since their own config is unchanged. Editing an
+OpenBao provider must not cost a 1Password prompt.
 
 Three decisions are load-bearing:
 

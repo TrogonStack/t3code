@@ -372,7 +372,7 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
           return { variables, unresolved };
         }),
       prime: () => Effect.void,
-      invalidate: Effect.void,
+      invalidate: () => Effect.void,
       listOnePasswordAccounts: Effect.succeed([]),
     };
     const secretDriver: ProviderDriver<Record<string, never>> = {
