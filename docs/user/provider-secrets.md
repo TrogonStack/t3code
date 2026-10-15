@@ -1,6 +1,6 @@
 # Provider Secrets From A Secret Manager
 
-This guide is for people who keep provider credentials in 1Password or OpenBao and would rather not
+This guide is for people who keep provider credentials in 1Password, OpenBao, or AWS Secrets Manager and would rather not
 copy them into a second place. It applies to every provider: Codex, Claude, Cursor, Grok, and
 OpenCode.
 
@@ -12,10 +12,11 @@ Add your secret manager as a named provider once, then point variables at it ins
 values.
 
 1. Open Settings, then Secrets, and choose Add provider.
-2. Pick 1Password CLI or OpenBao, give it a name, and fill in its details. 1Password needs the
+2. Pick 1Password CLI, OpenBao, or AWS Secrets Manager, give it a name, and fill in its details. 1Password needs the
    account sign-in address, such as `my.1password.com`. OpenBao needs its address and mount, an
    optional namespace, and an Authentication choice that says where the token comes from: the token
-   you paste, `BAO_TOKEN` on the server, or the login the `bao` CLI already has on the server.
+   you paste, `BAO_TOKEN` on the server, or the login the `bao` CLI already has on the server. AWS Secrets Manager needs a region, such as
+   `us-east-1`, and an optional profile.
 3. In a provider's Variables section, add the variable, choose your named provider as its source, and
    fill in the reference.
 
@@ -25,7 +26,7 @@ Source:    Work 1Password
 Reference: op://Private/claude-code/credential
 ```
 
-You can add as many providers as you need, for example two 1Password accounts and an OpenBao server.
+You can add as many providers as you need, for example two 1Password accounts, an OpenBao server, and an AWS region.
 Each variable names the one it reads from.
 
 T3 Code reads the value from your secret manager right before it starts the agent, and hands the
@@ -46,6 +47,9 @@ source.
   and choose **Copy Secret Reference**.
 - **OpenBao:** `apps/openai#api_key`. The path is inside the mount set on the provider, and the part
   after `#` is the key to read. A reference without a key cannot be resolved.
+- **AWS Secrets Manager:** `prod/openai#api_key`. The part before `#` is the secret name or ARN in
+  the provider's region. With `#key`, the secret must be a JSON object and the value of that key is
+  used. Without it, the whole secret string is used.
 
 ## What Do I Need Installed
 
@@ -58,12 +62,16 @@ What each store needs, on the machine running the T3 Code server.
   paste into the provider, `BAO_TOKEN` in the environment of the T3 Code server, or the login the
   `bao` CLI already has on that machine. The `bao` CLI only needs to be installed for the last
   option.
+- **AWS Secrets Manager:** the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+  v2 (`aws`), with credentials configured for it. T3 Code uses the profile on the provider, or the
+  CLI's default credentials when there is none. Binary secrets are not supported.
 
 Confirm it works from a normal shell first:
 
 ```bash
 op read --account my.1password.com --no-newline "op://Private/claude-code/credential"
 curl -H "X-Vault-Token: $BAO_TOKEN" https://bao.example:8200/v1/secret/data/apps/openai
+aws secretsmanager get-secret-value --secret-id prod/openai --region us-east-1 --profile production --query SecretString --output text
 ```
 
 If the command prints your secret, T3 Code can read it too. If it asks you to sign in, sign in first,
@@ -119,7 +127,9 @@ Work through it in this order:
    cannot be read.
 3. Confirm the token source you chose is available to whoever launched the T3 Code server. That is
    `op` on the `PATH` for 1Password, and for OpenBao either `BAO_TOKEN` in the server's environment
-   or `bao` on the `PATH` with a login. Something set up only for your interactive shell is not
+   or `bao` on the `PATH` with a login. For AWS Secrets Manager it is `aws` on the `PATH` with
+   credentials. An expired SSO login is the common case: run `aws sso login --profile <profile>` on
+   the server. Something set up only for your interactive shell is not
    always visible to a background service.
 4. Refresh provider status once the underlying problem is fixed. A failed read is remembered exactly
    like a successful one, so nothing retries on its own.

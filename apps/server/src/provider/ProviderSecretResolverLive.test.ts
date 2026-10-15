@@ -12,6 +12,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -1054,5 +1055,224 @@ describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
         resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) }, http),
       ),
     );
+  });
+});
+
+const AWS_PROVIDER = SecretProviderId.make("prod-aws");
+
+const awsProvider = (overrides: { region?: string; profile?: string } = {}) => ({
+  kind: "aws-secrets-manager" as const,
+  label: "Production",
+  region: "us-east-1",
+  ...overrides,
+});
+
+const awsRead = (reference: string) =>
+  decodeEnvironment([namedVariable("OPENAI_API_KEY", AWS_PROVIDER, reference)]);
+
+const awsBody = (body: { SecretString?: string; SecretBinary?: string }) =>
+  JSON.stringify({ ARN: "arn:aws:secretsmanager:us-east-1:000000000000:secret:prod", ...body });
+
+describe("ProviderSecretResolverLive with AWS Secrets Manager", () => {
+  it.effect("reads the whole secret string in the provider's region", () => {
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({ SecretString: "sk-aws-token" }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(awsRead("prod/openai"));
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "OPENAI_API_KEY", value: "sk-aws-token", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.commands, ["aws"]);
+      assert.deepStrictEqual(spawner.invocations, [
+        [
+          "secretsmanager",
+          "get-secret-value",
+          "--secret-id",
+          "prod/openai",
+          "--region",
+          "us-east-1",
+          "--output",
+          "json",
+          "--no-cli-pager",
+          "--no-cli-auto-prompt",
+        ],
+      ]);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
+  });
+
+  it.effect("passes the named profile when one is set", () => {
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({ SecretString: "sk-aws-token" }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(awsRead("prod/openai"));
+
+      assert.deepStrictEqual(spawner.invocations, [
+        [
+          "secretsmanager",
+          "get-secret-value",
+          "--secret-id",
+          "prod/openai",
+          "--region",
+          "eu-west-2",
+          "--profile",
+          "production",
+          "--output",
+          "json",
+          "--no-cli-pager",
+          "--no-cli-auto-prompt",
+        ],
+      ]);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, {
+          [AWS_PROVIDER]: awsProvider({ region: "eu-west-2", profile: "production" }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("reads one key of a JSON secret", () => {
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({
+        SecretString: JSON.stringify({ api_key: "sk-aws-key", retries: 3, strict: true }),
+      }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("KEY", AWS_PROVIDER, "prod/openai#api_key"),
+          namedVariable("RETRIES", AWS_PROVIDER, "prod/openai#retries"),
+          namedVariable("STRICT", AWS_PROVIDER, "prod/openai#strict"),
+        ]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [
+          { name: "KEY", value: "sk-aws-key", sensitive: true },
+          { name: "RETRIES", value: "3", sensitive: true },
+          { name: "STRICT", value: "true", sensitive: true },
+        ],
+        unresolved: [],
+      });
+      assert.strictEqual(spawner.invocations[0]?.[3], "prod/openai");
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
+  });
+
+  it.effect("reports a missing, non-scalar, or non-object key unresolved", () => {
+    const spawner = scriptedOpSpawner((args) => ({
+      stdout: awsBody({
+        SecretString: args.includes("prod/plain")
+          ? "not json"
+          : JSON.stringify({ nested: { a: 1 }, list: [1] }),
+      }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("MISSING", AWS_PROVIDER, "prod/openai#absent"),
+          namedVariable("NESTED", AWS_PROVIDER, "prod/openai#nested"),
+          namedVariable("LIST", AWS_PROVIDER, "prod/openai#list"),
+          namedVariable("PLAIN", AWS_PROVIDER, "prod/plain#api_key"),
+        ]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [],
+        unresolved: ["MISSING", "NESTED", "LIST", "PLAIN"],
+      });
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
+  });
+
+  it.effect("reports a binary-only secret unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({ SecretBinary: "aGVsbG8=" }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(awsRead("prod/blob"));
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["OPENAI_API_KEY"] });
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
+  });
+
+  it.effect("reports a failing `aws` unresolved and logs stderr but never stdout", () => {
+    const logged: Array<string> = [];
+    const logger = Logger.make(({ message }) => {
+      logged.push(JSON.stringify(message));
+    });
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({ SecretString: "sk-must-not-be-logged" }),
+      stderr: "Error when retrieving token from sso: Token has expired",
+      code: 254,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(awsRead("prod/openai"));
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["OPENAI_API_KEY"] });
+      const output = logged.join("\n");
+      assert.include(output, "Could not read provider secret from AWS Secrets Manager");
+      assert.include(output, "Token has expired");
+      assert.notInclude(output, "sk-must-not-be-logged");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() }),
+          Logger.layer([logger]),
+        ),
+      ),
+    );
+  });
+
+  it.effect("refuses a flag-shaped secret id and an empty key without spawning", () => {
+    const spawner = scriptedOpSpawner(() => ({
+      stdout: awsBody({ SecretString: "sk-aws-token" }),
+      stderr: "",
+      code: 0,
+    }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("FLAG", AWS_PROVIDER, "--profile=evil"),
+          namedVariable("FLAG_KEY", AWS_PROVIDER, "-x#api_key"),
+          namedVariable("EMPTY_KEY", AWS_PROVIDER, "prod/openai#"),
+          namedVariable("NO_ID", AWS_PROVIDER, "#api_key"),
+        ]),
+      );
+
+      assert.deepStrictEqual(Array.from(resolved.unresolved), [
+        "FLAG",
+        "FLAG_KEY",
+        "EMPTY_KEY",
+        "NO_ID",
+      ]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
   });
 });

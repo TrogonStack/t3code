@@ -16,6 +16,13 @@
  * so the CLI's own login applies, the same way `op` uses the user's existing
  * session.
  *
+ * AWS Secrets Manager reads `aws secretsmanager get-secret-value` in the
+ * provider's region, with its named profile when one is set. No credentials
+ * are stored: the CLI resolves them from that profile or its default chain
+ * (environment, default profile, SSO, instance role). A reference is
+ * `name-or-arn` for the whole secret string or `name-or-arn#key` for one key
+ * of a JSON secret. Binary secrets are not supported.
+ *
  * 1Password resolution is `op read --account <account> <reference>`, which is the same
  * command the user would run by hand and inherits their existing `op` session,
  * so there is no second place to configure credentials. The account is what
@@ -38,6 +45,7 @@
  * @module provider/ProviderSecretResolverLive
  */
 import {
+  type AwsSecretsManagerSecretProviderConfig,
   OnePasswordAccount,
   OnePasswordAccountSummary,
   type OpenBaoSecretProviderConfig,
@@ -72,6 +80,7 @@ import {
 
 const ONE_PASSWORD_BINARY = "op";
 const OPENBAO_BINARY = "bao";
+const AWS_BINARY = "aws";
 
 /**
  * Every `op` call skips its cache. The cache lives in an `op daemon` that `op`
@@ -400,6 +409,109 @@ const readOpenBaoSecret = Effect.fn("readOpenBaoSecret")(function* (
   return yield* readOpenBaoSecretOverApi(provider, config, location, reference);
 });
 
+/**
+ * Split an AWS Secrets Manager reference into the secret id and the optional
+ * JSON key. The id is handed to `aws` as the value of `--secret-id`, so one
+ * starting with `-` would be read as a flag and is refused. A secret name
+ * cannot contain `#`, so the first one always starts the key.
+ */
+function parseAwsReference(reference: string) {
+  const separator = reference.indexOf("#");
+  const secretId = separator === -1 ? reference : reference.slice(0, separator);
+  const key = separator === -1 ? undefined : reference.slice(separator + 1);
+  if (secretId.length === 0 || secretId.startsWith("-") || key === "") {
+    return undefined;
+  }
+  return { secretId, key };
+}
+
+const AwsSecretValueJson = Schema.fromJsonString(
+  Schema.Struct({
+    SecretString: Schema.optional(Schema.String),
+    SecretBinary: Schema.optional(Schema.String),
+  }),
+);
+const decodeAwsSecretValue = Schema.decodeUnknownOption(AwsSecretValueJson);
+const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
+
+const readAwsSecret = Effect.fn("readAwsSecret")(function* (
+  provider: SecretProviderId,
+  config: AwsSecretsManagerSecretProviderConfig,
+  reference: string,
+) {
+  const location = parseAwsReference(reference);
+  if (location === undefined) {
+    yield* Effect.logWarning(
+      "AWS Secrets Manager reference must be name-or-arn or name-or-arn#key",
+      { provider, reference },
+    );
+    return undefined;
+  }
+  const spawnCommand = yield* resolveSpawnCommand(AWS_BINARY, [
+    "secretsmanager",
+    "get-secret-value",
+    "--secret-id",
+    location.secretId,
+    "--region",
+    config.region,
+    ...(config.profile === undefined ? [] : ["--profile", config.profile]),
+    "--output",
+    "json",
+    "--no-cli-pager",
+    "--no-cli-auto-prompt",
+  ]);
+  const result = yield* spawnAndCollect(
+    AWS_BINARY,
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, { shell: spawnCommand.shell }),
+  );
+  if (result.code !== 0) {
+    // `aws` reports missing credentials, expired SSO sessions, and
+    // ResourceNotFound on stderr and never echoes the secret, so this is safe
+    // to log verbatim. Stdout carries the secret and is never logged.
+    yield* Effect.logWarning("Could not read provider secret from AWS Secrets Manager", {
+      provider,
+      reference,
+      exitCode: result.code,
+      detail: result.stderr.trim(),
+    });
+    return undefined;
+  }
+  const body = Option.getOrUndefined(decodeAwsSecretValue(result.stdout));
+  if (body === undefined) {
+    yield* Effect.logWarning("AWS Secrets Manager returned an unexpected response", {
+      provider,
+      reference,
+    });
+    return undefined;
+  }
+  if (body.SecretString === undefined) {
+    yield* Effect.logWarning("AWS Secrets Manager binary secrets are not supported", {
+      provider,
+      reference,
+    });
+    return undefined;
+  }
+  if (location.key === undefined) {
+    return nonEmpty(body.SecretString);
+  }
+  const parsed = Option.getOrUndefined(decodeJson(body.SecretString));
+  const value =
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? Reflect.get(parsed, location.key)
+      : undefined;
+  if (typeof value === "string") {
+    return nonEmpty(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  yield* Effect.logWarning("AWS Secrets Manager secret has no scalar value for the key", {
+    provider,
+    reference,
+  });
+  return undefined;
+});
+
 /** Log fields that identify a secret without carrying its value. */
 const describeSecret = (secret: ProviderSecretReference) =>
   secret._tag === "1password"
@@ -442,6 +554,8 @@ export const ProviderSecretResolverLive = Layer.effect(
           );
         case "openbao":
           return yield* readOpenBaoSecret(provider, config, reference);
+        case "aws-secrets-manager":
+          return yield* readAwsSecret(provider, config, reference);
       }
     });
 

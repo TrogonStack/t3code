@@ -31,13 +31,22 @@ import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 function secretProviderDescription(config: SecretProviderConfig): string {
-  if (config.kind === "1password") return secretProviderSummary(config);
-  return [
-    secretProviderSummary(config),
-    `mount ${config.mount}`,
-    ...(config.namespace === undefined ? [] : [`namespace ${config.namespace}`]),
-    ...(config.auth === "env" ? ["BAO_TOKEN"] : config.auth === "cli" ? ["bao CLI login"] : []),
-  ].join(" · ");
+  switch (config.kind) {
+    case "1password":
+      return secretProviderSummary(config);
+    case "openbao":
+      return [
+        secretProviderSummary(config),
+        `mount ${config.mount}`,
+        ...(config.namespace === undefined ? [] : [`namespace ${config.namespace}`]),
+        ...(config.auth === "env" ? ["BAO_TOKEN"] : config.auth === "cli" ? ["bao CLI login"] : []),
+      ].join(" · ");
+    case "aws-secrets-manager":
+      return [
+        secretProviderSummary(config),
+        ...(config.profile === undefined ? [] : [`profile ${config.profile}`]),
+      ].join(" · ");
+  }
 }
 
 /** Secret providers belong to one environment, so this page shows the representative one. */
@@ -106,7 +115,7 @@ function EnvironmentSecretProviders({
         {entries.length === 0 ? (
           <SettingsRow
             title="No secret providers configured."
-            description="Add 1Password or OpenBao, then pick it as the source of a provider variable."
+            description="Add 1Password, OpenBao, or AWS Secrets Manager, then pick it as the source of a provider variable."
           />
         ) : (
           entries.map(([id, config]) => (

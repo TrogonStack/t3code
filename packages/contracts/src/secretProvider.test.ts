@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { OpenBaoSecretProviderConfig, SecretProviderConfig } from "./secretProvider.ts";
+import {
+  AwsSecretsManagerSecretProviderConfig,
+  OpenBaoSecretProviderConfig,
+  SecretProviderConfig,
+} from "./secretProvider.ts";
 import { secretSettingsFields } from "./settingsSecret.ts";
 import { ProviderInstanceEnvironmentVariable } from "./providerInstance.ts";
 
@@ -54,6 +58,41 @@ describe("SecretProviderConfig", () => {
         kind: "openbao",
         label: "Homelab",
         address: "https://bao.example:8200",
+        ...override,
+      }),
+    ).toThrow();
+  });
+
+  it("decodes an AWS Secrets Manager provider with and without a profile", () => {
+    const withoutProfile = {
+      kind: "aws-secrets-manager",
+      label: "Production",
+      region: "us-east-1",
+    };
+    expect(decodeConfig(withoutProfile)).toEqual(withoutProfile);
+    const withProfile = { ...withoutProfile, region: "ap-southeast-2", profile: "production" };
+    expect(decodeConfig(withProfile)).toEqual(withProfile);
+  });
+
+  it("stores no secret fields for an AWS Secrets Manager provider", () => {
+    expect(secretSettingsFields(AwsSecretsManagerSecretProviderConfig)).toEqual([]);
+  });
+
+  it.each([
+    ["a missing region", { region: undefined }],
+    ["a region with uppercase", { region: "US-EAST-1" }],
+    ["a region without a number", { region: "us-east" }],
+    ["an unrelated region", { region: "mars" }],
+    ["a profile starting with a dash", { profile: "-production" }],
+    ["a profile with whitespace", { profile: "my profile" }],
+    ["an empty profile", { profile: "" }],
+    ["a long profile", { profile: "x".repeat(65) }],
+  ])("rejects an AWS Secrets Manager provider with %s", (_label, override) => {
+    expect(() =>
+      decodeConfig({
+        kind: "aws-secrets-manager",
+        label: "Production",
+        region: "us-east-1",
         ...override,
       }),
     ).toThrow();
