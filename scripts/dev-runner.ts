@@ -291,6 +291,9 @@ interface CreateDevRunnerEnvInput {
   readonly host: string | undefined;
   readonly port: number | undefined;
   readonly devUrl: URL | undefined;
+  // True when t3Home was chosen for this run (worktree default or --home-dir)
+  // rather than inherited from the shell, so the desktop profile can follow it.
+  readonly isolatedHome?: boolean;
 }
 
 export function createDevRunnerEnv({
@@ -299,6 +302,7 @@ export function createDevRunnerEnv({
   serverOffset,
   webOffset,
   t3Home,
+  isolatedHome,
   browser,
   autoBootstrapProjectFromCwd,
   logWebSocketEvents,
@@ -413,6 +417,14 @@ export function createDevRunnerEnv({
     if (isDesktopMode) {
       output.HOST = DESKTOP_DEV_LOOPBACK_HOST;
       delete output.T3CODE_DESKTOP_WS_URL;
+    }
+
+    // Two dev desktop apps cannot share one Chromium profile, so a run on its
+    // own T3 home keeps its Electron profile there too.
+    if (isDesktopMode && isolatedHome === true && configuredBaseDir !== undefined) {
+      output.T3CODE_DESKTOP_DEV_APP_DATA_DIR = resolvedBaseDir;
+    } else {
+      delete output.T3CODE_DESKTOP_DEV_APP_DATA_DIR;
     }
 
     return output;
@@ -671,16 +683,15 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // Trim before choosing: `--home-dir ""` is not a selection, and treating it
     // as one would skip the worktree default and land on the shared home —
     // exactly the outcome this precedence exists to prevent.
-    const resolvedT3Home =
-      (input.t3Home?.trim() || undefined) ??
-      worktreeHome ??
-      (hostEnvironment.T3CODE_HOME?.trim() || undefined);
+    const selectedT3Home = (input.t3Home?.trim() || undefined) ?? worktreeHome;
+    const resolvedT3Home = selectedT3Home ?? (hostEnvironment.T3CODE_HOME?.trim() || undefined);
     const env = yield* createDevRunnerEnv({
       mode: input.mode,
       baseEnv: hostEnvironment,
       serverOffset,
       webOffset,
       t3Home: resolvedT3Home,
+      isolatedHome: selectedT3Home !== undefined,
       browser: input.browser,
       autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
       logWebSocketEvents: input.logWebSocketEvents,

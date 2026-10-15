@@ -1719,7 +1719,7 @@ it.layer(
               unresolved: [],
             }),
           prime: () => Effect.void,
-          invalidate: Ref.update(invalidations, (count) => count + 1),
+          invalidate: () => Ref.update(invalidations, (count) => count + 1),
           listOnePasswordAccounts: Effect.succeed([]),
         });
         const instanceRegistryLayer = Layer.succeed(
@@ -1802,7 +1802,7 @@ it.layer(
               unresolved: [],
             }),
           prime: () => Effect.void,
-          invalidate: Effect.void,
+          invalidate: () => Effect.void,
           listOnePasswordAccounts: Effect.succeed([]),
         });
         const instanceRegistryLayer = Layer.succeed(
@@ -1888,7 +1888,7 @@ it.layer(
               ...previous,
               references.map((secret) => secret.reference),
             ]).pipe(Effect.asVoid),
-          invalidate: Effect.void,
+          invalidate: () => Effect.void,
           listOnePasswordAccounts: Effect.succeed([]),
         });
         const environmentFor = (reference: string) =>
@@ -3203,7 +3203,7 @@ it.layer(
               ...previous,
               `prime:${references.map((secret) => secret.reference).join(",")}`,
             ]).pipe(Effect.asVoid),
-          invalidate: Effect.void,
+          invalidate: () => Effect.void,
           listOnePasswordAccounts: Effect.succeed([]),
         });
 

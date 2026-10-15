@@ -1,10 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import { ProviderInstanceEnvironment, SecretProviderId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import {
   collectProviderSecretReferences,
   hasProviderSecretReference,
+  NamedProviderSecretReference,
   OnePasswordSecretReference,
   providerSecretReference,
 } from "./ProviderSecretReference.ts";
@@ -16,6 +17,11 @@ const ACCOUNT = "my.1password.com";
 const onePasswordVariable = (name: string, reference: string, account = ACCOUNT) => ({
   name,
   value: { kind: "1password" as const, reference, account },
+});
+
+const namedVariable = (name: string, provider: string, reference: string) => ({
+  name,
+  value: { kind: "secret-provider" as const, provider, reference },
 });
 
 const secret = (reference: string) =>
@@ -33,6 +39,18 @@ describe("providerSecretReference", () => {
       new OnePasswordSecretReference({
         reference: "op://Private/claude-code/credential",
         account: "my.1password.com" as OnePasswordSecretReference["account"],
+      }),
+    );
+  });
+
+  it("reads a named provider source with its provider id", () => {
+    const [variable] = decodeEnvironment([
+      namedVariable("TOKEN", "team-vault", "agents/codex#api_key"),
+    ]);
+    expect(providerSecretReference(variable!.value)).toEqual(
+      new NamedProviderSecretReference({
+        provider: SecretProviderId.make("team-vault"),
+        reference: "agents/codex#api_key",
       }),
     );
   });
@@ -84,6 +102,16 @@ describe("hasProviderSecretReference with secret sources", () => {
   });
 });
 
+describe("hasProviderSecretReference with named providers", () => {
+  it("is true for a named provider source", () => {
+    expect(
+      hasProviderSecretReference(
+        decodeEnvironment([namedVariable("TOKEN", "team-vault", "agents/codex#api_key")]),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("collectProviderSecretReferences", () => {
   it("returns each distinct reference once, in first-seen order", () => {
     const shared = "op://Private/shared/credential";
@@ -116,9 +144,15 @@ describe("collectProviderSecretReferences", () => {
       ]),
     ]);
 
-    expect(references.map(({ reference, account }) => [reference, account])).toEqual([
-      [shared, "my.1password.com"],
-      [shared, "acme.1password.com"],
+    expect(references).toEqual([
+      new OnePasswordSecretReference({
+        reference: shared,
+        account: "my.1password.com" as OnePasswordSecretReference["account"],
+      }),
+      new OnePasswordSecretReference({
+        reference: shared,
+        account: "acme.1password.com" as OnePasswordSecretReference["account"],
+      }),
     ]);
   });
 
@@ -131,5 +165,29 @@ describe("collectProviderSecretReferences", () => {
         ]),
       ),
     ).toEqual([]);
+  });
+
+  it("keeps one reference behind different providers apart, and apart from 1Password", () => {
+    const shared = "op://Private/shared/credential";
+    const references = collectProviderSecretReferences([
+      decodeEnvironment([
+        namedVariable("HOME_TOKEN", "home", shared),
+        namedVariable("WORK_TOKEN", "work", shared),
+        onePasswordVariable("LEGACY_TOKEN", shared),
+        namedVariable("HOME_AGAIN", "home", shared),
+      ]),
+    ]);
+
+    expect(references).toEqual([
+      new NamedProviderSecretReference({
+        provider: SecretProviderId.make("home"),
+        reference: shared,
+      }),
+      new NamedProviderSecretReference({
+        provider: SecretProviderId.make("work"),
+        reference: shared,
+      }),
+      secret(shared),
+    ]);
   });
 });

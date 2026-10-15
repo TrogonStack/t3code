@@ -977,7 +977,7 @@ export const layer = Layer.effect(
     const reloadSecretBackedInstances = Effect.fn("reloadSecretBackedInstances")(function* (
       instanceIds?: ReadonlyArray<ProviderInstanceId>,
     ) {
-      yield* secretResolver.invalidate;
+      yield* secretResolver.invalidate();
       // Unavailable instances are targets too. An instance whose last rebuild
       // failed because the vault was locked is not live, so live subscriptions
       // alone would never reach it again, and a refresh is exactly the moment

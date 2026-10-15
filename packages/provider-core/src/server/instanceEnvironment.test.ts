@@ -164,6 +164,10 @@ describe("literalProviderInstanceEnvironment", () => {
         name: "TOKEN",
         value: { kind: "1password", reference: "op://Private/item/field", account: "my" },
       },
+      {
+        name: "VAULT_TOKEN",
+        value: { kind: "secret-provider", provider: "team-vault", reference: "agents/codex#key" },
+      },
     ]);
 
     expect(literalProviderInstanceEnvironment(environment)).toEqual([

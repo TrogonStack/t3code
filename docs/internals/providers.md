@@ -145,11 +145,11 @@ current client support.
 ## Secret references in provider environments
 
 A provider instance's `environment` can hold secret references: a `ProviderSecretSource` value such
-as `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
+as `{ kind: "secret-provider", provider, reference }`, or the older `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
 that starts with `op://`.
-[`ProviderSecretResolver`](../../apps/server/src/provider/Services/ProviderSecretResolver.ts) swaps
-each one for the value the 1Password CLI returns. This happens once per instance in
-[`ProviderInstanceRegistryLive`](../../apps/server/src/provider/Layers/ProviderInstanceRegistryLive.ts),
+[`ProviderSecretResolver`](../../apps/server/src/provider/ProviderSecretResolver.ts) swaps
+each one for the value its secret store returns. This happens once per instance in
+[`ProviderInstanceRegistry`](../../apps/server/src/provider/ProviderInstanceRegistry.ts),
 before `driver.create`, so drivers and the orchestration v2 adapters built from them only ever see
 resolved values; `ResolvedProviderEnvironment` is the type that enforces it. The registry keeps the
 raw config, which is what makes a later rebuild possible. Paths that build a process environment
@@ -160,9 +160,15 @@ The parsing half lives in
 [`ProviderSecretReference.ts`](../../apps/server/src/provider/ProviderSecretReference.ts) and knows
 nothing about how a secret is fetched, so the registry can ask "does this instance read from a secret
 store?" without depending on the resolver.
-[`ProviderSecretResolverLive`](../../apps/server/src/provider/Layers/ProviderSecretResolverLive.ts)
-is the half that shells out to `op read --account <account> --no-newline`. The account is part of the
-cache key, because the same reference in two accounts is two different secrets.
+[`ProviderSecretResolverLive`](../../apps/server/src/provider/ProviderSecretResolverLive.ts)
+is the half that fetches values. A `secret-provider` source names an entry under the `secretProviders`
+server setting, and the resolver dispatches on that entry's kind: the 1Password CLI for `op`, or the
+OpenBao HTTP API with the token from one explicit source: the stored token, `BAO_TOKEN`, or the `bao` CLI login. The older 1Password source resolves as if it named a 1Password provider for its
+account. The provider id or account is part of the cache key, because the same reference in two
+stores is two different secrets. A reference naming a provider that no longer exists is unresolved.
+Changing `secretProviders` drops only the cached secrets read through the providers that changed
+and rebuilds the instances that read from them, since their own config is unchanged. Editing an
+OpenBao provider must not cost a 1Password prompt.
 
 Three decisions are load-bearing:
 
@@ -199,7 +205,7 @@ built with. Sessions follow a rebuild without extra wiring, because the v2 adapt
 the instance's adapter on every request.
 
 So `ProviderRegistry.reloadSecretBackedInstances` invalidates the cache and then calls
-[`rebuildInstanceWhen`](../../apps/server/src/provider/Services/ProviderInstanceRegistry.ts) on each
+[`rebuildInstanceWhen`](../../apps/server/src/provider/ProviderInstanceRegistry.ts) on each
 instance, passing `hasProviderSecretReference` as the predicate. The registry owns the child scopes
 and already stores each instance's config, so it can
 close and rebuild one entry in place; passing a predicate rather than exposing the entries keeps

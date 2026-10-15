@@ -12,7 +12,7 @@ const actions = vi.hoisted(() => ({
 }));
 
 const settingsHooks = vi.hoisted(() => ({
-  read: vi.fn(() => ({ providerInstances: {} })),
+  read: vi.fn(() => ({ providerInstances: {}, secretProviders: {} })),
   mutate: vi.fn(),
   useMutation: vi.fn(),
 }));
@@ -145,7 +145,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
     actions.canManageProviders = true;
     actions.toast.mockReset();
     actions.onOpenChange.mockReset();
-    settingsHooks.read.mockReset().mockReturnValue({ providerInstances: {} });
+    settingsHooks.read.mockReset().mockReturnValue({ providerInstances: {}, secretProviders: {} });
     settingsHooks.mutate.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
     settingsHooks.useMutation.mockReset().mockReturnValue(settingsHooks.mutate);
   });
@@ -176,6 +176,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
       providerInstances: {
         codex_2: { driver: "codex", enabled: false },
       },
+      secretProviders: {},
     });
     let tree = render();
     // Codex offers ChatGPT sign-in first; manual setup keeps the existing CLI flow.

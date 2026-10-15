@@ -13,7 +13,11 @@
  *
  * @module provider/ProviderSecretResolver
  */
-import type { OnePasswordAccountSummary, ProviderInstanceEnvironment } from "@t3tools/contracts";
+import type {
+  OnePasswordAccountSummary,
+  ProviderInstanceEnvironment,
+  SecretProviderId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
@@ -67,12 +71,13 @@ export interface ProviderSecretResolverShape {
    */
   readonly prime: (references: ReadonlyArray<ProviderSecretReference>) => Effect.Effect<void>;
   /**
-   * Drop every cached secret. The next `resolve` re-reads from the store.
-   * Callers that need the new value to reach a running provider must also
-   * rebuild the instance: a provider process keeps the environment it was
-   * spawned with.
+   * Drop cached secrets so the next `resolve` re-reads them from the store:
+   * every secret by default, or only those read through the named providers
+   * given, so editing one provider never re-prompts for the others. Callers
+   * that need the new value to reach a running provider must also rebuild the
+   * instance: a provider process keeps the environment it was spawned with.
    */
-  readonly invalidate: Effect.Effect<void>;
+  readonly invalidate: (providers?: ReadonlySet<SecretProviderId>) => Effect.Effect<void>;
   /**
    * The 1Password accounts signed in on this machine, so settings can offer
    * them instead of asking the user to type one. Reads local `op` config only,
@@ -108,7 +113,7 @@ export class ProviderSecretResolver extends Context.Reference<ProviderSecretReso
     defaultValue: () => ({
       resolve: (environment) => Effect.sync(() => resolveWithoutSecretStore(environment)),
       prime: () => Effect.void,
-      invalidate: Effect.void,
+      invalidate: () => Effect.void,
       listOnePasswordAccounts: Effect.succeed([]),
     }),
   },

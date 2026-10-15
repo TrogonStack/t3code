@@ -1,16 +1,30 @@
 // @effect-diagnostics nodeBuiltinImport:off - asserts against the fake op CLI script this test writes to disk.
 import { describe, it, assert } from "@effect/vitest";
-import { OnePasswordAccount, ProviderInstanceEnvironment } from "@t3tools/contracts";
+import {
+  OnePasswordAccount,
+  ProviderInstanceEnvironment,
+  SecretProviderId,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeFS from "node:fs";
 
-import { OnePasswordSecretReference } from "./ProviderSecretReference.ts";
+import * as Settings from "../serverSettings.ts";
+import {
+  NamedProviderSecretReference,
+  OnePasswordSecretReference,
+} from "./ProviderSecretReference.ts";
 import { ProviderSecretResolverLive } from "./ProviderSecretResolverLive.ts";
 import { ProviderSecretResolver } from "./ProviderSecretResolver.ts";
 
@@ -30,11 +44,34 @@ const onePasswordVariable = (name: string, reference: string, account: string) =
 const onePassword = (reference: string, account: string) => {
   const [variable] = decodeEnvironment([onePasswordVariable("TOKEN", reference, account)]);
   const source = variable?.value;
-  if (source === undefined || typeof source === "string") {
+  if (source === undefined || typeof source === "string" || source.kind !== "1password") {
     throw new Error("expected a 1Password source");
   }
   return new OnePasswordSecretReference({ reference: source.reference, account: source.account });
 };
+
+/**
+ * The live resolver over a fake spawner. `secretProviders` seeds the settings
+ * the resolver looks named providers up in.
+ */
+const noHttpClient = HttpClient.make(() => Effect.die("unexpected HTTP request"));
+
+const resolverLayer = (
+  spawner: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>,
+  secretProviders: ServerSettings["secretProviders"] = {},
+  httpClient: HttpClient.HttpClient = noHttpClient,
+) =>
+  ProviderSecretResolverLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        spawner,
+        NodeFileSystem.layer,
+        NodePath.layer,
+        Layer.succeed(HttpClient.HttpClient, httpClient),
+        Settings.layerTest({ secretProviders }),
+      ),
+    ),
+  );
 
 /**
  * Spawner that answers every `op read` with `result` and records the argv it
@@ -90,13 +127,7 @@ describe("ProviderSecretResolverLive", () => {
         unresolved: [],
       });
       assert.strictEqual(spawner.invocations.length, 0);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("swaps a secret reference for the value 1Password returns", () => {
@@ -121,13 +152,7 @@ describe("ProviderSecretResolverLive", () => {
       assert.deepStrictEqual(spawner.invocations, [
         ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("reads a reference once and holds it until the caller invalidates", () => {
@@ -144,16 +169,10 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.resolve(environment);
       assert.strictEqual(spawner.invocations.length, 1);
 
-      yield* resolver.invalidate;
+      yield* resolver.invalidate();
       yield* resolver.resolve(environment);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("drops a variable whose reference cannot be read", () => {
@@ -183,13 +202,7 @@ describe("ProviderSecretResolverLive", () => {
       // leaving it out would hand the provider whatever the server itself was
       // started with under that name.
       assert.deepStrictEqual(resolved.unresolved, ["CLAUDE_CODE_OAUTH_TOKEN"]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("holds a failed read too, so a locked vault prompts once", () => {
@@ -204,13 +217,7 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.resolve(environment);
 
       assert.strictEqual(spawner.invocations.length, 1);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
@@ -236,16 +243,24 @@ function scriptedOpSpawner(
   ) => { stdout: string; stderr: string; code: number },
 ) {
   const invocations: Array<ReadonlyArray<string>> = [];
+  const commands: Array<string> = [];
+  const environments: Array<Readonly<Record<string, string | undefined>> | undefined> = [];
   const stdinUses: Array<boolean> = [];
   const layer = Layer.succeed(
     ChildProcessSpawner.ChildProcessSpawner,
     ChildProcessSpawner.make((command) =>
       Effect.sync(() => {
         const cmd = command as unknown as {
+          command: string;
           args: ReadonlyArray<string>;
-          options?: { stdin?: Stream.Stream<Uint8Array> };
+          options?: {
+            stdin?: Stream.Stream<Uint8Array>;
+            env?: Readonly<Record<string, string | undefined>>;
+          };
         };
         invocations.push(cmd.args);
+        commands.push(cmd.command);
+        environments.push(cmd.options?.env);
         stdinUses.push(cmd.options?.stdin !== undefined);
         const inputPath = cmd.args[cmd.args.indexOf("-i") + 1];
         const template =
@@ -269,7 +284,7 @@ function scriptedOpSpawner(
       }),
     ),
   );
-  return { layer, invocations, stdinUses };
+  return { layer, invocations, commands, environments, stdinUses };
 }
 
 /** The separator `prime` chose, read back out of the template it built. */
@@ -321,13 +336,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       assert.strictEqual(claude.variables?.[0]?.value, "sk-claude-token");
       assert.strictEqual(codex.variables?.[0]?.value, "sk-codex-token");
       assert.strictEqual(spawner.invocations.length, 1);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("falls back to one read at a time when the batch fails", () => {
@@ -365,13 +374,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       assert.strictEqual(claude.variables?.[0]?.value, "sk-claude-token");
       assert.deepStrictEqual(Array.from(claude.unresolved), []);
       assert.deepStrictEqual(Array.from(codex.unresolved), ["CODEX_TOKEN"]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("hands the template to a file `op` will actually read", () => {
@@ -413,13 +416,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       // so a secret never reaches the disk.
       assert.isTrue(seenTemplate.includes(TOKEN_REFERENCE));
       assert.isTrue(seenTemplate.includes(SECOND_REFERENCE));
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("leaves no template behind once the batch is done", () => {
@@ -445,13 +442,7 @@ describe("ProviderSecretResolverLive.prime", () => {
 
       assert.isTrue(templatePath.length > 0);
       assert.isFalse(NodeFS.existsSync(templatePath));
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("does not spawn a batch for a single reference", () => {
@@ -464,13 +455,7 @@ describe("ProviderSecretResolverLive.prime", () => {
       // One reference is one prompt either way, and `op read` names the
       // reference it could not resolve.
       assert.strictEqual(spawner.invocations.length, 0);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
@@ -491,13 +476,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
       assert.deepStrictEqual(spawner.invocations, [
         ["--cache=false", "read", "--account", WORK_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("keeps the same reference in two accounts apart", () => {
@@ -521,13 +500,7 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         { name: "WORK_TOKEN", value: "sk-work-token", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
   it.effect("primes one batch per account", () => {
@@ -571,23 +544,13 @@ describe("ProviderSecretResolverLive with 1Password accounts", () => {
         { name: "WORK_CLAUDE", value: "work-claude", sensitive: true },
       ]);
       assert.strictEqual(spawner.invocations.length, 2);
-    }).pipe(
-      Effect.provide(
-        ProviderSecretResolverLive.pipe(
-          Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-        ),
-      ),
-    );
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
 
 describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
   const provideResolver = (spawner: ReturnType<typeof recordingOpSpawner>) =>
-    Effect.provide(
-      ProviderSecretResolverLive.pipe(
-        Layer.provide(Layer.merge(spawner.layer, NodeFileSystem.layer)),
-      ),
-    );
+    Effect.provide(resolverLayer(spawner.layer));
 
   it.effect("offers each signed-in account by the address `op --account` accepts", () => {
     const spawner = recordingOpSpawner({
@@ -627,5 +590,469 @@ describe("ProviderSecretResolverLive.listOnePasswordAccounts", () => {
       const resolver = yield* ProviderSecretResolver;
       assert.deepStrictEqual(yield* resolver.listOnePasswordAccounts, []);
     }).pipe(provideResolver(spawner));
+  });
+});
+
+const HOME_PROVIDER = SecretProviderId.make("home-1password");
+const VAULT_PROVIDER = SecretProviderId.make("team-vault");
+const BAO_ADDRESS = "https://bao.example.com:8200";
+
+const namedVariable = (name: string, provider: SecretProviderId, reference: string) => ({
+  name,
+  value: { kind: "secret-provider" as const, provider, reference },
+});
+
+const named = (provider: SecretProviderId, reference: string) =>
+  new NamedProviderSecretReference({ provider, reference });
+
+const onePasswordProvider = {
+  kind: "1password" as const,
+  label: "Home",
+  account: OnePasswordAccount.make(HOME_ACCOUNT),
+};
+
+const openBaoProvider = (
+  overrides: {
+    namespace?: string;
+    token?: string;
+    auth?: "token" | "env" | "cli";
+    address?: string;
+  } = {},
+) => ({
+  kind: "openbao" as const,
+  label: "Team vault",
+  address: BAO_ADDRESS,
+  mount: "kv",
+  auth: "token" as const,
+  ...overrides,
+});
+
+interface RecordedRequest {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/** HTTP client that answers every request with `status` and `body`, recording what it was sent. */
+const recordingHttpClient = (status: number, body: unknown) => {
+  const requests: Array<RecordedRequest> = [];
+  const client = HttpClient.make((request) => {
+    requests.push({ url: request.url, headers: { ...request.headers } });
+    return Effect.succeed(
+      HttpClientResponse.fromWeb(
+        request,
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+  });
+  return { client, requests };
+};
+
+const hostLayer = (env: NodeJS.ProcessEnv) => Layer.succeed(HostProcess.Environment, env);
+
+const apiRead = (reference = "agents/codex#api_key") =>
+  decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, reference)]);
+
+describe("ProviderSecretResolverLive with named secret providers", () => {
+  it.effect("reads a named 1Password provider from the account it is configured with", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-home-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", HOME_PROVIDER, TOKEN_REFERENCE)]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-home-token", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.invocations, [
+        ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+      ]);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer, { [HOME_PROVIDER]: onePasswordProvider })));
+  });
+
+  it.effect("reports an OpenBao reference without a field unresolved without a request", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "whole-secret", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("NO_FIELD", VAULT_PROVIDER, "agents/codex"),
+          namedVariable("NO_PATH", VAULT_PROVIDER, "#api_key"),
+          namedVariable("FLAG_PATH", VAULT_PROVIDER, "-address=evil#api_key"),
+        ]),
+      );
+
+      assert.deepStrictEqual(Array.from(resolved.unresolved), ["NO_FIELD", "NO_PATH", "FLAG_PATH"]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: openBaoProvider({ token: "s.t" }) },
+          noHttpClient,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a reference to a provider that is not configured unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([namedVariable("CODEX_TOKEN", VAULT_PROVIDER, "agents/codex#api_key")]),
+      );
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
+  });
+
+  it.effect("batches named 1Password references with legacy ones from the same account", () => {
+    const spawner = scriptedOpSpawner((args, template) => {
+      if (args.includes("inject")) {
+        return {
+          stdout: ["sk-shared", "sk-codex"].join(separatorOf(template)),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "should-not-be-read-one-at-a-time", stderr: "", code: 0 };
+    });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.prime([
+        onePassword(TOKEN_REFERENCE, HOME_ACCOUNT),
+        named(HOME_PROVIDER, TOKEN_REFERENCE),
+        named(HOME_PROVIDER, SECOND_REFERENCE),
+        named(VAULT_PROVIDER, "agents/codex#api_key"),
+      ]);
+
+      // OpenBao has no unlock prompt to save, so priming leaves it alone and
+      // the shared item is one slot in the template.
+      assert.strictEqual(spawner.invocations.length, 1);
+      assert.deepStrictEqual(Array.from(spawner.invocations[0] ?? []).slice(0, 5), [
+        "--cache=false",
+        "inject",
+        "--account",
+        HOME_ACCOUNT,
+        "-i",
+      ]);
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          onePasswordVariable("LEGACY", TOKEN_REFERENCE, HOME_ACCOUNT),
+          namedVariable("NAMED", HOME_PROVIDER, TOKEN_REFERENCE),
+          namedVariable("CODEX", HOME_PROVIDER, SECOND_REFERENCE),
+        ]),
+      );
+      assert.deepStrictEqual(resolved.variables, [
+        { name: "LEGACY", value: "sk-shared", sensitive: true },
+        { name: "NAMED", value: "sk-shared", sensitive: true },
+        { name: "CODEX", value: "sk-codex", sensitive: true },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 1);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, {
+          [HOME_PROVIDER]: onePasswordProvider,
+          [VAULT_PROVIDER]: openBaoProvider(),
+        }),
+      ),
+    );
+  });
+});
+
+describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
+  const apiProvider = openBaoProvider;
+
+  it.effect("reads the KV v2 field with the stored token and namespace", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api", port: 8200 } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-api", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(http.requests, [
+        {
+          url: `${BAO_ADDRESS}/v1/kv/data/agents/codex`,
+          headers: { "x-vault-token": "s.configured", "x-vault-namespace": "team" },
+        },
+      ]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ namespace: "team", token: "s.configured" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("joins a trailing slash address and encodes unsafe path characters", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "x" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(apiRead("my team/co dex?#api_key"));
+
+      assert.deepStrictEqual(
+        http.requests.map((request) => [request.url, "x-vault-namespace" in request.headers]),
+        [[`${BAO_ADDRESS}/v1/kv/data/my%20team/co%20dex%3F`, false]],
+      );
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t", address: `${BAO_ADDRESS}/` }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a stored-token provider with no token unresolved without a request", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 0);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider({ token: "" }) }, http.client),
+      ),
+    );
+  });
+
+  it.effect("uses BAO_TOKEN from the server environment when auth is env", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(
+        http.requests.map((request) => request.headers["x-vault-token"]),
+        ["s.from-env"],
+      );
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ auth: "env", token: "s.ignored" }) },
+          http.client,
+        ).pipe(Layer.provide(hostLayer({ BAO_TOKEN: "s.from-env", VAULT_TOKEN: "s.other" }))),
+      ),
+    );
+  });
+
+  it.effect("reports auth env with BAO_TOKEN unset unresolved without a request", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 0);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ auth: "env" }) },
+          http.client,
+        ).pipe(Layer.provide(hostLayer({ VAULT_TOKEN: "s.other" }))),
+      ),
+    );
+  });
+
+  it.effect("uses the output of `bao print token` when auth is cli", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "s.from-cli\n", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-api", sensitive: true }],
+        unresolved: [],
+      });
+      assert.deepStrictEqual(spawner.commands, ["bao"]);
+      assert.deepStrictEqual(spawner.invocations, [["print", "token"]]);
+      assert.deepStrictEqual(spawner.environments, [
+        {
+          BAO_ADDR: BAO_ADDRESS,
+          BAO_NAMESPACE: "team",
+          BAO_TOKEN: undefined,
+          VAULT_TOKEN: undefined,
+        },
+      ]);
+      assert.deepStrictEqual(
+        http.requests.map((request) => request.headers["x-vault-token"]),
+        ["s.from-cli"],
+      );
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ auth: "cli", namespace: "team", token: "s.ignored" }) },
+          http.client,
+        ).pipe(Layer.provide(hostLayer({ BAO_TOKEN: "s.from-env", VAULT_TOKEN: "s.other" }))),
+      ),
+    );
+  });
+
+  it.effect("reports a failing `bao print token` unresolved without a request", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "no token found", code: 2 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 0);
+      assert.deepStrictEqual(spawner.invocations, [["print", "token"]]);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ auth: "cli" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a 403 unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(403, { errors: ["permission denied"] });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(apiRead());
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(http.requests.length, 1);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports a missing or non-scalar field unresolved", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { nested: { a: 1 } } } });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("MISSING", VAULT_PROVIDER, "agents/codex#api_key"),
+          namedVariable("OBJECT", VAULT_PROVIDER, "agents/codex#nested"),
+        ]),
+      );
+
+      assert.deepStrictEqual(Array.from(resolved.unresolved), ["MISSING", "OBJECT"]);
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("invalidating one provider keeps the other providers' secrets cached", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-home-token", stderr: "", code: 0 }));
+    const http = recordingHttpClient(200, { data: { data: { api_key: "sk-api" } } });
+    const environment = decodeEnvironment([
+      onePasswordVariable("LEGACY", TOKEN_REFERENCE, HOME_ACCOUNT),
+      namedVariable("HOME", HOME_PROVIDER, SECOND_REFERENCE),
+      namedVariable("VAULT", VAULT_PROVIDER, "agents/codex#api_key"),
+    ]);
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 2);
+      assert.strictEqual(http.requests.length, 1);
+
+      // An OpenBao edit must not cost a 1Password prompt, legacy or named.
+      yield* resolver.invalidate(new Set([VAULT_PROVIDER]));
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 2);
+      assert.strictEqual(http.requests.length, 2);
+
+      yield* resolver.invalidate(new Set([HOME_PROVIDER]));
+      yield* resolver.resolve(environment);
+      assert.strictEqual(spawner.invocations.length, 3);
+      assert.strictEqual(http.requests.length, 2);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [HOME_PROVIDER]: onePasswordProvider, [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("reports an unresponsive address unresolved instead of holding the start", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = HttpClient.make(() => Effect.never);
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const pending = yield* resolver.resolve(apiRead()).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 seconds");
+      const resolved = yield* Fiber.join(pending);
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) }, http),
+      ),
+    );
   });
 });

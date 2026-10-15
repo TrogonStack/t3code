@@ -169,6 +169,34 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(desktop.T3CODE_DEV_AUTH_TOKEN, undefined);
       }),
     );
+    it.effect("keeps the desktop profile inside an isolated home only", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const input = {
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: "/tmp/worktree/.t3",
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        } as const;
+        const isolated = yield* createDevRunnerEnv({
+          ...input,
+          mode: "dev:desktop",
+          isolatedHome: true,
+        });
+        const ambient = yield* createDevRunnerEnv({ ...input, mode: "dev:desktop" });
+        const web = yield* createDevRunnerEnv({ ...input, mode: "dev", isolatedHome: true });
+
+        assert.equal(isolated.T3CODE_DESKTOP_DEV_APP_DATA_DIR, path.resolve("/tmp/worktree/.t3"));
+        assert.equal(ambient.T3CODE_DESKTOP_DEV_APP_DATA_DIR, undefined);
+        assert.equal(web.T3CODE_DESKTOP_DEV_APP_DATA_DIR, undefined);
+      }),
+    );
     it.effect("leaves the shared home implicit and disables browser auto-open", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({

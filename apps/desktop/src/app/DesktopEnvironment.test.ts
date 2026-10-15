@@ -167,6 +167,25 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("moves the development profile into a configured app data directory", () =>
+    Effect.gen(function* () {
+      const development = yield* makeEnvironment(
+        {},
+        {
+          VITE_DEV_SERVER_URL: "http://localhost:5173",
+          T3CODE_DESKTOP_DEV_APP_DATA_DIR: " /repo/.t3 ",
+        },
+      );
+      const production = yield* makeEnvironment(
+        {},
+        { T3CODE_DESKTOP_DEV_APP_DATA_DIR: "/repo/.t3" },
+      );
+
+      assert.equal(development.appDataDirectory, "/repo/.t3");
+      assert.equal(production.appDataDirectory, "/Users/alice/Library/Application Support");
+    }),
+  );
+
   it.effect("uses a configured app user model id override", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

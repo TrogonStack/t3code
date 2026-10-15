@@ -1,9 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderConfig,
+  SecretProviderId,
   type OnePasswordAccount,
   type OnePasswordSecretReference,
   type ServerProvider,
@@ -16,6 +20,7 @@ import {
   providerEnvironmentWithoutNames,
   ProviderInstanceCard,
   readProviderEnvironmentVariable,
+  secretSourceFromDraft,
   splitDedicatedProviderEnvironment,
 } from "./ProviderInstanceCard";
 
@@ -268,5 +273,97 @@ describe("provider environment helpers", () => {
         new Set(["CURSOR_API_KEY", "OTHER_KEY"]),
       ),
     ).toEqual({ dedicated: [literal], generic: [legacy] });
+  });
+});
+
+describe("secretSourceFromDraft", () => {
+  const decodeConfig = Schema.decodeUnknownSync(SecretProviderConfig);
+  const secretProviders = {
+    [SecretProviderId.make("homelab")]: decodeConfig({
+      kind: "openbao",
+      label: "Homelab",
+      address: "https://bao.example.test",
+    }),
+    [SecretProviderId.make("work")]: decodeConfig({
+      kind: "1password",
+      label: "Work",
+      account: "work.1password.com",
+    }),
+  };
+  const row = (
+    fields: Partial<Parameters<typeof secretSourceFromDraft>[0]>,
+  ): Parameters<typeof secretSourceFromDraft>[0] => ({
+    source: "secret-provider",
+    provider: "",
+    reference: "",
+    account: "",
+    ...fields,
+  });
+
+  it("reads a named provider row as a secret-provider source", () => {
+    expect(
+      secretSourceFromDraft(
+        row({ provider: "homelab", reference: "apps/t3#api_key" }),
+        secretProviders,
+      ),
+    ).toEqual(
+      Result.succeed({
+        kind: "secret-provider",
+        provider: "homelab",
+        reference: "apps/t3#api_key",
+      }),
+    );
+  });
+
+  it("asks for a provider before saving", () => {
+    expect(secretSourceFromDraft(row({ reference: "apps/t3#api_key" }), secretProviders)).toEqual(
+      Result.fail("Choose a secret provider."),
+    );
+  });
+
+  it("checks the reference against the provider's kind", () => {
+    expect(
+      Result.isFailure(
+        secretSourceFromDraft(row({ provider: "homelab", reference: "apps/t3" }), secretProviders),
+      ),
+    ).toBe(true);
+    expect(
+      Result.isFailure(
+        secretSourceFromDraft(row({ provider: "work", reference: "apps/t3#key" }), secretProviders),
+      ),
+    ).toBe(true);
+    expect(
+      Result.isSuccess(
+        secretSourceFromDraft(
+          row({ provider: "work", reference: "op://vault/item/field" }),
+          secretProviders,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps a row whose provider was removed so it resolves once re-added", () => {
+    expect(
+      secretSourceFromDraft(row({ provider: "gone", reference: "anything" }), secretProviders),
+    ).toEqual(Result.succeed({ kind: "secret-provider", provider: "gone", reference: "anything" }));
+  });
+
+  it("still converts legacy 1Password rows with their own account", () => {
+    expect(
+      secretSourceFromDraft(
+        row({
+          source: "1password",
+          reference: "op://vault/item/field",
+          account: "my.1password.com",
+        }),
+        {},
+      ),
+    ).toEqual(
+      Result.succeed({
+        kind: "1password",
+        reference: "op://vault/item/field",
+        account: "my.1password.com",
+      }),
+    );
   });
 });

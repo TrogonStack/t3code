@@ -962,6 +962,7 @@ export function EnvironmentProviderSettings({
         environmentId={environmentId}
         acpProjects={projects}
         projectOverride={projectOverride}
+        secretProviders={settings.secretProviders}
         onAcceptUrlAuth={
           readOnly ? undefined : (action) => acceptUrlAuthentication(row.instanceId, action)
         }
