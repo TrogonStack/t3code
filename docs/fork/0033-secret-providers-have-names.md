@@ -1,6 +1,6 @@
 # 0033: Secret providers have names
 
-- PR: pending
+- PR: [TrogonStack/t3code#106](https://github.com/TrogonStack/t3code/pull/106)
 - Status: active
 
 ## What you can do now
