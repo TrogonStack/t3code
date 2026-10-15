@@ -7,6 +7,7 @@ import {
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import * as NodePath from "@effect/platform-node/NodePath";
@@ -14,6 +15,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodeFS from "node:fs";
@@ -993,6 +995,27 @@ describe("ProviderSecretResolverLive with OpenBao over the HTTP API", () => {
           { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) },
           http.client,
         ),
+      ),
+    );
+  });
+
+  it.effect("reports an unresponsive address unresolved instead of holding the start", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "", stderr: "", code: 0 }));
+    const http = HttpClient.make(() => Effect.never);
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const pending = yield* resolver.resolve(apiRead()).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("10 seconds");
+      const resolved = yield* Fiber.join(pending);
+
+      assert.deepStrictEqual(resolved, { variables: [], unresolved: ["CODEX_TOKEN"] });
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        resolverLayer(spawner.layer, { [VAULT_PROVIDER]: apiProvider({ token: "s.t" }) }, http),
       ),
     );
   });

@@ -881,7 +881,7 @@ export function ProviderEnvironmentSection(props: {
           })}
           <p className="text-xs text-muted-foreground">
             Sensitive values are stored separately and never returned to the app. Values from a
-            secret provider are read through its CLI each time the provider starts.
+            secret provider are read on the server each time the provider starts.
           </p>
           {hasSecretProviders ? null : (
             <p className="text-xs text-muted-foreground">

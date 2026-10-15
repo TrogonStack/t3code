@@ -88,6 +88,8 @@ const resolveOnePasswordCommand = (args: ReadonlyArray<string>) =>
  * not wedge the instance rebuild that is waiting on it.
  */
 const SECRET_READ_TIMEOUT = Duration.seconds(45);
+/** OpenBao never prompts, so an unreachable address should not hold a start for long. */
+const OPENBAO_REQUEST_TIMEOUT = Duration.seconds(10);
 
 /**
  * References are small and few - one per provider credential. The cap only
@@ -332,7 +334,10 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
     // Trace headers would tell the vault which of our spans made the request.
     const response = yield* client
       .execute(request)
-      .pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
+      .pipe(
+        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+        Effect.timeout(OPENBAO_REQUEST_TIMEOUT),
+      );
     const body: unknown = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
     if (response.status < 200 || response.status >= 300) {
       // OpenBao's `errors` array names the failure and never carries a secret.

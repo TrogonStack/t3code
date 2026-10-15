@@ -181,7 +181,7 @@ const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProv
           Effect.gen(function* () {
             const configMap = deriveProviderInstanceConfigMap(next);
             const changedProviders = changedSecretProviderIds(
-              yield* Ref.getAndSet(secretProvidersRef, next.secretProviders),
+              yield* Ref.get(secretProvidersRef),
               next.secretProviders,
             );
             if (changedProviders.size > 0) {
@@ -200,6 +200,9 @@ const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProv
                 { discard: true },
               );
             }
+            // Committed last so a failed reconcile is retried on the next emission
+            // instead of being treated as already applied.
+            yield* Ref.set(secretProvidersRef, next.secretProviders);
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),

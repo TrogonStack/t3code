@@ -148,7 +148,7 @@ A provider instance's `environment` can hold secret references: a `ProviderSecre
 as `{ kind: "secret-provider", provider, reference }`, or the older `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
 that starts with `op://`.
 [`ProviderSecretResolver`](../../apps/server/src/provider/ProviderSecretResolver.ts) swaps
-each one for the value the 1Password CLI returns. This happens once per instance in
+each one for the value its secret store returns. This happens once per instance in
 [`ProviderInstanceRegistry`](../../apps/server/src/provider/ProviderInstanceRegistry.ts),
 before `driver.create`, so drivers and the orchestration v2 adapters built from them only ever see
 resolved values; `ResolvedProviderEnvironment` is the type that enforces it. The registry keeps the
