@@ -169,10 +169,60 @@ describe("secretProviderFromDraft", () => {
   });
 });
 
+describe("secretProviderFromDraft for AWS Secrets Manager", () => {
+  const aws = { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: "aws-secrets-manager" as const };
+
+  it("builds a provider without a profile", () => {
+    expect(
+      secretProviderFromDraft({ ...aws, name: "Production", region: " us-east-1 " }, NO_IDS),
+    ).toEqual(
+      Result.succeed({
+        id: "production",
+        config: { kind: "aws-secrets-manager", label: "Production", region: "us-east-1" },
+      }),
+    );
+  });
+
+  it("keeps a named profile when given", () => {
+    const result = secretProviderFromDraft(
+      { ...aws, name: "Prod", region: "eu-west-1", profile: " production " },
+      NO_IDS,
+    );
+    expect(Result.isSuccess(result) && result.success.config).toEqual({
+      kind: "aws-secrets-manager",
+      label: "Prod",
+      region: "eu-west-1",
+      profile: "production",
+    });
+  });
+
+  it("requires a region shaped like us-east-1", () => {
+    expect(secretProviderFromDraft({ ...aws, name: "Prod" }, NO_IDS)).toEqual(
+      Result.fail({ region: "Enter the AWS region." }),
+    );
+    const result = secretProviderFromDraft({ ...aws, name: "Prod", region: "useast1" }, NO_IDS);
+    expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["region"]);
+  });
+
+  it("rejects a profile that could be read as a flag or contains whitespace", () => {
+    for (const profile of ["--debug", "my profile"]) {
+      const result = secretProviderFromDraft(
+        { ...aws, name: "Prod", region: "us-east-1", profile },
+        NO_IDS,
+      );
+      expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["profile"]);
+    }
+  });
+});
+
 describe("secretProviderReferenceIssue", () => {
   it("accepts each kind's reference format", () => {
     expect(secretProviderReferenceIssue("1password", "op://vault/item/field")).toBeUndefined();
     expect(secretProviderReferenceIssue("openbao", "apps/claude#token")).toBeUndefined();
+    expect(secretProviderReferenceIssue("aws-secrets-manager", "prod/openai")).toBeUndefined();
+    expect(
+      secretProviderReferenceIssue("aws-secrets-manager", "prod/openai#api_key"),
+    ).toBeUndefined();
   });
 
   it("explains a reference in the wrong format for its provider", () => {
@@ -182,6 +232,16 @@ describe("secretProviderReferenceIssue", () => {
     );
     expect(secretProviderReferenceIssue("openbao", "-x#token")).toBe(
       "OpenBao secret path must not start with -.",
+    );
+  });
+
+  it("explains an AWS Secrets Manager reference in the wrong format", () => {
+    const format = "AWS Secrets Manager references look like name-or-arn or name-or-arn#key.";
+    expect(secretProviderReferenceIssue("aws-secrets-manager", "")).toBe(format);
+    expect(secretProviderReferenceIssue("aws-secrets-manager", "#key")).toBe(format);
+    expect(secretProviderReferenceIssue("aws-secrets-manager", "prod/openai#")).toBe(format);
+    expect(secretProviderReferenceIssue("aws-secrets-manager", "-x#key")).toBe(
+      "AWS secret id must not start with -.",
     );
   });
 });

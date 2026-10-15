@@ -13,6 +13,8 @@
   store is a change of source, not a rewrite.
 - Read from OpenBao as well as 1Password. An OpenBao provider reads over its HTTP API
   with one explicit token source: its own stored token, `BAO_TOKEN`, or the `bao` CLI login.
+- Read from AWS Secrets Manager. An AWS provider reads through the `aws` CLI in one region, with
+  an optional named profile, so credentials stay in the CLI's own configuration.
 - Keep variables saved with the earlier 1Password source. They still resolve and
   still open as before, with nothing to migrate.
 

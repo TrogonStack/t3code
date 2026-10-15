@@ -162,8 +162,9 @@ nothing about how a secret is fetched, so the registry can ask "does this instan
 store?" without depending on the resolver.
 [`ProviderSecretResolverLive`](../../apps/server/src/provider/ProviderSecretResolverLive.ts)
 is the half that fetches values. A `secret-provider` source names an entry under the `secretProviders`
-server setting, and the resolver dispatches on that entry's kind: the 1Password CLI for `op`, or the
-OpenBao HTTP API with the token from one explicit source: the stored token, `BAO_TOKEN`, or the `bao` CLI login. The older 1Password source resolves as if it named a 1Password provider for its
+server setting, and the resolver dispatches on that entry's kind: the 1Password CLI for `op`, the
+OpenBao HTTP API with the token from one explicit source (the stored token, `BAO_TOKEN`, or the `bao` CLI login), or
+the `aws` CLI for AWS Secrets Manager, which owns its own credentials so none are stored. The older 1Password source resolves as if it named a 1Password provider for its
 account. The provider id or account is part of the cache key, because the same reference in two
 stores is two different secrets. A reference naming a provider that no longer exists is unresolved.
 Changing `secretProviders` drops only the cached secrets read through the providers that changed

@@ -38,7 +38,14 @@ import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 const KIND_OPTIONS: ReadonlyArray<{ readonly kind: SecretProviderKind; readonly label: string }> = [
   { kind: "1password", label: "1Password CLI" },
   { kind: "openbao", label: "OpenBao" },
+  { kind: "aws-secrets-manager", label: "AWS Secrets Manager" },
 ];
+
+const NAME_PLACEHOLDERS: Readonly<Record<SecretProviderKind, string>> = {
+  "1password": "Personal",
+  openbao: "Homelab",
+  "aws-secrets-manager": "Production",
+};
 
 function SecretProviderKindLabel({ kind }: { readonly kind: SecretProviderKind }) {
   const label = KIND_OPTIONS.find((option) => option.kind === kind)?.label;
@@ -108,6 +115,8 @@ export function AddSecretProviderDialog({
   const mountError = fieldError("mount");
   const namespaceError = fieldError("namespace");
   const tokenError = fieldError("token");
+  const regionError = fieldError("region");
+  const profileError = fieldError("profile");
   const authOption = AUTH_OPTIONS.find((option) => option.auth === draft.auth);
 
   const update = (patch: Partial<SecretProviderDraft>) => setDraft({ ...draft, ...patch });
@@ -121,6 +130,236 @@ export function AddSecretProviderDialog({
     if (Result.isFailure(result)) return;
     updateSettings({ secretProviders: { [result.success.id]: result.success.config } });
     close();
+  };
+
+  const kindFields = () => {
+    switch (draft.kind) {
+      case "1password":
+        return (
+          <div className="grid gap-1.5">
+            <Label htmlFor="secret-provider-account">Account</Label>
+            <Autocomplete
+              items={listedAccounts}
+              itemToStringValue={(item) => item.account}
+              mode="none"
+              openOnInputClick
+              value={draft.account}
+              onValueChange={(account) => update({ account })}
+            >
+              <AutocompleteInput
+                id="secret-provider-account"
+                placeholder="my.1password.com"
+                spellCheck={false}
+                showTrigger={listedAccounts.length > 0}
+                aria-invalid={accountError !== undefined}
+                aria-describedby={
+                  accountError !== undefined ? "secret-provider-account-error" : undefined
+                }
+              />
+              {listedAccounts.length > 0 ? (
+                <AutocompletePopup>
+                  <AutocompleteList className="max-h-72">
+                    {listedAccounts.map((item) => (
+                      <AutocompleteItem key={item.account} value={item}>
+                        <span className="min-w-0 truncate text-sm font-medium">{item.account}</span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                          {item.email}
+                        </span>
+                      </AutocompleteItem>
+                    ))}
+                  </AutocompleteList>
+                </AutocompletePopup>
+              ) : null}
+            </Autocomplete>
+            {accountError !== undefined ? (
+              <p
+                id="secret-provider-account-error"
+                role="alert"
+                className="text-xs text-destructive"
+              >
+                {accountError}
+              </p>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              Accounts the op CLI is signed into are suggested. Type any other sign-in address.
+            </p>
+          </div>
+        );
+      case "openbao":
+        return (
+          <>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-address">Address</Label>
+              <Input
+                id="secret-provider-address"
+                placeholder="https://bao.example:8200"
+                value={draft.address}
+                onChange={(event) => update({ address: event.target.value })}
+                spellCheck={false}
+                aria-invalid={addressError !== undefined}
+                aria-describedby={
+                  addressError !== undefined ? "secret-provider-address-error" : undefined
+                }
+              />
+              {addressError !== undefined ? (
+                <p
+                  id="secret-provider-address-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {addressError}
+                </p>
+              ) : null}
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-mount">Mount</Label>
+              <Input
+                id="secret-provider-mount"
+                placeholder={DEFAULT_OPENBAO_MOUNT}
+                value={draft.mount}
+                onChange={(event) => update({ mount: event.target.value })}
+                spellCheck={false}
+                aria-invalid={mountError !== undefined}
+                aria-describedby={
+                  mountError !== undefined ? "secret-provider-mount-error" : undefined
+                }
+              />
+              {mountError !== undefined ? (
+                <p
+                  id="secret-provider-mount-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {mountError}
+                </p>
+              ) : null}
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-namespace">Namespace (optional)</Label>
+              <Input
+                id="secret-provider-namespace"
+                placeholder="admin/platform"
+                value={draft.namespace}
+                onChange={(event) => update({ namespace: event.target.value })}
+                spellCheck={false}
+                aria-invalid={namespaceError !== undefined}
+                aria-describedby={
+                  namespaceError !== undefined ? "secret-provider-namespace-error" : undefined
+                }
+              />
+              {namespaceError !== undefined ? (
+                <p
+                  id="secret-provider-namespace-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {namespaceError}
+                </p>
+              ) : null}
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-auth">Authentication</Label>
+              <Select
+                value={draft.auth}
+                onValueChange={(auth) => {
+                  if (auth !== null) update({ auth });
+                }}
+              >
+                <SelectTrigger id="secret-provider-auth">
+                  <SelectValue>{authOption?.label}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup>
+                  {AUTH_OPTIONS.map((option) => (
+                    <SelectItem key={option.auth} value={option.auth}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+              <p className="text-xs text-muted-foreground">{authOption?.description}</p>
+            </div>
+            {draft.auth === "token" ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="secret-provider-token">Token</Label>
+                <SecretInput
+                  id="secret-provider-token"
+                  placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
+                  value={draft.token}
+                  onChange={(event) => update({ token: event.target.value })}
+                  aria-invalid={tokenError !== undefined}
+                  aria-describedby={
+                    tokenError !== undefined ? "secret-provider-token-error" : undefined
+                  }
+                />
+                {tokenError !== undefined ? (
+                  <p
+                    id="secret-provider-token-error"
+                    role="alert"
+                    className="text-xs text-destructive"
+                  >
+                    {tokenError}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        );
+      case "aws-secrets-manager":
+        return (
+          <>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-region">Region</Label>
+              <Input
+                id="secret-provider-region"
+                placeholder="us-east-1"
+                value={draft.region}
+                onChange={(event) => update({ region: event.target.value })}
+                spellCheck={false}
+                aria-invalid={regionError !== undefined}
+                aria-describedby={
+                  regionError !== undefined ? "secret-provider-region-error" : undefined
+                }
+              />
+              {regionError !== undefined ? (
+                <p
+                  id="secret-provider-region-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {regionError}
+                </p>
+              ) : null}
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="secret-provider-profile">Profile (optional)</Label>
+              <Input
+                id="secret-provider-profile"
+                placeholder="production"
+                value={draft.profile}
+                onChange={(event) => update({ profile: event.target.value })}
+                spellCheck={false}
+                aria-invalid={profileError !== undefined}
+                aria-describedby={
+                  profileError !== undefined ? "secret-provider-profile-error" : undefined
+                }
+              />
+              {profileError !== undefined ? (
+                <p
+                  id="secret-provider-profile-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {profileError}
+                </p>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                Credentials come from the aws CLI configuration on the server: this profile, or its
+                default chain when empty.
+              </p>
+            </div>
+          </>
+        );
+    }
   };
 
   return (
@@ -173,7 +412,7 @@ export function AddSecretProviderDialog({
               <Label htmlFor="secret-provider-name">Name</Label>
               <Input
                 id="secret-provider-name"
-                placeholder={draft.kind === "1password" ? "Personal" : "Homelab"}
+                placeholder={NAME_PLACEHOLDERS[draft.kind]}
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
                 aria-invalid={nameError !== undefined}
@@ -192,175 +431,7 @@ export function AddSecretProviderDialog({
                 </p>
               ) : null}
             </div>
-            {draft.kind === "1password" ? (
-              <div className="grid gap-1.5">
-                <Label htmlFor="secret-provider-account">Account</Label>
-                <Autocomplete
-                  items={listedAccounts}
-                  itemToStringValue={(item) => item.account}
-                  mode="none"
-                  openOnInputClick
-                  value={draft.account}
-                  onValueChange={(account) => update({ account })}
-                >
-                  <AutocompleteInput
-                    id="secret-provider-account"
-                    placeholder="my.1password.com"
-                    spellCheck={false}
-                    showTrigger={listedAccounts.length > 0}
-                    aria-invalid={accountError !== undefined}
-                    aria-describedby={
-                      accountError !== undefined ? "secret-provider-account-error" : undefined
-                    }
-                  />
-                  {listedAccounts.length > 0 ? (
-                    <AutocompletePopup>
-                      <AutocompleteList className="max-h-72">
-                        {listedAccounts.map((item) => (
-                          <AutocompleteItem key={item.account} value={item}>
-                            <span className="min-w-0 truncate text-sm font-medium">
-                              {item.account}
-                            </span>
-                            <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                              {item.email}
-                            </span>
-                          </AutocompleteItem>
-                        ))}
-                      </AutocompleteList>
-                    </AutocompletePopup>
-                  ) : null}
-                </Autocomplete>
-                {accountError !== undefined ? (
-                  <p
-                    id="secret-provider-account-error"
-                    role="alert"
-                    className="text-xs text-destructive"
-                  >
-                    {accountError}
-                  </p>
-                ) : null}
-                <p className="text-xs text-muted-foreground">
-                  Accounts the op CLI is signed into are suggested. Type any other sign-in address.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-address">Address</Label>
-                  <Input
-                    id="secret-provider-address"
-                    placeholder="https://bao.example:8200"
-                    value={draft.address}
-                    onChange={(event) => update({ address: event.target.value })}
-                    spellCheck={false}
-                    aria-invalid={addressError !== undefined}
-                    aria-describedby={
-                      addressError !== undefined ? "secret-provider-address-error" : undefined
-                    }
-                  />
-                  {addressError !== undefined ? (
-                    <p
-                      id="secret-provider-address-error"
-                      role="alert"
-                      className="text-xs text-destructive"
-                    >
-                      {addressError}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-mount">Mount</Label>
-                  <Input
-                    id="secret-provider-mount"
-                    placeholder={DEFAULT_OPENBAO_MOUNT}
-                    value={draft.mount}
-                    onChange={(event) => update({ mount: event.target.value })}
-                    spellCheck={false}
-                    aria-invalid={mountError !== undefined}
-                    aria-describedby={
-                      mountError !== undefined ? "secret-provider-mount-error" : undefined
-                    }
-                  />
-                  {mountError !== undefined ? (
-                    <p
-                      id="secret-provider-mount-error"
-                      role="alert"
-                      className="text-xs text-destructive"
-                    >
-                      {mountError}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-namespace">Namespace (optional)</Label>
-                  <Input
-                    id="secret-provider-namespace"
-                    placeholder="admin/platform"
-                    value={draft.namespace}
-                    onChange={(event) => update({ namespace: event.target.value })}
-                    spellCheck={false}
-                    aria-invalid={namespaceError !== undefined}
-                    aria-describedby={
-                      namespaceError !== undefined ? "secret-provider-namespace-error" : undefined
-                    }
-                  />
-                  {namespaceError !== undefined ? (
-                    <p
-                      id="secret-provider-namespace-error"
-                      role="alert"
-                      className="text-xs text-destructive"
-                    >
-                      {namespaceError}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-auth">Authentication</Label>
-                  <Select
-                    value={draft.auth}
-                    onValueChange={(auth) => {
-                      if (auth !== null) update({ auth });
-                    }}
-                  >
-                    <SelectTrigger id="secret-provider-auth">
-                      <SelectValue>{authOption?.label}</SelectValue>
-                    </SelectTrigger>
-                    <SelectPopup>
-                      {AUTH_OPTIONS.map((option) => (
-                        <SelectItem key={option.auth} value={option.auth}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">{authOption?.description}</p>
-                </div>
-                {draft.auth === "token" ? (
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="secret-provider-token">Token</Label>
-                    <SecretInput
-                      id="secret-provider-token"
-                      placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
-                      value={draft.token}
-                      onChange={(event) => update({ token: event.target.value })}
-                      aria-invalid={tokenError !== undefined}
-                      aria-describedby={
-                        tokenError !== undefined ? "secret-provider-token-error" : undefined
-                      }
-                    />
-                    {tokenError !== undefined ? (
-                      <p
-                        id="secret-provider-token-error"
-                        role="alert"
-                        className="text-xs text-destructive"
-                      >
-                        {tokenError}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
-              </>
-            )}
+            {kindFields()}
           </form>
         </DialogPanel>
         <DialogFooter variant="bare">

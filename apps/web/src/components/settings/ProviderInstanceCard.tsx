@@ -898,7 +898,7 @@ export function ProviderEnvironmentSection(props: {
               <Link to="/settings/secrets" className="underline underline-offset-2">
                 Settings → Secrets
               </Link>{" "}
-              to read values from 1Password or OpenBao.
+              to read values from 1Password, OpenBao, or AWS Secrets Manager.
             </p>
           )}
         </div>

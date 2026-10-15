@@ -10,6 +10,8 @@ const SECRET_PROVIDER_REFERENCE_MAX_CHARS = 1024;
 const OPENBAO_ADDRESS_MAX_CHARS = 1024;
 const OPENBAO_PATH_MAX_CHARS = 253;
 const OPENBAO_MOUNT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+const AWS_REGION_PATTERN = /^[a-z]{2}(-[a-z]+)+-\d+$/;
+const AWS_PROFILE_MAX_CHARS = 64;
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index++) {
@@ -80,6 +82,25 @@ export type OpenBaoToken = typeof OpenBaoToken.Type;
 export const OpenBaoAuth = Schema.Literals(["token", "env", "cli"]);
 export type OpenBaoAuth = typeof OpenBaoAuth.Type;
 
+/** The region the provider reads in, such as `us-east-1`. Secrets Manager is regional, so one provider is one region. */
+export const AwsRegion = TrimmedNonEmptyString.check(
+  Schema.makeFilter((value: string) =>
+    AWS_REGION_PATTERN.test(value) ? true : "AWS region must look like us-east-1.",
+  ),
+);
+export type AwsRegion = typeof AwsRegion.Type;
+
+/** A named profile from the server's AWS CLI configuration. It is passed to the CLI as an argument, so it can never start with `-`. */
+export const AwsProfile = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(AWS_PROFILE_MAX_CHARS),
+  Schema.makeFilter((value: string) =>
+    !value.startsWith("-") && !/\s/.test(value) && !hasControlCharacter(value)
+      ? true
+      : "AWS profile must not start with - or contain whitespace.",
+  ),
+);
+export type AwsProfile = typeof AwsProfile.Type;
+
 export const OnePasswordSecretProviderConfig = Schema.Struct({
   kind: Schema.Literal("1password"),
   label: SecretProviderLabel,
@@ -98,19 +119,36 @@ export const OpenBaoSecretProviderConfig = Schema.Struct({
 });
 export type OpenBaoSecretProviderConfig = typeof OpenBaoSecretProviderConfig.Type;
 
+/**
+ * Credentials are never stored here: the `aws` CLI on the server resolves them
+ * the way it does for any other command, from the named profile when one is
+ * set, otherwise from its default chain (environment, default profile, SSO,
+ * instance role).
+ */
+export const AwsSecretsManagerSecretProviderConfig = Schema.Struct({
+  kind: Schema.Literal("aws-secrets-manager"),
+  label: SecretProviderLabel,
+  region: AwsRegion,
+  profile: Schema.optionalKey(AwsProfile),
+});
+export type AwsSecretsManagerSecretProviderConfig =
+  typeof AwsSecretsManagerSecretProviderConfig.Type;
+
 export const SecretProviderConfig = Schema.Union([
   OnePasswordSecretProviderConfig,
   OpenBaoSecretProviderConfig,
+  AwsSecretsManagerSecretProviderConfig,
 ]);
 export type SecretProviderConfig = typeof SecretProviderConfig.Type;
 
-export const SecretProviderKind = Schema.Literals(["1password", "openbao"]);
+export const SecretProviderKind = Schema.Literals(["1password", "openbao", "aws-secrets-manager"]);
 export type SecretProviderKind = SecretProviderConfig["kind"];
 
 /**
  * A secret's location inside a named provider: `op://vault/item/field` for
- * 1Password, `path/to/secret#field` for OpenBao. The format is checked when
- * the reference is resolved, against the provider it names.
+ * 1Password, `path/to/secret#field` for OpenBao, and `name-or-arn` or
+ * `name-or-arn#key` for AWS Secrets Manager. The format is checked when the
+ * reference is resolved, against the provider it names.
  */
 export const SecretProviderReference = Schema.String.check(
   Schema.isMaxLength(SECRET_PROVIDER_REFERENCE_MAX_CHARS),
