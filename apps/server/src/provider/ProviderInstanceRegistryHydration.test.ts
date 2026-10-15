@@ -140,7 +140,7 @@ describe("changedSecretProviderIds", () => {
     address: "https://bao.example.com",
     mount: "secret",
     token: "s.old",
-    access: "api" as const,
+    auth: "token" as const,
   };
 
   it("is empty when no provider changed", () => {

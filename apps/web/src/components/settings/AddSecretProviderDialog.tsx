@@ -1,4 +1,4 @@
-import type { EnvironmentId, SecretProviderKind } from "@t3tools/contracts";
+import type { EnvironmentId, OpenBaoAuth, SecretProviderKind } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
 
@@ -13,7 +13,6 @@ import {
   AutocompletePopup,
 } from "../ui/autocomplete";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -38,6 +37,29 @@ import { SecretInput } from "./SecretInput";
 const KIND_OPTIONS: ReadonlyArray<{ readonly kind: SecretProviderKind; readonly label: string }> = [
   { kind: "1password", label: "1Password CLI" },
   { kind: "openbao", label: "OpenBao" },
+];
+
+const AUTH_OPTIONS: ReadonlyArray<{
+  readonly auth: OpenBaoAuth;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    auth: "token",
+    label: "Token",
+    description: "The token below, stored with the provider.",
+  },
+  {
+    auth: "env",
+    label: "BAO_TOKEN on the server",
+    description: "The server process must have BAO_TOKEN set.",
+  },
+  {
+    auth: "cli",
+    label: "bao CLI login",
+    description:
+      "Runs bao print token on the server, so bao must be installed and logged in there.",
+  },
 ];
 
 /**
@@ -74,6 +96,8 @@ export function AddSecretProviderDialog({
   const addressError = fieldError("address");
   const mountError = fieldError("mount");
   const namespaceError = fieldError("namespace");
+  const tokenError = fieldError("token");
+  const authOption = AUTH_OPTIONS.find((option) => option.auth === draft.auth);
 
   const update = (patch: Partial<SecretProviderDraft>) => setDraft({ ...draft, ...patch });
   const close = () => {
@@ -280,36 +304,50 @@ export function AddSecretProviderDialog({
                   ) : null}
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-token">Token (optional)</Label>
-                  <SecretInput
-                    id="secret-provider-token"
-                    placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
-                    value={draft.token}
-                    onChange={(event) => update({ token: event.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    {draft.access === "cli"
-                      ? "Leave empty to use the bao CLI's own login."
-                      : "Leave empty to use BAO_TOKEN or the token saved by bao login on that server."}
-                  </p>
+                  <Label htmlFor="secret-provider-auth">Authentication</Label>
+                  <Select
+                    value={draft.auth}
+                    onValueChange={(auth) => {
+                      if (auth !== null) update({ auth });
+                    }}
+                  >
+                    <SelectTrigger id="secret-provider-auth">
+                      <SelectValue>{authOption?.label}</SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup>
+                      {AUTH_OPTIONS.map((option) => (
+                        <SelectItem key={option.auth} value={option.auth}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{authOption?.description}</p>
                 </div>
-                <label className="flex cursor-pointer items-start gap-3">
-                  <Checkbox
-                    className="mt-0.5"
-                    checked={draft.access === "cli"}
-                    onCheckedChange={(checked) =>
-                      update({ access: checked === true ? "cli" : "api" })
-                    }
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium text-foreground">
-                      Use the bao CLI
-                    </span>
-                    <span className="block text-xs leading-snug text-muted-foreground">
-                      Run the bao command on the server instead of calling the HTTP API.
-                    </span>
-                  </span>
-                </label>
+                {draft.auth === "token" ? (
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="secret-provider-token">Token</Label>
+                    <SecretInput
+                      id="secret-provider-token"
+                      placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={draft.token}
+                      onChange={(event) => update({ token: event.target.value })}
+                      aria-invalid={tokenError !== undefined}
+                      aria-describedby={
+                        tokenError !== undefined ? "secret-provider-token-error" : undefined
+                      }
+                    />
+                    {tokenError !== undefined ? (
+                      <p
+                        id="secret-provider-token-error"
+                        role="alert"
+                        className="text-xs text-destructive"
+                      >
+                        {tokenError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </>
             )}
           </form>

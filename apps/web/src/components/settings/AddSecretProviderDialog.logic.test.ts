@@ -61,7 +61,7 @@ describe("secretProviderFromDraft", () => {
         address: " https://bao.example:8200 ",
         mount: " ",
         namespace: " ",
-        token: " ",
+        auth: "env",
       },
       NO_IDS,
     );
@@ -73,7 +73,7 @@ describe("secretProviderFromDraft", () => {
           label: "Homelab",
           address: "https://bao.example:8200",
           mount: "secret",
-          access: "api",
+          auth: "env",
         },
       }),
     );
@@ -98,14 +98,57 @@ describe("secretProviderFromDraft", () => {
       address: "http://127.0.0.1:8200",
       mount: "kv",
       namespace: "team-a",
+      auth: "token",
       token: "s.token",
-      access: "api",
     });
+  });
+
+  it("requires the token when authentication is token", () => {
+    const result = secretProviderFromDraft(
+      {
+        ...EMPTY_SECRET_PROVIDER_DRAFT,
+        kind: "openbao",
+        name: "Bao",
+        address: "http://127.0.0.1:8200",
+        token: " ",
+      },
+      NO_IDS,
+    );
+    expect(result).toEqual(Result.fail({ token: "Enter the OpenBao token." }));
+  });
+
+  it("drops a typed token when authentication is env or cli", () => {
+    for (const auth of ["env", "cli"] as const) {
+      const result = secretProviderFromDraft(
+        {
+          ...EMPTY_SECRET_PROVIDER_DRAFT,
+          kind: "openbao",
+          name: "Bao",
+          address: "http://127.0.0.1:8200",
+          token: "s.typed",
+          auth,
+        },
+        NO_IDS,
+      );
+      expect(Result.isSuccess(result) && result.success.config).toEqual({
+        kind: "openbao",
+        label: "Bao",
+        address: "http://127.0.0.1:8200",
+        mount: "secret",
+        auth,
+      });
+    }
   });
 
   it("rejects an OpenBao address that is not an http URL", () => {
     const result = secretProviderFromDraft(
-      { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: "openbao", name: "Bao", address: "bao.local" },
+      {
+        ...EMPTY_SECRET_PROVIDER_DRAFT,
+        kind: "openbao",
+        name: "Bao",
+        address: "bao.local",
+        token: "s.token",
+      },
       NO_IDS,
     );
     expect(Result.isFailure(result) && Object.keys(result.failure)).toEqual(["address"]);
@@ -117,7 +160,11 @@ describe("secretProviderFromDraft", () => {
       NO_IDS,
     );
     expect(result).toEqual(
-      Result.fail({ name: "Enter a name.", address: "Enter the OpenBao address." }),
+      Result.fail({
+        name: "Enter a name.",
+        address: "Enter the OpenBao address.",
+        token: "Enter the OpenBao token.",
+      }),
     );
   });
 });

@@ -22,7 +22,7 @@ describe("SecretProviderConfig", () => {
       label: "Homelab",
       address: "https://bao.example:8200",
       mount: "secret",
-      access: "api",
+      auth: "token",
     });
     const full = {
       kind: "openbao",
@@ -31,7 +31,7 @@ describe("SecretProviderConfig", () => {
       mount: "kv/team",
       namespace: "admin",
       token: "s.token",
-      access: "cli",
+      auth: "cli",
     };
     expect(decodeConfig(full)).toEqual(full);
   });

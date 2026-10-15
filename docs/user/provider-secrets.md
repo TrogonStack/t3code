@@ -13,9 +13,9 @@ values.
 
 1. Open Settings, then Secrets, and choose Add provider.
 2. Pick 1Password CLI or OpenBao, give it a name, and fill in its details. 1Password needs the
-   account sign-in address, such as `my.1password.com`. OpenBao needs its address and mount, and
-   optionally a namespace and a token. Check Use the bao CLI only if you want the server to run the
-   `bao` command instead of calling the OpenBao HTTP API.
+   account sign-in address, such as `my.1password.com`. OpenBao needs its address and mount, an
+   optional namespace, and an Authentication choice that says where the token comes from: the token
+   you paste, `BAO_TOKEN` on the server, or the login the `bao` CLI already has on the server.
 3. In a provider's Variables section, add the variable, choose your named provider as its source, and
    fill in the reference.
 
@@ -53,10 +53,11 @@ What each store needs, on the machine running the T3 Code server.
 
 - **1Password:** the [1Password CLI](https://developer.1password.com/docs/cli/get-started/) (`op`),
   signed in.
-- **OpenBao:** a token, and network access to the OpenBao server. By default T3 Code calls the
-  OpenBao HTTP API (KV v2). It uses the provider's Token field, else `BAO_TOKEN` on the server, else
-  the token `bao login` saved in `~/.vault-token`. The `bao` CLI is only needed when Use the bao CLI
-  is checked, and then it uses its own login unless the provider has a token.
+- **OpenBao:** network access to the OpenBao server. T3 Code always calls the OpenBao HTTP API (KV
+  v2). Authentication picks exactly one token source, with no fallback to the others: the token you
+  paste into the provider, `BAO_TOKEN` in the environment of the T3 Code server, or the login the
+  `bao` CLI already has on that machine. The `bao` CLI only needs to be installed for the last
+  option.
 
 Confirm it works from a normal shell first:
 
@@ -116,8 +117,10 @@ Work through it in this order:
    typo in the reference.
 2. Confirm the provider still exists under Settings, Secrets. A variable naming a removed provider
    cannot be read.
-3. Confirm `op` (or `bao`, when Use the bao CLI is checked) is on the `PATH` of whoever launched the T3 Code server. A CLI installed only for
-   your interactive shell is not always visible to a background service.
+3. Confirm the token source you chose is available to whoever launched the T3 Code server. That is
+   `op` on the `PATH` for 1Password, and for OpenBao either `BAO_TOKEN` in the server's environment
+   or `bao` on the `PATH` with a login. Something set up only for your interactive shell is not
+   always visible to a background service.
 4. Refresh provider status once the underlying problem is fixed. A failed read is remembered exactly
    like a successful one, so nothing retries on its own.
 

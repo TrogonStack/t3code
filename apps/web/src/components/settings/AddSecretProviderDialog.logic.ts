@@ -1,8 +1,8 @@
 import {
   OnePasswordAccount,
   OnePasswordSecretReference,
-  OpenBaoAccess,
   OpenBaoAddress,
+  OpenBaoAuth,
   OpenBaoMount,
   OpenBaoNamespace,
   SecretProviderId,
@@ -76,7 +76,7 @@ export interface SecretProviderDraft {
   readonly mount: string;
   readonly namespace: string;
   readonly token: string;
-  readonly access: OpenBaoAccess;
+  readonly auth: OpenBaoAuth;
 }
 
 export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
@@ -87,7 +87,7 @@ export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
   mount: DEFAULT_OPENBAO_MOUNT,
   namespace: "",
   token: "",
-  access: "api",
+  auth: "token",
 };
 
 function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
@@ -102,7 +102,13 @@ function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
     : Result.succeed(decoded.success);
 }
 
-export type SecretProviderDraftField = "name" | "account" | "address" | "mount" | "namespace";
+export type SecretProviderDraftField =
+  | "name"
+  | "account"
+  | "address"
+  | "mount"
+  | "namespace"
+  | "token";
 
 export type SecretProviderDraftIssues = Partial<Readonly<Record<SecretProviderDraftField, string>>>;
 
@@ -160,8 +166,11 @@ export function secretProviderFromDraft(
   if (namespace !== undefined && Result.isFailure(namespace)) {
     issues.namespace = namespace.failure;
   }
+  const token = draft.token.trim();
+  if (draft.auth === "token" && token.length === 0) issues.token = "Enter the OpenBao token.";
   if (
     issues.name !== undefined ||
+    issues.token !== undefined ||
     Result.isFailure(label) ||
     id === null ||
     Result.isFailure(address) ||
@@ -170,7 +179,6 @@ export function secretProviderFromDraft(
   ) {
     return Result.fail(issues);
   }
-  const token = draft.token.trim();
   return Result.succeed({
     id,
     config: {
@@ -179,8 +187,8 @@ export function secretProviderFromDraft(
       address: address.success,
       mount: mount.success,
       ...(namespace === undefined ? {} : { namespace: namespace.success }),
-      ...(token.length === 0 ? {} : { token }),
-      access: draft.access,
+      auth: draft.auth,
+      ...(draft.auth === "token" ? { token } : {}),
     },
   });
 }

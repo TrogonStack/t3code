@@ -1522,7 +1522,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
               address: "https://bao.example.test",
               mount: "secret",
               token: "openbao-secret",
-              access: "api",
+              auth: "token",
             },
           },
         });

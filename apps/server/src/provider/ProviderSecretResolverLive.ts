@@ -8,14 +8,13 @@
  * a pure value and the provider's current configuration is what gets used.
  * Removing a provider leaves its references unresolved rather than failing.
  *
- * OpenBao reads the KV v2 secret over its HTTP API by default
- * (`access: "api"`): `GET <address>/v1/<mount>/data/<path>` with the token in
- * `X-Vault-Token`. The token is the provider's own, else the first of
- * `BAO_TOKEN`, `VAULT_TOKEN`, the file named by `BAO_TOKEN_PATH` or
- * `VAULT_TOKEN_PATH`, and `~/.vault-token`, where `bao login` saves it. With
- * `access: "cli"` it runs `bao kv get -mount=<mount> -field=<field> <path>`
- * instead and the CLI's own login applies, the same way `op` uses the user's
- * existing session.
+ * OpenBao reads the KV v2 secret over its HTTP API:
+ * `GET <address>/v1/<mount>/data/<path>` with the token in `X-Vault-Token`.
+ * The provider's `auth` names the one place the token comes from, with no
+ * fallback to another: `token` is the one stored on the provider, `env` is the
+ * server process's `BAO_TOKEN`, and `cli` is the output of `bao print token`,
+ * so the CLI's own login applies, the same way `op` uses the user's existing
+ * session.
  *
  * 1Password resolution is `op read --account <account> <reference>`, which is the same
  * command the user would run by hand and inherits their existing `op` session,
@@ -64,7 +63,6 @@ import {
   type NamedProviderSecretReference,
   type ProviderSecretReference,
 } from "./ProviderSecretReference.ts";
-import { expandHomePath } from "../os-jank.ts";
 import * as Settings from "../serverSettings.ts";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import {
@@ -247,33 +245,57 @@ const nonEmpty = (value: string | undefined) =>
   value === undefined || value.length === 0 ? undefined : value;
 
 /**
- * The token the API read authenticates with, in the order OpenBao's own CLI
- * would find it. The file is the CLI's token helper, so a `bao login` the user
- * already did applies without configuring anything here. A missing file is
- * not an error, it just means there is no saved login.
+ * The token the API read authenticates with, from the one source the
+ * provider's `auth` names. `cli` asks `bao print token`, which owns where its
+ * login lives, so nothing here reads a token file or a `VAULT_*` variable.
+ * Returns `undefined`, after logging why, when that source has no token.
  */
 const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
+  provider: SecretProviderId,
   config: OpenBaoSecretProviderConfig,
 ) {
-  const configured = nonEmpty(config.token);
-  if (configured !== undefined) {
-    return configured;
+  switch (config.auth) {
+    case "token": {
+      const token = nonEmpty(config.token);
+      if (token === undefined) {
+        yield* Effect.logWarning("OpenBao provider has no stored token", { provider });
+      }
+      return token;
+    }
+    case "env": {
+      const env = yield* HostProcess.Environment;
+      const token = nonEmpty(env.BAO_TOKEN);
+      if (token === undefined) {
+        yield* Effect.logWarning("BAO_TOKEN is not set in the server environment", { provider });
+      }
+      return token;
+    }
+    case "cli": {
+      const spawnCommand = yield* resolveSpawnCommand(OPENBAO_BINARY, ["print", "token"]);
+      const result = yield* spawnAndCollect(
+        OPENBAO_BINARY,
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          shell: spawnCommand.shell,
+          env: {
+            BAO_ADDR: config.address,
+            ...(config.namespace === undefined ? {} : { BAO_NAMESPACE: config.namespace }),
+          },
+          extendEnv: true,
+        }),
+      );
+      const token = result.code === 0 ? nonEmpty(result.stdout.trim()) : undefined;
+      if (token === undefined) {
+        // `bao print token` reports a missing login on stderr and never echoes
+        // the token there, so this is safe to log verbatim.
+        yield* Effect.logWarning("Could not read an OpenBao token from the bao CLI", {
+          provider,
+          exitCode: result.code,
+          detail: result.stderr.trim(),
+        });
+      }
+      return token;
+    }
   }
-  const env = yield* HostProcess.Environment;
-  const fromEnv = nonEmpty(env.BAO_TOKEN) ?? nonEmpty(env.VAULT_TOKEN);
-  if (fromEnv !== undefined) {
-    return fromEnv;
-  }
-  const fileSystem = yield* FileSystem.FileSystem;
-  const tokenFile =
-    nonEmpty(env.BAO_TOKEN_PATH) ??
-    nonEmpty(env.VAULT_TOKEN_PATH) ??
-    (yield* expandHomePath("~/.vault-token"));
-  const contents = yield* fileSystem.readFileString(tokenFile).pipe(Effect.option);
-  return Option.match(contents, {
-    onNone: () => undefined,
-    onSome: (text) => nonEmpty(text.trim()),
-  });
 });
 
 /** Percent-encode each path segment and keep `/` as the separator. */
@@ -286,12 +308,8 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
     location: { readonly path: string; readonly field: string },
     reference: string,
   ) {
-    const token = yield* resolveOpenBaoToken(config);
+    const token = yield* resolveOpenBaoToken(provider, config);
     if (token === undefined) {
-      yield* Effect.logWarning(
-        "No OpenBao token: set one on the provider, export BAO_TOKEN, or log in with `bao login`",
-        { provider, reference },
-      );
       return undefined;
     }
     const client = yield* HttpClient.HttpClient;
@@ -367,43 +385,7 @@ const readOpenBaoSecret = Effect.fn("readOpenBaoSecret")(function* (
     });
     return undefined;
   }
-  if (config.access === "api") {
-    return yield* readOpenBaoSecretOverApi(provider, config, location, reference);
-  }
-  const spawnCommand = yield* resolveSpawnCommand(OPENBAO_BINARY, [
-    "kv",
-    "get",
-    `-mount=${config.mount}`,
-    `-field=${location.field}`,
-    location.path,
-  ]);
-  const result = yield* spawnAndCollect(
-    OPENBAO_BINARY,
-    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-      shell: spawnCommand.shell,
-      env: {
-        BAO_ADDR: config.address,
-        ...(config.namespace === undefined ? {} : { BAO_NAMESPACE: config.namespace }),
-        ...(config.token === undefined || config.token.length === 0
-          ? {}
-          : { BAO_TOKEN: config.token }),
-      },
-      extendEnv: true,
-    }),
-  );
-  if (result.code !== 0) {
-    // `bao` reports permission and missing-path errors on stderr and never
-    // echoes the secret itself, so this is safe to log verbatim.
-    yield* Effect.logWarning("Could not read provider secret from OpenBao", {
-      provider,
-      reference,
-      exitCode: result.code,
-      detail: result.stderr.trim(),
-    });
-    return undefined;
-  }
-  const secret = result.stdout.trim();
-  return secret.length > 0 ? secret : undefined;
+  return yield* readOpenBaoSecretOverApi(provider, config, location, reference);
 });
 
 /** Log fields that identify a secret without carrying its value. */
