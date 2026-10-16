@@ -748,6 +748,7 @@ describe("serverSettings helpers", () => {
           label: "Homelab",
           address: "https://bao.example:8200",
           mount: "secret",
+          auth: "token",
         },
       },
     });
