@@ -29,6 +29,10 @@ Reference: op://Private/claude-code/credential
 You can add as many providers as you need, for example two 1Password accounts, an OpenBao server, and an AWS region.
 Each variable names the one it reads from.
 
+To change a provider later, choose Edit on its row in Settings, then Secrets. Its name and kind stay
+fixed. A stored OpenBao token is kept while Token authentication stays selected and the field is left
+empty. Entering a new token replaces it, and switching to another authentication choice discards it.
+
 T3 Code reads the value from your secret manager right before it starts the agent, and hands the
 resolved value to the agent process only. The reference is what T3 Code stores; the secret itself
 never lands in your settings file or in T3 Code's secret store.

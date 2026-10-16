@@ -1,4 +1,10 @@
-import type { EnvironmentId, OpenBaoAuth, SecretProviderKind } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OpenBaoAuth,
+  SecretProviderConfig,
+  SecretProviderId,
+  SecretProviderKind,
+} from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
 
@@ -28,10 +34,11 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import {
   DEFAULT_OPENBAO_MOUNT,
   EMPTY_SECRET_PROVIDER_DRAFT,
+  secretProviderDraftFromConfig,
   secretProviderFromDraft,
   type SecretProviderDraft,
   type SecretProviderDraftField,
-} from "./AddSecretProviderDialog.logic";
+} from "./SecretProviderDialog.logic";
 import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
@@ -81,24 +88,28 @@ const AUTH_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Adds a named secret provider to one environment. Provider variables on that
+ * Adds or edits a named secret provider on one environment. Provider variables on that
  * environment pick it by name; values are read on the server when a provider starts.
  */
-export function AddSecretProviderDialog({
+export function SecretProviderDialog({
   open,
   onOpenChange,
   environmentId,
   environmentLabel,
   existingIds,
+  existing,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly existingIds: ReadonlySet<string>;
+  readonly existing?: { readonly id: SecretProviderId; readonly config: SecretProviderConfig };
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
-  const [draft, setDraft] = useState<SecretProviderDraft>(EMPTY_SECRET_PROVIDER_DRAFT);
+  const [draft, setDraft] = useState<SecretProviderDraft>(
+    existing ? secretProviderDraftFromConfig(existing.config) : EMPTY_SECRET_PROVIDER_DRAFT,
+  );
   const [submitted, setSubmitted] = useState(false);
   const accounts = useEnvironmentQuery(
     draft.kind === "1password"
@@ -106,7 +117,11 @@ export function AddSecretProviderDialog({
       : null,
   );
   const listedAccounts = accounts.data ?? [];
-  const result = secretProviderFromDraft(draft, existingIds);
+  const result = secretProviderFromDraft(
+    draft,
+    existingIds,
+    existing ? { mode: "edit", id: existing.id } : { mode: "add" },
+  );
   const issues = Result.isFailure(result) ? result.failure : {};
   const fieldError = (field: SecretProviderDraftField) => (submitted ? issues[field] : undefined);
   const nameError = fieldError("name");
@@ -285,6 +300,7 @@ export function AddSecretProviderDialog({
                   id="secret-provider-token"
                   placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
                   value={draft.token}
+                  configured={draft.storedToken.length > 0}
                   onChange={(event) => update({ token: event.target.value })}
                   aria-invalid={tokenError !== undefined}
                   aria-describedby={
@@ -372,7 +388,9 @@ export function AddSecretProviderDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Add a secret provider</DialogTitle>
+          <DialogTitle>
+            {existing ? `Edit ${existing.config.label}` : "Add a secret provider"}
+          </DialogTitle>
           <DialogDescription>
             Provider variables on {environmentLabel} can read values from it by name. Values are
             read on that server when a provider starts.
@@ -390,6 +408,7 @@ export function AddSecretProviderDialog({
               <Label htmlFor="secret-provider-kind">Kind</Label>
               <Select
                 value={draft.kind}
+                disabled={existing !== undefined}
                 onValueChange={(kind) => {
                   if (kind !== null) update({ kind });
                 }}
@@ -415,6 +434,7 @@ export function AddSecretProviderDialog({
                 placeholder={NAME_PLACEHOLDERS[draft.kind]}
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
+                readOnly={existing !== undefined}
                 aria-invalid={nameError !== undefined}
                 aria-describedby={
                   nameError !== undefined ? "secret-provider-name-error" : undefined
@@ -430,6 +450,11 @@ export function AddSecretProviderDialog({
                   {nameError}
                 </p>
               ) : null}
+              {existing ? (
+                <p className="text-xs text-muted-foreground">
+                  Variables pick this provider by name, so it cannot change.
+                </p>
+              ) : null}
             </div>
             {kindFields()}
           </form>
@@ -439,7 +464,7 @@ export function AddSecretProviderDialog({
             Cancel
           </Button>
           <Button onClick={save} disabled={submitted && Result.isFailure(result)}>
-            Add provider
+            {existing ? "Save changes" : "Add provider"}
           </Button>
         </DialogFooter>
       </DialogPopup>

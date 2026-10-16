@@ -99,6 +99,7 @@ export interface SecretProviderDraft {
   readonly mount: string;
   readonly namespace: string;
   readonly token: string;
+  readonly storedToken: string;
   readonly auth: OpenBaoAuth;
   readonly region: string;
   readonly profile: string;
@@ -112,10 +113,34 @@ export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
   mount: DEFAULT_OPENBAO_MOUNT,
   namespace: "",
   token: "",
+  storedToken: "",
   auth: "token",
   region: "",
   profile: "",
 };
+
+export function secretProviderDraftFromConfig(config: SecretProviderConfig): SecretProviderDraft {
+  const base = { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: config.kind, name: config.label };
+  switch (config.kind) {
+    case "1password":
+      return { ...base, account: config.account };
+    case "openbao":
+      return {
+        ...base,
+        address: config.address,
+        mount: config.mount,
+        namespace: config.namespace ?? "",
+        storedToken: config.token ?? "",
+        auth: config.auth,
+      };
+    case "aws-secrets-manager":
+      return { ...base, region: config.region, profile: config.profile ?? "" };
+  }
+}
+
+export type SecretProviderTarget =
+  | { readonly mode: "add" }
+  | { readonly mode: "edit"; readonly id: SecretProviderId };
 
 function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
@@ -142,12 +167,13 @@ export type SecretProviderDraftField =
 export type SecretProviderDraftIssues = Partial<Readonly<Record<SecretProviderDraftField, string>>>;
 
 /**
- * The settings entry a draft adds, or every field that blocks it. Only the
+ * The settings entry a draft adds or replaces, or every field that blocks it. Only the
  * fields of the draft's kind are checked, and each field reports one message.
  */
 export function secretProviderFromDraft(
   draft: SecretProviderDraft,
   existingIds: ReadonlySet<string>,
+  target: SecretProviderTarget,
 ): Result.Result<
   { readonly id: SecretProviderId; readonly config: SecretProviderConfig },
   SecretProviderDraftIssues
@@ -155,12 +181,17 @@ export function secretProviderFromDraft(
   const issues: { -readonly [Field in SecretProviderDraftField]?: string } = {};
 
   const label = decodeField(SecretProviderLabel, draft.name, "Enter a name.");
-  const id = Result.isSuccess(label) ? secretProviderIdFromName(label.success) : null;
+  const id =
+    target.mode === "edit"
+      ? target.id
+      : Result.isSuccess(label)
+        ? secretProviderIdFromName(label.success)
+        : null;
   if (Result.isFailure(label)) {
     issues.name = label.failure;
   } else if (id === null) {
     issues.name = "The name needs at least one letter or digit.";
-  } else if (existingIds.has(id)) {
+  } else if (target.mode === "add" && existingIds.has(id)) {
     issues.name = `A secret provider named ${label.success} exists.`;
   }
 
@@ -200,7 +231,7 @@ export function secretProviderFromDraft(
       if (namespace !== undefined && Result.isFailure(namespace)) {
         issues.namespace = namespace.failure;
       }
-      const token = draft.token.trim();
+      const token = draft.token.trim() || draft.storedToken;
       if (draft.auth === "token" && token.length === 0) {
         issues.token = "Enter the OpenBao token.";
       }

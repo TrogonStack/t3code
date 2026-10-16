@@ -19,8 +19,8 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { AddSecretProviderDialog } from "./AddSecretProviderDialog";
-import { secretProviderSummary } from "./AddSecretProviderDialog.logic";
+import { SecretProviderDialog } from "./SecretProviderDialog";
+import { secretProviderSummary } from "./SecretProviderDialog.logic";
 import {
   classifyProviderEnvironmentAccess,
   resolveRemoteOperateAccess,
@@ -94,8 +94,15 @@ function EnvironmentSecretProviders({
   const readOnly = access.kind !== "editable";
   const providers = useEnvironmentSettings(environmentId, (settings) => settings.secretProviders);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
-  const [adding, setAdding] = useState(false);
+  const [dialog, setDialog] = useState<
+    null | { readonly mode: "add" } | { readonly mode: "edit"; readonly id: SecretProviderId }
+  >(null);
   const entries = Object.entries(providers) as Array<[SecretProviderId, SecretProviderConfig]>;
+  const editingConfig = dialog?.mode === "edit" ? providers[dialog.id] : undefined;
+  const editing =
+    dialog?.mode === "edit" && editingConfig !== undefined
+      ? { id: dialog.id, config: editingConfig }
+      : undefined;
   const section = searchableSetting("secret-providers");
 
   return (
@@ -105,7 +112,7 @@ function EnvironmentSecretProviders({
         title={`${section.title}${titleSuffix}`}
         headerAction={
           !readOnly ? (
-            <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
+            <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
               <PlusIcon className="size-3" aria-hidden />
               Add provider
             </Button>
@@ -125,23 +132,35 @@ function EnvironmentSecretProviders({
               description={<span className="break-all">{secretProviderDescription(config)}</span>}
               control={
                 !readOnly ? (
-                  <RemoveSecretProviderButton
-                    label={config.label}
-                    onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
-                  />
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => setDialog({ mode: "edit", id })}
+                    >
+                      Edit
+                    </Button>
+                    <RemoveSecretProviderButton
+                      label={config.label}
+                      onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
+                    />
+                  </div>
                 ) : null
               }
             />
           ))
         )}
       </SettingsSection>
-      {adding && !readOnly ? (
-        <AddSecretProviderDialog
+      {dialog !== null && !readOnly && (dialog.mode === "add" || editing !== undefined) ? (
+        <SecretProviderDialog
           open
-          onOpenChange={setAdding}
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
           environmentId={environmentId}
           environmentLabel={environment.label}
           existingIds={new Set(Object.keys(providers))}
+          {...(editing === undefined ? {} : { existing: editing })}
         />
       ) : null}
     </>

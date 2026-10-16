@@ -80,7 +80,7 @@ import {
   SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
   secretProviderReferenceIssue,
   secretProviderSummary,
-} from "./AddSecretProviderDialog.logic";
+} from "./SecretProviderDialog.logic";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
