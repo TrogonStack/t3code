@@ -16,7 +16,6 @@ import { CLAUDE_BACKGROUND_SUBAGENT_AFTER_ROOT_PROMPT } from "./input.ts";
 
 const SUBAGENT_TEXTS = ["SUB_STEP_1", "SUB_STEP_2", "SUB_FINAL_REPORT"];
 const SUBAGENT_COMMANDS = ["sleep 3 && echo SUB_DONE_1", "sleep 3 && echo SUB_DONE_2"];
-// The subagent's own task_progress, one per step, as the recording reports it.
 const SUBAGENT_PROGRESS = [
   "Running Sleep 3 seconds then echo SUB_DONE_1",
   "Running Sleep 3 seconds then echo SUB_DONE_2",
@@ -34,9 +33,6 @@ function commandTexts(projection: OrchestrationV2ThreadProjection): ReadonlyArra
   );
 }
 
-// Every frame the background subagent emits arrives after the root turn's
-// result, while the root is idle. Its work reaches its child thread as it
-// runs, before its end wakes the root, and none of it lands in the parent.
 export function assertClaudeBackgroundSubagentAfterRootOutput(
   result: OrchestratorV2ScenarioResult,
   transcript: ProviderReplayTranscript,
@@ -61,11 +57,8 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
   const subagent = projection.subagents[0];
   assert.equal(subagent?.status, "completed");
   assert.equal(subagent?.origin, "provider_native");
-  // The recording's two task_progress frames both land while the root is
-  // idle between its result and the wake that starts run 2 (the subagent's
-  // own foreground Bash steps are not background work and do not wake it
-  // early). The card must still pick up the latest one instead of staying
-  // frozen on whatever it showed when the root settled.
+  // Both task_progress frames in the recording land while the root is idle,
+  // so this fails if the card stays frozen on what it showed when the root settled.
   assert.equal(subagent?.progress, "Running Sleep 3 seconds then echo SUB_DONE_2");
   const subagentTurnItem = projection.turnItems.find(
     (item) => item.type === "subagent" && item.subagentId === subagent?.id,
@@ -75,16 +68,11 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
     subagent?.progress,
     "the turn item mobile reads progress from must match the subagent card",
   );
-  // Its completion drains into continuation run 2, but the subagent and its
-  // node stay attributed to the run that launched it.
   assert.lengthOf(projection.runs, 2);
   assert.equal(subagent?.runId, projection.runs[0]?.id);
   const subagentNode = projection.nodes.find((node) => node.id === subagent?.id);
   assert.equal(subagentNode?.status, "completed");
   assert.equal(subagentNode?.runId, projection.runs[0]?.id);
-  // The continuation carries the subagent's notification summary. The
-  // subagent's own foreground Bash steps are not background work, so they
-  // never reach the roster or take over that summary.
   const wakeMessage = projection.messages.find(
     (message) => message.id === projection.runs[1]?.userMessageId,
   );
@@ -99,7 +87,6 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
   if (subagent?.childThreadId == null) {
     throw new Error("The background subagent is missing its child thread.");
   }
-  // Its own foreground Bash steps end before it does, but only the subagent is named.
   assert.deepEqual(backgroundNotifications(projection), [
     {
       summary: 'Subagent "Background subagent test" finished',
@@ -120,9 +107,6 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
       `subagent command ${command} must be in the child thread`,
     );
   }
-  // The subagent works while the root is idle, so its steps and progress are
-  // stored as they happen. Its end starts continuation run 2, which drains
-  // the wake buffer; none of the subagent's work may wait there for it.
   const continuationStartIndex = result.domainEvents.findIndex(
     (event) =>
       event.type === "run.updated" &&
@@ -167,7 +151,6 @@ export function assertClaudeBackgroundSubagentAfterRootOutput(
         event.payload.progress === progress,
     );
   }
-  // The drain stores nothing in the child thread, so nothing is stored twice.
   assert.isFalse(
     result.domainEvents
       .slice(continuationStartIndex)

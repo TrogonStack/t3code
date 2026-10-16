@@ -15,7 +15,7 @@ import {
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-export const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<SecretProviderKind, string>> = {
+const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<SecretProviderKind, string>> = {
   "1password": "1Password",
   openbao: "OpenBao",
   "aws-secrets-manager": "AWS Secrets Manager",
