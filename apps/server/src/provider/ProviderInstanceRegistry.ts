@@ -1,53 +1,3 @@
-/**
- * ProviderInstanceRegistry — the single Effect service in the new model.
- *
- * Owns a `Map<ProviderInstanceId, ProviderInstance>` produced by running
- * registered driver factories against `ServerSettings.providerInstances`.
- * The registry watches settings; when an instance's config changes (or
- * the entry disappears), the registry tears down the affected instance's
- * scope and rebuilds — that's the entire hot-reload story.
- *
- * What rest-of-server reads from here:
- *   - `getInstance(instanceId)` — for routing turn/session calls.
- *   - `listInstances` — for snapshot aggregation in `ProviderRegistry`.
- *   - `listUnavailable` — `ServerProvider` shadows for instances whose
- *     driver is not registered in this build (rollback / fork tolerance).
- *   - `streamChanges` — coalesced "registry mutated" pings so consumers
- *     can re-pull lists or re-broadcast.
- *
- * The live implementation (`makeProviderInstanceRegistry`, `layer`) also
- * provides its sibling mutator.
- *
- * Materializes every entry in a `ProviderInstanceConfigMap`:
- *
- *   - When the entry's `driver` matches a registered driver, the registry
- *     decodes the opaque `config` envelope through `driver.configSchema`
- *     and calls `driver.create()` inside a fresh child scope. The
- *     resulting `ProviderInstance` is stored keyed by instance id,
- *     alongside its scope so the entry can be torn down independently.
- *   - When the entry's `driver` is unknown to this build (fork, rollback,
- *     in-flight PR branch), the registry emits an `"unavailable"` shadow
- *     `ServerProvider` snapshot instead of failing. This is what makes
- *     downgrades and fork-hopping safe per the
- *     `forward/backward compatibility invariant` in
- *     `packages/contracts/src/providerInstance.ts`.
- *   - When the entry's config fails schema decode, the registry logs and
- *     emits a shadow snapshot with the schema detail — same bucket as an
- *     unknown driver.
- *
- * Unlike the pre-Slice-D layer, the registry now holds mutable state
- * (`Ref`s + `PubSub`) and exposes an internal mutator
- * (`ProviderInstanceRegistryMutator`) whose `reconcile` method diffs a
- * fresh config map against the live state, tearing down removed instances
- * and building new ones without disturbing unaffected instances.
- *
- * Every live instance runs inside its own child `Scope`. The registry's
- * own scope owns all child scopes via finalizers, so closing the registry
- * tears every instance down in reverse order; closing a single instance
- * (via `reconcile` removing it) leaves the rest untouched.
- *
- * @module provider/ProviderInstanceRegistry
- */
 import {
   providerInstanceConfigEnabledFlag,
   ProviderInstanceId,
@@ -78,100 +28,43 @@ import type { AnyProviderDriver, ProviderInstance } from "@t3tools/provider-core
 export class ProviderInstanceRegistry extends Context.Service<
   ProviderInstanceRegistry,
   {
-    /**
-     * Look up one instance by id. Returns `undefined` (not Option) when the
-     * id is unknown — callers branch on falsy and emit
-     * `ProviderInstanceNotFoundError`.
-     */
     readonly getInstance: (
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ProviderInstance | undefined>;
-    /**
-     * Every available (driver-registered, successfully created) instance,
-     * in stable settings-author order.
-     */
     readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
-    /**
-     * Wire-shape shadow snapshots for instances whose driver is unknown to
-     * this build (or whose config failed to decode). Suitable for merging
-     * directly into `ProviderRegistry` output.
-     */
     readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
     /**
-     * The configured environment of every instance the registry could rebuild,
-     * keyed by id. Covers the live instances and the ones whose last build
-     * failed, which is exactly the set `rebuildInstanceWhen` can act on.
-     *
-     * Exists so a caller that is about to rebuild several instances can inspect
-     * what they are configured with first. `ProviderRegistry` uses it to resolve
-     * every external secret in one go instead of once per rebuild; the registry
-     * itself stays ignorant of what any particular value means.
+     * The configured environment of every instance `rebuildInstanceWhen` can act on: live ones
+     * and ones whose last build failed. Lets a caller resolve every external secret before a
+     * batch of rebuilds instead of once per rebuild.
      */
     readonly listEnvironments: Effect.Effect<
       ReadonlyMap<ProviderInstanceId, ProviderInstanceEnvironment | undefined>
     >;
     /**
-     * Tear one instance down and build it again from the configuration it
-     * already has, but only when `shouldRebuild` accepts that configuration.
-     * Resolves to whether a rebuild happened.
-     *
-     * This exists for inputs a driver reads at create time that can change
-     * without the settings file changing - a credential held in an external
-     * secret store, say. `reconcile` cannot see those, because the config
-     * envelope it diffs is identical before and after. The predicate keeps the
-     * decision with the caller that understands the input, and keeps every
-     * other instance out of the blast radius.
-     *
-     * The rebuilt instance keeps its position in settings-author order, and an
-     * unknown id is a no-op rather than an error. Sessions already talking to
-     * the old instance keep the process they were given; only work started
-     * after the rebuild sees the new one.
+     * Rebuilds one instance from the configuration it already has when `shouldRebuild` accepts
+     * it, for inputs a driver reads at create time that change without the settings file
+     * changing (a credential in an external secret store), which `reconcile`'s diff cannot see.
+     * The instance keeps its settings-author position, an unknown id is a no-op, and sessions
+     * already using the old instance keep it. Resolves to whether a rebuild happened.
      */
     readonly rebuildInstanceWhen: (
       instanceId: ProviderInstanceId,
       shouldRebuild: (entry: ProviderInstanceConfig) => boolean,
     ) => Effect.Effect<boolean>;
     /**
-     * Push notification stream emitted whenever the registry's contents
-     * change — instance added, removed, or rebuilt. The payload is `void`
-     * because consumers always want to re-pull `listInstances` /
-     * `listUnavailable` together.
-     *
-     * NOTE: because `Stream.fromPubSub` defers `PubSub.subscribe` until the
-     * stream starts running, forking a consumer via
-     * `Stream.runForEach(...).pipe(Effect.forkScoped)` races the next
-     * publish — the forked fiber may not have subscribed yet when the
-     * publish lands. Hot-reload consumers that must not miss a publish
-     * should use `subscribeChanges` below instead, which acquires the
-     * subscription synchronously in the caller's fiber before the consumer
-     * loop is forked.
+     * NOTE: because `Stream.fromPubSub` defers `PubSub.subscribe` until the stream starts
+     * running, forking a consumer via `Stream.runForEach(...).pipe(Effect.forkScoped)` races
+     * the next publish — the forked fiber may not have subscribed yet when the publish lands.
+     * Hot-reload consumers that must not miss a publish should use `subscribeChanges` below
+     * instead, which acquires the subscription synchronously in the caller's fiber before the
+     * consumer loop is forked.
      */
     readonly streamChanges: Stream.Stream<void>;
-    /**
-     * Acquire a subscription to the registry's change channel synchronously
-     * in the caller's fiber. Returns a `PubSub.Subscription<void>` whose
-     * lifetime is scoped to the provided `Scope` (the subscription is
-     * released when the scope closes). Consumers typically `yield*` this
-     * in the same fiber that forks their consumer loop, then drain with
-     * `PubSub.take(subscription)` inside `Effect.forever`. Because the
-     * subscription is registered with the PubSub before this `yield*`
-     * returns, no subsequent publish can land in a gap.
-     *
-     * This exists because the `ProviderInstanceRegistry` publishes on a
-     * PubSub and `Stream.fromPubSub` defers subscription until the stream
-     * starts executing — a consumer that `forkScoped`s the stream
-     * consumption can miss a publish that lands in the narrow window
-     * between "fiber scheduled" and "fiber starts running".
-     */
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
   }
 >()("t3/provider/ProviderInstanceRegistry") {}
 
-/**
- * Live registry entry: the materialized `ProviderInstance` + the fresh
- * child scope its `create` effect ran in + the original `entry` envelope
- * so `reconcile` can cheaply detect "no-op" updates.
- */
 interface LiveEntry {
   readonly instance: ProviderInstance;
   readonly scope: Scope.Closeable;
@@ -212,33 +105,19 @@ function withInstanceAt(
   return next;
 }
 
-/**
- * Internal state shared between the public registry service and the
- * mutator service. Both services are thin shells around these refs.
- */
 interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
   readonly changes: PubSub.PubSub<void>;
 }
 
-/**
- * Structural equality on `ProviderInstanceConfig` envelopes. Used by
- * `reconcile` to skip rebuilds when settings arrive unchanged. Config
- * payloads are opaque `unknown` at the envelope layer; `Equal.equals`
- * falls back to structural equality for plain records, which matches how
- * the schema decode output is constructed.
- */
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
   Equal.equals(a, b);
 
 /**
- * Resolve an entry's enabled state. An explicit false on either the
- * envelope or the raw config blob wins (most restrictive) — old settings
- * files can carry both flags with conflicting values, and a user's disable
- * must never be silently undone. Otherwise the envelope flag wins, then the
- * decoded config's flag (which carries the driver schema's default for
- * built-ins and forks alike), then enabled by default.
+ * An explicit false on either the envelope or the raw config blob wins (most
+ * restrictive) — old settings files can carry both flags with conflicting
+ * values, and a user's disable must never be silently undone.
  */
 const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown): boolean => {
   const rawConfigEnabled = providerInstanceConfigEnabledFlag(entry.config);
@@ -267,11 +146,6 @@ function hostEnvironmentWithout(
   return next;
 }
 
-/**
- * Build one live entry from a raw config envelope. Returns either a
- * `LiveEntry` plus undefined unavailable shadow, or a shadow snapshot and
- * undefined entry — callers dispatch to the appropriate Ref bucket.
- */
 const buildEntry = <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
@@ -335,11 +209,6 @@ const buildEntry = <R>(input: {
     const typedConfig = decodeResult.success;
     const resolvedEnvironment = yield* secretResolver.resolve(entry.environment);
     const childScope = yield* Scope.make();
-    // Attach the child scope to the registry's parent scope: if the
-    // registry scope closes, each surviving instance's child scope is
-    // closed through this finalizer. `reconcile` manually closes the
-    // child scope on remove/replace; subsequent close via the parent's
-    // finalizer is a no-op because `Scope.close` is idempotent.
     yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
     const createResult = yield* driver
@@ -388,10 +257,6 @@ const buildEntry = <R>(input: {
     };
   });
 
-/**
- * Reconcile-only implementation of the mutator. Exposed to the hydration
- * layer; never called directly by the rest of the server.
- */
 const makeReconcile = <R>(input: {
   readonly state: RegistryState;
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
@@ -431,8 +296,6 @@ const makeReconcile = <R>(input: {
         }
       }
 
-      // 2. Build additions and replacements. Walk `nextRaw` so the final
-      //    entry order follows settings-author order.
       const builtEntries = new Map<ProviderInstanceId, LiveEntry>();
       const builtUnavailable = new Map<ProviderInstanceId, ServerProvider>();
       let orderChanged = false;
@@ -445,7 +308,6 @@ const makeReconcile = <R>(input: {
 
         const existing = previousEntries.get(instanceId);
         if (existing !== undefined && !replacedIds.has(instanceId)) {
-          // No-op update: keep the existing live entry and scope.
           builtEntries.set(instanceId, existing);
           continue;
         }
@@ -499,22 +361,6 @@ const makeReconcile = <R>(input: {
     });
 };
 
-/**
- * Build the registry's runtime state from a concrete configMap. Returns a
- * record containing:
- *
- *   - `registry`: the read-only `ProviderInstanceRegistry["Service"]` to expose
- *     under `ProviderInstanceRegistry`.
- *   - `mutator`: the `ProviderInstanceRegistryMutatorShape` to expose
- *     under `ProviderInstanceRegistryMutator`.
- *   - `reconcile`: the raw reconcile function, provided for convenience so
- *     boot-time layers can hydrate an initial map before publishing the
- *     services.
- *
- * The scope that this effect runs in owns every per-instance child scope
- * created during `reconcile`. Closing that scope closes every live
- * instance.
- */
 export const makeProviderInstanceRegistry = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
@@ -537,10 +383,6 @@ export const makeProviderInstanceRegistry = <R>(input: {
     // scopes to the *caller's* scope instead of the registry's.
     const parentScope = yield* Scope.Scope;
 
-    // Capture the driver R context at construction time so `reconcile`
-    // can be invoked later without re-providing driver dependencies.
-    // The service tag's declared `reconcile: Effect<void>` hides R from
-    // consumers — we materialize that here.
     const driverContext = yield* Effect.context<R>();
     const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
     const hostEnvironment = yield* HostProcess.Environment;
@@ -580,8 +422,6 @@ export const makeProviderInstanceRegistry = <R>(input: {
           ),
         );
 
-    // Hydrate the initial configMap synchronously so callers can read
-    // `listInstances` immediately after this effect completes.
     yield* reconcile(input.configMap);
 
     // Rebuild one instance from the config it already has. Unlike
@@ -688,18 +528,9 @@ export const makeProviderInstanceRegistry = <R>(input: {
         return environments;
       }),
       rebuildInstanceWhen,
-      // Getters: each read constructs a fresh Stream / Effect descriptor
-      // so multiple consumers don't share a single already-started
-      // Channel or subscription. Matches the pattern `ProviderRegistry`
-      // uses for its own `streamChanges`.
       get streamChanges() {
         return Stream.fromPubSub(changes);
       },
-      // Synchronous subscribe — callers that need to consume changes
-      // from a forked fibre must acquire the subscription in their own
-      // fibre first (via `yield* registry.subscribeChanges`) and only
-      // then fork a consumer loop on `Stream.fromSubscription(...)` /
-      // `PubSub.take(...)`. See the shape docs for the race this avoids.
       get subscribeChanges() {
         return PubSub.subscribe(changes);
       },
@@ -712,12 +543,6 @@ export const makeProviderInstanceRegistry = <R>(input: {
     return { registry, mutator };
   });
 
-/**
- * Layer variant that also exposes the mutator tag. Consumed by
- * `ProviderInstanceRegistryHydrationLive` to reconcile on settings
- * changes. Tests that exercise the mutator directly can pair this Layer
- * with a test-local `ServerSettingsService`.
- */
 export const layer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;

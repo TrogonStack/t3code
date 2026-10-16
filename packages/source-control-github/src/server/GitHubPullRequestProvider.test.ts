@@ -6,7 +6,7 @@ import * as Result from "effect/Result";
 import type { PullRequestReaction } from "@t3tools/contracts";
 
 import { decodePullRequestDetailJson } from "./gitHubPullRequestJson.ts";
-import * as GitHubApi from "./GitHubApi.ts";
+import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import type { GitHubPullRequestCore } from "./gitHubPullRequestJson.ts";
@@ -87,7 +87,7 @@ describe("gitHubProviderFailure", () => {
   it("says no more than failed about a plain request failure", () => {
     expect(
       gitHubProviderFailure(
-        new GitHubApi.GitHubApiResponseError({
+        new GitHubRequestPolicy.GitHubApiResponseError({
           host: "github.com",
           operation: "merge",
           status: 422,
@@ -96,6 +96,49 @@ describe("gitHubProviderFailure", () => {
     ).toEqual({ reason: "failed" });
   });
 });
+
+it.effect("advertises standalone branch deletion for source repository writers", () =>
+  Effect.gen(function* () {
+    let action: string | undefined;
+    const provider = yield* make.pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+          runPullRequestAction: (input) =>
+            Effect.sync(() => {
+              action = input.action;
+            }),
+        }),
+      ),
+    );
+    expect(provider.capabilities.deleteBranch).toBe(true);
+    expect(provider.capabilities.actions).toContain("delete-branch");
+    yield* provider.runAction({
+      cwd: "/w",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+      action: "delete-branch",
+    });
+    expect(action).toBe("delete-branch");
+    const access = {
+      canWrite: false,
+      canTriage: false,
+      canUpdate: false,
+      didAuthor: false,
+      canAdminister: false,
+      canDeleteBranch: true,
+    };
+    expect(gitHubViewerPermissions(access).actions).toContain("delete-branch");
+    expect(
+      gitHubViewerPermissions({
+        ...access,
+        canWrite: true,
+        didAuthor: true,
+        canDeleteBranch: false,
+      }).actions,
+    ).not.toContain("delete-branch");
+  }),
+);
 
 it.effect("refreshes checks without permissions or comparison reads", () =>
   Effect.gen(function* () {
@@ -183,7 +226,6 @@ it.effect("uses one narrow read for a linked pull request summary", () =>
 
     expect(summary.state).toBe("open");
     expect(summaryReads).toBe(1);
-    // The author's avatar comes from the login-shaped URL, not a second request.
     expect(summary.author?.avatarUrl).toBe("https://github.com/octocat.png?size=80");
   }),
 );
@@ -252,14 +294,15 @@ describe("gitHubViewerPermissions", () => {
     expect(
       gitHubViewerPermissions({
         canWrite: true,
+        canDeleteBranch: true,
         canUpdate: true,
         didAuthor: false,
         canAdminister: true,
         canTriage: true,
       }),
     ).toEqual({
-      // Arming a merge for later is the merge, so it travels with it.
       actions: [
+        "delete-branch",
         "merge",
         "enable-auto-merge",
         "disable-auto-merge",
@@ -293,8 +336,6 @@ describe("gitHubViewerPermissions", () => {
   });
 
   it("leaves a passer-by on a repository they can only read nothing but the review", () => {
-    // Every open-source pull request somebody else opened: GitHub says no to all five actions
-    // and to resolving, and yes to commenting and to every verdict.
     expect(
       gitHubViewerPermissions({
         canWrite: false,
@@ -308,7 +349,6 @@ describe("gitHubViewerPermissions", () => {
       comment: true,
       resolve: false,
       verdicts: ["comment", "approve", "request-changes"],
-      // Asking somebody else to review is the one thing read access never stretches to.
       requestReviewers: false,
       mergeBypass: false,
       labels: false,
@@ -338,11 +378,9 @@ describe("gitHubViewerPermissions", () => {
         canTriage: false,
       }),
     ).toEqual({
-      // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,
-      // GitHub refuses an author's approval of their own change, so the page does not offer one.
       verdicts: ["comment"],
       requestReviewers: false,
       mergeBypass: false,
@@ -385,7 +423,7 @@ describe("gitHubViewerPermissions", () => {
             number: 7,
           })
           .pipe(
-            Effect.provideService(GitHubApi.PinnedGitHubCredential, {
+            Effect.provideService(GitHubRequestPolicy.PinnedGitHubCredential, {
               host: "github.com",
               token: Redacted.make("credential"),
               credentialFingerprint: fingerprint,
@@ -432,7 +470,7 @@ describe("gitHubViewerPermissions", () => {
               commits: [],
             }).pipe(
               Effect.flatMap((detail) =>
-                GitHubApi.PinnedGitHubCredential.pipe(
+                GitHubRequestPolicy.PinnedGitHubCredential.pipe(
                   Effect.map((credential) => ({
                     ...detail,
                     viewerAccess: {
@@ -723,7 +761,7 @@ it.effect("propagates workflow discovery rate limits", () =>
         getPullRequestDetail: () => Effect.succeed(openDetail),
         listWorkflowRunsRequiringApproval: () =>
           Effect.fail(
-            new GitHubApi.GitHubApiRateLimitError({
+            new GitHubRequestPolicy.GitHubApiRateLimitError({
               host: "github.com",
               operation: "listWorkflowRunsRequiringApproval",
             }),
@@ -1114,8 +1152,6 @@ describe("loginAvatarUrl", () => {
   });
 
   it("has nothing for an app, which names no page", () => {
-    // `dependabot[bot]` has a picture, but not at `/dependabot[bot].png` — a guess that 404s is
-    // worse than the initials it would replace.
     expect(loginAvatarUrl("dependabot[bot]", "github.com")).toBeNull();
   });
 
