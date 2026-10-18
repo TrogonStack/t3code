@@ -12,11 +12,13 @@ import {
   KeyRoundIcon,
   LayersIcon,
   PlusIcon,
+  RefreshCwIcon,
   Trash2Icon,
   TypeIcon,
   XIcon,
 } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
+import { useAtomValue } from "@effect/atom-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
@@ -77,6 +79,8 @@ import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
   secretProviderReferenceIssue,
@@ -556,7 +560,72 @@ function ProviderEnvironmentFieldRow(props: {
   );
 }
 
+type SecretCheckState =
+  | { readonly status: "checking" }
+  | { readonly status: "resolved" }
+  | { readonly status: "failed"; readonly detail: string };
+
+interface RowSecretCheck {
+  readonly sourceKey: string;
+  readonly state: SecretCheckState;
+}
+
+function SecretCheckButton(props: {
+  readonly label: string;
+  readonly state: SecretCheckState | undefined;
+  readonly disabledReason: string | undefined;
+  readonly onCheck: () => void;
+}) {
+  const { state, disabledReason } = props;
+  const checking = state?.status === "checking";
+  const description =
+    disabledReason ??
+    (state === undefined
+      ? "Check that the secret resolves"
+      : state.status === "checking"
+        ? "Checking the secret"
+        : state.status === "resolved"
+          ? "Secret resolved"
+          : state.detail);
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="icon-micro"
+              variant="ghost-muted"
+              disabled={disabledReason !== undefined || checking}
+              onClick={props.onCheck}
+              aria-label={
+                state?.status === "failed" && disabledReason === undefined
+                  ? `${props.label} failed: ${state.detail}`
+                  : state?.status === "resolved" && disabledReason === undefined
+                    ? `${props.label} resolved`
+                    : props.label
+              }
+            >
+              {checking ? (
+                <Spinner />
+              ) : state?.status === "resolved" ? (
+                <CheckIcon className="size-3 text-success-foreground" />
+              ) : state?.status === "failed" ? (
+                <AlertTriangleIcon className="size-3 text-destructive" />
+              ) : (
+                <RefreshCwIcon className="size-3" />
+              )}
+            </Button>
+          </span>
+        }
+      />
+      <TooltipPopup side="top">{description}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function ProviderEnvironmentSection(props: {
+  readonly environmentId?: EnvironmentId | undefined;
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly secretProviders: SecretProviders;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
@@ -656,6 +725,36 @@ export function ProviderEnvironmentSection(props: {
 
   const hasSecretProviders = Object.keys(props.secretProviders).length > 0;
 
+  const canCheckSecrets = useAtomValue(
+    serverEnvironment.checkSecretSource.permissionAtom(props.environmentId ?? null),
+  );
+  const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
+  const [secretChecks, setSecretChecks] = useState<Readonly<Record<string, RowSecretCheck>>>({});
+
+  const runSecretCheck = async (rowId: string, source: ProviderSecretSource) => {
+    if (props.environmentId === undefined) return;
+    const sourceKey = JSON.stringify(source);
+    setSecretChecks((previous) => ({
+      ...previous,
+      [rowId]: { sourceKey, state: { status: "checking" } },
+    }));
+    const response = await checkSecretSource({
+      environmentId: props.environmentId,
+      input: { source },
+    });
+    const state: SecretCheckState =
+      response._tag !== "Success"
+        ? { status: "failed", detail: "Could not reach the server" }
+        : response.value._tag === "Resolved"
+          ? { status: "resolved" }
+          : { status: "failed", detail: response.value.detail };
+    setSecretChecks((previous) =>
+      previous[rowId]?.sourceKey === sourceKey
+        ? { ...previous, [rowId]: { sourceKey, state } }
+        : previous,
+    );
+  };
+
   const addVariable = () =>
     setRows([
       ...rows,
@@ -696,6 +795,18 @@ export function ProviderEnvironmentSection(props: {
                     onFailure: (message) => `Not saved yet. ${message}`,
                     onSuccess: () => undefined,
                   })
+                : undefined;
+            const draftSource = isSecret
+              ? secretSourceFromDraft(variable, props.secretProviders)
+              : undefined;
+            const draftSourceKey =
+              draftSource !== undefined && Result.isSuccess(draftSource)
+                ? JSON.stringify(draftSource.success)
+                : undefined;
+            const rowCheck = secretChecks[variable.id];
+            const secretCheckState =
+              rowCheck !== undefined && rowCheck.sourceKey === draftSourceKey
+                ? rowCheck.state
                 : undefined;
             const sourceOptions = environmentSourceOptions(variable, props.secretProviders);
             const selectedOption = environmentDraftSourceOption(variable);
@@ -800,6 +911,22 @@ export function ProviderEnvironmentSection(props: {
                         spellCheck={false}
                         aria-invalid={sourceIssue !== undefined || undefined}
                         aria-label={`Environment variable 1Password account ${index + 1}`}
+                      />
+                    ) : null}
+                    {canCheckSecrets && props.environmentId !== undefined ? (
+                      <SecretCheckButton
+                        label={`Check secret for environment variable ${variable.name || index + 1}`}
+                        state={secretCheckState}
+                        disabledReason={
+                          draftSource === undefined || Result.isSuccess(draftSource)
+                            ? undefined
+                            : draftSource.failure
+                        }
+                        onCheck={() => {
+                          if (draftSource !== undefined && Result.isSuccess(draftSource)) {
+                            void runSecretCheck(variable.id, draftSource.success);
+                          }
+                        }}
                       />
                     ) : null}
                   </>
@@ -1644,6 +1771,7 @@ export function ProviderInstanceCard({
         className={readOnly ? "opacity-50 select-none" : undefined}
       >
         <ProviderEnvironmentSection
+          environmentId={environmentId}
           environment={genericEnvironment}
           secretProviders={secretProviders}
           onChange={updateGenericEnvironment}

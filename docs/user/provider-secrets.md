@@ -123,6 +123,9 @@ uses the new value.
 That is what a failed read looks like, and it is deliberate: when T3 Code cannot read a reference it
 leaves the variable unset rather than passing an empty value the agent would misread as a real one.
 
+To see the store's own error without starting the provider, use the check button on the variable.
+It reads the reference as it is currently written, saved or not.
+
 Work through it in this order:
 
 1. Run the matching command above by hand. Most failures are a locked vault, an expired login, or a

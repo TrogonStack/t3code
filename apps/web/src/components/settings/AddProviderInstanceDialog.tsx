@@ -489,6 +489,7 @@ export function AddProviderInstanceDialog({
                         />
                         {isLocalAcp ? (
                           <ProviderEnvironmentSection
+                            environmentId={environmentId}
                             environment={localEnvironment}
                             secretProviders={settings.secretProviders}
                             onChange={setLocalEnvironment}

@@ -156,6 +156,12 @@ export const SecretProviderReference = Schema.String.check(
 ).pipe(Schema.brand("SecretProviderReference"));
 export type SecretProviderReference = typeof SecretProviderReference.Type;
 
+export const SecretSourceCheckResult = Schema.Union([
+  Schema.TaggedStruct("Resolved", {}),
+  Schema.TaggedStruct("Failed", { detail: Schema.String }),
+]);
+export type SecretSourceCheckResult = typeof SecretSourceCheckResult.Type;
+
 export const SecretProviderSecretSource = Schema.Struct({
   kind: Schema.Literal("secret-provider"),
   provider: SecretProviderId,
