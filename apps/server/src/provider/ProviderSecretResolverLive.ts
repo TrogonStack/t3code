@@ -379,7 +379,7 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
         provider,
         reference,
         status: response.status,
-        errors,
+        errorCount: errors.length,
       });
       return unreadable(errors.length > 0 ? errors.join("; ") : `HTTP ${response.status}`);
     }
