@@ -3,10 +3,14 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
+  OpenBaoSecretProviderConfig,
+  ProviderInstanceEnvironment,
   ProviderInstanceId,
+  SecretProviderId,
   type ServerProvider,
   type UnifiedSettings,
 } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -32,6 +36,7 @@ const state = vi.hoisted(() => ({
   updateModelPreferences: vi.fn(),
   toggleFavorite: vi.fn(),
   mutateProviderInstance: vi.fn(),
+  checkSecretSource: vi.fn(),
 }));
 
 vi.mock(import("../../state/server"), async (original) => {
@@ -58,6 +63,11 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       ...labelled,
+      checkSecretSource: {
+        ...actual.serverEnvironment.checkSecretSource,
+        label: "check-secret-source",
+        permissionAtom: (() => Atom.make(true)) as never,
+      },
       configValueAtom: (() => config) as never,
       providersValueAtom: (() => providers) as never,
     } as never,
@@ -71,6 +81,7 @@ vi.mock(import("../../state/use-atom-command"), async (original) => ({
       update: state.updateProvider,
       uninstall: state.uninstall,
       "accept-url-auth": state.acceptUrlAuth,
+      "check-secret-source": state.checkSecretSource,
     })[command.label ?? ""] ?? vi.fn()) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
@@ -158,6 +169,9 @@ vi.mock(import("../ProviderUpdatesAction"), async (original) => ({
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
+const decodeOpenBaoProvider = Schema.decodeSync(OpenBaoSecretProviderConfig);
+const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+
 const environmentId = EnvironmentId.make("remote-device");
 const codexId = ProviderInstanceId.make("codex");
 const customId = ProviderInstanceId.make("codex_work");
@@ -240,6 +254,7 @@ beforeEach(async () => {
   state.updateProvider.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.uninstall.mockReset().mockResolvedValue(AsyncResult.success({}));
   state.acceptUrlAuth.mockReset().mockResolvedValue(AsyncResult.success({ accepted: true }));
+  state.checkSecretSource.mockReset();
   await setProviders([]);
   container = document.createElement("div");
   document.body.append(container);
@@ -464,6 +479,66 @@ describe("EnvironmentProviderSettings routing", () => {
       },
       {},
     );
+  });
+
+  it("checks a secret reference on the selected environment and shows the outcome", async () => {
+    const vault = SecretProviderId.make("vault");
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      secretProviders: {
+        [vault]: decodeOpenBaoProvider({
+          kind: "openbao",
+          label: "Team vault",
+          address: "https://bao.example.com",
+          mount: "kv",
+        }),
+      },
+      providerInstances: {
+        [customId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "Work",
+          environment: decodeEnvironment([
+            {
+              name: "CODEX_TOKEN",
+              value: { kind: "secret-provider", provider: vault, reference: "agents/codex#key" },
+            },
+          ]),
+        },
+      },
+    };
+    state.checkSecretSource
+      .mockResolvedValueOnce(AsyncResult.success({ _tag: "Failed", detail: "permission denied" }))
+      .mockResolvedValueOnce(AsyncResult.success({ _tag: "Resolved" }));
+    await render({ targetInstanceId: customId });
+
+    await userEvent.click(
+      page.getByRole("button", { name: "Check secret for environment variable CODEX_TOKEN" }),
+    );
+    expect(state.checkSecretSource).toHaveBeenLastCalledWith({
+      environmentId,
+      input: {
+        source: { kind: "secret-provider", provider: vault, reference: "agents/codex#key" },
+      },
+    });
+    await expect
+      .element(
+        page.getByRole("button", {
+          name: "Check secret for environment variable CODEX_TOKEN failed: permission denied",
+        }),
+      )
+      .toBeVisible();
+
+    await userEvent.click(
+      page.getByRole("button", { name: /^Check secret for environment variable CODEX_TOKEN/ }),
+    );
+    await expect
+      .element(
+        page.getByRole("button", {
+          name: "Check secret for environment variable CODEX_TOKEN resolved",
+        }),
+      )
+      .toBeVisible();
   });
 
   it("lets the server decide managed ACP cleanup after an atomic delete", async () => {

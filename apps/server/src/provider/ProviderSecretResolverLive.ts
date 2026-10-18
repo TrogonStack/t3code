@@ -78,6 +78,25 @@ import {
   type ProviderSecretResolverShape,
 } from "./ProviderSecretResolver.ts";
 
+/**
+ * What one read of a secret store came back with. The failure carries the
+ * store's own reason so `check` can show it; `resolve` only needs to know
+ * whether there was a value. Details are the store's error text and never
+ * include a secret.
+ */
+type SecretRead =
+  | { readonly _tag: "Read"; readonly value: string }
+  | { readonly _tag: "Unreadable"; readonly detail: string };
+
+const readValue = (value: string): SecretRead => ({ _tag: "Read", value });
+const unreadable = (detail: string): SecretRead => ({ _tag: "Unreadable", detail });
+const readNonEmpty = (value: string | undefined, emptyDetail: string) =>
+  value === undefined || value.length === 0 ? unreadable(emptyDetail) : readValue(value);
+const exitDetail = (result: { readonly code: number; readonly stderr: string }) => {
+  const stderr = result.stderr.trim();
+  return stderr.length > 0 ? stderr : `Exited with code ${result.code}`;
+};
+
 const ONE_PASSWORD_BINARY = "op";
 const OPENBAO_BINARY = "bao";
 const AWS_BINARY = "aws";
@@ -200,10 +219,9 @@ const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
       exitCode: result.code,
       detail: result.stderr.trim(),
     });
-    return undefined;
+    return unreadable(exitDetail(result));
   }
-  const secret = result.stdout.trim();
-  return secret.length > 0 ? secret : undefined;
+  return readNonEmpty(result.stdout.trim(), "1Password returned an empty value");
 });
 
 const OnePasswordAccountListJson = Schema.fromJsonString(
@@ -261,7 +279,7 @@ const nonEmpty = (value: string | undefined) =>
  * login lives, so nothing here reads a token file or a `VAULT_*` variable, and
  * the token variables are withheld from that child so it reports the login
  * rather than the server's environment.
- * Returns `undefined`, after logging why, when that source has no token.
+ * Returns the reason, after logging it, when that source has no token.
  */
 const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
   provider: SecretProviderId,
@@ -272,16 +290,18 @@ const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
       const token = nonEmpty(config.token);
       if (token === undefined) {
         yield* Effect.logWarning("OpenBao provider has no stored token", { provider });
+        return unreadable("OpenBao provider has no stored token");
       }
-      return token;
+      return readValue(token);
     }
     case "env": {
       const env = yield* HostProcess.Environment;
       const token = nonEmpty(env.BAO_TOKEN);
       if (token === undefined) {
         yield* Effect.logWarning("BAO_TOKEN is not set in the server environment", { provider });
+        return unreadable("BAO_TOKEN is not set in the server environment");
       }
-      return token;
+      return readValue(token);
     }
     case "cli": {
       const spawnCommand = yield* resolveSpawnCommand(OPENBAO_BINARY, ["print", "token"]);
@@ -310,8 +330,9 @@ const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
           exitCode: result.code,
           detail: result.stderr.trim(),
         });
+        return unreadable(exitDetail(result));
       }
-      return token;
+      return readValue(token);
     }
   }
 });
@@ -327,14 +348,14 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
     reference: string,
   ) {
     const token = yield* resolveOpenBaoToken(provider, config);
-    if (token === undefined) {
-      return undefined;
+    if (token._tag === "Unreadable") {
+      return token;
     }
     const client = yield* HttpClient.HttpClient;
     const url = `${config.address.replace(/\/+$/, "")}/v1/${encodeOpenBaoPath(config.mount)}/data/${encodeOpenBaoPath(location.path)}`;
     const request = HttpClientRequest.get(url).pipe(
       HttpClientRequest.setHeaders({
-        "X-Vault-Token": token,
+        "X-Vault-Token": token.value,
         ...(config.namespace === undefined || config.namespace.length === 0
           ? {}
           : { "X-Vault-Namespace": config.namespace }),
@@ -350,16 +371,17 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
     const body: unknown = yield* response.json.pipe(Effect.orElseSucceed(() => undefined));
     if (response.status < 200 || response.status >= 300) {
       // OpenBao's `errors` array names the failure and never carries a secret.
+      const errors = decodeOpenBaoErrorBody(body).pipe(
+        Option.flatMap((decoded) => Option.fromNullishOr(decoded.errors)),
+        Option.getOrElse((): ReadonlyArray<string> => []),
+      );
       yield* Effect.logWarning("Could not read provider secret from OpenBao", {
         provider,
         reference,
         status: response.status,
-        errors: decodeOpenBaoErrorBody(body).pipe(
-          Option.flatMap((decoded) => Option.fromNullishOr(decoded.errors)),
-          Option.getOrElse(() => []),
-        ),
+        errorCount: errors.length,
       });
-      return undefined;
+      return unreadable(errors.length > 0 ? errors.join("; ") : `HTTP ${response.status}`);
     }
     const value = decodeOpenBaoSecretBody(body).pipe(
       Option.map((decoded) => decoded.data.data[location.field]),
@@ -377,9 +399,9 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
         reference,
         status: response.status,
       });
-      return undefined;
+      return unreadable("OpenBao secret has no usable value for the requested field");
     }
-    return secret;
+    return readValue(secret);
   },
   (effect, provider, _config, _location, reference) =>
     effect.pipe(
@@ -388,7 +410,7 @@ const readOpenBaoSecretOverApi = Effect.fn("readOpenBaoSecretOverApi")(
           provider,
           reference,
           detail: String(error),
-        }).pipe(Effect.as(undefined)),
+        }).pipe(Effect.as(unreadable(String(error)))),
       ),
     ),
 );
@@ -404,7 +426,7 @@ const readOpenBaoSecret = Effect.fn("readOpenBaoSecret")(function* (
       provider,
       reference,
     });
-    return undefined;
+    return unreadable("OpenBao secret reference must be path/to/secret#field");
   }
   return yield* readOpenBaoSecretOverApi(provider, config, location, reference);
 });
@@ -445,7 +467,7 @@ const readAwsSecret = Effect.fn("readAwsSecret")(function* (
       "AWS Secrets Manager reference must be name-or-arn or name-or-arn#key",
       { provider, reference },
     );
-    return undefined;
+    return unreadable("AWS Secrets Manager reference must be name-or-arn or name-or-arn#key");
   }
   const spawnCommand = yield* resolveSpawnCommand(AWS_BINARY, [
     "secretsmanager",
@@ -474,7 +496,7 @@ const readAwsSecret = Effect.fn("readAwsSecret")(function* (
       exitCode: result.code,
       detail: result.stderr.trim(),
     });
-    return undefined;
+    return unreadable(exitDetail(result));
   }
   const body = Option.getOrUndefined(decodeAwsSecretValue(result.stdout));
   if (body === undefined) {
@@ -482,17 +504,17 @@ const readAwsSecret = Effect.fn("readAwsSecret")(function* (
       provider,
       reference,
     });
-    return undefined;
+    return unreadable("AWS Secrets Manager returned an unexpected response");
   }
   if (body.SecretString === undefined) {
     yield* Effect.logWarning("AWS Secrets Manager binary secrets are not supported", {
       provider,
       reference,
     });
-    return undefined;
+    return unreadable("AWS Secrets Manager binary secrets are not supported");
   }
   if (location.key === undefined) {
-    return nonEmpty(body.SecretString);
+    return readNonEmpty(body.SecretString, "The secret string is empty");
   }
   const parsed = Option.getOrUndefined(decodeJson(body.SecretString));
   const value =
@@ -500,16 +522,16 @@ const readAwsSecret = Effect.fn("readAwsSecret")(function* (
       ? Reflect.get(parsed, location.key)
       : undefined;
   if (typeof value === "string") {
-    return nonEmpty(value);
+    return readNonEmpty(value, "The value for the key is empty");
   }
   if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
+    return readValue(String(value));
   }
   yield* Effect.logWarning("AWS Secrets Manager secret has no scalar value for the key", {
     provider,
     reference,
   });
-  return undefined;
+  return unreadable("The secret has no scalar value for the key");
 });
 
 /** Log fields that identify a secret without carrying its value. */
@@ -545,7 +567,7 @@ export const ProviderSecretResolverLive = Layer.effect(
           provider,
           reference,
         });
-        return undefined;
+        return unreadable("Secret provider is not configured");
       }
       switch (config.kind) {
         case "1password":
@@ -568,23 +590,45 @@ export const ProviderSecretResolverLive = Layer.effect(
       }
     };
 
+    const readContext =
+      yield* Effect.context<Effect.Services<ReturnType<typeof readNamedProviderSecret>>>();
+
+    const readSecretBounded = (reference: ProviderSecretReference) =>
+      readSecret(reference).pipe(
+        Effect.timeoutOption(SECRET_READ_TIMEOUT),
+        Effect.map(Option.getOrElse(() => unreadable("Timed out waiting for the secret store"))),
+        Effect.catch((error) =>
+          Effect.logWarning("Could not run the secret store CLI to read a provider secret", {
+            ...describeSecret(reference),
+            detail: String(error),
+          }).pipe(Effect.as(unreadable(String(error)))),
+        ),
+      );
+
     const cache = yield* Cache.make({
       capacity: SECRET_CACHE_CAPACITY,
       // No time to live: a resolved secret is held until the user asks for a
       // provider refresh. Expiring on a timer would reintroduce the surprise
       // biometric prompt mid-session that the cache exists to remove.
       lookup: (reference: ProviderSecretReference) =>
-        readSecret(reference).pipe(
-          Effect.timeoutOption(SECRET_READ_TIMEOUT),
-          Effect.map(Option.getOrUndefined),
-          Effect.catch((error) =>
-            Effect.logWarning("Could not run the secret store CLI to read a provider secret", {
-              ...describeSecret(reference),
-              detail: String(error),
-            }).pipe(Effect.as(undefined)),
-          ),
+        readSecretBounded(reference).pipe(
+          Effect.map((read) => (read._tag === "Read" ? read.value : undefined)),
         ),
     });
+
+    const check: ProviderSecretResolverShape["check"] = (source) =>
+      Effect.gen(function* () {
+        const reference = providerSecretReference(source);
+        if (reference === undefined) {
+          return { _tag: "Failed", detail: "This variable does not name a secret" } as const;
+        }
+        const read = yield* readSecretBounded(reference).pipe(Effect.provideContext(readContext));
+        if (read._tag === "Unreadable") {
+          return { _tag: "Failed", detail: read.detail } as const;
+        }
+        yield* Cache.set(cache, reference, read.value);
+        return { _tag: "Resolved" } as const;
+      });
 
     const resolve: ProviderSecretResolverShape["resolve"] = (environment) =>
       Effect.gen(function* () {
@@ -723,6 +767,7 @@ export const ProviderSecretResolverLive = Layer.effect(
       resolve,
       prime,
       invalidate,
+      check,
       listOnePasswordAccounts,
     };
   }),

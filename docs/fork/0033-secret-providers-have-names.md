@@ -18,6 +18,9 @@
 - Edit a provider in place. Change its region, address, mount, namespace, or token from the same
   dialog. The name stays, so variables stay pointed at it, though a reference written for the old
   mount or region may need updating.
+- Check a reference before saving it. A check button on each secret variable reads the reference
+  through its provider right now and shows whether it resolved, with the store's error when it did
+  not.
 - Keep variables saved with the earlier 1Password source. They still resolve and
   still open as before, with nothing to migrate.
 

@@ -1276,3 +1276,104 @@ describe("ProviderSecretResolverLive with AWS Secrets Manager", () => {
     }).pipe(Effect.provide(resolverLayer(spawner.layer, { [AWS_PROVIDER]: awsProvider() })));
   });
 });
+
+const sourceOf = (variable: Parameters<typeof decodeEnvironment>[0][number]) => {
+  const [decoded] = decodeEnvironment([variable]);
+  const source = decoded?.value;
+  if (source === undefined || typeof source === "string") {
+    throw new Error("expected a secret source");
+  }
+  return source;
+};
+
+describe("ProviderSecretResolver.check", () => {
+  it.effect("reports a legacy 1Password read as resolved and primes the cache", () => {
+    const spawner = recordingOpSpawner({ stdout: "sk-live-token", stderr: "", code: 0 });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+      const variable = onePasswordVariable("TOKEN", TOKEN_REFERENCE, HOME_ACCOUNT);
+
+      const result = yield* resolver.check(sourceOf(variable));
+
+      assert.deepStrictEqual(result, { _tag: "Resolved" });
+      assert.strictEqual(spawner.invocations.length, 1);
+      const resolved = yield* resolver.resolve(decodeEnvironment([variable]));
+      assert.deepStrictEqual(resolved.unresolved, []);
+      assert.strictEqual(spawner.invocations.length, 1);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
+  });
+
+  it.effect("reports the op error text when 1Password exits non-zero", () => {
+    const spawner = recordingOpSpawner({
+      stdout: "",
+      stderr: "[ERROR] could not read secret: item not found\n",
+      code: 1,
+    });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const result = yield* resolver.check(
+        sourceOf(onePasswordVariable("TOKEN", TOKEN_REFERENCE, HOME_ACCOUNT)),
+      );
+
+      assert.deepStrictEqual(result, {
+        _tag: "Failed",
+        detail: "[ERROR] could not read secret: item not found",
+      });
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
+  });
+
+  it.effect("reports a named provider that is not in settings", () => {
+    const spawner = recordingOpSpawner({ stdout: "unused", stderr: "", code: 0 });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const result = yield* resolver.check(
+        sourceOf(namedVariable("TOKEN", VAULT_PROVIDER, "agents/codex#api_key")),
+      );
+
+      assert.deepStrictEqual(result, {
+        _tag: "Failed",
+        detail: "Secret provider is not configured",
+      });
+      assert.strictEqual(spawner.invocations.length, 0);
+    }).pipe(Effect.provide(resolverLayer(spawner.layer)));
+  });
+
+  it.effect("reports the OpenBao errors on a 403", () => {
+    const spawner = recordingOpSpawner({ stdout: "", stderr: "", code: 0 });
+    const http = recordingHttpClient(403, { errors: ["permission denied"] });
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const result = yield* resolver.check(
+        sourceOf(namedVariable("TOKEN", VAULT_PROVIDER, "agents/codex#api_key")),
+      );
+
+      assert.deepStrictEqual(result, { _tag: "Failed", detail: "permission denied" });
+    }).pipe(
+      Effect.provide(
+        resolverLayer(
+          spawner.layer,
+          { [VAULT_PROVIDER]: openBaoProvider({ token: "s.t" }) },
+          http.client,
+        ),
+      ),
+    );
+  });
+
+  it.effect("fails without a secret store on the default resolver", () =>
+    Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const result = yield* resolver.check(
+        sourceOf(onePasswordVariable("TOKEN", TOKEN_REFERENCE, HOME_ACCOUNT)),
+      );
+
+      assert.deepStrictEqual(result, {
+        _tag: "Failed",
+        detail: "Secret stores are not available on this server",
+      });
+    }),
+  );
+});

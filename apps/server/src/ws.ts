@@ -2396,6 +2396,7 @@ const layerWsRpc = (
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
         [WS_METHODS.serverListOnePasswordAccounts]: (_input) =>
           providerSecretResolver.listOnePasswordAccounts,
+        [WS_METHODS.serverCheckSecretSource]: (input) => providerSecretResolver.check(input.source),
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
           TraceDiagnostics.readTraceDiagnostics({
             traceFilePath: config.serverTracePath,

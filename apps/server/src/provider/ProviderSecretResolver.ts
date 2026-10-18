@@ -16,7 +16,9 @@
 import type {
   OnePasswordAccountSummary,
   ProviderInstanceEnvironment,
+  ProviderSecretSource,
   SecretProviderId,
+  SecretSourceCheckResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -79,6 +81,14 @@ export interface ProviderSecretResolverShape {
    */
   readonly invalidate: (providers?: ReadonlySet<SecretProviderId>) => Effect.Effect<void>;
   /**
+   * Read one secret source now, for the Settings "check" button, and report
+   * whether it resolved. Reads fresh, bypassing the cache, and stores a
+   * successful read in the cache so the next provider refresh does not prompt
+   * again. Never fails and never returns the value; a failure carries the
+   * store's own reason.
+   */
+  readonly check: (source: ProviderSecretSource) => Effect.Effect<SecretSourceCheckResult>;
+  /**
    * The 1Password accounts signed in on this machine, so settings can offer
    * them instead of asking the user to type one. Reads local `op` config only,
    * so it never prompts. Empty when `op` is missing or fails.
@@ -114,6 +124,11 @@ export class ProviderSecretResolver extends Context.Reference<ProviderSecretReso
       resolve: (environment) => Effect.sync(() => resolveWithoutSecretStore(environment)),
       prime: () => Effect.void,
       invalidate: () => Effect.void,
+      check: () =>
+        Effect.succeed({
+          _tag: "Failed",
+          detail: "Secret stores are not available on this server",
+        } as const),
       listOnePasswordAccounts: Effect.succeed([]),
     }),
   },
