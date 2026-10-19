@@ -62,7 +62,11 @@ export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(
   }
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const configDir = yield* resolveClaudeHomePath({ homePath: "" }, environment);
+  const inheritedConfigDir = environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+  const configDir =
+    cwd !== null && inheritedConfigDir.length > 0 && !path.isAbsolute(inheritedConfigDir)
+      ? path.resolve(cwd, inheritedConfigDir)
+      : yield* resolveClaudeHomePath({ homePath: "" }, environment);
   const settingsPaths = [
     ...(cwd === null
       ? []

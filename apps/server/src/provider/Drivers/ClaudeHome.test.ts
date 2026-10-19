@@ -165,6 +165,22 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
     );
 
+    it.effect("resolves a relative config dir against the workspace", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { cwd } = yield* setup({});
+        yield* fileSystem.makeDirectory(path.join(cwd, "claude-config"), { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(cwd, "claude-config", "settings.json"),
+          settingsWith("org.name=Acme"),
+        );
+        expect(
+          yield* claudeSettingsLaunchedEnv(cwd, { CLAUDE_CONFIG_DIR: "claude-config" }),
+        ).toEqual({ OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,${LAUNCHED}` });
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
     it.effect("skips an unreadable file and keeps looking", () =>
       Effect.gen(function* () {
         const { cwd, environment } = yield* setup({
