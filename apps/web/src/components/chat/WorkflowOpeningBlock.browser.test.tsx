@@ -100,7 +100,10 @@ const foldToggle = () =>
 it("shows a short script as highlighted code with nothing to open", async () => {
   await render(SHORT_SCRIPT);
   expect(host.querySelector('[data-language="javascript"]')?.textContent).toContain("SCRIPTONLY");
-  await vi.waitFor(() => expect(host.querySelector(".chat-markdown-shiki")).not.toBeNull());
+  // Highlighting loads its grammar in the background, which outlasts the default wait on slower runners.
+  await vi.waitFor(() => expect(host.querySelector(".chat-markdown-shiki")).not.toBeNull(), {
+    timeout: 5_000,
+  });
   expect(foldToggle()).toBeUndefined();
 });
 
