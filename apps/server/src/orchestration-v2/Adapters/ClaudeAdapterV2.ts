@@ -123,6 +123,7 @@ import * as ServerConfig from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import {
+  claudeSettingsLaunchedEnv,
   claudeSignedOutMessage,
   makeClaudeEnvironment,
 } from "../../provider/Drivers/ClaudeHome.ts";
@@ -1104,6 +1105,7 @@ export function makeClaudeQueryOptions(input: {
   readonly attachmentsDir?: string;
   readonly settings?: ClaudeSettings;
   readonly sdkSettings?: string | ClaudeSdkSettings;
+  readonly settingsEnv?: Readonly<Record<string, string>>;
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly tools?: ClaudeAgentSdkQueryTools;
@@ -1141,12 +1143,20 @@ export function makeClaudeQueryOptions(input: {
       : typeof input.sdkSettings === "object" && input.sdkSettings !== null
         ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
         : selectionSettings;
-  const effectiveQuerySettings =
+  const compactedQuerySettings =
     input.settings?.autoCompactWindow === undefined || input.settings.autoCompactWindow.length === 0
       ? querySettings
       : ({
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
           autoCompactWindow: Number(input.settings.autoCompactWindow),
+        } as ClaudeSdkSettings);
+  // A settings string is a path or JSON the caller owns, so it is left alone.
+  const effectiveQuerySettings =
+    input.settingsEnv === undefined || typeof compactedQuerySettings === "string"
+      ? compactedQuerySettings
+      : ({
+          ...compactedQuerySettings,
+          env: { ...compactedQuerySettings?.env, ...input.settingsEnv },
         } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -8613,6 +8623,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
+          const settingsEnv = yield* claudeSettingsLaunchedEnv(
+            turnInput.runtimePolicy.cwd,
+            adapterOptions.environment,
+          ).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
@@ -8622,6 +8639,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             attachmentsDir,
             settings: adapterOptions.settings,
             environment: adapterOptions.environment,
+            ...(settingsEnv === undefined ? {} : { settingsEnv }),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...(mcpOverrides.allowedTools === undefined
               ? {}

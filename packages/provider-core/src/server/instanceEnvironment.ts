@@ -39,7 +39,7 @@ export function literalProviderInstanceEnvironment(
   return literals;
 }
 
-const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
+export const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
 
 /**
  * Marks the telemetry of every process T3 Code launches, so a harness such as
@@ -48,26 +48,46 @@ const RESOURCE_ATTRIBUTES = "OTEL_RESOURCE_ATTRIBUTES";
  */
 const LAUNCHED_ATTRIBUTE = { key: "t3code.launched", value: "true" } as const;
 
-const hasResourceAttribute = (attributes: string, key: string): boolean =>
-  attributes.split(",").some((entry) => {
-    const name = entry.split("=", 1)[0]?.trim() ?? "";
+const resourceAttributeValue = (attributes: string, key: string): string | undefined => {
+  for (const entry of attributes.split(",")) {
+    const separator = entry.indexOf("=");
+    const rawName = (separator === -1 ? entry : entry.slice(0, separator)).trim();
+    const rawValue = separator === -1 ? "" : entry.slice(separator + 1).trim();
     try {
-      return decodeURIComponent(name) === key;
+      if (decodeURIComponent(rawName) === key) {
+        return decodeURIComponent(rawValue);
+      }
     } catch {
-      return name === key;
+      if (rawName === key) {
+        return rawValue;
+      }
     }
-  });
+  }
+  return undefined;
+};
+
+/**
+ * The value the user set for `t3code.launched` in a resource attribute list,
+ * or `undefined` when the list does not carry it.
+ */
+export const userLaunchedAttribute = (attributes: string): string | undefined =>
+  resourceAttributeValue(attributes, LAUNCHED_ATTRIBUTE.key);
+
+export const withLaunchedAttribute = (attributes: string): string => {
+  const trimmed = attributes.trim();
+  if (userLaunchedAttribute(trimmed) !== undefined) {
+    return trimmed;
+  }
+  const entry = `${encodeURIComponent(LAUNCHED_ATTRIBUTE.key)}=${encodeURIComponent(LAUNCHED_ATTRIBUTE.value)}`;
+  return trimmed === "" ? entry : `${trimmed},${entry}`;
+};
 
 const withLaunchedByAttribute = (environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const attributes = environment[RESOURCE_ATTRIBUTES]?.trim() ?? "";
-  if (hasResourceAttribute(attributes, LAUNCHED_ATTRIBUTE.key)) {
+  if (userLaunchedAttribute(attributes) !== undefined) {
     return environment;
   }
-  const entry = `${encodeURIComponent(LAUNCHED_ATTRIBUTE.key)}=${encodeURIComponent(LAUNCHED_ATTRIBUTE.value)}`;
-  return {
-    ...environment,
-    [RESOURCE_ATTRIBUTES]: attributes === "" ? entry : `${attributes},${entry}`,
-  };
+  return { ...environment, [RESOURCE_ATTRIBUTES]: withLaunchedAttribute(attributes) };
 };
 
 /**

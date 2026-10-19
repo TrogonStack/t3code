@@ -229,6 +229,35 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.include(options.settings, { showThinkingSummaries: true });
   });
 
+  it("adds the settings env without dropping other flag settings", () => {
+    const settingsEnv = { OTEL_RESOURCE_ATTRIBUTES: "org.name=Acme,t3code.launched=true" };
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "settings-env-thread",
+      resume: false,
+      cwd: "/workspace",
+      sdkSettings: { env: { KEEP: "1" }, model: "kept" },
+      settingsEnv,
+    });
+    assert.deepEqual(options.settings, {
+      model: "kept",
+      env: { KEEP: "1", ...settingsEnv },
+      showThinkingSummaries: true,
+    });
+  });
+
+  it("leaves a settings string untouched", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "settings-env-thread",
+      resume: false,
+      cwd: "/workspace",
+      sdkSettings: "/etc/claude.json",
+      settingsEnv: { OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true" },
+    });
+    assert.equal(options.settings, "/etc/claude.json");
+  });
+
   it("preserves an explicit omitted thinking display", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
