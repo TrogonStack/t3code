@@ -1060,10 +1060,7 @@ function layerClaudeProviderAdapterRegistryReplay(
           configMap: {
             [ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID]: {
               driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              environment: [
-                { name: "CLAUDE_CODE_TMPDIR", value: tmpRoot, sensitive: false },
-                { name: "CLAUDE_CONFIG_DIR", value: tmpRoot, sensitive: false },
-              ],
+              environment: [{ name: "CLAUDE_CODE_TMPDIR", value: tmpRoot, sensitive: false }],
             },
           },
         }),
