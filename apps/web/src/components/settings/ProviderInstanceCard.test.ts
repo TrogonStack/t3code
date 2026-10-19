@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   SecretProviderConfig,
   SecretProviderId,
+  SecretProviderReference,
   type OnePasswordAccount,
   type OnePasswordSecretReference,
   type ServerProviderModel,
@@ -169,6 +170,20 @@ describe("provider environment helpers", () => {
       dedicated: [],
       generic: environment,
     });
+  });
+
+  it("keeps a dedicated variable read from a named secret provider in its field", () => {
+    const source = {
+      kind: "secret-provider" as const,
+      provider: SecretProviderId.make("homelab"),
+      reference: SecretProviderReference.make("apps/t3#api_key"),
+    };
+    const dedicated = { name: "CURSOR_API_KEY", value: source, sensitive: false };
+    const generic = { name: "EXTRA_FLAG", value: source, sensitive: false };
+
+    expect(
+      splitDedicatedProviderEnvironment([dedicated, generic], new Set(["CURSOR_API_KEY"])),
+    ).toEqual({ dedicated: [dedicated], generic: [generic] });
   });
 
   it("keeps a plain op:// value in the generic editor so its account can be picked", () => {

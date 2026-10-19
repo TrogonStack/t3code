@@ -15,6 +15,8 @@
   with one explicit token source: its own stored token, `BAO_TOKEN`, or the `bao` CLI login.
 - Read from AWS Secrets Manager. An AWS provider reads through the `aws` CLI in one region, with
   an optional named profile, so credentials stay in the CLI's own configuration.
+- Read a provider's own setup fields, such as the Cursor API key, from a secret provider. Pick the
+  provider next to the field instead of adding the same variable by hand under Environment.
 - Edit a provider in place. Change its region, address, mount, namespace, or token from the same
   dialog. The name stays, so variables stay pointed at it, though a reference written for the old
   mount or region may need updating.

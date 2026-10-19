@@ -541,6 +541,55 @@ describe("EnvironmentProviderSettings routing", () => {
       .toBeVisible();
   });
 
+  it("saves a dedicated field from a named secret provider and clears it back", async () => {
+    const vault = SecretProviderId.make("vault");
+    const cursorId = ProviderInstanceId.make("cursor_work");
+    const cursor = ProviderDriverKind.make("cursor");
+    state.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      secretProviders: {
+        [vault]: decodeOpenBaoProvider({
+          kind: "openbao",
+          label: "Team vault",
+          address: "https://bao.example.com",
+          mount: "kv",
+        }),
+      },
+      providerInstances: {
+        [cursorId]: { driver: cursor, enabled: true, displayName: "Cursor Work" },
+      },
+    };
+    await render({ targetInstanceId: cursorId });
+
+    await userEvent.click(page.getByRole("combobox", { name: "Cursor API key source" }));
+    await userEvent.click(page.getByRole("option", { name: /Team vault/ }));
+    expect(state.mutateProviderInstance).not.toHaveBeenCalled();
+
+    const reference = page.getByRole("textbox", { name: "Cursor API key secret reference" });
+    await userEvent.fill(reference, "agents/cursor#key");
+    await userEvent.tab();
+
+    expect(state.mutateProviderInstance).toHaveBeenLastCalledWith(
+      {
+        operation: "upsert",
+        instanceId: cursorId,
+        instance: {
+          driver: cursor,
+          enabled: true,
+          displayName: "Cursor Work",
+          environment: [
+            {
+              name: "CURSOR_API_KEY",
+              value: { kind: "secret-provider", provider: vault, reference: "agents/cursor#key" },
+              sensitive: false,
+            },
+          ],
+        },
+      },
+      {},
+    );
+  });
+
   it("lets the server decide managed ACP cleanup after an atomic delete", async () => {
     const firstId = ProviderInstanceId.make("acpRegistry_kilo_one");
     const secondId = ProviderInstanceId.make("acpRegistry_kilo_two");
