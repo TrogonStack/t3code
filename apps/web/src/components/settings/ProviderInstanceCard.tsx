@@ -556,7 +556,7 @@ export function nextProviderEnvironmentWithFieldValue(
   return next;
 }
 
-export function nextProviderEnvironmentWithFieldSource(
+function nextProviderEnvironmentWithFieldSource(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
   field: ProviderEnvironmentField,
   source: ProviderSecretSource,
@@ -617,7 +617,7 @@ function ProviderEnvironmentFieldRow(props: {
   const changeSource = (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
     if (patch.source === "plain") {
       setDraft(undefined);
-      props.onCommit(props.field, "");
+      if (savedRow.source !== "plain") props.onCommit(props.field, "");
       return;
     }
     setDraft({ ...row, ...patch, reference: "" });
@@ -630,6 +630,31 @@ function ProviderEnvironmentFieldRow(props: {
   };
   const value = row.valueRedacted ? "" : row.value;
   const sensitive = props.field.sensitive !== false;
+
+  // A legacy 1Password source needs its account field, which only the
+  // Environment editor has, so the variable is edited there instead.
+  if (savedRow.source === "1password") {
+    return (
+      <SettingsRow
+        title={<label htmlFor={inputId}>{props.field.label}</label>}
+        description={props.field.description}
+        control={
+          <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
+            <DraftInput
+              id={inputId}
+              size="sm"
+              className="min-w-0 flex-1"
+              value=""
+              onCommit={() => undefined}
+              placeholder="Read from a secret provider. Edit it under Environment."
+              disabled
+              spellCheck={false}
+            />
+          </div>
+        }
+      />
+    );
+  }
 
   return (
     <SettingsRow

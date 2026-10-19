@@ -541,7 +541,7 @@ describe("EnvironmentProviderSettings routing", () => {
       .toBeVisible();
   });
 
-  it("saves a dedicated field from a named secret provider and clears it back", async () => {
+  it("saves a dedicated field from a named secret provider", async () => {
     const vault = SecretProviderId.make("vault");
     const cursorId = ProviderInstanceId.make("cursor_work");
     const cursor = ProviderDriverKind.make("cursor");
