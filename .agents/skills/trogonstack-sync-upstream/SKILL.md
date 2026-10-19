@@ -9,21 +9,28 @@ This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the 
 
 ## 1. Prepare
 
-1. Start from a clean working tree on `main` with `origin/main` up to date.
-2. Fetch upstream: `git fetch upstream`.
-3. If `git log --oneline main..upstream/main` is empty, the fork is already current; stop and report that.
-4. Load the divergence context before touching any conflict:
+Every sync runs in its own linked worktree, never in the main checkout. The main checkout is often serving the developer's live T3 Code session and carries their uncommitted work; a sync installs dependencies, rewrites the lockfile, and runs the full suite, none of which should touch that.
+
+1. Fetch both remotes: `git fetch origin && git fetch upstream`. Do not switch branches, stash, or clean anything in the main checkout.
+2. If `git log --oneline origin/main..upstream/main` is empty, the fork is already current; stop and report that.
+3. Load the divergence context before touching any conflict:
    - Read `docs/fork/README.md` and every active ledger entry in `docs/fork/`. These are the features the merge must not regress.
-   - List fork-only commits: `git log --oneline upstream/main..main`.
+   - List fork-only commits: `git log --oneline upstream/main..origin/main`.
 
 ## 2. Create the sync branch
 
+Create the branch in a sibling worktree based on `origin/main`, install dependencies there, then merge:
+
 ```
-git switch -c yordis/chore-sync-upstream-{YYYYMMDD}-{NUM} main
+git worktree add -b yordis/chore-sync-upstream-{YYYYMMDD}-{NUM} ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM} origin/main
+cd ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}
+T3CODE_PROJECT_ROOT="$(git worktree list --porcelain | head -1 | cut -d' ' -f2)" node scripts/setup-worktree.ts
 git merge upstream/main
 ```
 
-Use today's date for `{YYYYMMDD}` and a sequence number for `{NUM}`, starting at `1` and incrementing for each additional sync the same day (e.g. `yordis/chore-sync-upstream-20260729-1`). Check `git branch --list --all 'yordis/chore-sync-upstream-*'` to pick the next free number.
+Use today's date for `{YYYYMMDD}` and a sequence number for `{NUM}`, starting at `1` and incrementing for each additional sync the same day (e.g. `yordis/chore-sync-upstream-20260729-1`). Check `git branch --list --all 'yordis/chore-sync-upstream-*'` and `git worktree list` to pick the next free number.
+
+Run every later command, including verification, from inside this worktree. Setup installs from the pre-merge lockfile; after resolving `pnpm-lock.yaml`, run `vp i` in the worktree again.
 
 ## 3. Resolve conflicts
 
@@ -62,4 +69,4 @@ Fix fallout on the sync branch before opening the PR. If upstream bumped a depen
    - Title: `chore: sync with upstream pingdotgg/t3code main`
    - Body: bullets only, each explaining the why of a nontrivial resolution decision (what was kept, dropped, or renumbered, and why). No file lists, no test plan section.
 3. Merge the PR with a **merge commit**, never squash. Squashing would drop the `upstream/main` merge parent, so the next sync would re-conflict on everything already resolved.
-4. Share the PR link, then delete the sync branch.
+4. Share the PR link, then remove the worktree from the main checkout (`git worktree remove ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}`) and delete the sync branch.
