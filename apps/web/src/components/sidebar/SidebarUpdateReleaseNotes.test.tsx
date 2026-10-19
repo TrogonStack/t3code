@@ -72,6 +72,8 @@ function renderNotes(state: DesktopUpdateState, openExternal = vi.fn().mockResol
 describe("SidebarUpdateReleaseNotes", () => {
   beforeEach(() => {
     testState.addToast.mockReset();
+    // CI builds inject GITHUB_REPOSITORY, which would otherwise point the default links at a fork.
+    vi.stubEnv("T3CODE_DESKTOP_UPDATE_REPOSITORY", "");
   });
 
   afterEach(() => {
