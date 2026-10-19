@@ -4,8 +4,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import {
+  RESOURCE_ATTRIBUTES,
+  userLaunchedAttribute,
+  withLaunchedAttribute,
+} from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { fromLenientJson } from "@t3tools/shared/schemaJson";
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
@@ -25,6 +31,65 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
     return path.resolve(inherited);
   }
   return path.resolve(path.join(home, ".claude"));
+});
+
+const decodeSettingsEnv = Schema.decodeUnknownEffect(
+  fromLenientJson(
+    Schema.Struct({ env: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)) }),
+  ),
+);
+
+/**
+ * Claude Code copies the `env` of each settings file over its own environment
+ * at startup, so a user's `OTEL_RESOURCE_ATTRIBUTES` there replaces the one T3
+ * Code launched it with and drops `t3code.launched`. Flag settings outrank those
+ * files, so this returns the `env` to pass there: the value the files would
+ * leave in effect, plus the attribute. It returns nothing when no file sets the
+ * variable, the file value already carries the attribute, or the launch
+ * environment holds a value the user chose, such as `false`.
+ */
+export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(function* (
+  cwd: string | null,
+  environment: NodeJS.ProcessEnv,
+): Effect.fn.Return<
+  Readonly<Record<string, string>> | undefined,
+  never,
+  FileSystem.FileSystem | Path.Path
+> {
+  const launched = userLaunchedAttribute(environment[RESOURCE_ATTRIBUTES] ?? "");
+  if (launched !== undefined && launched !== "true") {
+    return undefined;
+  }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const configDir = yield* resolveClaudeHomePath({ homePath: "" }, environment);
+  const settingsPaths = [
+    ...(cwd === null
+      ? []
+      : [
+          path.join(cwd, ".claude", "settings.local.json"),
+          path.join(cwd, ".claude", "settings.json"),
+        ]),
+    path.join(configDir, "settings.json"),
+  ];
+  for (const settingsPath of settingsPaths) {
+    const contents = yield* fileSystem
+      .readFileString(settingsPath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (contents === undefined) {
+      continue;
+    }
+    const attributes = (yield* decodeSettingsEnv(contents).pipe(
+      Effect.orElseSucceed(() => undefined),
+    ))?.env?.[RESOURCE_ATTRIBUTES];
+    if (typeof attributes !== "string") {
+      continue;
+    }
+    return userLaunchedAttribute(attributes) === undefined
+      ? { [RESOURCE_ATTRIBUTES]: withLaunchedAttribute(attributes) }
+      : undefined;
+  }
+  return undefined;
 });
 
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (

@@ -3,9 +3,13 @@ import * as NodeOS from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import * as HostProcess from "@t3tools/shared/HostProcess";
+
 import {
+  claudeSettingsLaunchedEnv,
   claudeSignedOutMessage,
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
@@ -83,6 +87,108 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         const second = yield* makeClaudeCapabilitiesCacheKey(config, "/repo-b");
         expect(first).not.toBe(second);
       }),
+    );
+  });
+
+  describe("settings launched env", () => {
+    const LAUNCHED = "t3code.launched=true";
+    const setup = (files: {
+      readonly user?: string;
+      readonly project?: string;
+      readonly local?: string;
+    }) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped();
+        const configDir = path.join(root, "config");
+        const cwd = path.join(root, "workspace");
+        yield* fileSystem.makeDirectory(configDir, { recursive: true });
+        yield* fileSystem.makeDirectory(path.join(cwd, ".claude"), { recursive: true });
+        if (files.user !== undefined) {
+          yield* fileSystem.writeFileString(path.join(configDir, "settings.json"), files.user);
+        }
+        if (files.project !== undefined) {
+          yield* fileSystem.writeFileString(
+            path.join(cwd, ".claude", "settings.json"),
+            files.project,
+          );
+        }
+        if (files.local !== undefined) {
+          yield* fileSystem.writeFileString(
+            path.join(cwd, ".claude", "settings.local.json"),
+            files.local,
+          );
+        }
+        return { cwd, environment: { CLAUDE_CONFIG_DIR: configDir } };
+      });
+    const settingsWith = (attributes: string) =>
+      JSON.stringify({ env: { OTEL_RESOURCE_ATTRIBUTES: attributes } });
+
+    it.effect("extends the value of the highest precedence settings file", () =>
+      Effect.gen(function* () {
+        const { cwd, environment } = yield* setup({
+          user: settingsWith("from=user"),
+          project: settingsWith("from=project"),
+          local: settingsWith("from=local"),
+        });
+        expect(yield* claudeSettingsLaunchedEnv(cwd, environment)).toEqual({
+          OTEL_RESOURCE_ATTRIBUTES: `from=local,${LAUNCHED}`,
+        });
+        const withoutLocal = yield* setup({
+          user: settingsWith("from=user"),
+          project: settingsWith("from=project"),
+        });
+        expect(
+          yield* claudeSettingsLaunchedEnv(withoutLocal.cwd, withoutLocal.environment),
+        ).toEqual({ OTEL_RESOURCE_ATTRIBUTES: `from=project,${LAUNCHED}` });
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
+    it.effect("reads the user file when there is no workspace", () =>
+      Effect.gen(function* () {
+        const { environment } = yield* setup({ user: settingsWith("org.name=Acme") });
+        expect(yield* claudeSettingsLaunchedEnv(null, environment)).toEqual({
+          OTEL_RESOURCE_ATTRIBUTES: `org.name=Acme,${LAUNCHED}`,
+        });
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
+    it.effect("changes nothing when no settings file overrides the variable", () =>
+      Effect.gen(function* () {
+        const none = yield* setup({});
+        expect(yield* claudeSettingsLaunchedEnv(none.cwd, none.environment)).toBeUndefined();
+        const unrelated = yield* setup({ user: JSON.stringify({ env: { OTHER: "1" } }) });
+        expect(
+          yield* claudeSettingsLaunchedEnv(unrelated.cwd, unrelated.environment),
+        ).toBeUndefined();
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
+    it.effect("skips an unreadable file and keeps looking", () =>
+      Effect.gen(function* () {
+        const { cwd, environment } = yield* setup({
+          user: settingsWith("from=user"),
+          local: "{ not json",
+        });
+        expect(yield* claudeSettingsLaunchedEnv(cwd, environment)).toEqual({
+          OTEL_RESOURCE_ATTRIBUTES: `from=user,${LAUNCHED}`,
+        });
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
+    it.effect("respects a launched value the user chose", () =>
+      Effect.gen(function* () {
+        const inFile = yield* setup({ user: settingsWith("t3code.launched=false") });
+        expect(yield* claudeSettingsLaunchedEnv(inFile.cwd, inFile.environment)).toBeUndefined();
+        const optedOut = yield* setup({ user: settingsWith("from=user") });
+        expect(
+          yield* claudeSettingsLaunchedEnv(optedOut.cwd, {
+            ...optedOut.environment,
+            OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=false",
+          }),
+        ).toBeUndefined();
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
     );
   });
 });

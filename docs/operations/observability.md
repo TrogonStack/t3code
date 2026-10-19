@@ -642,6 +642,9 @@ Every process T3 Code launches for a provider, such as Claude Code or Codex, inh
 A harness that exports its own telemetry reports it on every signal, so its sessions driven from T3 Code
 can be told apart from the ones started in a terminal. A value already set for `t3code.launched`,
 in the environment or a provider instance's variables, is kept, so `false` opts a harness out.
+Claude Code copies the `env` of its settings files over the environment it starts with, so when
+one of them sets `OTEL_RESOURCE_ATTRIBUTES` T3 Code passes the value those files would leave in
+effect, plus the attribute, as flag settings, which outrank them.
 Integrated terminals do not add it, though they keep one already in those variables.
 
 If the OTLP URLs are unset, local tracing still works, metrics stay in-process only, and logs stay
