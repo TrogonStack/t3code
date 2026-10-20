@@ -1355,6 +1355,7 @@ describe("viewer permission decoding", () => {
       ),
     ).toEqual({
       mergeCapabilities: { merge: true, squash: false, rebase: true },
+      autoMergeAllowed: true,
       canWrite: true,
       canAdminister: true,
       canTriage: true,
