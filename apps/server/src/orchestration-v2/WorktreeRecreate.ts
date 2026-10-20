@@ -35,13 +35,13 @@ const toRecreateError =
  * thread's branch, or on a fresh branch of the same name from the project's
  * current branch when that branch was deleted too.
  */
-export const recreateMissingWorktree = (input: {
-  readonly gitWorkflow: GitWorkflowService.GitWorkflowService["Service"];
-  readonly cwd: string;
-  readonly worktreePath: string;
-  readonly branch: string;
-}): Effect.Effect<void, WorktreeRecreateError> =>
-  Effect.gen(function* () {
+export const recreateMissingWorktree = Effect.fn("WorktreeRecreate.recreateMissingWorktree")(
+  function* (input: {
+    readonly gitWorkflow: GitWorkflowService.GitWorkflowService["Service"];
+    readonly cwd: string;
+    readonly worktreePath: string;
+    readonly branch: string;
+  }) {
     const { gitWorkflow, cwd, worktreePath, branch } = input;
     const onFailure = toRecreateError({ worktreePath, branch });
     yield* gitWorkflow.pruneWorktrees({ cwd }).pipe(Effect.mapError(onFailure));
@@ -68,4 +68,5 @@ export const recreateMissingWorktree = (input: {
         path: worktreePath,
       })
       .pipe(Effect.mapError(onFailure));
-  });
+  },
+);

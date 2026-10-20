@@ -112,7 +112,10 @@ const readsThroughSecretProvider = (
     return reference?._tag === "secret-provider" && providers.has(reference.provider);
   }) ?? false;
 
-const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProviders"]) =>
+const layerSettingsWatcher = (
+  settingsChanges: Stream.Stream<ServerSettings>,
+  initialSecretProviders: ServerSettings["secretProviders"],
+) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
@@ -120,35 +123,39 @@ const layerSettingsWatcher = (initialSecretProviders: ServerSettings["secretProv
       const serverSettings = yield* Settings.ServerSettingsService;
       const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
       const secretProvidersRef = yield* Ref.make(initialSecretProviders);
-      const settingsChanges = yield* serverSettings.subscribeChanges;
       yield* settingsChanges.pipe(
-        Stream.runForEach((next) =>
-          Effect.gen(function* () {
-            const configMap = deriveProviderInstanceConfigMap(next);
-            const changedProviders = changedSecretProviderIds(
-              yield* Ref.get(secretProvidersRef),
-              next.secretProviders,
-            );
-            if (changedProviders.size > 0) {
-              yield* secretResolver.invalidate(changedProviders);
-            }
-            yield* primeConfigMapSecrets(secretResolver, configMap);
-            yield* mutator.reconcile(configMap);
-            if (changedProviders.size > 0) {
-              const environments = yield* registry.listEnvironments;
-              yield* Effect.forEach(
-                environments.keys(),
-                (instanceId) =>
-                  registry.rebuildInstanceWhen(instanceId, (entry) =>
-                    readsThroughSecretProvider(entry, changedProviders),
-                  ),
-                { discard: true },
-              );
-            }
-            // Committed last so a failed reconcile is retried on the next emission
-            // instead of being treated as already applied.
-            yield* Ref.set(secretProvidersRef, next.secretProviders);
-          }).pipe(
+        Stream.runForEach(() =>
+          // The subscription predates the seed read, so a queued change can be
+          // older than the seed. A failed current read must leave the registry intact.
+          serverSettings.getSettings.pipe(
+            Effect.flatMap((next) =>
+              Effect.gen(function* () {
+                const configMap = deriveProviderInstanceConfigMap(next);
+                const changedProviders = changedSecretProviderIds(
+                  yield* Ref.get(secretProvidersRef),
+                  next.secretProviders,
+                );
+                if (changedProviders.size > 0) {
+                  yield* secretResolver.invalidate(changedProviders);
+                }
+                yield* primeConfigMapSecrets(secretResolver, configMap);
+                yield* mutator.reconcile(configMap);
+                if (changedProviders.size > 0) {
+                  const environments = yield* registry.listEnvironments;
+                  yield* Effect.forEach(
+                    environments.keys(),
+                    (instanceId) =>
+                      registry.rebuildInstanceWhen(instanceId, (entry) =>
+                        readsThroughSecretProvider(entry, changedProviders),
+                      ),
+                    { discard: true },
+                  );
+                }
+                // Committed last so a failed reconcile is retried on the next emission
+                // instead of being treated as already applied.
+                yield* Ref.set(secretProvidersRef, next.secretProviders);
+              }),
+            ),
             Effect.catchCause((cause) =>
               Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
             ),
@@ -167,6 +174,8 @@ export const layer: Layer.Layer<
   Effect.gen(function* () {
     const serverSettings = yield* Settings.ServerSettingsService;
     const secretResolver = yield* ProviderSecretResolver.ProviderSecretResolver;
+    // Subscribe before the seed read so saves during registry construction are queued.
+    const settingsChanges = yield* serverSettings.subscribeChanges;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -188,7 +197,7 @@ export const layer: Layer.Layer<
       Layer.provide(ProviderHostLive.layer),
     );
 
-    return layerSettingsWatcher(initialSettings?.secretProviders ?? {}).pipe(
+    return layerSettingsWatcher(settingsChanges, initialSettings?.secretProviders ?? {}).pipe(
       Layer.provideMerge(layerMutable),
     );
   }),
