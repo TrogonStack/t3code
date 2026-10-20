@@ -43,6 +43,15 @@ vi.mock(import("~/state/query"), async (original) => ({
   })) as never,
 }));
 
+// The first Mermaid render loads the library and its flowchart chunks, which took over
+// 10 seconds on a busy release runner. Pay that while the file loads, not inside a test.
+{
+  const { default: mermaid } = await import("mermaid");
+  mermaid.initialize({ startOnLoad: false });
+  await mermaid.render("mermaid-warmup", "flowchart LR\n  A --> B");
+  document.getElementById("dmermaid-warmup")?.remove();
+}
+
 const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const CREATED_AT = "2026-03-17T19:12:28.000Z";
 
@@ -215,10 +224,8 @@ describe("MessagesTimeline work rows", () => {
     );
     const row = screen.container.querySelector<HTMLElement>('[data-v2-item-type="file_change"]')!;
     const press = async (target: HTMLElement) => {
-      await act(async () => {
-        target.focus();
-        await userEvent.keyboard(key);
-      });
+      target.focus();
+      await userEvent.keyboard(key);
     };
     expect(row.getAttribute("aria-expanded")).toBe("false");
     await press(row);
