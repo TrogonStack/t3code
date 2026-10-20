@@ -3,6 +3,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   SecretProviderConfig,
+  EasDeviceHostConfig,
   type ServerSettings,
   UsageLimitSourceConfig,
   secretSettingsFields,
@@ -37,6 +38,7 @@ const secretProviderSecretFields = new Map(
     (member) => [member.fields.kind.literal, secretSettingsFields(member)] as const,
   ),
 );
+const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
 
 export interface SettingsSecret {
@@ -166,5 +168,23 @@ export function mapSettingsSecrets(
     ]),
   ) as ServerSettings["secretProviders"];
 
-  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources, secretProviders };
+  const easDeviceHosts = settings.easDeviceHosts.map(
+    (host) =>
+      mapFields(
+        host,
+        easDeviceHostSecretFields,
+        (field, serverHost) =>
+          `device-host-${encode(host.id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ) as EasDeviceHostConfig,
+  );
+
+  return {
+    ...settings,
+    providerInstances,
+    sourceControlHosts,
+    usageLimitSources,
+    secretProviders,
+    easDeviceHosts,
+  };
 }

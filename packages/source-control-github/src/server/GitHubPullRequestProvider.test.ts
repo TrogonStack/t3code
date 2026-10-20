@@ -29,6 +29,7 @@ const coreFields = {
     didAuthor: false,
     canAdminister: false,
     mergeCapabilities: { merge: true, squash: true, rebase: true },
+    autoMergeAllowed: true,
   },
 };
 
@@ -127,6 +128,7 @@ it.effect("advertises standalone branch deletion for source repository writers",
       didAuthor: false,
       canAdminister: false,
       canDeleteBranch: true,
+      autoMergeAllowed: true,
     };
     expect(gitHubViewerPermissions(access).actions).toContain("delete-branch");
     expect(
@@ -299,6 +301,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
         canAdminister: true,
         canTriage: true,
+        autoMergeAllowed: true,
       }),
     ).toEqual({
       actions: [
@@ -331,6 +334,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
         canAdminister: false,
         canTriage: true,
+        autoMergeAllowed: true,
       }).mergeBypass,
     ).toBe(false);
   });
@@ -343,6 +347,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
         canAdminister: false,
         canTriage: false,
+        autoMergeAllowed: true,
       }),
     ).toEqual({
       actions: [],
@@ -362,6 +367,7 @@ describe("gitHubViewerPermissions", () => {
       canUpdate: false,
       didAuthor: false,
       canAdminister: false,
+      autoMergeAllowed: true,
     });
     expect(permissions.labels).toBe(true);
     expect(permissions.requestReviewers).toBe(false);
@@ -376,6 +382,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: true,
         canAdminister: false,
         canTriage: false,
+        autoMergeAllowed: true,
       }),
     ).toEqual({
       actions: ["ready", "draft", "close", "reopen"],
@@ -586,6 +593,7 @@ describe("gitHubViewerPermissions", () => {
               canUpdate: true,
               didAuthor: false,
               mergeCapabilities: { merge: true, squash: true, rebase: true },
+              autoMergeAllowed: true,
             }),
         }),
       ),
@@ -686,6 +694,7 @@ it.effect("does not classify same-repository gates as fork workflow approvals", 
             canUpdate: true,
             didAuthor: false,
             mergeCapabilities: { merge: true, squash: true, rebase: true },
+            autoMergeAllowed: true,
           }),
       }),
     ),
@@ -734,6 +743,7 @@ it.effect("keeps an unsafe workflow approval scope visible as unknown", () =>
             canUpdate: true,
             didAuthor: false,
             mergeCapabilities: { merge: true, squash: true, rebase: true },
+            autoMergeAllowed: true,
           }),
       }),
     ),
@@ -774,6 +784,7 @@ it.effect("propagates workflow discovery rate limits", () =>
             canUpdate: true,
             didAuthor: false,
             mergeCapabilities: { merge: true, squash: true, rebase: true },
+            autoMergeAllowed: true,
           }),
       }),
     ),
@@ -788,6 +799,7 @@ describe("getViewerPermissions", () => {
     didAuthor: false,
     canAdminister: false,
     mergeCapabilities: { merge: true, squash: true, rebase: true },
+    autoMergeAllowed: true,
   };
 
   it.effect("checks fresh access without reading branch details for unrelated operations", () => {
