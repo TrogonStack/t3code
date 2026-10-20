@@ -43,13 +43,11 @@ vi.mock(import("~/state/query"), async (original) => ({
   })) as never,
 }));
 
-// The first Mermaid render loads the library and its flowchart chunks, which took over
+// The first Mermaid render loads the library and its flowchart chunk, which took over
 // 10 seconds on a busy release runner. Pay that while the file loads, not inside a test.
 {
-  const { default: mermaid } = await import("mermaid");
-  mermaid.initialize({ startOnLoad: false });
-  await mermaid.render("mermaid-warmup", "flowchart LR\n  A --> B");
-  document.getElementById("dmermaid-warmup")?.remove();
+  const pele = await import("pele/lazy");
+  await pele.load("flowchart");
 }
 
 const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
