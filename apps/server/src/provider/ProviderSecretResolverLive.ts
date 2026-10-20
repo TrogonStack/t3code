@@ -616,8 +616,8 @@ export const ProviderSecretResolverLive = Layer.effect(
         ),
     });
 
-    const check: ProviderSecretResolverShape["check"] = (source) =>
-      Effect.gen(function* () {
+    const check: ProviderSecretResolverShape["check"] = Effect.fn("ProviderSecretResolver.check")(
+      function* (source) {
         const reference = providerSecretReference(source);
         if (reference === undefined) {
           return { _tag: "Failed", detail: "This variable does not name a secret" } as const;
@@ -628,29 +628,31 @@ export const ProviderSecretResolverLive = Layer.effect(
         }
         yield* Cache.set(cache, reference, read.value);
         return { _tag: "Resolved" } as const;
-      });
+      },
+    );
 
-    const resolve: ProviderSecretResolverShape["resolve"] = (environment) =>
-      Effect.gen(function* () {
-        const resolved: Array<ResolvedProviderEnvironmentVariable> = [];
-        const unresolved: Array<string> = [];
-        for (const { name, value, sensitive } of environment ?? []) {
-          const reference = providerSecretReference(value);
-          if (reference === undefined) {
-            if (typeof value === "string") {
-              resolved.push({ name, value, sensitive });
-            }
-            continue;
+    const resolve: ProviderSecretResolverShape["resolve"] = Effect.fn(
+      "ProviderSecretResolver.resolve",
+    )(function* (environment) {
+      const resolved: Array<ResolvedProviderEnvironmentVariable> = [];
+      const unresolved: Array<string> = [];
+      for (const { name, value, sensitive } of environment ?? []) {
+        const reference = providerSecretReference(value);
+        if (reference === undefined) {
+          if (typeof value === "string") {
+            resolved.push({ name, value, sensitive });
           }
-          const secret = yield* Cache.get(cache, reference);
-          if (secret === undefined) {
-            unresolved.push(name);
-            continue;
-          }
-          resolved.push({ name, value: secret, sensitive: true });
+          continue;
         }
-        return { variables: resolved, unresolved };
-      });
+        const secret = yield* Cache.get(cache, reference);
+        if (secret === undefined) {
+          unresolved.push(name);
+          continue;
+        }
+        resolved.push({ name, value: secret, sensitive: true });
+      }
+      return { variables: resolved, unresolved };
+    });
 
     /**
      * `wanted` maps each `op://` reference to every cache key that reads it, so
@@ -712,8 +714,8 @@ export const ProviderSecretResolverLive = Layer.effect(
       }
     };
 
-    const prime: ProviderSecretResolverShape["prime"] = (references) =>
-      Effect.gen(function* () {
+    const prime: ProviderSecretResolverShape["prime"] = Effect.fn("ProviderSecretResolver.prime")(
+      function* (references) {
         // `op inject` reads every reference in its template from one account,
         // so a batch is one call per account.
         const onePasswordByAccount = new Map<
@@ -739,7 +741,9 @@ export const ProviderSecretResolverLive = Layer.effect(
           ([account, wanted]) => primeOnePassword(account, wanted),
           { discard: true },
         );
-      }).pipe(Effect.provideContext(primeContext));
+      },
+      Effect.provideContext(primeContext),
+    );
 
     const listOnePasswordAccounts: ProviderSecretResolverShape["listOnePasswordAccounts"] =
       readOnePasswordAccounts().pipe(
