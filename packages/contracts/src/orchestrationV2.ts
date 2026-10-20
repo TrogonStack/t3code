@@ -669,6 +669,7 @@ export const OrchestrationV2WorkflowAgent = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   queuedAt: Schema.optional(NonNegativeInt),
   startedAt: Schema.optional(NonNegativeInt),
+  completedAt: Schema.optional(NonNegativeInt),
   prompt: Schema.optional(Schema.NonEmptyString),
   result: Schema.optional(Schema.NonEmptyString),
 });
@@ -1132,6 +1133,7 @@ export const OrchestrationV2UserInputQuestion = Schema.Struct({
       label: TrimmedNonEmptyString,
       description: TrimmedNonEmptyString,
       value: Schema.optional(Schema.String),
+      preview: Schema.optional(Schema.String),
     }),
   ),
   multiSelect: Schema.optional(Schema.Boolean),
@@ -1825,6 +1827,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   activityRunStatus: Schema.optional(
     Schema.NullOr(Schema.Literals(["preparing", "starting", "running", "waiting"])),
   ),
+  blockedOnThreadWait: Schema.optional(Schema.Boolean),
   status: OrchestrationV2ShellThreadStatus,
   lastError: Schema.optional(Schema.NullOr(Schema.String)),
   lastErrorClass: Schema.optional(Schema.NullOr(OrchestrationV2ProviderFailureClass)),
