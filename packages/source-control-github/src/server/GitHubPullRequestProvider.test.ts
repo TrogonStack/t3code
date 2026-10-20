@@ -334,6 +334,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
         canAdminister: false,
         canTriage: true,
+        autoMergeAllowed: true,
       }).mergeBypass,
     ).toBe(false);
   });

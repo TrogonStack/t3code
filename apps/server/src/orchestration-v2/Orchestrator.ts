@@ -11924,7 +11924,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread.limitRecovery.resetAt === input.limitRecovery.resetAt
           )
             return;
-          yield* dispatchWithReceiptEffect({ type: "thread.metadata.update", ...input });
+          yield* dispatchWithReceiptEffect(
+            { type: "thread.metadata.update", ...input },
+            yield* Clock.currentTimeMillis,
+          );
         }),
       ),
     searchThreadStream: (input) =>

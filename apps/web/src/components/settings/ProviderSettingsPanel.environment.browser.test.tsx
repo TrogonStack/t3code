@@ -509,7 +509,7 @@ describe("EnvironmentProviderSettings routing", () => {
     state.checkSecretSource
       .mockResolvedValueOnce(AsyncResult.success({ _tag: "Failed", detail: "permission denied" }))
       .mockResolvedValueOnce(AsyncResult.success({ _tag: "Resolved" }));
-    await render({ targetInstanceId: customId });
+    await using _screen = await render(panel({ targetInstanceId: customId }));
 
     await userEvent.click(
       page.getByRole("button", { name: "Check secret for environment variable CODEX_TOKEN" }),
@@ -558,7 +558,7 @@ describe("EnvironmentProviderSettings routing", () => {
         [cursorId]: { driver: cursor, enabled: true, displayName: "Cursor Work" },
       },
     };
-    await render({ targetInstanceId: cursorId });
+    await using _screen = await render(panel({ targetInstanceId: cursorId }));
 
     await userEvent.click(page.getByRole("combobox", { name: "Cursor API key source" }));
     await userEvent.click(page.getByRole("option", { name: /Team vault/ }));

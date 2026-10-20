@@ -25,7 +25,6 @@ import {
   PullRequestOperationError,
   ProviderDriverKind,
   ProviderInstanceId,
-  ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
   RunId,
