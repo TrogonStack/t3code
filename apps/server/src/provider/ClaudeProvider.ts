@@ -224,6 +224,8 @@ const isConfiguredClaudeTokenRejected = Effect.fn("isConfiguredClaudeTokenReject
 // Amazon Bedrock initializes far slower than first-party auth: the SDK boots the Bedrock
 // backend and runs the `awsAuthRefresh` credential hook before returning account info.
 const CAPABILITIES_PROBE_TIMEOUT_MS = 25_000;
+// Native CLI startup on Windows can exceed the shared probe deadline.
+const CLAUDE_VERSION_CHECK_TIMEOUT_MS = 20_000;
 
 export const CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES = [
   "user",
@@ -547,7 +549,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ["--version"],
     resolvedEnvironment,
     cwd,
-  ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
+  ).pipe(Effect.timeoutOption(CLAUDE_VERSION_CHECK_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
@@ -653,7 +655,14 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  if (claudeAuthStatus(capabilities) === "unauthenticated") {
+  // First-party account fields cannot verify custom endpoint credentials.
+  const endpoint = URL.parse(resolvedEnvironment.ANTHROPIC_BASE_URL?.trim() ?? "");
+  const customApiEndpoint =
+    endpoint !== null &&
+    (endpoint.protocol === "http:" || endpoint.protocol === "https:") &&
+    endpoint.hostname !== "" &&
+    endpoint.hostname !== "api.anthropic.com";
+  if (!customApiEndpoint && claudeAuthStatus(capabilities) === "unauthenticated") {
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -694,7 +703,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeAuthMetadata({
       subscriptionType: capabilities.subscriptionType,
       authMethod: capabilities.tokenSource,
-    }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
+    }) ??
+    apiProviderAuthMetadata(capabilities.apiProvider) ??
+    (customApiEndpoint ? { type: "customEndpoint", label: "Custom API endpoint" } : undefined);
   const usageLimits = !capabilities.usage
     ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
     : scopedLimitNames
