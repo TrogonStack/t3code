@@ -3,6 +3,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { afterEach, assert, describe, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import * as ServerConfig from "../config.ts";
 import * as ResourceMonitorBinary from "./ResourceMonitorBinary.ts";
@@ -85,6 +86,39 @@ describe("ResourceMonitorBinary", () => {
 
       assert.instanceOf(error, ResourceMonitorBinary.ResourceMonitorBinaryNotExecutable);
       assert.equal(error.path, baseDir);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("looks for cargo build output from both the source and the bundled server layout", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-resource-monitor-binary-",
+      });
+      const service = yield* ResourceMonitorBinary.make().pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Architecture, "arm64"),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      const error = yield* Effect.flip(service.resolve);
+
+      assert.instanceOf(error, ResourceMonitorBinary.ResourceMonitorBinaryNotFound);
+      const candidates = (error as ResourceMonitorBinary.ResourceMonitorBinaryNotFound).candidates;
+      for (const crateRelative of [
+        "../../../../native/resource-monitor",
+        "../../../native/resource-monitor",
+      ]) {
+        const crateDirectory = path.resolve(import.meta.dirname, crateRelative);
+        for (const output of [
+          path.join("target", "aarch64-apple-darwin", "release"),
+          path.join("target", "release"),
+          path.join("target", "debug"),
+        ]) {
+          assert.include(candidates, path.join(crateDirectory, output, "t3-resource-monitor"));
+        }
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
