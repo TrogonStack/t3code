@@ -5028,6 +5028,7 @@ export default function ChatView(props: ChatViewProps) {
     now: new Date().toISOString(),
   }));
   if (snoozeClockState.shell !== activeThreadShell) {
+    // oxlint-disable-next-line react/purity -- the clock resyncs once per shell change, a stale value would misjudge the snooze
     setSnoozeClockState({ shell: activeThreadShell, now: new Date().toISOString() });
   }
   const snoozeClock = snoozeClockState.now;
@@ -6426,6 +6427,7 @@ export default function ChatView(props: ChatViewProps) {
         submission: {
           id: newMessageId(),
           command: trimmed,
+          // oxlint-disable-next-line react/purity -- read inside an event handler, not during render
           createdAt: new Date().toISOString(),
         },
         clearDraft: () => {
@@ -6618,6 +6620,7 @@ export default function ChatView(props: ChatViewProps) {
       composerAttachmentsSnapshot.map((attachment) => attachment.id),
     );
     const messageIdForSend = newMessageId();
+    // oxlint-disable-next-line react/purity -- read inside an event handler, not during render
     const messageCreatedAt = new Date().toISOString();
     // A stale Claude session compacts before this message so the turn does not re-read the
     // old history. The message queues behind the /compact run, since steering into it is
@@ -7443,6 +7446,7 @@ export default function ChatView(props: ChatViewProps) {
 
     const threadIdForSend = activeThread.id;
     const messageIdForSend = newMessageId();
+    // oxlint-disable-next-line react/purity -- read inside an event handler, not during render
     const messageCreatedAt = new Date().toISOString();
     const outgoingMessageText = formatOutgoingPrompt({
       provider: ctxSelectedProvider,
@@ -7576,6 +7580,7 @@ export default function ChatView(props: ChatViewProps) {
       selectedModelSelection: ctxSelectedModelSelection,
     } = sendCtx;
 
+    // oxlint-disable-next-line react/purity -- read inside an event handler, not during render
     const createdAt = new Date().toISOString();
     const nextThreadId = newThreadId();
     const planMarkdown = activeProposedPlan.planMarkdown;

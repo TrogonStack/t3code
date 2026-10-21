@@ -1081,6 +1081,7 @@ function SnoozeMenuButton(props: {
   timestampFormat: TimestampFormat;
 }) {
   const { open, onOpenChange, onSnooze, timestampFormat } = props;
+  // oxlint-disable-next-line react/purity -- presets are computed only while the menu is open, so each opening reads a fresh clock
   const presets = open ? resolveSnoozePresets(new Date(), timestampFormat) : [];
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -1887,6 +1888,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     now: new Date().toISOString(),
   }));
   if (snoozeGateClock.thread !== thread) {
+    // oxlint-disable-next-line react/purity -- the clock resyncs once per thread change, a stale value would misjudge the gate
     setSnoozeGateClock({ thread, now: new Date().toISOString() });
   }
   const snoozeGateNow = snoozeGateClock.now;
