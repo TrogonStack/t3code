@@ -80,10 +80,21 @@ function removeRunnerRecordIfUnchanged(desktopDir, text) {
   }
 }
 
+// The runner can exit on its own between inspection and each signal.
+function signalIfAlive(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
 async function terminate(pid) {
-  process.kill(pid, "SIGTERM");
+  signalIfAlive(pid, "SIGTERM");
   if (!(await waitForExit(pid, stopGracePeriodMs))) {
-    process.kill(pid, "SIGKILL");
+    signalIfAlive(pid, "SIGKILL");
     await waitForExit(pid, stopGracePeriodMs);
   }
 }
