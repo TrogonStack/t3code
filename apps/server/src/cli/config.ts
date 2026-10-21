@@ -424,22 +424,28 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     otel,
     "traces",
     { url: env.otlpTracesUrl, export: signalExport },
-    bootstrap?.otlpTracesUrl,
-    persistedObservabilitySettings.otlpTracesUrl,
+    {
+      bootstrapUrl: bootstrap?.otlpTracesUrl,
+      settingsUrl: persistedObservabilitySettings.otlpTracesUrl,
+    },
   );
   const metrics = OtelEnvironment.resolveSignalEndpoint(
     otel,
     "metrics",
     { url: env.otlpMetricsUrl, export: signalExport },
-    bootstrap?.otlpMetricsUrl,
-    persistedObservabilitySettings.otlpMetricsUrl,
+    {
+      bootstrapUrl: bootstrap?.otlpMetricsUrl,
+      settingsUrl: persistedObservabilitySettings.otlpMetricsUrl,
+    },
   );
   const logs = OtelEnvironment.resolveSignalEndpoint(
     otel,
     "logs",
     { url: env.otlpLogsUrl, export: signalExport },
-    bootstrap?.otlpLogsUrl,
-    persistedObservabilitySettings.otlpLogsUrl,
+    {
+      bootstrapUrl: bootstrap?.otlpLogsUrl,
+      settingsUrl: persistedObservabilitySettings.otlpLogsUrl,
+    },
   );
 
   const config: ServerConfig.ServerConfig["Service"] = {
@@ -455,6 +461,9 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     otlpTracesExport: traces?.export ?? signalExport,
     otlpMetricsExport: metrics?.export ?? signalExport,
     otlpLogsExport: logs?.export ?? signalExport,
+    ...(traces !== undefined ? { otlpTracesSource: traces.source } : {}),
+    ...(metrics !== undefined ? { otlpMetricsSource: metrics.source } : {}),
+    ...(logs !== undefined ? { otlpLogsSource: logs.source } : {}),
     otelEnvironment: otel,
     mode,
     port,

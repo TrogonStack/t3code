@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
+import type { OtlpEndpointSource } from "@t3tools/contracts";
 import packageJson from "../package.json" with { type: "json" };
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import {
@@ -65,6 +66,9 @@ export class ServerConfig extends Context.Service<
     readonly otlpTracesExport: SignalExport;
     readonly otlpMetricsExport: SignalExport;
     readonly otlpLogsExport: SignalExport;
+    readonly otlpTracesSource?: OtlpEndpointSource;
+    readonly otlpMetricsSource?: OtlpEndpointSource;
+    readonly otlpLogsSource?: OtlpEndpointSource;
     readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
     readonly port: number;
