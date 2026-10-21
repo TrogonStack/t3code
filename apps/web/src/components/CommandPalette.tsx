@@ -2566,6 +2566,7 @@ function OpenCommandPaletteDialog(props: {
       input: {
         projectId,
         title: inferProjectTitleFromPath(destinationPath),
+        // oxlint-disable-next-line react/purity -- read inside an event handler, not during render
         createdAt: new Date().toISOString(),
         remoteUrl: addProjectCloneFlow.remoteUrl,
         destinationPath,
