@@ -60,6 +60,8 @@ const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.tr
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 
+const initialParentPid = process.ppid;
+
 // Two runners in one checkout rebuild the same launcher bundle concurrently and kill each
 // other's Electron processes, so a new runner replaces the previous one.
 const { stoppedPid } = await stopPreviousRunner(desktopDir);
@@ -81,6 +83,11 @@ await waitForResources({
   tcpPort: port,
 });
 
+if (process.ppid !== initialParentPid) {
+  releaseRunnerRecord(desktopDir);
+  process.exit(0);
+}
+
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
 const devProtocolClient = resolveDevProtocolClient();
@@ -95,8 +102,8 @@ let currentApp = null;
 let restartQueue = Promise.resolve();
 const expectedExits = new WeakSet();
 const watchers = [];
+const failedApps = new WeakSet();
 const crashLoopBreaker = createCrashLoopBreaker();
-const initialParentPid = process.ppid;
 
 function killChildTreeByPid(pid, signal) {
   if (hostPlatform === "win32" || typeof pid !== "number") {
@@ -146,9 +153,7 @@ function startApp() {
       currentApp = null;
     }
 
-    if (!shuttingDown) {
-      scheduleRestart();
-    }
+    restartAfterFailure(app);
   });
 
   app.once("exit", (code, signal) => {
@@ -156,19 +161,28 @@ function startApp() {
       currentApp = null;
     }
 
-    const exitedAbnormally = signal !== null || code !== 0;
-    if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      if (crashLoopBreaker.recordAbnormalExit(Date.now()).tripped) {
-        console.error(
-          "[desktop-dev] Electron keeps crashing right after launch, so restarts are paused. " +
-            "Fix the problem and rebuild to try again, or run `mise run dev:desktop:reset` " +
-            "to rebuild the Electron bundle.",
-        );
-        return;
-      }
-      scheduleRestart();
+    if (signal !== null || code !== 0) {
+      restartAfterFailure(app);
     }
   });
+}
+
+// A spawn error can be followed by an exit event for the same child, so each child counts once.
+function restartAfterFailure(app) {
+  if (shuttingDown || expectedExits.has(app) || failedApps.has(app)) {
+    return;
+  }
+  failedApps.add(app);
+
+  if (crashLoopBreaker.recordAbnormalExit(Date.now()).tripped) {
+    console.error(
+      "[desktop-dev] Electron keeps crashing right after launch, so restarts are paused. " +
+        "Fix the problem and rebuild to try again, or run `mise run dev:desktop:reset` " +
+        "to rebuild the Electron bundle.",
+    );
+    return;
+  }
+  scheduleRestart();
 }
 
 async function stopApp() {

@@ -11,7 +11,7 @@ const stopPollIntervalMs = 100;
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 
-export function runnerRecordPath(desktopDir) {
+function runnerRecordPath(desktopDir) {
   return NodePath.join(desktopDir, ".electron-runtime", "runner.json");
 }
 

@@ -1,4 +1,4 @@
-export const RUNNER_SCRIPT_NAME = "dev-electron.mjs";
+const RUNNER_SCRIPT_NAME = "dev-electron.mjs";
 
 export function parseRunnerRecord(text) {
   let parsed;
@@ -11,11 +11,19 @@ export function parseRunnerRecord(text) {
   return Number.isInteger(pid) && pid > 1 ? { pid } : null;
 }
 
+function isRunnerCommand(command) {
+  const [executable = "", ...args] = command.trim().split(/\s+/);
+  const script = args.find((arg) => !arg.startsWith("-"));
+  return (
+    /^node(?:\.exe)?$/.test(executable.split(/[\\/]/).at(-1)) &&
+    script !== undefined &&
+    script.split(/[\\/]/).at(-1) === RUNNER_SCRIPT_NAME
+  );
+}
+
 export function isVerifiedRunner(processInfo, desktopDir) {
   return (
-    processInfo !== null &&
-    processInfo.command.includes(RUNNER_SCRIPT_NAME) &&
-    processInfo.cwd === desktopDir
+    processInfo !== null && isRunnerCommand(processInfo.command) && processInfo.cwd === desktopDir
   );
 }
 

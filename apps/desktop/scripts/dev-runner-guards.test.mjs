@@ -50,6 +50,13 @@ describe("takeover decision", () => {
     });
     assert.isFalse(isVerifiedRunner({ ...runner, cwd: null }, desktopDir));
   });
+
+  it("matches the runner by its node entry script, not by a substring", () => {
+    const at = (command) => isVerifiedRunner({ command, cwd: desktopDir }, desktopDir);
+    assert.isTrue(at("/usr/local/bin/node --enable-source-maps scripts/dev-electron.mjs"));
+    assert.isFalse(at("tail -f scripts/dev-electron.mjs"));
+    assert.isFalse(at("node scripts/dev-electron.mjs.bak"));
+  });
 });
 
 describe("crash loop breaker", () => {
