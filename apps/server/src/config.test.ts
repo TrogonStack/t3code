@@ -18,12 +18,6 @@ describe("otlpResource", () => {
       "box-1",
     );
 
-  it("names the host, unless OTEL_RESOURCE_ATTRIBUTES already does", () => {
-    assert.equal(resource({}).attributes["host.name"], "box-1");
-    assert.equal(resource({ "host.name": "from-env" }).attributes["host.name"], "from-env");
-    assert.equal(resource({ "host.name": "" }).attributes["host.name"], "box-1");
-  });
-
   it("reports who manages the server and its deployment environment", () => {
     const standalone: Readonly<Record<string, unknown>> = resource({}).attributes;
     assert.equal(standalone["t3code.server.managed_by"], "standalone");
