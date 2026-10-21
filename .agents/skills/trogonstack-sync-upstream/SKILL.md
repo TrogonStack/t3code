@@ -44,6 +44,10 @@ Default to upstream's shape and re-apply the fork's intent on top of it. Concret
 
 Record every nontrivial resolution decision as you go; each one becomes a PR body bullet.
 
+### Generated files
+
+- `apps/web/src/routeTree.gen.ts` is written by the TanStack router plugin whenever Vite runs, including the test suite in step 4. Accept git's merge result for it, and if the verification run rewrites it, commit the rewritten file. Never resolve it by hand and never restore the fork's copy to quiet a diff: the merge base then carries the stale content and every later sync keeps it, which is how the generator header went missing for a week.
+
 ### Migration rules (apps/server/src/persistence)
 
 - Upstream migrations sync as-is, keeping their own ids. `Migrations.ts` and every file under `apps/server/src/persistence/Migrations/` must stay byte-identical to upstream. If either conflicts during a sync, take upstream's side wholesale rather than hand-merging.
