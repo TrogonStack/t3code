@@ -8,6 +8,12 @@ import {
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
 } from "./electron-launcher.mjs";
+import {
+  claimRunnerRecord,
+  releaseRunnerRecord,
+  stopPreviousRunner,
+} from "./dev-runner-control.mjs";
+import { createCrashLoopBreaker } from "./dev-runner-guards.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
@@ -49,9 +55,18 @@ const watchedDirectories = [
 const forcedShutdownTimeoutMs = 1_500;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
+const orphanCheckIntervalMs = 1_000;
 const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.trim();
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
+
+// Two runners in one checkout rebuild the same launcher bundle concurrently and kill each
+// other's Electron processes, so a new runner replaces the previous one.
+const { stoppedPid } = await stopPreviousRunner(desktopDir);
+if (stoppedPid !== null) {
+  console.log(`[desktop-dev] stopped previous runner ${stoppedPid} for this checkout`);
+}
+claimRunnerRecord(desktopDir);
 
 NodeChildProcess.execFileSync(
   process.execPath,
@@ -80,6 +95,8 @@ let currentApp = null;
 let restartQueue = Promise.resolve();
 const expectedExits = new WeakSet();
 const watchers = [];
+const crashLoopBreaker = createCrashLoopBreaker();
+const initialParentPid = process.ppid;
 
 function killChildTreeByPid(pid, signal) {
   if (hostPlatform === "win32" || typeof pid !== "number") {
@@ -141,6 +158,14 @@ function startApp() {
 
     const exitedAbnormally = signal !== null || code !== 0;
     if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
+      if (crashLoopBreaker.recordAbnormalExit(Date.now()).tripped) {
+        console.error(
+          "[desktop-dev] Electron keeps crashing right after launch, so restarts are paused. " +
+            "Fix the problem and rebuild to try again, or run `mise run dev:desktop:reset` " +
+            "to rebuild the Electron bundle.",
+        );
+        return;
+      }
       scheduleRestart();
     }
   });
@@ -217,6 +242,7 @@ function startWatchers() {
           return;
         }
 
+        crashLoopBreaker.rearm();
         scheduleRestart();
       },
     );
@@ -248,6 +274,8 @@ async function shutdown(exitCode) {
     watcher.close();
   }
 
+  clearInterval(orphanCheck);
+  releaseRunnerRecord(desktopDir);
   await stopApp();
   killChildTree("TERM");
   await new Promise((resolve) => {
@@ -257,6 +285,12 @@ async function shutdown(exitCode) {
 
   process.exit(exitCode);
 }
+
+const orphanCheck = setInterval(() => {
+  if (process.ppid !== initialParentPid) {
+    void shutdown(0);
+  }
+}, orphanCheckIntervalMs);
 
 startWatchers();
 cleanupStaleDevApps();

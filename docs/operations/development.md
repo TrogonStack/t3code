@@ -25,6 +25,12 @@ The server also loads the native resource monitor, which a fresh checkout has no
 `mise run dev:desktop` installs dependencies, builds `native/resource-monitor`, and then starts
 `vp run dev:desktop`. The tasks live in `.config/mise/tasks`.
 
+The desktop runner keeps one instance per checkout: starting it stops a previous runner in the same
+checkout, and a runner exits when its parent process dies. If Electron crashes repeatedly right
+after launch, the runner pauses restarts until a watched file changes. `mise run dev:desktop:stop`
+stops the runner for the current checkout, and `mise run dev:desktop:reset` also deletes
+`apps/desktop/.electron-runtime` so the Electron bundle is rebuilt on the next start.
+
 Flags go directly after the task name, for example `vp run dev --home-dir /tmp/t3code-dev`.
 Add `--browser` to open a browser automatically.
 
