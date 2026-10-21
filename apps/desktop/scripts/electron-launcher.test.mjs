@@ -137,8 +137,7 @@ async function startupCleanupPattern(desktopDir) {
       NodeOS: { platform: () => "linux" },
       NodePath,
       desktopDir,
-      stopPreviousRunner: async () => ({ stoppedPid: null }),
-      claimRunnerRecord: () => undefined,
+      acquireRunnerRecord: async () => ({ claimed: true, stoppedPids: [] }),
       releaseRunnerRecord: () => undefined,
       createCrashLoopBreaker: () => ({
         recordAbnormalExit: () => ({ tripped: false }),

@@ -8,11 +8,7 @@ import {
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
 } from "./electron-launcher.mjs";
-import {
-  claimRunnerRecord,
-  releaseRunnerRecord,
-  stopPreviousRunner,
-} from "./dev-runner-control.mjs";
+import { acquireRunnerRecord, releaseRunnerRecord } from "./dev-runner-control.mjs";
 import { createCrashLoopBreaker } from "./dev-runner-guards.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
@@ -64,11 +60,17 @@ const initialParentPid = process.ppid;
 
 // Two runners in one checkout rebuild the same launcher bundle concurrently and kill each
 // other's Electron processes, so a new runner replaces the previous one.
-const { stoppedPid } = await stopPreviousRunner(desktopDir);
-if (stoppedPid !== null) {
+const claim = await acquireRunnerRecord(desktopDir);
+if (!claim.claimed) {
+  console.error(
+    `[desktop-dev] runner ${claim.unverifiablePid} may still own this checkout but its working ` +
+      "directory could not be verified. Stop it, or delete .electron-runtime/runner.json, then retry.",
+  );
+  process.exit(1);
+}
+for (const stoppedPid of claim.stoppedPids) {
   console.log(`[desktop-dev] stopped previous runner ${stoppedPid} for this checkout`);
 }
-claimRunnerRecord(desktopDir);
 
 NodeChildProcess.execFileSync(
   process.execPath,

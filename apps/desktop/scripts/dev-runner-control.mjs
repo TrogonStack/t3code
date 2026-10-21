@@ -7,6 +7,7 @@ import { decideTakeover, parseRunnerRecord } from "./dev-runner-guards.mjs";
 
 const stopGracePeriodMs = 4_000;
 const stopPollIntervalMs = 100;
+const maxClaimAttempts = 5;
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
@@ -15,12 +16,17 @@ function runnerRecordPath(desktopDir) {
   return NodePath.join(desktopDir, ".electron-runtime", "runner.json");
 }
 
-function readRunnerRecord(desktopDir) {
+function readRunnerRecordText(desktopDir) {
   try {
-    return parseRunnerRecord(NodeFS.readFileSync(runnerRecordPath(desktopDir), "utf8"));
+    return NodeFS.readFileSync(runnerRecordPath(desktopDir), "utf8");
   } catch {
     return null;
   }
+}
+
+function readRunnerRecord(desktopDir) {
+  const text = readRunnerRecordText(desktopDir);
+  return text === null ? null : parseRunnerRecord(text);
 }
 
 function readProcessCwd(pid) {
@@ -68,33 +74,85 @@ async function waitForExit(pid, timeoutMs) {
   return !isAlive(pid);
 }
 
-export async function stopPreviousRunner(desktopDir, selfPid = process.pid) {
-  if (hostPlatform === "win32") {
-    return { stoppedPid: null };
+function removeRunnerRecordIfUnchanged(desktopDir, text) {
+  if (readRunnerRecordText(desktopDir) === text) {
+    NodeFS.rmSync(runnerRecordPath(desktopDir), { force: true });
   }
+}
 
-  const record = readRunnerRecord(desktopDir);
+async function terminate(pid) {
+  process.kill(pid, "SIGTERM");
+  if (!(await waitForExit(pid, stopGracePeriodMs))) {
+    process.kill(pid, "SIGKILL");
+    await waitForExit(pid, stopGracePeriodMs);
+  }
+}
+
+async function clearRecordedRunner(desktopDir, selfPid) {
+  const text = readRunnerRecordText(desktopDir);
+  if (text === null) {
+    return { action: "none" };
+  }
+  const record = parseRunnerRecord(text);
   const decision = decideTakeover({
     record,
     selfPid,
     processInfo: record === null ? null : inspectProcess(record.pid),
     desktopDir,
   });
-  if (decision.action !== "stop") {
-    return { stoppedPid: null, refusedPid: decision.action === "refuse" ? decision.pid : null };
+  if (decision.action === "unverifiable") {
+    return decision;
   }
-
-  process.kill(decision.pid, "SIGTERM");
-  if (!(await waitForExit(decision.pid, stopGracePeriodMs))) {
-    process.kill(decision.pid, "SIGKILL");
-    await waitForExit(decision.pid, stopGracePeriodMs);
+  if (decision.action === "stop") {
+    await terminate(decision.pid);
   }
-  return { stoppedPid: decision.pid };
+  removeRunnerRecordIfUnchanged(desktopDir, text);
+  return decision;
 }
 
-export function claimRunnerRecord(desktopDir, pid = process.pid) {
-  NodeFS.mkdirSync(NodePath.dirname(runnerRecordPath(desktopDir)), { recursive: true });
-  NodeFS.writeFileSync(runnerRecordPath(desktopDir), `${JSON.stringify({ pid })}\n`);
+export async function stopRecordedRunner(desktopDir) {
+  if (hostPlatform === "win32") {
+    return { action: "unsupported" };
+  }
+  return clearRecordedRunner(desktopDir, 0);
+}
+
+// The record is published with link() so it appears atomically with its full contents and two
+// runners starting together cannot both believe they own the checkout.
+export async function acquireRunnerRecord(desktopDir, pid = process.pid) {
+  const recordPath = runnerRecordPath(desktopDir);
+  const contents = `${JSON.stringify({ pid })}\n`;
+  NodeFS.mkdirSync(NodePath.dirname(recordPath), { recursive: true });
+  if (hostPlatform === "win32") {
+    NodeFS.writeFileSync(recordPath, contents);
+    return { claimed: true, stoppedPids: [] };
+  }
+
+  const stagingPath = `${recordPath}.${pid}.tmp`;
+  NodeFS.writeFileSync(stagingPath, contents);
+  const stoppedPids = [];
+  try {
+    for (let attempt = 0; attempt < maxClaimAttempts; attempt += 1) {
+      try {
+        NodeFS.linkSync(stagingPath, recordPath);
+        return { claimed: true, stoppedPids };
+      } catch (error) {
+        if (error?.code !== "EEXIST") {
+          throw error;
+        }
+      }
+      const decision = await clearRecordedRunner(desktopDir, pid);
+      if (decision.action === "unverifiable") {
+        return { claimed: false, unverifiablePid: decision.pid };
+      }
+      if (decision.action === "stop") {
+        stoppedPids.push(decision.pid);
+      }
+    }
+    throw new Error(`another runner keeps claiming ${recordPath}`);
+  } finally {
+    NodeFS.rmSync(stagingPath, { force: true });
+  }
 }
 
 export function releaseRunnerRecord(desktopDir, pid = process.pid) {

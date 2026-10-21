@@ -39,13 +39,20 @@ describe("takeover decision", () => {
     assert.deepEqual(decide({ selfPid: 100 }), { action: "none" });
   });
 
-  it("refuses a reused pid that is not this checkout's runner", () => {
+  it("treats a pid reused by another process as a stale record", () => {
     assert.deepEqual(decide({ processInfo: { command: "sleep 30", cwd: desktopDir } }), {
-      action: "refuse",
+      action: "stale",
       pid: 100,
     });
     assert.deepEqual(decide({ processInfo: { ...runner, cwd: "/work/b/apps/desktop" } }), {
-      action: "refuse",
+      action: "stale",
+      pid: 100,
+    });
+  });
+
+  it("will not stop or replace a runner whose working directory is unknown", () => {
+    assert.deepEqual(decide({ processInfo: { ...runner, cwd: null } }), {
+      action: "unverifiable",
       pid: 100,
     });
     assert.isFalse(isVerifiedRunner({ ...runner, cwd: null }, desktopDir));

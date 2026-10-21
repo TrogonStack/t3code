@@ -27,15 +27,20 @@ export function isVerifiedRunner(processInfo, desktopDir) {
   );
 }
 
-// `processInfo` is null when the pid is not alive. A live pid that fails verification
-// is never signaled because the pid may have been reused by an unrelated process.
+// `processInfo` is null when the pid is not alive. Only a verified runner is signaled: a pid
+// running something else was reused, so its record is stale, while a runner whose working
+// directory cannot be read may belong to this checkout and must be neither signaled nor replaced.
 export function decideTakeover({ record, selfPid, processInfo, desktopDir }) {
   if (record === null || record.pid === selfPid || processInfo === null) {
     return { action: "none" };
   }
-  return isVerifiedRunner(processInfo, desktopDir)
-    ? { action: "stop", pid: record.pid }
-    : { action: "refuse", pid: record.pid };
+  if (isVerifiedRunner(processInfo, desktopDir)) {
+    return { action: "stop", pid: record.pid };
+  }
+  if (isRunnerCommand(processInfo.command) && processInfo.cwd === null) {
+    return { action: "unverifiable", pid: record.pid };
+  }
+  return { action: "stale", pid: record.pid };
 }
 
 export function createCrashLoopBreaker({ maxAbnormalExits = 3, windowMs = 10_000 } = {}) {
