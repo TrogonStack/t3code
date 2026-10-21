@@ -21,6 +21,10 @@ Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron cl
 `dev:server` and `dev:web` start those processes separately.
 See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.
 
+The server also loads the native resource monitor, which a fresh checkout has not built, so
+`mise run dev:desktop` installs dependencies, builds `native/resource-monitor`, and then starts
+`vp run dev:desktop`. The tasks live in `.config/mise/tasks`.
+
 Flags go directly after the task name, for example `vp run dev --home-dir /tmp/t3code-dev`.
 Add `--browser` to open a browser automatically.
 

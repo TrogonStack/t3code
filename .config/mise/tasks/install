@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Install workspace dependencies"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+vp i
