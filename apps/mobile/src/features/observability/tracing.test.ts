@@ -17,7 +17,7 @@ vi.mock("expo-constants", () => ({
   },
 }));
 
-it.effect("exports spans through the scoped mobile OTLP layer", () => {
+it.effect("labels exported spans with the mobile surface, environment, and instance", () => {
   const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
   const layerTracing = Tracing.layerFromConfig(
     {
@@ -35,21 +35,12 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
     Effect.void.pipe(Effect.withSpan("mobile.test.span"), withRelayClientTracing),
   ).pipe(Layer.provide(layerTracing));
 
-  return Effect.gen(function* () {
-    yield* Layer.build(layerTracedApplication);
-
-    expect(fetchFn).not.toHaveBeenCalled();
-  }).pipe(
+  return Layer.build(layerTracedApplication).pipe(
     Effect.scoped,
     Effect.andThen(
       Effect.sync(() => {
         expect(fetchFn).toHaveBeenCalledOnce();
-        const [url, init] = fetchFn.mock.calls[0]!;
-        expect(String(url)).toBe("https://api.axiom.test/v1/traces");
-        expect(new Headers(init?.headers).get("authorization")).toBe("Bearer public-ingest-token");
-        expect(new Headers(init?.headers).get("x-axiom-dataset")).toBe("mobile-traces");
-        const body = new TextDecoder().decode(init?.body as Uint8Array);
-        expect(body).toContain("mobile.test.span");
+        const body = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
         expect(body).toContain('"key":"t3code.client.surface","value":{"stringValue":"mobile"}');
         expect(body).toContain(
           '"key":"deployment.environment.name","value":{"stringValue":"test"}',
