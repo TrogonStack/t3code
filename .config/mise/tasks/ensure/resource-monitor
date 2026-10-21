@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Build the native resource monitor sidecar the server loads in dev"
+#MISE depends=["install"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+vp run build:resource-monitor

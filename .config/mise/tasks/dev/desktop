@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Install, build native prerequisites, then start the desktop dev runner"
-#MISE depends=["build:resource-monitor", "build:electron"]
+#MISE description="Install, build the resource monitor, then start the desktop dev runner"
+#MISE depends=["ensure:resource-monitor"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 vp run dev:desktop "$@"
