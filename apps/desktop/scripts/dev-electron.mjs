@@ -291,13 +291,15 @@ async function shutdown(exitCode) {
   }
 
   clearInterval(orphanCheck);
-  releaseRunnerRecord(desktopDir);
   await stopApp();
   killChildTree("TERM");
   await new Promise((resolve) => {
     setTimeout(resolve, childTreeGracePeriodMs);
   });
   killChildTree("KILL");
+  // Released only after teardown, because the teardown kills every Electron tagged with this
+  // checkout and would take down a replacement runner's app.
+  releaseRunnerRecord(desktopDir);
 
   process.exit(exitCode);
 }
