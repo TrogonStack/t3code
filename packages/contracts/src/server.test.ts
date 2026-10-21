@@ -216,6 +216,38 @@ describe("ServerObservability", () => {
 
     expect(parsed.otlpLogsEnabled).toBe(false);
     expect(parsed.otlpLogsUrl).toBeUndefined();
+    expect(parsed.otlpTracesSource).toBeUndefined();
+  });
+
+  it("reads where each running endpoint came from", () => {
+    const parsed = decodeServerObservability({
+      logsDirectoryPath: "/tmp/t3/logs",
+      localTracingEnabled: true,
+      otlpTracesUrl: "https://collector.example.com/v1/traces",
+      otlpTracesSource: "environment",
+      otlpTracesEnabled: true,
+      otlpMetricsUrl: "https://collector.example.com/v1/metrics",
+      otlpMetricsSource: "settings",
+      otlpMetricsEnabled: true,
+      otlpLogsEnabled: false,
+    });
+
+    expect(parsed.otlpTracesSource).toBe("environment");
+    expect(parsed.otlpMetricsSource).toBe("settings");
+    expect(parsed.otlpLogsSource).toBeUndefined();
+  });
+
+  it("rejects an unknown endpoint source", () => {
+    expect(() =>
+      decodeServerObservability({
+        logsDirectoryPath: "/tmp/t3/logs",
+        localTracingEnabled: true,
+        otlpTracesUrl: "https://collector.example.com/v1/traces",
+        otlpTracesSource: "cli",
+        otlpTracesEnabled: true,
+        otlpMetricsEnabled: false,
+      }),
+    ).toThrow();
   });
 });
 
