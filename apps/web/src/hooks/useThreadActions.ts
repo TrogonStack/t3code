@@ -706,7 +706,8 @@ export function useThreadActions() {
     }
     const resolved = resolveThreadTarget(target);
     const wokeAt = resolved
-      ? threadWokeAt(resolved.thread, { now: new Date().toISOString() })
+      ? // oxlint-disable-next-line react/purity -- read inside an async action, not during render
+        threadWokeAt(resolved.thread, { now: new Date().toISOString() })
       : null;
     const undoPlan = ThreadUndo.planThreadUndo("settle", resolved?.thread);
     // An older unpin/snooze Undo would re-pin or re-snooze, and the server
@@ -818,6 +819,7 @@ export function useThreadActions() {
       );
     }
     const resolved = resolveThreadTarget(target);
+    // oxlint-disable-next-line react/purity -- read inside an async action, not during render
     if (resolved && !canSnooze(resolved.thread, { now: new Date().toISOString() })) {
       return AsyncResult.failure(
         Cause.fail(
