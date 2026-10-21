@@ -62,9 +62,13 @@ const initialParentPid = process.ppid;
 // other's Electron processes, so a new runner replaces the previous one.
 const claim = await acquireRunnerRecord(desktopDir);
 if (!claim.claimed) {
+  const reason =
+    claim.blocker.action === "survived"
+      ? "did not exit after SIGKILL"
+      : "may still own this checkout but its working directory could not be verified";
   console.error(
-    `[desktop-dev] runner ${claim.unverifiablePid} may still own this checkout but its working ` +
-      "directory could not be verified. Stop it, or delete .electron-runtime/runner.json, then retry.",
+    `[desktop-dev] runner ${claim.blocker.pid} ${reason}. ` +
+      "Stop it, or delete .electron-runtime/runner.json, then retry.",
   );
   process.exit(1);
 }

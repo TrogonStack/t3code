@@ -22,6 +22,12 @@ switch (result.action) {
     );
     process.exitCode = 1;
     break;
+  case "survived":
+    console.error(
+      `[desktop-dev] runner ${result.pid} did not exit after SIGKILL; stop it manually`,
+    );
+    process.exitCode = 1;
+    break;
   case "unsupported":
     console.error(
       "[desktop-dev] stopping the runner is not supported on Windows; stop it manually",

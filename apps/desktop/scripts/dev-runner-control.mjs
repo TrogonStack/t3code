@@ -95,8 +95,9 @@ async function terminate(pid) {
   signalIfAlive(pid, "SIGTERM");
   if (!(await waitForExit(pid, stopGracePeriodMs))) {
     signalIfAlive(pid, "SIGKILL");
-    await waitForExit(pid, stopGracePeriodMs);
+    return waitForExit(pid, stopGracePeriodMs);
   }
+  return true;
 }
 
 async function clearRecordedRunner(desktopDir, selfPid) {
@@ -114,8 +115,8 @@ async function clearRecordedRunner(desktopDir, selfPid) {
   if (decision.action === "unverifiable") {
     return decision;
   }
-  if (decision.action === "stop") {
-    await terminate(decision.pid);
+  if (decision.action === "stop" && !(await terminate(decision.pid))) {
+    return { action: "survived", pid: decision.pid };
   }
   removeRunnerRecordIfUnchanged(desktopDir, text);
   return decision;
@@ -153,8 +154,8 @@ export async function acquireRunnerRecord(desktopDir, pid = process.pid) {
         }
       }
       const decision = await clearRecordedRunner(desktopDir, pid);
-      if (decision.action === "unverifiable") {
-        return { claimed: false, unverifiablePid: decision.pid };
+      if (decision.action === "unverifiable" || decision.action === "survived") {
+        return { claimed: false, blocker: decision };
       }
       if (decision.action === "stop") {
         stoppedPids.push(decision.pid);
