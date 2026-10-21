@@ -43,6 +43,13 @@ vi.mock(import("~/state/query"), async (original) => ({
   })) as never,
 }));
 
+// The first Mermaid render loads the library and its flowchart chunk, which took over
+// 10 seconds on a busy release runner. Pay that while the file loads, not inside a test.
+{
+  const pele = await import("pele/lazy");
+  await pele.load("flowchart");
+}
+
 const ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const CREATED_AT = "2026-03-17T19:12:28.000Z";
 
@@ -215,10 +222,8 @@ describe("MessagesTimeline work rows", () => {
     );
     const row = screen.container.querySelector<HTMLElement>('[data-v2-item-type="file_change"]')!;
     const press = async (target: HTMLElement) => {
-      await act(async () => {
-        target.focus();
-        await userEvent.keyboard(key);
-      });
+      target.focus();
+      await userEvent.keyboard(key);
     };
     expect(row.getAttribute("aria-expanded")).toBe("false");
     await press(row);
