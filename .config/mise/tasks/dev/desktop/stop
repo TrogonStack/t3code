@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Stop this checkout's desktop dev runner"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+node apps/desktop/scripts/stop-dev-electron.mjs

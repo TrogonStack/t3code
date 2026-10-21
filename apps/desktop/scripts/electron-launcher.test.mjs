@@ -12,6 +12,7 @@ import {
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
   resolveMacLauncherPaths,
+  resolveWorktreeLabel,
   writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
@@ -136,6 +137,14 @@ async function startupCleanupPattern(desktopDir) {
       NodeOS: { platform: () => "linux" },
       NodePath,
       desktopDir,
+      acquireRunnerRecord: async () => ({ claimed: true, stoppedPids: [] }),
+      releaseRunnerRecord: () => undefined,
+      createCrashLoopBreaker: () => ({
+        recordAbnormalExit: () => ({ tripped: false }),
+        rearm: () => undefined,
+      }),
+      setInterval: () => 0,
+      clearInterval: () => undefined,
       resolveDevProtocolClient: () => null,
       resolveElectronLaunchCommand: (args) => ({ electronPath: "electron", args }),
       waitForResources: async () => undefined,
@@ -143,6 +152,7 @@ async function startupCleanupPattern(desktopDir) {
       process: {
         env: { VITE_DEV_SERVER_URL: "http://localhost:1234" },
         execPath: "node",
+        ppid: 1,
         once: () => undefined,
       },
     },
@@ -206,4 +216,13 @@ it
       }),
     );
   }
+});
+
+describe("worktree dock label", () => {
+  it("drops the checkout prefix and keeps the distinguishing name", () => {
+    assert.equal(resolveWorktreeLabel("t3code-wt-secret-management"), "secret-management");
+    assert.equal(resolveWorktreeLabel("t3code-feature-x"), "feature-x");
+    assert.equal(resolveWorktreeLabel("scratch"), "scratch");
+    assert.equal(resolveWorktreeLabel("t3code-"), "t3code-");
+  });
 });

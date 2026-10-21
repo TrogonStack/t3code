@@ -8,6 +8,8 @@ import {
   resolveDevProtocolClient,
   resolveElectronLaunchCommand,
 } from "./electron-launcher.mjs";
+import { acquireRunnerRecord, releaseRunnerRecord } from "./dev-runner-control.mjs";
+import { createCrashLoopBreaker } from "./dev-runner-guards.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
@@ -49,9 +51,30 @@ const watchedDirectories = [
 const forcedShutdownTimeoutMs = 1_500;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
+const orphanCheckIntervalMs = 1_000;
 const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.trim();
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
+
+const initialParentPid = process.ppid;
+
+// Two runners in one checkout rebuild the same launcher bundle concurrently and kill each
+// other's Electron processes, so a new runner replaces the previous one.
+const claim = await acquireRunnerRecord(desktopDir);
+if (!claim.claimed) {
+  const reason =
+    claim.blocker.action === "survived"
+      ? "did not exit after SIGKILL"
+      : "may still own this checkout but its working directory could not be verified";
+  console.error(
+    `[desktop-dev] runner ${claim.blocker.pid} ${reason}. ` +
+      "Stop it, or delete .electron-runtime/runner.json, then retry.",
+  );
+  process.exit(1);
+}
+for (const stoppedPid of claim.stoppedPids) {
+  console.log(`[desktop-dev] stopped previous runner ${stoppedPid} for this checkout`);
+}
 
 NodeChildProcess.execFileSync(
   process.execPath,
@@ -65,6 +88,11 @@ await waitForResources({
   tcpHost: devServer.hostname,
   tcpPort: port,
 });
+
+if (process.ppid !== initialParentPid) {
+  releaseRunnerRecord(desktopDir);
+  process.exit(0);
+}
 
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -80,6 +108,8 @@ let currentApp = null;
 let restartQueue = Promise.resolve();
 const expectedExits = new WeakSet();
 const watchers = [];
+const failedApps = new WeakSet();
+const crashLoopBreaker = createCrashLoopBreaker();
 
 function killChildTreeByPid(pid, signal) {
   if (hostPlatform === "win32" || typeof pid !== "number") {
@@ -129,9 +159,7 @@ function startApp() {
       currentApp = null;
     }
 
-    if (!shuttingDown) {
-      scheduleRestart();
-    }
+    restartAfterFailure(app);
   });
 
   app.once("exit", (code, signal) => {
@@ -139,11 +167,28 @@ function startApp() {
       currentApp = null;
     }
 
-    const exitedAbnormally = signal !== null || code !== 0;
-    if (!shuttingDown && !expectedExits.has(app) && exitedAbnormally) {
-      scheduleRestart();
+    if (signal !== null || code !== 0) {
+      restartAfterFailure(app);
     }
   });
+}
+
+// A spawn error can be followed by an exit event for the same child, so each child counts once.
+function restartAfterFailure(app) {
+  if (shuttingDown || expectedExits.has(app) || failedApps.has(app)) {
+    return;
+  }
+  failedApps.add(app);
+
+  if (crashLoopBreaker.recordAbnormalExit(Date.now()).tripped) {
+    console.error(
+      "[desktop-dev] Electron keeps crashing right after launch, so restarts are paused. " +
+        "Fix the problem and rebuild to try again, or run `mise run dev:desktop:reset` " +
+        "to rebuild the Electron bundle.",
+    );
+    return;
+  }
+  scheduleRestart();
 }
 
 async function stopApp() {
@@ -217,6 +262,7 @@ function startWatchers() {
           return;
         }
 
+        crashLoopBreaker.rearm();
         scheduleRestart();
       },
     );
@@ -248,15 +294,25 @@ async function shutdown(exitCode) {
     watcher.close();
   }
 
+  clearInterval(orphanCheck);
   await stopApp();
   killChildTree("TERM");
   await new Promise((resolve) => {
     setTimeout(resolve, childTreeGracePeriodMs);
   });
   killChildTree("KILL");
+  // Released only after teardown, because the teardown kills every Electron tagged with this
+  // checkout and would take down a replacement runner's app.
+  releaseRunnerRecord(desktopDir);
 
   process.exit(exitCode);
 }
+
+const orphanCheck = setInterval(() => {
+  if (process.ppid !== initialParentPid) {
+    void shutdown(0);
+  }
+}, orphanCheckIntervalMs);
 
 startWatchers();
 cleanupStaleDevApps();

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Stop this checkout's desktop dev runner and delete its Electron bundle so the next start rebuilds it"
+#MISE depends=["dev:desktop:stop"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+rm -rf apps/desktop/.electron-runtime
+echo "[desktop-dev] removed apps/desktop/.electron-runtime"

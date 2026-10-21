@@ -13,12 +13,30 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
+export function resolveWorktreeLabel(folderName) {
+  return folderName.replace(/^t3code-(?:wt-)?/, "") || folderName;
+}
+
+function isLinkedWorktree() {
+  try {
+    return NodeFS.statSync(NodePath.join(repoRoot, ".git")).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Beta)";
+// Only the Dock and app switcher label differs. The bundle path, executable names, bundle id and
+// the app's own name and userData are derived from the fixed names above.
+const APP_DOCK_NAME =
+  isDevelopment && isLinkedWorktree()
+    ? `T3 Code (Dev \u00b7 ${resolveWorktreeLabel(NodePath.basename(repoRoot))})`
+    : APP_DISPLAY_NAME;
 const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 20;
+const LAUNCHER_VERSION = 21;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -262,8 +280,8 @@ function ensureMacIconIcns(runtimeDir) {
 
 function resolveMacBundleInfoPlistStrings(executableName) {
   return {
-    CFBundleDisplayName: APP_DISPLAY_NAME,
-    CFBundleName: APP_DISPLAY_NAME,
+    CFBundleDisplayName: APP_DOCK_NAME,
+    CFBundleName: APP_DOCK_NAME,
     CFBundleIdentifier: APP_BUNDLE_ID,
     CFBundleExecutable: executableName,
     CFBundleIconFile: "icon.icns",
@@ -361,6 +379,7 @@ function buildMacLauncher(electronBinaryPath) {
     sourceAppMtimeMs: NodeFS.statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: NodeFS.statSync(iconPath).mtimeMs,
     appBundleId: APP_BUNDLE_ID,
+    appDockName: APP_DOCK_NAME,
     appProtocolSchemes: APP_PROTOCOL_SCHEMES,
   };
 
