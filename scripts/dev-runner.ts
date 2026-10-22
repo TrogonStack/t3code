@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import * as NodeOS from "node:os";
+import * as NodeSqlite from "node:sqlite";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -179,6 +180,15 @@ export class DevRunnerProcessExitError extends Schema.TaggedError<DevRunnerProce
 ) {
   override get message(): string {
     return `Dev-runner process exited with code ${this.exitCode} in mode "${this.mode}".`;
+  }
+}
+
+export class DevRunnerStateDirOwnedError extends Schema.TaggedError<DevRunnerStateDirOwnedError>()(
+  "DevRunnerStateDirOwnedError",
+  { stateDir: Schema.String },
+) {
+  override get message(): string {
+    return `A T3 Code server already owns ${this.stateDir}. Stop that server, or pass --home-dir to use a separate T3 home, then retry. Nothing was started.`;
   }
 }
 
@@ -680,6 +690,31 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
   }
 });
 
+/**
+ * Mirrors the server's ownership lock (apps/server/src/serverOwnership.ts).
+ * A refused server under `node --watch` leaves its watcher alive, and the
+ * next file change restarts it into a race with the running owner.
+ */
+const isStateDirOwned = Effect.fn("dev-runner.isStateDirOwned")(function* (stateDir: string) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const lockPath = path.join(stateDir, "server-owner.sqlite");
+  if (!(yield* fs.exists(lockPath).pipe(Effect.orElseSucceed(() => false)))) return false;
+  return yield* Effect.sync(() => {
+    const db = new NodeSqlite.DatabaseSync(lockPath);
+    try {
+      db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
+      db.exec("ROLLBACK;");
+      return false;
+    } catch (cause) {
+      if (cause instanceof Error && "errcode" in cause && cause.errcode === 5) return true;
+      throw cause;
+    } finally {
+      db.close();
+    }
+  });
+});
+
 interface DevRunnerCliInput {
   readonly mode: DevMode;
   readonly t3Home: string | undefined;
@@ -771,6 +806,19 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
   yield* Effect.logInfo(
     `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
   );
+
+  // Mirrors the server's deriveServerPaths: an explicit home uses userdata.
+  const stateDir = (yield* Path.Path).join(
+    baseDir,
+    env.T3CODE_HOME === undefined ? "dev" : "userdata",
+  );
+  if (
+    !input.dryRun &&
+    (input.mode === "dev" || input.mode === "dev:server") &&
+    (yield* isStateDirOwned(stateDir))
+  ) {
+    return yield* new DevRunnerStateDirOwnedError({ stateDir });
+  }
 
   // Before the share block: --dry-run only resolves and prints. Sharing would
   // replace, then tear down, whatever mapping the port already had — a

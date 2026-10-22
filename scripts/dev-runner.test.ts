@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 import * as NetService from "@t3tools/shared/Net";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
@@ -392,6 +393,46 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.ok(!error.message.includes(cause.message));
         assert.notProperty(error, "args");
         assert.notInclude(error.message, "secret-token-value");
+      });
+    });
+
+    // The server's `node --watch` parent outlives a refused start, and its next
+    // restart races the running owner for the lock, so refusal must happen
+    // before anything is spawned.
+    it.effect("refuses to start when another server owns the state directory", () => {
+      let spawned = false;
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => {
+          spawned = true;
+          return Effect.succeed(mockProcess(0));
+        }),
+      );
+
+      return Effect.gen(function* () {
+        const t3Home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-dev-owner-"));
+        const stateDir = NodePath.join(t3Home, "userdata");
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        const owner = new NodeSqlite.DatabaseSync(NodePath.join(stateDir, "server-owner.sqlite"));
+        owner.exec("BEGIN EXCLUSIVE;");
+
+        const error = yield* runDevRunnerWithInput({ ...devServerInput, t3Home }).pipe(
+          Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.flip,
+          Effect.ensuring(
+            Effect.sync(() => {
+              owner.close();
+              NodeFS.rmSync(t3Home, { recursive: true, force: true });
+            }),
+          ),
+        );
+
+        if (error._tag !== "DevRunnerStateDirOwnedError") {
+          assert.fail(`Unexpected error: ${error._tag}`);
+        }
+        assert.equal(error.stateDir, stateDir);
+        assert.isFalse(spawned);
       });
     });
 
