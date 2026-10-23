@@ -17,6 +17,7 @@ export type OtelSignal = Data.TaggedEnum<{
   Off: {};
   Export: {
     readonly url: string;
+    readonly variable: string;
     readonly protocol: OtlpProtocol;
     readonly headers: Readonly<Record<string, string>> | undefined;
   };
@@ -241,6 +242,7 @@ const endpointSignal = (name: OtlpSignalName, own: Settings, generic: Settings):
   return {
     signal: OtelSignal.Export({
       url: url.toString(),
+      variable: ownEndpoint ? `OTEL_EXPORTER_OTLP_${name}_ENDPOINT` : "OTEL_EXPORTER_OTLP_ENDPOINT",
       protocol: protocol.value ?? "http/protobuf",
       headers: headers.value,
     }),
@@ -336,6 +338,8 @@ export interface SignalEndpoint {
   readonly url: string;
   readonly export: SignalExport;
   readonly source: OtlpEndpointSource;
+  /** The environment variable that set the endpoint, when `source` is `environment`. */
+  readonly variable?: string;
 }
 
 export const resolveSignalEndpoint = (
@@ -349,13 +353,19 @@ export const resolveSignalEndpoint = (
   }
   const t3Url = blankAsUnset(t3.url);
   if (t3Url !== undefined) {
-    return { url: t3Url, export: t3.export, source: "environment" };
+    return {
+      url: t3Url,
+      export: t3.export,
+      source: "environment",
+      variable: `T3CODE_OTLP_${signal.toUpperCase()}_URL`,
+    };
   }
   return OtelSignal.$match(otel[signal], {
-    Export: ({ url, protocol, headers }): SignalEndpoint => ({
+    Export: ({ url, variable, protocol, headers }): SignalEndpoint => ({
       url,
       export: { protocol, headers, exportIntervalMs: t3.export.exportIntervalMs },
       source: "environment",
+      variable,
     }),
     Off: () => undefined,
     Unset: (): SignalEndpoint | undefined => {

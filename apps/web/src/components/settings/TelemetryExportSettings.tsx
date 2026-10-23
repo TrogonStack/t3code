@@ -14,9 +14,27 @@ import { SettingsSection } from "./settingsLayout";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
 
 const SIGNALS = [
-  { key: "otlpTracesUrl", sourceKey: "otlpTracesSource", label: "Traces", signal: "traces" },
-  { key: "otlpMetricsUrl", sourceKey: "otlpMetricsSource", label: "Metrics", signal: "metrics" },
-  { key: "otlpLogsUrl", sourceKey: "otlpLogsSource", label: "Logs", signal: "logs" },
+  {
+    key: "otlpTracesUrl",
+    sourceKey: "otlpTracesSource",
+    variableKey: "otlpTracesVariable",
+    label: "Traces",
+    signal: "traces",
+  },
+  {
+    key: "otlpMetricsUrl",
+    sourceKey: "otlpMetricsSource",
+    variableKey: "otlpMetricsVariable",
+    label: "Metrics",
+    signal: "metrics",
+  },
+  {
+    key: "otlpLogsUrl",
+    sourceKey: "otlpLogsSource",
+    variableKey: "otlpLogsVariable",
+    label: "Logs",
+    signal: "logs",
+  },
 ] as const;
 
 type SignalDescriptor = (typeof SIGNALS)[number];
@@ -26,12 +44,12 @@ const OVERRIDE_LABELS = { environment: "Set by environment", bootstrap: "Set by 
 
 function runningOverride(
   running: ServerObservability | undefined,
-  { key, sourceKey }: SignalDescriptor,
+  { key, sourceKey, variableKey }: SignalDescriptor,
 ) {
   const url = running?.[key];
   const source = running?.[sourceKey];
   if (url === undefined || (source !== "environment" && source !== "bootstrap")) return undefined;
-  return { url, label: OVERRIDE_LABELS[source] };
+  return { url, label: OVERRIDE_LABELS[source], variable: running?.[variableKey] };
 }
 
 type EndpointCheck = { readonly url: string; readonly result: OtlpEndpointCheckResult | null };
@@ -213,9 +231,15 @@ function TelemetryExportForm() {
                   </Button>
                 )}
               </div>
-              {saved[key] !== (running?.[key] ?? "") && (
+              {(saved[key] !== (running?.[key] ?? "") || override?.variable) && (
                 <p className="break-all text-xs text-muted-foreground">
                   Running: {running?.[key] || "Disabled"}
+                  {override?.variable && (
+                    <>
+                      {" "}
+                      from <code className="font-mono">{override.variable}</code>
+                    </>
+                  )}
                 </p>
               )}
             </div>

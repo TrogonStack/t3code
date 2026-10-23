@@ -67,8 +67,11 @@ export class ServerConfig extends Context.Service<
     readonly otlpMetricsExport: SignalExport;
     readonly otlpLogsExport: SignalExport;
     readonly otlpTracesSource?: OtlpEndpointSource;
+    readonly otlpTracesVariable?: string;
     readonly otlpMetricsSource?: OtlpEndpointSource;
+    readonly otlpMetricsVariable?: string;
     readonly otlpLogsSource?: OtlpEndpointSource;
+    readonly otlpLogsVariable?: string;
     readonly otelEnvironment: OtelEnvironment.OtelEnvironment;
     readonly mode: RuntimeMode;
     readonly port: number;

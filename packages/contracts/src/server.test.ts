@@ -81,6 +81,7 @@ describe("ServerObservability", () => {
       localTracingEnabled: true,
       otlpTracesUrl: "https://collector.example.com/v1/traces",
       otlpTracesSource: "environment",
+      otlpTracesVariable: "OTEL_EXPORTER_OTLP_ENDPOINT",
       otlpTracesEnabled: true,
       otlpMetricsUrl: "https://collector.example.com/v1/metrics",
       otlpMetricsSource: "settings",
@@ -89,6 +90,7 @@ describe("ServerObservability", () => {
     });
 
     expect(parsed.otlpTracesSource).toBe("environment");
+    expect(parsed.otlpTracesVariable).toBe("OTEL_EXPORTER_OTLP_ENDPOINT");
     expect(parsed.otlpMetricsSource).toBe("settings");
     expect(parsed.otlpLogsSource).toBeUndefined();
   });
