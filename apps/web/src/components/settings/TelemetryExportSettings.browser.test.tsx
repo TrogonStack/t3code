@@ -109,6 +109,7 @@ describe("TelemetryExportSettings", () => {
         localTracingEnabled: true,
         otlpTracesUrl: "http://collector/v1/traces",
         otlpTracesSource: "environment",
+        otlpTracesVariable: "OTEL_EXPORTER_OTLP_ENDPOINT",
         otlpTracesEnabled: true,
         otlpMetricsEnabled: false,
         otlpLogsEnabled: false,
@@ -118,6 +119,11 @@ describe("TelemetryExportSettings", () => {
 
     await expect
       .element(screen.getByText("Set by environment · Connected · 12 ms"))
+      .toBeInTheDocument();
+    await expect
+      .element(
+        screen.getByText("Running: http://collector/v1/traces from OTEL_EXPORTER_OTLP_ENDPOINT"),
+      )
       .toBeInTheDocument();
     expect(checkOtlpEndpoint).toHaveBeenCalledExactlyOnceWith({
       environmentId: "env",

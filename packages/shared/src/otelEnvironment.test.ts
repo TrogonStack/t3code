@@ -220,6 +220,24 @@ describe("OtelEnvironment", () => {
     );
   });
 
+  it.effect("names the variable each signal's endpoint came from", () =>
+    Effect.gen(function* () {
+      const otel = yield* load({
+        OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector:4318",
+        OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "https://tempo:4318/v1/traces",
+      });
+      const variableOf = (signal: OtelEnvironment.OtelSignal) =>
+        OtelEnvironment.OtelSignal.$match(signal, {
+          Export: ({ variable }) => variable,
+          Off: () => undefined,
+          Unset: () => undefined,
+        });
+      assert.strictEqual(variableOf(otel.traces), "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT");
+      assert.strictEqual(variableOf(otel.metrics), "OTEL_EXPORTER_OTLP_ENDPOINT");
+      assert.strictEqual(variableOf(otel.logs), "OTEL_EXPORTER_OTLP_ENDPOINT");
+    }),
+  );
+
   describe("resolveSignalEndpoint", () => {
     const t3Export = {
       protocol: "http/json",
@@ -233,6 +251,7 @@ describe("OtelEnvironment", () => {
     });
     const otelExport = OtelEnvironment.OtelSignal.Export({
       url: "http://otel:4318/v1/logs",
+      variable: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
       protocol: "http/protobuf",
       headers: { "x-key": "otel" },
     });
@@ -245,6 +264,7 @@ describe("OtelEnvironment", () => {
           url: "http://t3:4318/v1/logs",
           export: t3Export,
           source: "environment" as const,
+          variable: "T3CODE_OTLP_LOGS_URL",
         },
       },
       {
@@ -259,6 +279,7 @@ describe("OtelEnvironment", () => {
             exportIntervalMs: 5_000,
           },
           source: "environment" as const,
+          variable: "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
         },
       },
       {
@@ -399,6 +420,7 @@ describe("isRelayTracingEnabled", () => {
         otel.traces,
         OtelEnvironment.OtelSignal.Export({
           url: env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
+          variable: "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
           protocol: "http/protobuf",
           headers: undefined,
         }),
