@@ -89,37 +89,49 @@ describe("ResourceMonitorBinary", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("looks for cargo build output from both the source and the bundled server layout", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-resource-monitor-binary-",
-      });
-      const service = yield* ResourceMonitorBinary.make().pipe(
-        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
-        Effect.provideService(HostProcess.Platform, "darwin"),
-        Effect.provideService(HostProcess.Architecture, "arm64"),
-        Effect.provideService(HostProcess.Environment, {}),
-      );
-      const error = yield* Effect.flip(service.resolve);
+  it.effect.each(["release", "debug"])(
+    "resolves a cargo %s binary from the built server layout",
+    (profile) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-resource-monitor-binary-",
+        });
+        const projectDirectory = path.join(baseDir, "repo");
+        const distDirectory = path.join(projectDirectory, "apps", "server", "dist");
+        const binaryDirectory = path.join(
+          projectDirectory,
+          "native",
+          "resource-monitor",
+          "target",
+          profile,
+        );
+        const binaryPath = path.join(binaryDirectory, "t3-resource-monitor.exe");
+        yield* fileSystem.makeDirectory(distDirectory, { recursive: true });
+        yield* fileSystem.makeDirectory(binaryDirectory, { recursive: true });
+        yield* fileSystem.writeFileString(binaryPath, "binary");
+        yield* fileSystem.chmod(binaryPath, 0o755);
 
-      assert.instanceOf(error, ResourceMonitorBinary.ResourceMonitorBinaryNotFound);
-      const candidates = (error as ResourceMonitorBinary.ResourceMonitorBinaryNotFound).candidates;
-      for (const crateRelative of [
-        "../../../../native/resource-monitor",
-        "../../../native/resource-monitor",
-      ]) {
-        const crateDirectory = path.resolve(import.meta.dirname, crateRelative);
-        for (const output of [
-          path.join("target", "aarch64-apple-darwin", "release"),
-          path.join("target", "release"),
-          path.join("target", "debug"),
-        ]) {
-          assert.include(candidates, path.join(crateDirectory, output, "t3-resource-monitor"));
-        }
-      }
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+        const service = yield* ResourceMonitorBinary.make().pipe(
+          // The bundled module lives in dist rather than src/resourceTelemetry.
+          Effect.provideService(Path.Path, {
+            ...path,
+            resolve: (...segments) =>
+              path.resolve(
+                ...segments.map((segment) =>
+                  segment === import.meta.dirname ? distDirectory : segment,
+                ),
+              ),
+          }),
+          Effect.provide(ServerConfig.layerTest(projectDirectory, baseDir)),
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(HostProcess.Architecture, "arm64"),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+
+        assert.equal(yield* service.resolve, binaryPath);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("rejects bundled glibc binaries on musl Linux hosts", () =>
