@@ -116,6 +116,7 @@ export const otlpResource = (
     "service.namespace": "t3code",
     "t3code.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
     ...nodeProcessResourceAttributes({
+      version: packageJson.version,
       operatorAttributes: config.otelEnvironment.resourceAttributes,
       isDevelopment: config.devUrl !== undefined,
     }),

@@ -11,12 +11,16 @@
   `t3code.server.managed_by`.
 - Query every T3 Code signal with the resource attributes a collector,
   dashboard, or vendor already understands: `service.version`,
-  `service.instance.id`, `deployment.environment.name`, `process.runtime.*`,
+  `service.instance.id`, `deployment.environment.name`,
+  `t3code.release.channel`, `process.runtime.*`,
   `user_agent.original`, and `browser.*`.
 - Tell two copies of the same service apart, such as two browser tabs or a
   desktop-managed server next to a standalone one, by `service.instance.id`.
-- Set `deployment.environment.name` or `service.instance.id` through
-  `OTEL_RESOURCE_ATTRIBUTES` and have the server and desktop app keep it.
+- Set `deployment.environment.name`, `t3code.release.channel`, or
+  `service.instance.id` through `OTEL_RESOURCE_ATTRIBUTES` and have the server
+  and desktop app keep it.
+- Tell a hosted UI build, a PR preview, and the server it talks to apart,
+  since each reports the environment and release channel of its own build.
 
 ## Why
 
@@ -40,13 +44,16 @@ Upstream has taken the `t3code.`-prefixed keys (`t3code.client.surface`,
 `t3code.server.managed_by`, `t3code.component`) and the web UI's
 `deployment.environment.name`. What the fork still carries is dropping
 `service.runtime`, plus `service.instance.id`, the server and desktop
-`deployment.environment.name`, and the web UI's `process.runtime.*`,
-`user_agent.original`, and `browser.*`. Dashboards or
+`deployment.environment.name`, the web UI's `process.runtime.*`,
+`user_agent.original`, and `browser.*`, and the derivation of
+`deployment.environment.name` from the build's release channel, with the new
+`t3code.release.channel` on every process. The web UI's value no longer follows
+only the Vite dev server, and preview builds report `staging`. Dashboards or
 saved queries that filter on `service.runtime` have to move to the new keys,
 which is the part upstream would want to weigh.
 Mobile relay traces now report `t3code.client.surface` as `mobile` and carry
-the build variant in `deployment.environment.name`, so a query on
-`mobile-production` becomes two filters.
+the build variant as `deployment.environment.name` and `t3code.release.channel`,
+so a query on `mobile-production` becomes two filters.
 
 The server's own `mode` values (`web` for any standalone launch) are left
 alone, since renaming them touches the CLI flag, `T3CODE_MODE`, and persisted

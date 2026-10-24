@@ -598,13 +598,17 @@ const layerTelemetry = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const endpoints = yield* resolveOtlpEndpoints;
+    // Unpackaged runs launch a script, so Electron reports its own version.
+    const serviceVersion = environment.isPackaged
+      ? environment.appVersion
+      : desktopPackageJson.version;
     const resource = {
       serviceName: "t3code-desktop",
-      // Unpackaged runs launch a script, so Electron reports its own version.
-      serviceVersion: environment.isPackaged ? environment.appVersion : desktopPackageJson.version,
+      serviceVersion,
       attributes: {
         "service.namespace": "t3code",
         ...nodeProcessResourceAttributes({
+          version: serviceVersion,
           operatorAttributes: endpoints.resourceAttributes,
           isDevelopment: environment.isDevelopment,
         }),

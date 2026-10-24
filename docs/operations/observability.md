@@ -626,16 +626,24 @@ Service names are fixed: `t3code-server` for the backend, `t3code-desktop` for t
 process, and `t3code-web` for the UI, all in `service.namespace` `t3code`. `OTEL_SERVICE_NAME` and a
 `service.name` or `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` are ignored. Tell installations
 apart with other resource attributes, such as
-`OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging`. The server and the desktop main
-process report `deployment.environment.name` as `development` or `production` on their own, and a
-random `service.instance.id` per process. A value for either in `OTEL_RESOURCE_ATTRIBUTES` replaces
+`OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=staging`. Every process reports the identity
+of its own build, never that of the process it talks to: the server, the desktop main process, the
+UI, and the mobile app each carry their own `service.version`, `t3code.release.channel`, and
+`deployment.environment.name`. The channel is `dev` under a development run, and otherwise `stable`,
+`nightly`, or `preview`, read from the version (`X-nightly.YYYYMMDD.N`, `X-preview.YYYYMMDD.N`).
+The environment follows it: `development`, `production`, and `staging` for `preview`, which is an
+internal build with no update feed. The server and the desktop main process also report a random
+`service.instance.id` per process. A value for any of these in `OTEL_RESOURCE_ATTRIBUTES` replaces
 it.
 
 Attributes specific to T3 Code use the `t3code.` prefix. The UI runs as `t3code-web` in both a
-browser and the desktop window, since it is the same code. Its `t3code.client.surface` resource attribute is `desktop` or `web`, and `user_agent.original` carries the
-full user agent. Its `deployment.environment.name` follows the build: `development` under the Vite dev
-server and `production` otherwise. The server's `t3code.server.managed_by` is `desktop` when the
-desktop app launched it and `standalone` otherwise.
+browser and the desktop window, since it is the same code. Its `t3code.client.surface` resource
+attribute is `desktop` or `web`, and `user_agent.original` carries the full user agent. The hosted
+UI derives its channel from `APP_VERSION`, and Vercel PR previews mark themselves with
+`VITE_RELEASE_CHANNEL=preview` so they report `staging` without changing the version the UI
+compares against the server's. The mobile app takes both values from its build variant:
+`development`, `preview` (`staging`), or `production`. The server's `t3code.server.managed_by` is
+`desktop` when the desktop app launched it and `standalone` otherwise.
 
 Every process T3 Code launches for a provider, such as Claude Code or Codex, inherits
 `t3code.launched=true` in `OTEL_RESOURCE_ATTRIBUTES`, added after any attributes already there.
