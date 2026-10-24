@@ -219,6 +219,7 @@ describe("Muse history discovery", () => {
             PATH: "/host/bin",
             XDG_DATA_HOME: xdg ?? "/host/data",
             MUSE_NO_AUTO_UPDATE: "1",
+            OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
           },
           readOnly: true,
           startupTimeoutMs: 5_000,
