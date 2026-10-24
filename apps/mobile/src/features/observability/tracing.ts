@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import type { ReleaseChannel } from "@t3tools/shared/releaseResource";
 import * as RelayTracing from "@t3tools/shared/relayTracing";
 
 import { hasTracingPublicConfig, resolveCloudPublicConfig } from "../cloud/publicConfig";
@@ -15,6 +16,14 @@ export interface TracingResource {
   readonly appVariant: string;
 }
 
+const RELEASE_IDENTITY_BY_VARIANT: Readonly<
+  Record<string, { readonly environment: string; readonly channel: ReleaseChannel }>
+> = {
+  development: { environment: "development", channel: "dev" },
+  preview: { environment: "staging", channel: "preview" },
+  production: { environment: "production", channel: "stable" },
+};
+
 export function resolveTracingConfig(): TracingConfig | null {
   const config = resolveCloudPublicConfig();
   if (!hasTracingPublicConfig(config)) {
@@ -25,6 +34,9 @@ export function resolveTracingConfig(): TracingConfig | null {
 }
 
 export function layerFromConfig(config: TracingConfig | null, resource: TracingResource) {
+  const releaseIdentity = Object.hasOwn(RELEASE_IDENTITY_BY_VARIANT, resource.appVariant)
+    ? RELEASE_IDENTITY_BY_VARIANT[resource.appVariant]
+    : undefined;
   return RelayTracing.layer(config, {
     serviceName: "t3code-mobile",
     serviceVersion: resource.serviceVersion,
@@ -32,8 +44,9 @@ export function layerFromConfig(config: TracingConfig | null, resource: TracingR
     client: "mobile",
     attributes: {
       "process.runtime.name": "react-native",
-      ...(resource.appVariant !== "unknown" && {
-        "deployment.environment.name": resource.appVariant,
+      ...(releaseIdentity && {
+        "deployment.environment.name": releaseIdentity.environment,
+        "t3code.release.channel": releaseIdentity.channel,
       }),
     },
   });
