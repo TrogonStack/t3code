@@ -631,8 +631,8 @@ process report `deployment.environment.name` as `development` or `production` on
 random `service.instance.id` per process. A value for either in `OTEL_RESOURCE_ATTRIBUTES` replaces
 it.
 
-The UI runs as `t3code-web` in both a browser and the desktop window, since it is the same code. Its
-`t3code.client.surface` resource attribute is `desktop` or `web`, and `user_agent.original` carries the
+Attributes specific to T3 Code use the `t3code.` prefix. The UI runs as `t3code-web` in both a
+browser and the desktop window, since it is the same code. Its `t3code.client.surface` resource attribute is `desktop` or `web`, and `user_agent.original` carries the
 full user agent. Its `deployment.environment.name` follows the build: `development` under the Vite dev
 server and `production` otherwise. The server's `t3code.server.managed_by` is `desktop` when the
 desktop app launched it and `standalone` otherwise.
