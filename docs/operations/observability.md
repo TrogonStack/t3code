@@ -633,16 +633,18 @@ UI, and the mobile app each carry their own `service.version`, `t3code.release.c
 `nightly`, or `preview`, read from the version (`X-nightly.YYYYMMDD.N`, `X-preview.YYYYMMDD.N`).
 The environment follows it: `development`, `production`, and `staging` for `preview`, which is an
 internal build with no update feed. The server and the desktop main process also report a random
-`service.instance.id` per process. A value for any of these in `OTEL_RESOURCE_ATTRIBUTES` replaces
-it.
+`service.instance.id` per process. On the server and the desktop main process, a value for any of
+these in `OTEL_RESOURCE_ATTRIBUTES` replaces it. The UI and the mobile app never read that variable;
+their values come from build inputs.
 
 Attributes specific to T3 Code use the `t3code.` prefix. The UI runs as `t3code-web` in both a
 browser and the desktop window, since it is the same code. Its `t3code.client.surface` resource
 attribute is `desktop` or `web`, and `user_agent.original` carries the full user agent. The hosted
 UI derives its channel from `APP_VERSION`, and Vercel PR previews mark themselves with
 `VITE_RELEASE_CHANNEL=preview` so they report `staging` without changing the version the UI
-compares against the server's. The mobile app takes both values from its build variant:
-`development`, `preview` (`staging`), or `production`. The server's `t3code.server.managed_by` is
+compares against the server's. The mobile app takes both values from its build variant: the
+`development` variant reports `development` and `dev`, `preview` reports `staging` and `preview`,
+and `production` reports `production` and `stable`. The server's `t3code.server.managed_by` is
 `desktop` when the desktop app launched it and `standalone` otherwise.
 
 Every process T3 Code launches for a provider, such as Claude Code or Codex, inherits

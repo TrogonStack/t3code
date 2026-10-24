@@ -51,9 +51,12 @@ Upstream has taken the `t3code.`-prefixed keys (`t3code.client.surface`,
 only the Vite dev server, and preview builds report `staging`. Dashboards or
 saved queries that filter on `service.runtime` have to move to the new keys,
 which is the part upstream would want to weigh.
-Mobile relay traces now report `t3code.client.surface` as `mobile` and carry
-the build variant as `deployment.environment.name` and `t3code.release.channel`,
-so a query on `mobile-production` becomes two filters.
+Mobile relay traces now report `t3code.client.surface` as `mobile` and map the
+build variant onto `deployment.environment.name` and `t3code.release.channel`:
+`development` becomes `development`/`dev`, `preview` becomes `staging`/`preview`,
+and `production` becomes `production`/`stable`. A query on `mobile-production`
+becomes `deployment.environment.name=production` plus
+`t3code.release.channel=stable`.
 
 The server's own `mode` values (`web` for any standalone launch) are left
 alone, since renaming them touches the CLI flag, `T3CODE_MODE`, and persisted
