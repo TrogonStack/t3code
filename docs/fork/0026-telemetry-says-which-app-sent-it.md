@@ -36,10 +36,14 @@ else.
 
 ## Upstream considerations
 
-A plausible upstream submission. The attributes came from upstream, and the
-change carries no fork-specific intent. Dashboards or saved queries that
-filter on `service.mode`, `service.runtime`, `service.component`, or the
-relay's `t3.client.surface` have to move to the new keys, which is the part upstream would want to weigh.
+Upstream has taken the `t3code.`-prefixed keys (`t3code.client.surface`,
+`t3code.server.managed_by`, `t3code.component`) and the web UI's
+`deployment.environment.name`. What the fork still carries is dropping
+`service.runtime`, plus `service.instance.id`, the server and desktop
+`deployment.environment.name`, and the web UI's `process.runtime.*`,
+`user_agent.original`, and `browser.*`. Dashboards or
+saved queries that filter on `service.runtime` have to move to the new keys,
+which is the part upstream would want to weigh.
 Mobile relay traces now report `t3code.client.surface` as `mobile` and carry
 the build variant in `deployment.environment.name`, so a query on
 `mobile-production` becomes two filters.
