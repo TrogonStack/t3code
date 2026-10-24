@@ -15,6 +15,7 @@ import * as Tracer from "effect/Tracer";
 import { OtlpResource, OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import { makeAsyncRotatingFileSink } from "./logging.ts";
+import { releaseResourceAttributes } from "./releaseResource.ts";
 
 export const OtlpProtocol = Schema.Literals(["http/json", "http/protobuf"]);
 export type OtlpProtocol = typeof OtlpProtocol.Type;
@@ -56,14 +57,13 @@ export const nodeProcessRuntimeAttributes = (): Record<string, string> => ({
  * operator set there are carried over by hand to keep winning.
  */
 export const nodeProcessResourceAttributes = (input: {
+  readonly version: string;
   readonly operatorAttributes: Readonly<Record<string, unknown>>;
   readonly isDevelopment: boolean;
 }): Record<string, unknown> => ({
   "service.instance.id":
     input.operatorAttributes["service.instance.id"] ?? processServiceInstanceId(),
-  "deployment.environment.name":
-    input.operatorAttributes["deployment.environment.name"] ??
-    (input.isDevelopment ? "development" : "production"),
+  ...releaseResourceAttributes(input),
   ...nodeProcessRuntimeAttributes(),
 });
 

@@ -17,7 +17,7 @@ vi.mock("expo-constants", () => ({
   },
 }));
 
-it.effect("labels exported spans with the mobile surface, environment, and instance", () => {
+const exportedResourceBody = (appVariant: string) => {
   const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
   const layerTracing = Tracing.layerFromConfig(
     {
@@ -26,7 +26,7 @@ it.effect("labels exported spans with the mobile surface, environment, and insta
       tracesToken: "public-ingest-token",
     },
     {
-      appVariant: "test",
+      appVariant,
       serviceInstanceId: "test-instance",
       serviceVersion: "1.2.3",
     },
@@ -40,18 +40,52 @@ it.effect("labels exported spans with the mobile surface, environment, and insta
     Effect.andThen(
       Effect.sync(() => {
         expect(fetchFn).toHaveBeenCalledOnce();
-        const body = new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
-        expect(body).toContain('"key":"t3code.client.surface","value":{"stringValue":"mobile"}');
-        expect(body).toContain(
-          '"key":"deployment.environment.name","value":{"stringValue":"test"}',
-        );
-        expect(body).toContain(
-          '"key":"service.instance.id","value":{"stringValue":"test-instance"}',
-        );
+        return new TextDecoder().decode(fetchFn.mock.calls[0]?.[1]?.body as Uint8Array);
       }),
     ),
   );
-});
+};
+
+const stringAttribute = (key: string, value: string) =>
+  `"key":"${key}","value":{"stringValue":"${value}"}`;
+
+it.effect("labels exported spans with the mobile surface and instance", () =>
+  exportedResourceBody("production").pipe(
+    Effect.andThen((body) =>
+      Effect.sync(() => {
+        expect(body).toContain(stringAttribute("t3code.client.surface", "mobile"));
+        expect(body).toContain(stringAttribute("service.instance.id", "test-instance"));
+        expect(body).toContain(stringAttribute("service.version", "1.2.3"));
+      }),
+    ),
+  ),
+);
+
+it.effect.each([
+  ["development", "development", "dev"],
+  ["preview", "staging", "preview"],
+  ["production", "production", "stable"],
+] as const)("reports %s builds as %s on the %s channel", ([appVariant, environment, channel]) =>
+  exportedResourceBody(appVariant).pipe(
+    Effect.andThen((body) =>
+      Effect.sync(() => {
+        expect(body).toContain(stringAttribute("deployment.environment.name", environment));
+        expect(body).toContain(stringAttribute("t3code.release.channel", channel));
+      }),
+    ),
+  ),
+);
+
+it.effect("omits environment and channel for an unknown variant", () =>
+  exportedResourceBody("unknown").pipe(
+    Effect.andThen((body) =>
+      Effect.sync(() => {
+        expect(body).not.toContain("deployment.environment.name");
+        expect(body).not.toContain("t3code.release.channel");
+      }),
+    ),
+  ),
+);
 
 it.effect("does not let OTLP serialization failures alter application effects", () => {
   const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 202 }));
@@ -62,7 +96,7 @@ it.effect("does not let OTLP serialization failures alter application effects", 
       tracesToken: "public-ingest-token",
     },
     {
-      appVariant: "test",
+      appVariant: "production",
       serviceInstanceId: "test-instance",
       serviceVersion: "1.2.3",
     },

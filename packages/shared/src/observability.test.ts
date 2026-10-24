@@ -28,26 +28,39 @@ import {
 } from "./observability.ts";
 
 describe("nodeProcessResourceAttributes", () => {
-  it("shares one instance id per process and defaults the tier from the build", () => {
-    const first = nodeProcessResourceAttributes({ operatorAttributes: {}, isDevelopment: true });
-    const second = nodeProcessResourceAttributes({ operatorAttributes: {}, isDevelopment: false });
+  it("shares one instance id per process and reports the release identity of the build", () => {
+    const first = nodeProcessResourceAttributes({
+      version: "1.2.3",
+      operatorAttributes: {},
+      isDevelopment: true,
+    });
+    const second = nodeProcessResourceAttributes({
+      version: "1.2.3",
+      operatorAttributes: {},
+      isDevelopment: false,
+    });
 
     expect(first["service.instance.id"]).toBe(second["service.instance.id"]);
     expect(first["deployment.environment.name"]).toBe("development");
+    expect(first["t3code.release.channel"]).toBe("dev");
     expect(second["deployment.environment.name"]).toBe("production");
+    expect(second["t3code.release.channel"]).toBe("stable");
   });
 
   it("keeps values an operator set in OTEL_RESOURCE_ATTRIBUTES", () => {
     const attributes = nodeProcessResourceAttributes({
+      version: "1.2.3",
       operatorAttributes: {
         "service.instance.id": "pod-7",
         "deployment.environment.name": "staging",
+        "t3code.release.channel": "nightly",
       },
       isDevelopment: true,
     });
 
     expect(attributes["service.instance.id"]).toBe("pod-7");
     expect(attributes["deployment.environment.name"]).toBe("staging");
+    expect(attributes["t3code.release.channel"]).toBe("nightly");
   });
 });
 
