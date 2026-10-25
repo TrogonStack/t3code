@@ -214,6 +214,8 @@ function restartAfterFailure(app) {
 async function stopApp() {
   const app = currentApp;
   if (!app) {
+    // A crashed Electron is already gone, but its backend may still hold the T3 home.
+    await stopStaleDevBackends();
     return;
   }
 
