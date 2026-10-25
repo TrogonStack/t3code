@@ -664,13 +664,14 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         config: makeCodexConfig({ enabled: true }),
       },
     };
-    const lockedStore = (unlocked: Ref.Ref<boolean>) => ({
+    const lockedStore = (unlocked: Ref.Ref<boolean>, reads?: Ref.Ref<number>) => ({
       prime: () => Effect.void,
       invalidate: () => Effect.void,
       check: () => Effect.succeed({ _tag: "Resolved" } as const),
       listOnePasswordAccounts: Effect.succeed([]),
       resolve: () =>
-        Ref.get(unlocked).pipe(
+        (reads === undefined ? Effect.void : Ref.update(reads, (n) => n + 1)).pipe(
+          Effect.andThen(Ref.get(unlocked)),
           Effect.map((open) =>
             open
               ? {
@@ -711,6 +712,22 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         expect(rebuilt).toBe(true);
         expect(yield* registry.getInstance(instanceId)).toBeDefined();
         expect(yield* registry.listUnavailable).toHaveLength(0);
+      }).pipe(Effect.provide(layerTest)),
+    );
+
+    it.live("is not read again by a settings change that leaves it alone", () =>
+      Effect.gen(function* () {
+        const unlocked = yield* Ref.make(false);
+        const reads = yield* Ref.make(0);
+        const { registry, mutator } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
+          drivers: [CodexDriver],
+          configMap,
+        }).pipe(Effect.provideService(ProviderSecretResolver, lockedStore(unlocked, reads)));
+
+        yield* mutator.reconcile({ ...configMap });
+
+        expect(yield* Ref.get(reads)).toBe(1);
+        expect(yield* registry.listUnavailable).toHaveLength(1);
       }).pipe(Effect.provide(layerTest)),
     );
   });
