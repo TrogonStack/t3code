@@ -379,7 +379,6 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
             driver,
             environment: decodeEnvironment([
               onePasswordVariable("OPENAI_API_KEY", apiKeyReference),
-              onePasswordVariable("ANTHROPIC_API_KEY", "op://Vault/Locked/api-key"),
               { name: "CODEX_PROFILE", value: "work", sensitive: false },
             ]),
             config: {},
@@ -389,7 +388,6 @@ it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secr
         Effect.provideService(ProviderSecretResolver.ProviderSecretResolver, resolver),
         Effect.provideService(HostProcess.Environment, {
           PATH: "/bin",
-          ANTHROPIC_API_KEY: "inherited-key",
         }),
       );
     const registry = yield* Effect.service(ProviderAdapterRegistry.ProviderAdapterRegistryV2).pipe(

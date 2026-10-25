@@ -26,6 +26,7 @@ import {
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
   ProviderDriverKind,
   ProviderInstanceEnvironment,
+  ProviderSecretSource,
   ProviderInstanceId,
   ServerSettings,
   ServerSettingsError,
@@ -78,6 +79,7 @@ const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
 const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+const decodeSecretSource = Schema.decodeSync(ProviderSecretSource);
 const HOME_ACCOUNT = "my.1password.com";
 const onePasswordVariable = (name: string, reference: string, sensitive = true) => ({
   name,
@@ -1452,6 +1454,97 @@ it.layer(
           yield* registry.refresh();
 
           assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
+        }).pipe(Effect.provide(runtimeServices));
+      }),
+    );
+
+    it.effect("recovers the unavailable instances a successful secret check unlocks", () =>
+      Effect.gen(function* () {
+        const codexDriver = ProviderDriverKind.make("codex");
+        const readableId = ProviderInstanceId.make("codex");
+        const otherId = ProviderInstanceId.make("codex_other");
+        const reference = "op://Vault/Item/token";
+        const unavailableProvider = (instanceId: ProviderInstanceId) =>
+          ({
+            instanceId,
+            driver: codexDriver,
+            status: "error",
+            enabled: true,
+            installed: false,
+            auth: { status: "unknown" },
+            checkedAt: "2026-06-10T00:00:00.000Z",
+            version: null,
+            models: [],
+            slashCommands: [],
+            skills: [],
+            message: "Could not read CODEX_TOKEN from its secret store. Unlock it, then refresh.",
+          }) as const satisfies ServerProvider;
+
+        const invalidations = yield* Ref.make(0);
+        const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+        const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
+          resolve: (environment) =>
+            Effect.succeed({
+              variables: literalProviderInstanceEnvironment(environment),
+              unresolved: [],
+            }),
+          prime: () => Effect.void,
+          invalidate: () => Ref.update(invalidations, (count) => count + 1),
+          check: () => Effect.succeed({ _tag: "Resolved" }),
+          listOnePasswordAccounts: Effect.succeed([]),
+        });
+        const instanceRegistryLayer = Layer.succeed(
+          ProviderInstanceRegistry.ProviderInstanceRegistry,
+          {
+            getInstance: () => Effect.succeed(undefined),
+            listInstances: Effect.succeed([]),
+            listUnavailable: Effect.succeed([
+              unavailableProvider(readableId),
+              unavailableProvider(otherId),
+            ]),
+            rebuildInstanceWhen: (instanceId) =>
+              Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(Effect.as(true)),
+            streamChanges: Stream.empty,
+            listEnvironments: Effect.succeed(
+              new Map([
+                [readableId, decodeEnvironment([onePasswordVariable("CODEX_TOKEN", reference)])],
+                [
+                  otherId,
+                  decodeEnvironment([onePasswordVariable("CODEX_TOKEN", "op://Vault/Other/token")]),
+                ],
+              ]),
+            ),
+            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+          },
+        );
+
+        const scope = yield* Scope.make();
+        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+        const runtimeServices = yield* Layer.build(
+          ProviderRegistry.layer.pipe(
+            Layer.provideMerge(instanceRegistryLayer),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-secret-check-",
+              }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(secretResolverLayer),
+          ),
+        ).pipe(Scope.provide(scope));
+
+        yield* Effect.gen(function* () {
+          const registry = yield* ProviderRegistry.ProviderRegistry;
+          const source = decodeSecretSource({
+            kind: "1password",
+            reference,
+            account: HOME_ACCOUNT,
+          });
+          const result = yield* registry.checkSecretSource(source);
+
+          assert.deepStrictEqual(result, { _tag: "Resolved" });
+          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [readableId]);
+          assert.strictEqual(yield* Ref.get(invalidations), 0);
         }).pipe(Effect.provide(runtimeServices));
       }),
     );

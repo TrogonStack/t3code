@@ -15,6 +15,7 @@ import {
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -546,16 +547,21 @@ export const ProviderSecretResolverLive = Layer.effect(
         ),
       );
 
-    const cache = yield* Cache.make({
-      capacity: SECRET_CACHE_CAPACITY,
-      // No time to live: a resolved secret is held until the user asks for a
-      // provider refresh. Expiring on a timer would reintroduce the surprise
-      // biometric prompt mid-session that the cache exists to remove.
-      lookup: (reference: ProviderSecretReference) =>
+    const cache = yield* Cache.makeWith(
+      (reference: ProviderSecretReference) =>
         readSecretBounded(reference).pipe(
           Effect.map((read) => (read._tag === "Read" ? read.value : undefined)),
         ),
-    });
+      {
+        capacity: SECRET_CACHE_CAPACITY,
+        // No time to live for a value: it is held until the user asks for a provider refresh.
+        // Expiring on a timer would reintroduce the surprise biometric prompt mid-session that the
+        // cache exists to remove. An unreadable secret is never held, so unlocking the store is
+        // enough for the next resolve to succeed.
+        timeToLive: (exit) =>
+          Exit.isSuccess(exit) && exit.value !== undefined ? Duration.infinity : Duration.zero,
+      },
+    );
 
     const check: ProviderSecretResolverShape["check"] = Effect.fn("ProviderSecretResolver.check")(
       function* (source) {

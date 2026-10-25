@@ -91,6 +91,9 @@ function withInstanceAt(
 interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
+  // Configs parked on an unreadable secret. Settings saves leave them parked
+  // so a locked vault is not read, or prompted for, on every unrelated save.
+  readonly secretsUnreadable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ProviderInstanceConfig>>;
   readonly changes: PubSub.PubSub<void>;
 }
 
@@ -106,25 +109,6 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
   return entry.enabled ?? providerInstanceConfigEnabledFlag(typedConfig) ?? true;
 };
 
-/**
- * What a provider process inherits from the server. A variable whose secret
- * could not be read is removed rather than left to the server's own value,
- * because that would run the provider as an account the user did not pick.
- */
-function hostEnvironmentWithout(
-  hostEnvironment: NodeJS.ProcessEnv,
-  names: ReadonlyArray<string>,
-): NodeJS.ProcessEnv {
-  if (names.length === 0) {
-    return hostEnvironment;
-  }
-  const next: NodeJS.ProcessEnv = { ...hostEnvironment };
-  for (const name of names) {
-    delete next[name];
-  }
-  return next;
-}
-
 const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
@@ -135,7 +119,11 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
   readonly entry: ProviderInstanceConfig;
 }): Effect.fn.Return<
   | { readonly kind: "live"; readonly live: LiveEntry }
-  | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
+  | {
+      readonly kind: "unavailable";
+      readonly snapshot: ServerProvider;
+      readonly secretsUnreadable?: true;
+    },
   never,
   R
 > {
@@ -186,6 +174,19 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
 
   const typedConfig = decodeResult.success;
   const resolvedEnvironment = yield* secretResolver.resolve(entry.environment);
+  if (resolvedEnvironment.unresolved.length > 0) {
+    return {
+      kind: "unavailable" as const,
+      secretsUnreadable: true as const,
+      snapshot: yield* buildUnavailableProviderSnapshot({
+        driverKind: entry.driver,
+        instanceId,
+        displayName: entry.displayName,
+        accentColor: entry.accentColor,
+        reason: `Could not read ${resolvedEnvironment.unresolved.join(", ")} from its secret store. Unlock it, then refresh.`,
+      }),
+    };
+  }
   const childScope = yield* Scope.make();
   yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
@@ -200,10 +201,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
     })
     .pipe(
       Effect.provideService(Scope.Scope, childScope),
-      Effect.provideService(
-        HostProcess.Environment,
-        hostEnvironmentWithout(hostEnvironment, resolvedEnvironment.unresolved),
-      ),
+      Effect.provideService(HostProcess.Environment, hostEnvironment),
       Effect.result,
     );
   if (createResult._tag === "Failure") {
@@ -247,6 +245,7 @@ const makeReconcile = <R>(input: {
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
+      const previousSecretsUnreadable = yield* Ref.get(state.secretsUnreadable);
       const nextRaw = Object.entries(configMap);
       const nextKeys = new Set<ProviderInstanceId>(
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
@@ -274,6 +273,7 @@ const makeReconcile = <R>(input: {
 
       const builtEntries = new Map<ProviderInstanceId, LiveEntry>();
       const builtUnavailable = new Map<ProviderInstanceId, ServerProvider>();
+      const builtSecretsUnreadable = new Map<ProviderInstanceId, ProviderInstanceConfig>();
       let orderChanged = false;
       const previousOrder = [...previousEntries.keys()];
       const nextOrder: Array<ProviderInstanceId> = [];
@@ -285,6 +285,17 @@ const makeReconcile = <R>(input: {
         const existing = previousEntries.get(instanceId);
         if (existing !== undefined && !replacedIds.has(instanceId)) {
           builtEntries.set(instanceId, existing);
+          continue;
+        }
+        const parkedEntry = previousSecretsUnreadable.get(instanceId);
+        const parkedSnapshot = previousUnavailable.get(instanceId);
+        if (
+          parkedEntry !== undefined &&
+          parkedSnapshot !== undefined &&
+          entryEqual(parkedEntry, entry)
+        ) {
+          builtUnavailable.set(instanceId, parkedSnapshot);
+          builtSecretsUnreadable.set(instanceId, entry);
           continue;
         }
 
@@ -301,6 +312,9 @@ const makeReconcile = <R>(input: {
           builtEntries.set(instanceId, result.live);
         } else {
           builtUnavailable.set(instanceId, result.snapshot);
+          if (result.secretsUnreadable) {
+            builtSecretsUnreadable.set(instanceId, entry);
+          }
         }
       }
 
@@ -330,6 +344,7 @@ const makeReconcile = <R>(input: {
 
       yield* Ref.set(state.entries, builtEntries);
       yield* Ref.set(state.unavailable, builtUnavailable);
+      yield* Ref.set(state.secretsUnreadable, builtSecretsUnreadable);
 
       if (entriesChanged || unavailableChanged) {
         yield* PubSub.publish(state.changes, undefined);
@@ -366,6 +381,9 @@ export const makeProviderInstanceRegistry = Effect.fn(
 
   const entries = yield* Ref.make<ReadonlyMap<ProviderInstanceId, LiveEntry>>(new Map());
   const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());
+  const secretsUnreadable = yield* Ref.make<
+    ReadonlyMap<ProviderInstanceId, ProviderInstanceConfig>
+  >(new Map());
   const changes = yield* PubSub.unbounded<void>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
@@ -382,7 +400,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
   // Reads stay outside: `getInstance` and `listInstances` never wait.
   const mutations = yield* Semaphore.make(1);
 
-  const state: RegistryState = { entries, unavailable, changes };
+  const state: RegistryState = { entries, unavailable, secretsUnreadable, changes };
   const reconcileWithR = makeReconcile({
     state,
     driversById,
@@ -394,7 +412,20 @@ export const makeProviderInstanceRegistry = Effect.fn(
     (configMap) =>
       mutations.withPermits(1)(
         reconcileWithR(configMap).pipe(
-          Effect.tap(() => Ref.set(rebuildable, new Map())),
+          Effect.tap(() =>
+            Ref.get(unavailable).pipe(
+              Effect.flatMap((pending) =>
+                Ref.set(
+                  rebuildable,
+                  new Map(
+                    Object.entries(configMap)
+                      .map(([id, entry]) => [ProviderInstanceId.make(id), entry] as const)
+                      .filter(([id]) => pending.has(id)),
+                  ),
+                ),
+              ),
+            ),
+          ),
           Effect.provideContext(driverContext),
         ),
       );
@@ -457,9 +488,15 @@ export const makeProviderInstanceRegistry = Effect.fn(
               yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
               yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
               yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
+              yield* Ref.update(secretsUnreadable, (previous) => withoutKey(previous, instanceId));
             } else {
               yield* Ref.update(unavailable, (previous) =>
                 new Map(previous).set(instanceId, result.snapshot),
+              );
+              yield* Ref.update(secretsUnreadable, (previous) =>
+                result.secretsUnreadable
+                  ? new Map(previous).set(instanceId, entry)
+                  : withoutKey(previous, instanceId),
               );
             }
             yield* PubSub.publish(changes, undefined);

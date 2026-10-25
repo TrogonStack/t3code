@@ -206,7 +206,7 @@ describe("ProviderSecretResolverLive", () => {
     }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 
-  it.effect("holds a failed read too, so a locked vault prompts once", () => {
+  it.effect("reads a failed reference again on the next resolve", () => {
     const spawner = recordingOpSpawner({ stdout: "", stderr: "not signed in", code: 1 });
     return Effect.gen(function* () {
       const resolver = yield* ProviderSecretResolver;
@@ -217,7 +217,7 @@ describe("ProviderSecretResolverLive", () => {
       yield* resolver.resolve(environment);
       yield* resolver.resolve(environment);
 
-      assert.strictEqual(spawner.invocations.length, 1);
+      assert.strictEqual(spawner.invocations.length, 2);
     }).pipe(Effect.provide(resolverLayer(spawner.layer)));
   });
 });
