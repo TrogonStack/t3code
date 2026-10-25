@@ -1,7 +1,8 @@
 import { type EnvironmentId, UsageLimitSourceId } from "@t3tools/contracts";
+import * as Result from "effect/Result";
 import { useState } from "react";
 
-import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
+import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -13,8 +14,12 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { SecretInput } from "./SecretInput";
 import { Label } from "../ui/label";
+import {
+  EMPTY_SECRET_FIELD_DRAFT,
+  SecretField,
+  secretFieldSubmission,
+} from "./SecretSourceControls";
 
 function sourceIdFromUrl(url: string): UsageLimitSourceId {
   let host = url;
@@ -28,7 +33,10 @@ function sourceIdFromUrl(url: string): UsageLimitSourceId {
   return UsageLimitSourceId.make(`cliproxy-${slug || "hub"}`);
 }
 
-/** Send the management key once to server secret storage; settings retain only a redaction marker. */
+/**
+ * A literal management key is sent once to server secret storage and settings retain only a
+ * redaction marker; a secret provider reference is stored as written.
+ */
 export function AddUsageLimitSourceDialog({
   open,
   onOpenChange,
@@ -43,14 +51,19 @@ export function AddUsageLimitSourceDialog({
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
-  const [managementKey, setManagementKey] = useState("");
+  const secretProviders = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.secretProviders,
+  );
+  const [keyDraft, setKeyDraft] = useState(EMPTY_SECRET_FIELD_DRAFT);
+  const managementKey = Result.getOrUndefined(secretFieldSubmission(keyDraft, secretProviders));
   const trimmedUrl = url.trim();
-  const canSave = trimmedUrl.length > 0 && managementKey.trim().length > 0;
+  const canSave = trimmedUrl.length > 0 && managementKey !== undefined;
 
   const reset = () => {
     setLabel("");
     setUrl("");
-    setManagementKey("");
+    setKeyDraft(EMPTY_SECRET_FIELD_DRAFT);
   };
 
   const save = () => {
@@ -62,7 +75,7 @@ export function AddUsageLimitSourceDialog({
           kind: "cliproxy",
           ...(label.trim() ? { label: label.trim() } : {}),
           url: trimmedUrl,
-          managementKey: managementKey.trim(),
+          managementKey,
           enabled: true,
         },
       },
@@ -107,10 +120,14 @@ export function AddUsageLimitSourceDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="usage-source-key">Management key</Label>
-              <SecretInput
+              <SecretField
                 id="usage-source-key"
-                value={managementKey}
-                onChange={(event) => setManagementKey(event.target.value)}
+                label="Management key"
+                environmentId={environmentId}
+                secretProviders={secretProviders}
+                value={undefined}
+                draft={keyDraft}
+                onDraftChange={setKeyDraft}
               />
             </div>
             <div className="grid gap-1.5">

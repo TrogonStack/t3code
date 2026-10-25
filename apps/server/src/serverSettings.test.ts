@@ -12,6 +12,7 @@ import {
   SecretProviderId,
   SecretProviderReference,
   ServerSettings,
+  type UsageLimitSourceConfig,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -1539,6 +1540,41 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         assert.equal(literal.easDeviceHosts[0]?.accessToken, "");
         assert.isTrue(Option.isSome(yield* stored("bitbucket", "accessToken", null)));
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("keeps a usage limit key that names a secret provider outside the secret store", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const id = UsageLimitSourceId.make("hub");
+      const source = {
+        kind: "secret-provider" as const,
+        provider: SecretProviderId.make("homelab"),
+        reference: SecretProviderReference.make("cliproxy#key"),
+      };
+      const hub = (managementKey: UsageLimitSourceConfig["managementKey"]) => ({
+        [id]: {
+          kind: "cliproxy" as const,
+          url: "https://hub.example.test",
+          managementKey,
+          enabled: true,
+        },
+      });
+
+      yield* serverSettings.updateSettings({ usageLimitSources: hub("quota-literal") });
+      assert.isTrue(Option.isSome(yield* secrets.get("usage-limit-source-aHVi")));
+
+      const saved = yield* serverSettings.updateSettings({ usageLimitSources: hub(source) });
+      assert.isTrue(Option.isNone(yield* secrets.get("usage-limit-source-aHVi")));
+      const client = ServerSettingsModule.redactServerSettingsForClient(saved);
+      assert.deepEqual(client.usageLimitSources[id]?.managementKey, source);
+
+      yield* serverSettings.updateSettings({ usageLimitSources: client.usageLimitSources });
+      assert.deepEqual(
+        (yield* serverSettings.getSettings).usageLimitSources[id]?.managementKey,
+        source,
+      );
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
   it.effect("keeps the retired keys for another load when a token cannot be copied", () => {
