@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Mint a pairing code for the running dev server"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+node apps/server/src/bin.ts pair "$@"

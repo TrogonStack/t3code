@@ -72,6 +72,35 @@ after launch, the runner pauses restarts until a watched file changes. `mise run
 stops the runner for the current checkout, and `mise run dev:desktop:reset` also deletes
 `apps/desktop/.electron-runtime` so the Electron bundle is rebuilt on the next start.
 
+### Server only, on a remote machine
+
+`mise run dev:server` does the same setup as `dev:desktop` and then runs only the T3 server from
+source, with no web or Electron process. Use it on a remote Linux machine and connect from a
+desktop dev app on your own machine. The remote needs `vp` (which provides Node 26) and a Rust
+toolchain for the resource monitor build.
+
+Bind the server to an address the desktop can reach, such as the machine's tailnet IP or a
+wildcard (the flag is passed through to the dev runner):
+
+```sh
+mise run dev:server --host <tailnet-ip>
+```
+
+Read the backend port from the `[dev-runner]` line (`serverPort=`); pass `--port` to pin it.
+The startup output also prints a `pairingUrl:` line, but its origin is the web dev URL, which
+this mode does not serve. Use the code instead. In a second terminal on the remote, mint one:
+
+```sh
+mise run dev:server:pair
+```
+
+It prints a `Token:` line, which is the pairing code. A `--home-dir` given to the server must be
+given to the pair task as `--base-dir` so it finds the running server. Then, in the desktop dev app
+(`mise run dev:desktop`), open Add Environment, choose "Remote link", and enter
+`http://<tailnet-ip>:<port>` as the backend host and the token as the pairing code.
+
+`--share` has no effect for `dev:server`. Do not bind a wildcard host on an untrusted network.
+
 Flags go directly after the task name, for example `vp run dev --home-dir /tmp/t3code-dev`.
 Add `--browser` to open a browser automatically.
 
