@@ -13,9 +13,9 @@ import {
 import {
   deriveProviderModelsForDisplay,
   nextProviderEnvironmentWithFieldValue,
-  secretSourceFromDraft,
   splitDedicatedProviderEnvironment,
 } from "./ProviderInstanceCard";
+import { secretSourceFromDraft } from "./SecretSourceControls";
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {
