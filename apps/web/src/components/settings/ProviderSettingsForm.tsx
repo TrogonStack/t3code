@@ -3,7 +3,6 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import {
-  isSecretProviderSecretSource,
   isSecretSetting,
   type EnvironmentId,
   type ProviderSettingsFormAnnotation,
@@ -365,13 +364,7 @@ function SecretSettingsControl({
         secretProviders={secretSources.secretProviders}
         className="flex-1"
         draft={draft}
-        onDraftChange={(next) => {
-          if (next.provider === null && isSecretProviderSecretSource(saved)) {
-            commit("");
-            return;
-          }
-          setPending({ key: savedKey, draft: next });
-        }}
+        onDraftChange={(next) => setPending({ key: savedKey, draft: next })}
         onReferenceCommit={(next) => {
           const source = credentialSourceFromDraft(next, secretSources.secretProviders);
           if (
@@ -388,7 +381,7 @@ function SecretSettingsControl({
           aria-describedby={descriptionId}
           size="sm"
           className="min-w-0 flex-1"
-          configured={typeof saved === "string" && saved.length > 0}
+          configured={hasSavedCredential(saved)}
           value=""
           onCommit={commit}
         />
