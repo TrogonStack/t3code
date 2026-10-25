@@ -7,6 +7,8 @@ import * as NodeVM from "node:vm";
 
 import { assert, describe, it } from "vite-plus/test";
 
+import { devAppPattern, devBackendPattern } from "./dev-runner-guards.mjs";
+
 import {
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
@@ -129,7 +131,9 @@ async function startupCleanupPattern(desktopDir) {
       NodeChildProcess: {
         execFileSync: () => undefined,
         spawnSync: (command, args) => {
-          if (command === "pkill" && args.includes("-f")) pattern = args.at(-1);
+          // The dev-root cleanup signals first; later backend cleanup must find nothing to stop.
+          if (command === "pkill" && args.includes("-f")) pattern ??= args.at(-1);
+          return { status: 1 };
         },
         spawn: () => new NodeEvents.EventEmitter(),
       },
@@ -139,6 +143,8 @@ async function startupCleanupPattern(desktopDir) {
       desktopDir,
       acquireRunnerRecord: async () => ({ claimed: true, stoppedPids: [] }),
       releaseRunnerRecord: () => undefined,
+      devAppPattern,
+      devBackendPattern,
       createCrashLoopBreaker: () => ({
         recordAbnormalExit: () => ({ tripped: false }),
         rearm: () => undefined,
