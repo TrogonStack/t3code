@@ -10,6 +10,7 @@ import type {
   ProviderSecretSource,
   SecretProviderId,
   SecretSourceCheckResult,
+  SettingsSecretValue,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -96,3 +97,17 @@ export class ProviderSecretResolver extends Context.Reference<ProviderSecretReso
     }),
   },
 ) {}
+
+/**
+ * The secret a credential setting holds or names, through the resolver's cache. An unreadable
+ * secret comes back as `""`, so callers treat it exactly like a missing token.
+ */
+export const resolveSettingsSecret = (
+  resolver: ProviderSecretResolverShape,
+  value: SettingsSecretValue,
+): Effect.Effect<string> =>
+  typeof value === "string"
+    ? Effect.succeed(value)
+    : resolver
+        .resolve([{ name: "T3_SETTINGS_SECRET", value, sensitive: true }])
+        .pipe(Effect.map(({ variables }) => variables[0]?.value ?? ""));

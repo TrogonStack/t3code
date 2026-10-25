@@ -4,6 +4,7 @@ import {
   CodexSettings,
   SecretProviderConfig,
   EasDeviceHostConfig,
+  isSecretProviderSecretSource,
   type ServerSettings,
   UsageLimitSourceConfig,
   secretSettingsFields,
@@ -64,7 +65,7 @@ export function mapSettingsSecrets(
   ) => {
     const next = { ...fields };
     for (const field of secretFields) {
-      if (!(field in next)) continue;
+      if (!(field in next) || isSecretProviderSecretSource(next[field])) continue;
       next[field] = writeSecretFieldValues(
         next[field],
         readSecretFieldValues(next[field]).map(([serverHost, value]) => {

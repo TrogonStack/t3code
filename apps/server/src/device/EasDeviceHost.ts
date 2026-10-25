@@ -32,6 +32,10 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+import {
+  ProviderSecretResolver,
+  resolveSettingsSecret,
+} from "../provider/ProviderSecretResolver.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { findEasProjectId } from "./easProjectId.ts";
 import { type ExpoApi, makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
@@ -110,6 +114,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const server = yield* ServerConfig.ServerConfig;
+  const secrets = yield* ProviderSecretResolver;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | Effect.Services<ReturnType<typeof findEasProjectId>>
   >();
@@ -163,9 +168,11 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       ...(cause === undefined ? {} : { cause }),
     });
 
-  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveExpoCredential(
+  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveSettingsSecret(
+    secrets,
     config.accessToken,
   ).pipe(
+    Effect.flatMap(resolveExpoCredential),
     Effect.map((credential) => makeExpoApi(http, credential)),
     Effect.provide(services),
     Effect.mapError((error) => unavailable(error.message, error)),

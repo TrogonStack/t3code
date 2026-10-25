@@ -1,8 +1,10 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import {
   AuthSettingsWriteScope,
+  isSecretProviderSecretSource,
   type DeviceEasAccount,
   type EasDeviceHostConfig,
   type EnvironmentId,
@@ -35,6 +37,15 @@ import {
   updateEasDeviceHosts,
 } from "./easDeviceHostsSettings.logic";
 import { SecretInput } from "./SecretInput";
+import {
+  credentialSourceDraft,
+  credentialSourceFromDraft,
+  CredentialSourceField,
+  EMPTY_SECRET_PROVIDERS,
+  LITERAL_CREDENTIAL_DRAFT,
+  type CredentialSourceDraft,
+  type SecretProviders,
+} from "./SecretSourceControls";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsRow } from "./settingsLayout";
 
@@ -61,6 +72,8 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
     (candidate) => candidate.environmentId === props.environmentId,
   );
   const hosts = environment?.serverConfig?.settings.easDeviceHosts ?? [];
+  const secretProviders =
+    environment?.serverConfig?.settings.secretProviders ?? EMPTY_SECRET_PROVIDERS;
   const [editing, setEditing] = useState<{ host: EasDeviceHostConfig; isNew: boolean } | null>(
     null,
   );
@@ -144,6 +157,7 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
             environmentId={props.environmentId}
             host={editing.host}
             isNew={editing.isNew}
+            secretProviders={secretProviders}
             busy={busy}
             onSave={(host) => void save(host, false)}
             onClose={() => setEditing(null)}
@@ -158,6 +172,7 @@ function EasDeviceHostEditor(props: {
   environmentId: EnvironmentId;
   host: EasDeviceHostConfig;
   isNew: boolean;
+  secretProviders: SecretProviders;
   busy: boolean;
   onSave: (host: EasDeviceHostConfig) => void;
   onClose: () => void;
@@ -165,10 +180,27 @@ function EasDeviceHostEditor(props: {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
   const [draft, setDraft] = useState(props.host);
   const tokenId = useId();
+  const savedLiteral =
+    typeof props.host.accessToken === "string" && props.host.accessToken.length > 0;
   // A saved token arrives redacted; only a replacement or a clear changes it.
   const [token, setToken] = useState<
-    { kind: "saved" } | { kind: "new"; value: string } | { kind: "cleared" }
-  >(props.host.accessToken ? { kind: "saved" } : { kind: "cleared" });
+    | { kind: "saved" }
+    | { kind: "new"; value: string }
+    | { kind: "reference"; draft: CredentialSourceDraft }
+    | { kind: "cleared" }
+  >(
+    isSecretProviderSecretSource(props.host.accessToken)
+      ? { kind: "reference", draft: credentialSourceDraft(props.host.accessToken) }
+      : savedLiteral
+        ? { kind: "saved" }
+        : { kind: "cleared" },
+  );
+  const reference =
+    token.kind === "reference"
+      ? credentialSourceFromDraft(token.draft, props.secretProviders)
+      : undefined;
+  const referenceIssue =
+    reference === undefined || Result.isSuccess(reference) ? null : reference.failure;
   const [account, setAccount] = useState<
     | { status: "idle" }
     | { status: "checking" }
@@ -180,15 +212,23 @@ function EasDeviceHostEditor(props: {
     ...draft,
     label: draft.label.trim(),
     accessToken:
-      token.kind === "saved" ? props.host.accessToken : token.kind === "new" ? token.value : "",
+      token.kind === "saved"
+        ? props.host.accessToken
+        : token.kind === "new"
+          ? token.value
+          : reference !== undefined && Result.isSuccess(reference)
+            ? reference.success
+            : "",
   };
-  const valid = Option.isSome(parseEasDeviceHostDraft(next));
+  const valid = referenceIssue === null && Option.isSome(parseEasDeviceHostDraft(next));
   // Why Save is off, for the limits the fields' ranges do not show.
   const problem = valid
     ? null
-    : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
-      ? "Idle minutes must be smaller than session minutes."
-      : "Give the host a label and limits within the ranges shown.";
+    : referenceIssue !== null
+      ? `Expo access token: ${referenceIssue}`
+      : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
+        ? "Idle minutes must be smaller than session minutes."
+        : "Give the host a label and limits within the ranges shown.";
   const apps = account.status === "signed-in" ? account.account.apps : [];
 
   // A check answers for the credential it was asked about: a later check or a
@@ -206,8 +246,8 @@ function EasDeviceHostEditor(props: {
         ...(token.kind === "saved" && !props.isNew ? { hostId: props.host.id } : {}),
         // A cleared token is sent as empty, so the check does not fall back to
         // the saved one that Save is about to drop.
-        ...(token.kind === "new"
-          ? { accessToken: token.value }
+        ...(token.kind === "new" || token.kind === "reference"
+          ? { accessToken: next.accessToken }
           : token.kind === "cleared"
             ? { accessToken: "" }
             : {}),
@@ -293,28 +333,48 @@ function EasDeviceHostEditor(props: {
               <label htmlFor={tokenId} className="block">
                 Expo access token
               </label>
-              <div className="flex items-center gap-2">
-                <SecretInput
+              <div className="flex items-start gap-2">
+                <CredentialSourceField
                   id={tokenId}
-                  className="min-w-0 flex-1"
-                  configured={token.kind === "saved"}
-                  value={token.kind === "new" ? token.value : ""}
+                  label="Expo access token"
+                  environmentId={props.environmentId}
+                  secretProviders={props.secretProviders}
+                  className="flex-1"
                   disabled={props.busy}
-                  placeholder="Optional"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    // Emptying the field is not clearing the saved token; the
-                    // Clear button is, so a saved token comes back here.
+                  draft={token.kind === "reference" ? token.draft : LITERAL_CREDENTIAL_DRAFT}
+                  onDraftChange={(next) => {
                     setToken(
-                      value
-                        ? { kind: "new", value }
-                        : props.host.accessToken
+                      next.provider !== null
+                        ? { kind: "reference", draft: next }
+                        : savedLiteral
                           ? { kind: "saved" }
                           : { kind: "cleared" },
                     );
                     resetAccount();
                   }}
-                />
+                >
+                  <SecretInput
+                    id={tokenId}
+                    className="min-w-0 flex-1"
+                    configured={token.kind === "saved"}
+                    value={token.kind === "new" ? token.value : ""}
+                    disabled={props.busy}
+                    placeholder="Optional"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      // Emptying the field is not clearing the saved token; the
+                      // Clear button is, so a saved token comes back here.
+                      setToken(
+                        value
+                          ? { kind: "new", value }
+                          : savedLiteral
+                            ? { kind: "saved" }
+                            : { kind: "cleared" },
+                      );
+                      resetAccount();
+                    }}
+                  />
+                </CredentialSourceField>
                 {token.kind !== "cleared" ? (
                   <Button
                     type="button"
@@ -345,7 +405,7 @@ function EasDeviceHostEditor(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.busy || account.status === "checking"}
+                disabled={props.busy || account.status === "checking" || referenceIssue !== null}
                 onClick={() => void checkAccount()}
               >
                 {account.status === "checking" ? <Spinner size="xs" /> : null} Check account
