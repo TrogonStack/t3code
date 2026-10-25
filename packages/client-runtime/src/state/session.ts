@@ -2,6 +2,7 @@ import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/con
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
@@ -36,6 +37,7 @@ function initialConfigOption<E>(
 }
 
 const DEFAULT_SESSION_STATE_TIMEOUT_MS = 6_000;
+const MAX_SESSION_STATE_TIMEOUT_MS = 60_000;
 
 export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",
@@ -47,19 +49,23 @@ export const fetchEnvironmentSessionState = Effect.fn(
   >;
   readonly timeoutMs?: number;
 }) {
-  return yield* executeAuthenticatedEnvironmentHttpRequest({
-    ...input,
-    group: "auth",
-    method: "GET",
-    url: (urls) => urls.session(),
-    timeoutMs: input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS,
-    request: ({ client, headers }) => client.session({ headers }),
-    // This endpoint returns 200 with authenticated:false for expired credentials.
-    isUnauthorizedResponse: (response) => !response.authenticated,
-  }).pipe(
+  let timeoutMs = input.timeoutMs ?? DEFAULT_SESSION_STATE_TIMEOUT_MS;
+  for (;;) {
+    const result = yield* executeAuthenticatedEnvironmentHttpRequest({
+      ...input,
+      group: "auth",
+      method: "GET",
+      url: (urls) => urls.session(),
+      timeoutMs,
+      request: ({ client, headers }) => client.session({ headers }),
+      // This endpoint returns 200 with authenticated:false for expired credentials.
+      isUnauthorizedResponse: (response) => !response.authenticated,
+    }).pipe(Effect.result);
+    if (Result.isSuccess(result)) return result.success;
     // A timeout says nothing about grants; failing would show a busy host as read-only.
-    Effect.retry({ while: (error) => error._tag === "RemoteEnvironmentAuthTimeoutError" }),
-  );
+    if (result.failure._tag !== "RemoteEnvironmentAuthTimeoutError") return yield* result.failure;
+    timeoutMs = Math.min(timeoutMs * 2, MAX_SESSION_STATE_TIMEOUT_MS);
+  }
 });
 
 function makeEnvironmentSessionAtoms<R, E>(

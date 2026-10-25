@@ -525,14 +525,17 @@ describe("authenticated environment HTTP requests", () => {
   );
 
   it.effect(
-    "keeps asking for session permissions while the environment is too slow to answer",
+    "waits longer for session permissions each time the environment is too slow to answer",
     () =>
       Effect.gen(function* () {
         const firstRequestSent = yield* Deferred.make<void>();
+        const retrySent = yield* Deferred.make<void>();
+        let answerRetry: (response: Response) => void = () => {};
         const harness = makeHarness((requestNumber) => {
-          if (requestNumber > 1) return Response.json(SESSION);
-          Deferred.doneUnsafe(firstRequestSent, Effect.void);
-          return new Promise<Response>(() => {});
+          Deferred.doneUnsafe(requestNumber === 1 ? firstRequestSent : retrySent, Effect.void);
+          return new Promise<Response>((resolve) => {
+            if (requestNumber > 1) answerRetry = resolve;
+          });
         });
         const session = yield* fetchEnvironmentSessionState({
           prepared: { ...PREPARED, httpAuthorization: { _tag: "Bearer", token: "bearer-token" } },
@@ -542,6 +545,9 @@ describe("authenticated environment HTTP requests", () => {
 
         yield* Deferred.await(firstRequestSent);
         yield* TestClock.adjust("1 second");
+        yield* Deferred.await(retrySent);
+        yield* TestClock.adjust("1500 millis");
+        answerRetry(Response.json(SESSION));
 
         expect(yield* Fiber.join(session)).toEqual(SESSION);
         expect(harness.calls).toHaveLength(2);
