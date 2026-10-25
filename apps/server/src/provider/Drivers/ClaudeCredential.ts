@@ -1,21 +1,7 @@
 /**
- * ClaudeCredential: liveness check for a configured Claude OAuth token.
- *
- * The capability probe reports which credential the CLI *found*, never whether
- * Anthropic still honours it. An expired or revoked setup token still reads as
- * `tokenSource: "CLAUDE_CODE_OAUTH_TOKEN"`, so Settings would keep claiming the
- * provider is authenticated right up until a turn fails. This module closes
- * that gap with one cheap authenticated GET.
- *
- * `GET /v1/models` is used because it is the only first-party endpoint that
- * accepts the token, costs no message quota, and answers the only question
- * worth asking: does Anthropic still accept this credential.
- *
- * Only a value that looks like an Anthropic credential is ever sent. Anything
- * else is a question for someone other than Anthropic, and a `401` earned by an
- * unresolved secret reference or a placeholder would blame the token for a
- * problem that is not the token's.
- *
+ * Liveness check for a configured Claude OAuth token via one cheap `GET /v1/models`: the probe
+ * only reports which credential was found. Only Anthropic-shaped values are sent, so a
+ * placeholder never causes a misleading 401.
  * @module provider/Drivers/ClaudeCredential
  */
 import * as Duration from "effect/Duration";
@@ -34,12 +20,8 @@ export type ClaudeCredentialVerdict = "live" | "rejected" | "unknown";
 
 const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models?limit=1";
 /**
- * `sk-ant-` is shared by Anthropic setup tokens (`sk-ant-oat01-`) and API keys
- * (`sk-ant-api03-`). The tail is spelled out because the prefix alone accepts
- * `sk-ant-oat01-${MY_TOKEN}`, and a placeholder that happens to carry the
- * prefix is still a placeholder. Anything outside the character set key
- * material is written with is treated as not a credential, which costs at most
- * an unknown verdict and never a wrong one.
+ * `sk-ant-` covers setup tokens (`sk-ant-oat01-`) and API keys (`sk-ant-api03-`). The tail is
+ * spelled out so placeholders like `sk-ant-oat01-${MY_TOKEN}` are not treated as credentials.
  */
 const ANTHROPIC_CREDENTIAL = /^sk-ant-[A-Za-z0-9._~+/=-]+$/;
 const ANTHROPIC_VERSION_HEADER = "2023-06-01";

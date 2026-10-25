@@ -90,7 +90,6 @@ const layerFakeFileSystem = (realPaths: Record<string, string>) =>
           ),
   } as never);
 
-/** Starts a run on a thread whose worktree folder is missing, with routing reads failing after. */
 function startWithMissingWorktree(
   worktreePath: string,
   realPaths: Record<string, string> = defaultRealPaths,

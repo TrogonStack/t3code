@@ -258,7 +258,7 @@ describe("VcsProcess.run", () => {
       }),
   );
 
-  it.effect("bounds a synthetic burst of GitHub API processes", () =>
+  it.effect("bounds a burst of processes that share a concurrency key", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
       const starts = yield* Queue.unbounded<number>();
@@ -294,10 +294,11 @@ describe("VcsProcess.run", () => {
       const burst = yield* Effect.all(
         Array.from({ length: 32 }, (_, index) =>
           service.run({
-            operation: `synthetic.github.${index}`,
-            command: "gh",
+            operation: `synthetic.cli.${index}`,
+            command: "host-cli",
             args: ["api", "user"],
             cwd: "/workspace",
+            concurrency: { key: "host-cli", limit: 4 },
           }),
         ),
         { concurrency: "unbounded" },
@@ -391,78 +392,28 @@ describe("VcsProcess.run", () => {
     }).pipe(provideLive),
   );
 
-  const exitWith = (command: string, stderr: string) =>
-    VcsProcess.make.pipe(
-      Effect.provideService(
-        ProcessRunner.ProcessRunner,
-        ProcessRunner.ProcessRunner.of({
-          run: () =>
-            Effect.succeed({
-              stdout: "",
-              stderr,
-              code: ChildProcessSpawner.ExitCode(1),
-              timedOut: false,
-              stdoutTruncated: false,
-              stderrTruncated: false,
-              stdoutInvalidUtf8: false,
-              stderrInvalidUtf8: false,
-            }),
-        }),
-      ),
-      Effect.flatMap((service) => service.run({ ...baseInput, command })),
-      Effect.flip,
-    );
-
-  it.effect("says the branch's rules refused the merge, in this repository's own words", () =>
+  it.effect("reads a failure with the command's own classifier and names it in its terms", () =>
     Effect.gen(function* () {
-      const providerStderr =
-        "X Pull request acme/web#7 is not mergeable: the base branch policy prohibits the merge.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\n";
-      const error = yield* exitWith("gh", providerStderr);
+      const fail = (input: Partial<VcsProcess.VcsProcessInput>) =>
+        run({
+          operation: "test.classify",
+          command: "node",
+          args: ["-e", "process.stderr.write('HTTP 404: 404 Not Found'); process.exit(1)"],
+          cwd: process.cwd(),
+          ...input,
+        }).pipe(Effect.flip);
 
-      expect(error).toMatchObject({
-        detail: "The target branch's rules do not allow this merge yet.",
-        failureKind: "merge-blocked",
-      });
-      expect(error.message).not.toContain(providerStderr);
-    }),
-  );
-
-  it.effect(
-    "separates a conflict from a rule, since only one of them is the branch's contents",
-    () =>
-      Effect.gen(function* () {
-        const error = yield* exitWith(
-          "gh",
-          "X Pull request acme/web#7 is not mergeable: the merge commit cannot be cleanly created.\n",
-        );
-
-        expect(error).toMatchObject({
-          detail: "The two branches conflict, so no merge commit can be created from them.",
-          failureKind: "merge-conflict",
-        });
-      }),
-  );
-
-  it.effect("recognises a pull request somebody else already merged", () =>
-    Effect.gen(function* () {
-      const error = yield* exitWith("gh", "X Pull request acme/web#7 was already merged\n");
-
-      expect(error).toMatchObject({
-        detail: "The pull request has already been merged.",
-        failureKind: "already-merged",
-      });
-    }),
-  );
-
-  it.effect("leaves other tools the generic reason rather than guessing at their wording", () =>
-    Effect.gen(function* () {
-      const error = yield* exitWith("glab", "the merge commit cannot be cleanly created");
-
-      expect(error).toMatchObject({
-        detail: "Process exited with a non-zero status.",
+      expect(yield* fail({})).toMatchObject({
         failureKind: "command-failed",
+        detail: "Process exited with a non-zero status.",
       });
-    }),
+      expect(
+        yield* fail({
+          classifyFailure: (stderr) => (stderr.includes("404") ? "not-found" : null),
+          notFoundDetail: "Merge request not found.",
+        }),
+      ).toMatchObject({ failureKind: "not-found", detail: "Merge request not found." });
+    }).pipe(provideLive),
   );
 
   it.effect("retains spawn causes without exposing process arguments in the error message", () =>
