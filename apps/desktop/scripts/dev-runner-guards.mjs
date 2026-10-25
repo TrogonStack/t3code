@@ -1,4 +1,21 @@
+import * as NodePath from "node:path";
+
 const RUNNER_SCRIPT_NAME = "dev-electron.mjs";
+
+const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// `pkill -f` patterns for the Electron apps a runner launches from one checkout.
+export function devAppPattern(desktopDir) {
+  return `(^| )--t3code-dev-root=${escapeRegExp(desktopDir)}( |$)`;
+}
+
+// The backend Electron spawns carries no dev-root tag and is the runner's grandchild, so neither
+// the tag nor `pkill -P` reaches it once its Electron parent is gone. A hung one keeps the T3
+// home's ownership lock and every later start fails with ServerAlreadyRunningError.
+export function devBackendPattern(desktopDir) {
+  const serverEntry = NodePath.join(NodePath.dirname(desktopDir), "server", "dist", "bin.mjs");
+  return `(^| )${escapeRegExp(serverEntry)} --bootstrap-fd( |$)`;
+}
 
 export function parseRunnerRecord(text) {
   let parsed;

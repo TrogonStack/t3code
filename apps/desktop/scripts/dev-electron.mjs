@@ -9,7 +9,7 @@ import {
   resolveElectronLaunchCommand,
 } from "./electron-launcher.mjs";
 import { acquireRunnerRecord, releaseRunnerRecord } from "./dev-runner-control.mjs";
-import { createCrashLoopBreaker } from "./dev-runner-guards.mjs";
+import { createCrashLoopBreaker, devAppPattern, devBackendPattern } from "./dev-runner-guards.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
@@ -49,6 +49,8 @@ const watchedDirectories = [
   { directory: "../server/dist", files: new Set(["bin.mjs"]) },
 ];
 const forcedShutdownTimeoutMs = 1_500;
+const backendShutdownTimeoutMs = 4_000;
+const backendPollIntervalMs = 100;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
 const orphanCheckIntervalMs = 1_000;
@@ -124,14 +126,32 @@ function cleanupStaleDevApps() {
     return;
   }
 
-  const escapedDesktopDir = desktopDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  NodeChildProcess.spawnSync(
-    "pkill",
-    ["-f", "--", `(^| )--t3code-dev-root=${escapedDesktopDir}( |$)`],
-    {
+  NodeChildProcess.spawnSync("pkill", ["-f", "--", devAppPattern(desktopDir)], {
+    stdio: "ignore",
+  });
+}
+
+// pkill and pgrep exit 0 only when the pattern matched a process.
+function matchDevBackends(command, args) {
+  return (
+    NodeChildProcess.spawnSync(command, [...args, "-f", "--", devBackendPattern(desktopDir)], {
       stdio: "ignore",
-    },
+    }).status === 0
   );
+}
+
+async function stopStaleDevBackends() {
+  if (hostPlatform === "win32" || !matchDevBackends("pkill", ["-TERM"])) {
+    return;
+  }
+
+  for (let waited = 0; waited < backendShutdownTimeoutMs; waited += backendPollIntervalMs) {
+    await new Promise((resolve) => setTimeout(resolve, backendPollIntervalMs));
+    if (!matchDevBackends("pgrep", [])) {
+      return;
+    }
+  }
+  matchDevBackends("pkill", ["-KILL"]);
 }
 
 function startApp() {
@@ -194,6 +214,8 @@ function restartAfterFailure(app) {
 async function stopApp() {
   const app = currentApp;
   if (!app) {
+    // A crashed Electron is already gone, but its backend may still hold the T3 home.
+    await stopStaleDevBackends();
     return;
   }
 
@@ -228,6 +250,7 @@ async function stopApp() {
       finish();
     }, forcedShutdownTimeoutMs).unref();
   });
+  await stopStaleDevBackends();
 }
 
 function scheduleRestart() {
@@ -316,6 +339,7 @@ const orphanCheck = setInterval(() => {
 
 startWatchers();
 cleanupStaleDevApps();
+await stopStaleDevBackends();
 startApp();
 
 process.once("SIGINT", () => {
