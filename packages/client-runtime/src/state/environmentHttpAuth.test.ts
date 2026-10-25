@@ -12,10 +12,13 @@ import {
   OrchestrationV2ThreadTranscript,
   type OrchestrationV2ThreadHistoryPage,
 } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import type { HttpClient } from "effect/http";
 
 import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
@@ -519,6 +522,30 @@ describe("authenticated environment HTTP requests", () => {
       });
       expect(harness.calls).toHaveLength(2);
     }),
+  );
+
+  it.effect(
+    "keeps asking for session permissions while the environment is too slow to answer",
+    () =>
+      Effect.gen(function* () {
+        const firstRequestSent = yield* Deferred.make<void>();
+        const harness = makeHarness((requestNumber) => {
+          if (requestNumber > 1) return Response.json(SESSION);
+          Deferred.doneUnsafe(firstRequestSent, Effect.void);
+          return new Promise<Response>(() => {});
+        });
+        const session = yield* fetchEnvironmentSessionState({
+          prepared: { ...PREPARED, httpAuthorization: { _tag: "Bearer", token: "bearer-token" } },
+          signer: Option.none(),
+          timeoutMs: 1_000,
+        }).pipe(Effect.provide(harness.httpLayer), Effect.forkChild({ startImmediately: true }));
+
+        yield* Deferred.await(firstRequestSent);
+        yield* TestClock.adjust("1 second");
+
+        expect(yield* Fiber.join(session)).toEqual(SESSION);
+        expect(harness.calls).toHaveLength(2);
+      }),
   );
 
   it.effect("reports persistent session rejection instead of showing missing permissions", () =>
