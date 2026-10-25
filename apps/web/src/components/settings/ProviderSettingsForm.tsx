@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Result from "effect/Result";
 import {
+  isSecretProviderSecretSource,
   isSecretSetting,
   type EnvironmentId,
   type ProviderSettingsFormAnnotation,
@@ -10,6 +10,7 @@ import {
   type ProviderSettingsFormOption,
   type ProviderSettingsFormSchemaAnnotation,
   type SecretProviderSecretSource,
+  type SettingsSecretValue,
 } from "@t3tools/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
 
@@ -18,14 +19,7 @@ import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { SecretInput } from "./SecretInput";
-import {
-  credentialSourceDraft,
-  credentialSourceFromDraft,
-  CredentialSourceField,
-  hasSavedCredential,
-  type CredentialSourceDraft,
-  type SecretProviders,
-} from "./SecretSourceControls";
+import { hasSavedCredential, SecretField, type SecretProviders } from "./SecretSourceControls";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -339,53 +333,22 @@ function SecretSettingsControl({
     value !== null && typeof value === "object"
       ? (value as Record<string, unknown>)[field.key]
       : undefined;
-  const savedKey = JSON.stringify(saved ?? "");
-  const [pending, setPending] = useState<{
-    readonly key: string;
-    readonly draft: CredentialSourceDraft;
-  } | null>(null);
-  const draft = pending?.key === savedKey ? pending.draft : credentialSourceDraft(saved);
-  const commit = (next: string | SecretProviderSecretSource) => {
-    setPending(null);
+  const stored =
+    typeof saved === "string" || isSecretProviderSecretSource(saved) ? saved : undefined;
+  const commit = (next: SettingsSecretValue) =>
     onChange(nextProviderConfigWithFieldValue(value, field, next));
-  };
-  const wide = draft.provider !== null || Object.keys(secretSources.secretProviders).length > 0;
   return (
-    <div
-      className={cn(
-        "flex w-full min-w-0 items-start gap-2",
-        wide ? "@min-[32rem]/settings-row:w-80" : "@min-[32rem]/settings-row:w-56",
-      )}
-    >
-      <CredentialSourceField
+    <div className="flex w-full min-w-0 items-start gap-2 @min-[32rem]/settings-row:w-80">
+      <SecretField
         id={inputId}
         label={field.label}
         environmentId={secretSources.environmentId}
         secretProviders={secretSources.secretProviders}
         className="flex-1"
-        draft={draft}
-        onDraftChange={(next) => setPending({ key: savedKey, draft: next })}
-        onReferenceCommit={(next) => {
-          const source = credentialSourceFromDraft(next, secretSources.secretProviders);
-          if (
-            source !== undefined &&
-            Result.isSuccess(source) &&
-            JSON.stringify(source.success) !== savedKey
-          ) {
-            commit(source.success);
-          }
-        }}
-      >
-        <SecretInput
-          id={inputId}
-          aria-describedby={descriptionId}
-          size="sm"
-          className="min-w-0 flex-1"
-          configured={hasSavedCredential(saved)}
-          value=""
-          onCommit={commit}
-        />
-      </CredentialSourceField>
+        value={stored}
+        describedBy={descriptionId}
+        onCommit={commit}
+      />
       {hasSavedCredential(saved) ? (
         <Button
           type="button"

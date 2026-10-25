@@ -10,17 +10,27 @@ import {
   type SecretProviderConfig,
   type SecretProviderKind,
   type SecretProviderSecretSource,
+  type SettingsSecretValue,
   type UnifiedSettings,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { AlertTriangleIcon, CheckIcon, KeyRoundIcon, RefreshCwIcon, TypeIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import {
+  AlertTriangleIcon,
+  CheckIcon,
+  KeyRoundIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  TypeIcon,
+} from "lucide-react";
+import { useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
+import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
@@ -30,6 +40,7 @@ import {
   secretProviderReferenceIssue,
   secretProviderSummary,
 } from "./SecretProviderDialog.logic";
+import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
 type EnvironmentDraftSource = "plain" | "1password" | "secret-provider";
@@ -39,6 +50,7 @@ export type SecretProviders = UnifiedSettings["secretProviders"];
 const PLAIN_SOURCE_OPTION = "plain";
 export const EMPTY_SECRET_PROVIDERS: SecretProviders = {};
 const SECRET_PROVIDER_SOURCE_OPTION_PREFIX = "secret-provider:";
+const ADD_SECRET_PROVIDER_OPTION = "add-secret-provider";
 /** Rows saved before named providers keep their own account; new rows cannot pick it. */
 const ONE_PASSWORD_SOURCE_OPTION_PREFIX = "1password:";
 
@@ -134,6 +146,7 @@ export function EnvironmentSourceSelect(props: {
   readonly ariaLabel: string;
   readonly onChange: (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => void;
 }) {
+  const navigate = useNavigate();
   const sourceOptions = environmentSourceOptions(props.row, props.secretProviders);
   const selectedOption = environmentDraftSourceOption(props.row);
   const selectedSourceOption =
@@ -143,6 +156,10 @@ export function EnvironmentSourceSelect(props: {
       value={selectedOption}
       onValueChange={(option) => {
         if (option === null || option === selectedOption) return;
+        if (option === ADD_SECRET_PROVIDER_OPTION) {
+          void navigate({ to: "/settings/secrets" });
+          return;
+        }
         if (option === PLAIN_SOURCE_OPTION) {
           props.onChange({ source: "plain", value: "", sensitive: true });
           return;
@@ -173,6 +190,12 @@ export function EnvironmentSourceSelect(props: {
             </span>
           </SelectItem>
         ))}
+        <SelectItem value={ADD_SECRET_PROVIDER_OPTION}>
+          <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            <PlusIcon className="size-3.5 shrink-0" />
+            <span className="truncate">Add secret provider</span>
+          </span>
+        </SelectItem>
       </SelectPopup>
     </Select>
   );
@@ -343,31 +366,36 @@ export function SecretCheckButton(props: {
   );
 }
 
-/** A credential setting being edited: the literal while `provider` is null, else a reference. */
-export interface CredentialSourceDraft {
-  readonly provider: string | null;
-  readonly reference: string;
-}
+/** A secret field being edited: the literal typed so far, or a provider and its reference. */
+export type SecretFieldDraft =
+  | { readonly kind: "literal"; readonly text: string }
+  | { readonly kind: "reference"; readonly provider: string; readonly reference: string };
 
-export const LITERAL_CREDENTIAL_DRAFT: CredentialSourceDraft = { provider: null, reference: "" };
+export const EMPTY_SECRET_FIELD_DRAFT: SecretFieldDraft = { kind: "literal", text: "" };
 
-export function credentialSourceDraft(value: unknown): CredentialSourceDraft {
+/** A saved literal arrives redacted, so only a saved reference is shown back for editing. */
+export function secretFieldDraft(value: unknown): SecretFieldDraft {
   return isSecretProviderSecretSource(value)
-    ? { provider: value.provider, reference: value.reference }
-    : LITERAL_CREDENTIAL_DRAFT;
+    ? { kind: "reference", provider: value.provider, reference: value.reference }
+    : EMPTY_SECRET_FIELD_DRAFT;
 }
 
-/** The reference a draft names, or why it is not one yet; `undefined` while it is a literal. */
-export function credentialSourceFromDraft(
-  draft: CredentialSourceDraft,
+/**
+ * What saving the draft writes, or why it cannot be saved yet. An empty literal is
+ * `undefined`: nothing was typed, and the caller decides whether that keeps or clears.
+ */
+export function secretFieldSubmission(
+  draft: SecretFieldDraft,
   secretProviders: SecretProviders,
-): Result.Result<SecretProviderSecretSource, string> | undefined {
-  return draft.provider === null
-    ? undefined
-    : secretProviderSourceFromDraft(
-        { provider: draft.provider, reference: draft.reference.trim() },
-        secretProviders,
-      );
+): Result.Result<SettingsSecretValue | undefined, string> {
+  if (draft.kind === "literal") {
+    const text = draft.text.trim();
+    return Result.succeed(text.length > 0 ? text : undefined);
+  }
+  return secretProviderSourceFromDraft(
+    { provider: draft.provider, reference: draft.reference.trim() },
+    secretProviders,
+  );
 }
 
 /** A saved credential setting holds a literal or names a secret. */
@@ -375,65 +403,103 @@ export function hasSavedCredential(value: unknown): boolean {
   return isSecretProviderSecretSource(value) || (typeof value === "string" && value.length > 0);
 }
 
-/**
- * A credential input that can read the secret from a configured provider. `children` is the
- * caller's literal input, shown while no provider is chosen.
- */
-export function CredentialSourceField(props: {
+type SecretFieldProps = {
   readonly id: string;
   readonly label: string;
   readonly environmentId: EnvironmentId | undefined;
   readonly secretProviders: SecretProviders;
-  readonly draft: CredentialSourceDraft;
+  /** What is saved; a saved literal is usually redacted. */
+  readonly value: SettingsSecretValue | undefined;
+  /** A literal is saved and redacted. Defaults to any non-empty saved literal. */
+  readonly configured?: boolean | undefined;
+  /** Mask the literal. A plain literal is shown back as saved. */
+  readonly sensitive?: boolean | undefined;
+  readonly placeholder?: string | undefined;
   readonly disabled?: boolean | undefined;
+  readonly describedBy?: string | undefined;
   readonly className?: string | undefined;
-  readonly onDraftChange: (draft: CredentialSourceDraft) => void;
-  readonly onReferenceCommit?: ((draft: CredentialSourceDraft) => void) | undefined;
-  readonly children: ReactNode;
-}) {
-  const { draft, onReferenceCommit } = props;
-  const secretChecks = useSecretSourceChecks(props.environmentId);
-  const showSource = draft.provider !== null || Object.keys(props.secretProviders).length > 0;
-  const row = {
-    source: draft.provider === null ? ("plain" as const) : ("secret-provider" as const),
-    provider: draft.provider ?? "",
-    account: "",
+} & (
+  | {
+      /** Saves a finished literal or reference as soon as it is entered. */
+      readonly onCommit: (next: SettingsSecretValue) => void;
+      readonly draft?: never;
+      readonly onDraftChange?: never;
+    }
+  | {
+      /** Holds the draft in the caller, for a form that saves it later. */
+      readonly draft: SecretFieldDraft;
+      readonly onDraftChange: (draft: SecretFieldDraft) => void;
+      readonly onCommit?: never;
+    }
+);
+
+/**
+ * A credential input that holds a literal or reads it from a secret provider. The
+ * source picker is always shown, so the field reads as secret-capable even before a
+ * provider exists, and a reference can be checked against the server.
+ */
+export function SecretField(props: SecretFieldProps) {
+  const { onCommit } = props;
+  const savedKey = JSON.stringify(props.value ?? "");
+  const [pending, setPending] = useState<{
+    readonly savedKey: string;
+    readonly draft: SecretFieldDraft;
+  } | null>(null);
+  const draft =
+    props.draft ?? (pending?.savedKey === savedKey ? pending.draft : secretFieldDraft(props.value));
+  const setDraft = (next: SecretFieldDraft) => {
+    if (props.onDraftChange !== undefined) props.onDraftChange(next);
+    else setPending({ savedKey, draft: next });
   };
-  const source = credentialSourceFromDraft(draft, props.secretProviders);
-  const issue =
-    source !== undefined && Result.isFailure(source) && draft.reference.trim().length > 0
-      ? source.failure
+  const secretChecks = useSecretSourceChecks(props.environmentId);
+  const configured =
+    props.configured ?? (typeof props.value === "string" && props.value.length > 0);
+  const savedLiteral = !configured && typeof props.value === "string" ? props.value : "";
+  const row =
+    draft.kind === "literal"
+      ? { source: "plain" as const, provider: "", account: "" }
+      : { source: "secret-provider" as const, provider: draft.provider, account: "" };
+  const submission = secretFieldSubmission(draft, props.secretProviders);
+  const source =
+    Result.isSuccess(submission) && isSecretProviderSecretSource(submission.success)
+      ? submission.success
       : undefined;
-  const sourceKey =
-    source !== undefined && Result.isSuccess(source) ? JSON.stringify(source.success) : undefined;
+  const issue =
+    Result.isFailure(submission) && draft.kind === "reference" && draft.reference.trim() !== ""
+      ? submission.failure
+      : undefined;
+  const sourceKey = source === undefined ? undefined : JSON.stringify(source);
   const check = secretChecks.checks[props.id];
   const checkState = check !== undefined && check.sourceKey === sourceKey ? check.state : undefined;
+
+  const commitReference = () => {
+    if (onCommit !== undefined && source !== undefined && sourceKey !== savedKey) onCommit(source);
+  };
+  const changeSource = (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
+    if (patch.source === "secret-provider" && patch.provider !== undefined) {
+      setDraft({ kind: "reference", provider: patch.provider, reference: "" });
+      return;
+    }
+    setDraft(EMPTY_SECRET_FIELD_DRAFT);
+    if (onCommit !== undefined && isSecretProviderSecretSource(props.value)) onCommit("");
+  };
 
   return (
     <div className={cn("grid min-w-0 gap-1", props.className)}>
       <div className="flex min-w-0 items-center gap-2">
-        {showSource ? (
-          <EnvironmentSourceSelect
-            row={row}
-            secretProviders={props.secretProviders}
-            className="w-28 shrink-0"
-            ariaLabel={`${props.label} source`}
-            onChange={(patch) =>
-              props.onDraftChange(
-                patch.source === "secret-provider" && patch.provider !== undefined
-                  ? { provider: patch.provider, reference: "" }
-                  : LITERAL_CREDENTIAL_DRAFT,
-              )
-            }
-          />
-        ) : null}
-        {draft.provider === null ? (
-          props.children
-        ) : (
+        <EnvironmentSourceSelect
+          row={row}
+          secretProviders={props.secretProviders}
+          className="w-28 shrink-0"
+          ariaLabel={`${props.label} source`}
+          onChange={changeSource}
+        />
+        {draft.kind === "reference" ? (
           <>
             <Input
               id={props.id}
               size="sm"
+              font="mono"
               className="min-w-0 flex-1"
               autoComplete="off"
               spellCheck={false}
@@ -442,29 +508,63 @@ export function CredentialSourceField(props: {
               placeholder={referencePlaceholderFor(row, props.secretProviders)}
               aria-invalid={issue !== undefined || undefined}
               aria-label={`${props.label} secret reference`}
-              onChange={(event) => props.onDraftChange({ ...draft, reference: event.target.value })}
-              onBlur={() => onReferenceCommit?.(draft)}
+              aria-describedby={props.describedBy}
+              onChange={(event) => setDraft({ ...draft, reference: event.target.value })}
+              onBlur={commitReference}
               onKeyDown={(event) => {
-                if (event.key !== "Enter" || onReferenceCommit === undefined) return;
+                if (event.key !== "Enter" || onCommit === undefined) return;
                 event.preventDefault();
-                onReferenceCommit(draft);
+                commitReference();
               }}
             />
             {secretChecks.canCheck && props.environmentId !== undefined ? (
               <SecretCheckButton
                 label={`Check secret for ${props.label}`}
                 state={checkState}
-                disabledReason={
-                  source === undefined || Result.isSuccess(source) ? undefined : source.failure
-                }
+                disabledReason={Result.isFailure(submission) ? submission.failure : undefined}
                 onCheck={() => {
-                  if (source !== undefined && Result.isSuccess(source)) {
-                    void secretChecks.run(props.id, source.success);
-                  }
+                  if (source !== undefined) void secretChecks.run(props.id, source);
                 }}
               />
             ) : null}
           </>
+        ) : props.draft !== undefined ? (
+          <SecretInput
+            id={props.id}
+            size="sm"
+            className="min-w-0 flex-1"
+            configured={configured}
+            value={draft.text}
+            disabled={props.disabled}
+            placeholder={props.placeholder}
+            aria-describedby={props.describedBy}
+            onChange={(event) => setDraft({ kind: "literal", text: event.target.value })}
+          />
+        ) : props.sensitive === false ? (
+          <DraftInput
+            id={props.id}
+            size="sm"
+            className="min-w-0 flex-1"
+            autoComplete="off"
+            spellCheck={false}
+            value={savedLiteral}
+            disabled={props.disabled}
+            placeholder={props.placeholder}
+            aria-describedby={props.describedBy}
+            onCommit={(next) => onCommit?.(next)}
+          />
+        ) : (
+          <SecretInput
+            id={props.id}
+            size="sm"
+            className="min-w-0 flex-1"
+            configured={configured}
+            value={savedLiteral}
+            disabled={props.disabled}
+            placeholder={props.placeholder}
+            aria-describedby={props.describedBy}
+            onCommit={(next) => onCommit?.(next)}
+          />
         )}
       </div>
       {issue !== undefined ? <p className="text-xs text-destructive">{issue}</p> : null}

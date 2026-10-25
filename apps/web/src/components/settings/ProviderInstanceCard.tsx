@@ -18,6 +18,7 @@ import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  isSecretProviderSecretSource,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderSecretSource,
@@ -68,6 +69,7 @@ import {
   EnvironmentSourceSelect,
   referencePlaceholderFor,
   SecretCheckButton,
+  SecretField,
   secretSourceFromDraft,
   useSecretSourceChecks,
   type EnvironmentDraftRow,
@@ -362,56 +364,9 @@ function ProviderEnvironmentFieldRow(props: {
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const { variable } = props;
-  const savedRow = makeEnvironmentDraftRow(
-    variable ?? { name: props.field.name, value: "", sensitive: false },
-    0,
-  );
-  // An unfinished source choice waits here until it is valid, so the saved
-  // value stays in place meanwhile. It is dropped once the saved value changes.
-  const savedKey = JSON.stringify(variable);
-  const [pending, setPending] = useState<
-    { readonly savedKey: string; readonly row: EnvironmentDraftRow } | undefined
-  >(undefined);
-  const row = pending !== undefined && pending.savedKey === savedKey ? pending.row : savedRow;
-  const setDraft = (next: EnvironmentDraftRow | undefined) =>
-    setPending(next === undefined ? undefined : { savedKey, row: next });
-  const secretChecks = useSecretSourceChecks(props.environmentId);
-  const hasSecretProviders = Object.keys(props.secretProviders).length > 0;
-
-  const draftSource =
-    row.source === "plain" ? undefined : secretSourceFromDraft(row, props.secretProviders);
-  const sourceIssue =
-    draftSource !== undefined && Result.isFailure(draftSource) && row.reference.length > 0
-      ? `Not saved yet. ${draftSource.failure}`
-      : undefined;
-  const draftSourceKey =
-    draftSource !== undefined && Result.isSuccess(draftSource)
-      ? JSON.stringify(draftSource.success)
-      : undefined;
-  const rowCheck = secretChecks.checks[props.field.name];
-  const checkState =
-    rowCheck !== undefined && rowCheck.sourceKey === draftSourceKey ? rowCheck.state : undefined;
-
-  const changeSource = (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
-    if (patch.source === "plain") {
-      setDraft(undefined);
-      if (savedRow.source !== "plain") props.onCommit(props.field, "");
-      return;
-    }
-    setDraft({ ...row, ...patch, reference: "" });
-  };
-  const commitReference = (reference: string) => {
-    const next = { ...row, reference: reference.trim() };
-    const source = secretSourceFromDraft(next, props.secretProviders);
-    if (Result.isSuccess(source)) props.onCommitSource(props.field, source.success);
-    else setDraft(next);
-  };
-  const value = row.valueRedacted ? "" : row.value;
-  const sensitive = props.field.sensitive !== false;
-
   // A legacy 1Password source needs its account field, which only the
   // Environment editor has, so the variable is edited there instead.
-  if (savedRow.source === "1password") {
+  if (variable !== undefined && makeEnvironmentDraftRow(variable, 0).source === "1password") {
     return (
       <SettingsRow
         title={<label htmlFor={inputId}>{props.field.label}</label>}
@@ -434,83 +389,31 @@ function ProviderEnvironmentFieldRow(props: {
     );
   }
 
+  const value = variable?.value;
   return (
     <SettingsRow
       title={<label htmlFor={inputId}>{props.field.label}</label>}
       description={props.field.description}
       control={
-        <div
-          className={cn(
-            "flex w-full min-w-0 items-center gap-2",
-            hasSecretProviders || row.source !== "plain"
-              ? "@min-[32rem]/settings-row:w-80"
-              : "@min-[32rem]/settings-row:w-56",
-          )}
-        >
-          {hasSecretProviders || row.source !== "plain" ? (
-            <EnvironmentSourceSelect
-              row={row}
-              secretProviders={props.secretProviders}
-              className="w-28 shrink-0"
-              ariaLabel={`${props.field.label} source`}
-              onChange={changeSource}
-            />
-          ) : null}
-          {row.source !== "plain" ? (
-            <>
-              <DraftInput
-                id={inputId}
-                size="sm"
-                font="mono"
-                className="min-w-0 flex-1"
-                autoComplete="off"
-                value={row.reference}
-                onCommit={commitReference}
-                placeholder={referencePlaceholderFor(row, props.secretProviders)}
-                spellCheck={false}
-                aria-invalid={sourceIssue !== undefined || undefined}
-                aria-label={`${props.field.label} secret reference`}
-              />
-              {secretChecks.canCheck && props.environmentId !== undefined ? (
-                <SecretCheckButton
-                  label={`Check secret for ${props.field.label}`}
-                  state={checkState}
-                  disabledReason={
-                    draftSource === undefined || Result.isSuccess(draftSource)
-                      ? undefined
-                      : draftSource.failure
-                  }
-                  onCheck={() => {
-                    if (draftSource !== undefined && Result.isSuccess(draftSource)) {
-                      void secretChecks.run(props.field.name, draftSource.success);
-                    }
-                  }}
-                />
-              ) : null}
-            </>
-          ) : sensitive ? (
-            <SecretInput
-              id={inputId}
-              size="sm"
-              className="min-w-0 flex-1"
-              value={value}
-              onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
-              configured={row.valueRedacted === true}
-              spellCheck={false}
-            />
-          ) : (
-            <DraftInput
-              id={inputId}
-              size="sm"
-              className="min-w-0 flex-1"
-              autoComplete="off"
-              value={value}
-              onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
-              spellCheck={false}
-            />
-          )}
+        <div className="flex w-full min-w-0 items-start gap-2 @min-[32rem]/settings-row:w-80">
+          <SecretField
+            id={inputId}
+            label={props.field.label}
+            environmentId={props.environmentId}
+            secretProviders={props.secretProviders}
+            className="flex-1"
+            value={
+              typeof value === "string" || isSecretProviderSecretSource(value) ? value : undefined
+            }
+            configured={variable?.valueRedacted === true}
+            sensitive={props.field.sensitive !== false}
+            placeholder={props.field.placeholder}
+            onCommit={(next) =>
+              typeof next === "string"
+                ? props.onCommit(props.field, next)
+                : props.onCommitSource(props.field, next)
+            }
+          />
           {variable ? (
             <Button
               type="button"
@@ -524,11 +427,7 @@ function ProviderEnvironmentFieldRow(props: {
           ) : null}
         </div>
       }
-    >
-      {sourceIssue !== undefined ? (
-        <p className="pb-2 text-xs text-destructive">{sourceIssue}</p>
-      ) : null}
-    </SettingsRow>
+    />
   );
 }
 

@@ -15,7 +15,14 @@ import {
   nextProviderEnvironmentWithFieldValue,
   splitDedicatedProviderEnvironment,
 } from "./ProviderInstanceCard";
-import { secretSourceFromDraft } from "./SecretSourceControls";
+import {
+  EMPTY_SECRET_FIELD_DRAFT,
+  secretFieldDraft,
+  secretFieldSubmission,
+  secretSourceFromDraft,
+} from "./SecretSourceControls";
+
+const decodeSecretProviderConfig = Schema.decodeUnknownSync(SecretProviderConfig);
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {
@@ -236,5 +243,64 @@ describe("secretSourceFromDraft", () => {
         account: "my.1password.com",
       }),
     );
+  });
+});
+
+describe("secret field drafts", () => {
+  const vault = SecretProviderId.make("vault");
+  const secretProviders = {
+    [vault]: decodeSecretProviderConfig({
+      kind: "openbao",
+      label: "Vault",
+      address: "https://bao.example.test",
+    }),
+  };
+
+  it("edits a saved reference and starts a redacted literal empty", () => {
+    expect(
+      secretFieldDraft({
+        kind: "secret-provider",
+        provider: vault,
+        reference: SecretProviderReference.make("apps/t3#token"),
+      }),
+    ).toEqual({ kind: "reference", provider: "vault", reference: "apps/t3#token" });
+    expect(secretFieldDraft("<redacted>")).toEqual(EMPTY_SECRET_FIELD_DRAFT);
+    expect(secretFieldDraft(undefined)).toEqual(EMPTY_SECRET_FIELD_DRAFT);
+  });
+
+  it("submits a typed literal trimmed and nothing for an empty one", () => {
+    expect(secretFieldSubmission({ kind: "literal", text: "  ghp_abc " }, {})).toEqual(
+      Result.succeed("ghp_abc"),
+    );
+    expect(secretFieldSubmission({ kind: "literal", text: "   " }, {})).toEqual(
+      Result.succeed(undefined),
+    );
+  });
+
+  it("submits a reference only once it is valid for its provider", () => {
+    expect(
+      secretFieldSubmission(
+        { kind: "reference", provider: "vault", reference: " apps/t3#token " },
+        secretProviders,
+      ),
+    ).toEqual(
+      Result.succeed({ kind: "secret-provider", provider: "vault", reference: "apps/t3#token" }),
+    );
+    expect(
+      Result.isFailure(
+        secretFieldSubmission(
+          { kind: "reference", provider: "vault", reference: "apps/t3" },
+          secretProviders,
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      Result.isFailure(
+        secretFieldSubmission(
+          { kind: "reference", provider: "vault", reference: "" },
+          secretProviders,
+        ),
+      ),
+    ).toBe(true);
   });
 });

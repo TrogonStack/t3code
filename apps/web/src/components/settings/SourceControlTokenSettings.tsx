@@ -13,14 +13,13 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
-import { SecretInput } from "./SecretInput";
 import { Label } from "../ui/label";
 import {
-  credentialSourceDraft,
-  credentialSourceFromDraft,
-  CredentialSourceField,
   hasSavedCredential,
-  type CredentialSourceDraft,
+  SecretField,
+  secretFieldDraft,
+  secretFieldSubmission,
+  type SecretFieldDraft,
 } from "./SecretSourceControls";
 
 export function SourceControlTokenSettings({
@@ -46,10 +45,9 @@ export function SourceControlTokenSettings({
   });
   const defaultHost = definition.publicHost ?? "";
   const [host, setHost] = useState(defaultHost);
-  const [draft, setDraft] = useState("");
-  const [pendingSource, setPendingSource] = useState<{
+  const [pending, setPending] = useState<{
     readonly key: string;
-    readonly draft: CredentialSourceDraft;
+    readonly draft: SecretFieldDraft;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const normalizedHost = host.trim().toLowerCase();
@@ -59,15 +57,8 @@ export function SourceControlTokenSettings({
     .filter(([, value]) => hasSavedCredential(value))
     .map(([saved]) => saved);
   const sourceKey = JSON.stringify([normalizedHost, savedToken ?? ""]);
-  const sourceDraft =
-    pendingSource?.key === sourceKey ? pendingSource.draft : credentialSourceDraft(savedToken);
-  const source = credentialSourceFromDraft(sourceDraft, secretProviders);
-  const submission: SettingsSecretValue | undefined =
-    source === undefined
-      ? draft.trim() || undefined
-      : Result.isSuccess(source)
-        ? source.success
-        : undefined;
+  const draft = pending?.key === sourceKey ? pending.draft : secretFieldDraft(savedToken);
+  const submission = Result.getOrUndefined(secretFieldSubmission(draft, secretProviders));
 
   const save = async (target: string, token: SettingsSecretValue) => {
     setSaving(true);
@@ -82,8 +73,7 @@ export function SourceControlTokenSettings({
     });
     setSaving(false);
     if (result._tag === "Success") {
-      setDraft("");
-      setPendingSource(null);
+      setPending(null);
       onSaved();
     }
   };
@@ -134,23 +124,15 @@ export function SourceControlTokenSettings({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
-            <CredentialSourceField
+            <SecretField
               id={`${definition.kind}-token-${environmentId}`}
               label={`${definition.label} token`}
               environmentId={environmentId}
               secretProviders={secretProviders}
-              draft={sourceDraft}
-              onDraftChange={(next) => setPendingSource({ key: sourceKey, draft: next })}
-            >
-              <SecretInput
-                id={`${definition.kind}-token-${environmentId}`}
-                size="sm"
-                className="min-w-0 flex-1"
-                configured={typeof savedToken === "string" && savedToken.length > 0}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-              />
-            </CredentialSourceField>
+              value={savedToken}
+              draft={draft}
+              onDraftChange={(next) => setPending({ key: sourceKey, draft: next })}
+            />
           </div>
         </div>
         <div className="flex items-center justify-between gap-3">
