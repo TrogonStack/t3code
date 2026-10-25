@@ -481,7 +481,6 @@ export function SecretField(props: SecretFieldProps) {
       return;
     }
     setDraft(EMPTY_SECRET_FIELD_DRAFT);
-    if (onCommit !== undefined && isSecretProviderSecretSource(props.value)) onCommit("");
   };
 
   return (
@@ -558,7 +557,7 @@ export function SecretField(props: SecretFieldProps) {
             id={props.id}
             size="sm"
             className="min-w-0 flex-1"
-            configured={configured}
+            configured={configured || isSecretProviderSecretSource(props.value)}
             value={savedLiteral}
             disabled={props.disabled}
             placeholder={props.placeholder}
