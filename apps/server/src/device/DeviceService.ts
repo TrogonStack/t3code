@@ -56,14 +56,11 @@ import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost
 
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import {
-  ProviderSecretResolver,
-  resolveSettingsSecret,
-} from "../provider/ProviderSecretResolver.ts";
+import { ProviderSecretResolver } from "../provider/ProviderSecretResolver.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import * as SshDeviceHost from "./SshDeviceHost.ts";
 import * as EasDeviceHost from "./EasDeviceHost.ts";
-import { makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
+import { makeExpoApi } from "./ExpoApi.ts";
 import * as Exit from "effect/Exit";
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 
@@ -1110,8 +1107,9 @@ export const make = Effect.gen(function* () {
           ? ""
           : ((yield* settings.getSettings).easDeviceHosts.find((host) => host.id === input.hostId)
               ?.accessToken ?? "");
-      const credential = yield* resolveExpoCredential(
-        yield* resolveSettingsSecret(secrets, input.accessToken ?? saved),
+      const credential = yield* EasDeviceHost.resolveSavedExpoCredential(
+        secrets,
+        input.accessToken ?? saved,
       );
       const viewer = yield* makeExpoApi(yield* HttpClient.HttpClient, credential).viewer;
       return { signedInAs: viewer.name, credentialSource: credential.source, apps: viewer.apps };

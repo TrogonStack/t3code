@@ -15,6 +15,7 @@ import * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -302,6 +303,37 @@ describe("EAS Simulator host", () => {
       expect(yield* ready.devices.boot(catalogDevice!)).toBe("session-1");
       expect(requested).not.toHaveLength(0);
       expect(new Set(requested)).toEqual(new Set([source]));
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("fails instead of using another Expo login when its secret cannot be read", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo();
+      const source = {
+        kind: "secret-provider" as const,
+        provider: SecretProviderId.make("homelab"),
+        reference: SecretProviderReference.make("expo#token"),
+      };
+      const host = yield* makeHost(expo, config({ accessToken: source }), yield* Scope.make()).pipe(
+        Effect.provideService(HostProcess.Environment, { EXPO_TOKEN: "expo-token" }),
+      );
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [catalogDevice] = (yield* ready.devices.list).devices;
+      const failure = yield* ready.devices.boot(catalogDevice!).pipe(Effect.flip);
+      expect(failure.message).toContain('secret provider "homelab"');
+      expect(expo.named("T3CreateEasSimulatorSession")).toHaveLength(0);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
+  it.effect("falls back to EXPO_TOKEN when no token is saved", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo();
+      const host = yield* makeHost(expo, config({ accessToken: "" }), yield* Scope.make()).pipe(
+        Effect.provideService(HostProcess.Environment, { EXPO_TOKEN: "expo-token" }),
+      );
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [catalogDevice] = (yield* ready.devices.list).devices;
+      expect(yield* ready.devices.boot(catalogDevice!)).toBe("session-1");
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 

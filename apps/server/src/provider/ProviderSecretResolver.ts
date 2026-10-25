@@ -4,16 +4,17 @@
  * re-prompt. `invalidate` is wired to the Settings refresh button.
  * @module provider/ProviderSecretResolver
  */
-import type {
-  OnePasswordAccountSummary,
-  ProviderInstanceEnvironment,
-  ProviderSecretSource,
+import {
+  type OnePasswordAccountSummary,
+  type ProviderInstanceEnvironment,
+  type ProviderSecretSource,
   SecretProviderId,
-  SecretSourceCheckResult,
-  SettingsSecretValue,
+  type SecretSourceCheckResult,
+  type SettingsSecretValue,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import type { ResolvedProviderEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type { ProviderSecretReference } from "./ProviderSecretReference.ts";
@@ -98,16 +99,43 @@ export class ProviderSecretResolver extends Context.Reference<ProviderSecretReso
   },
 ) {}
 
+export class SettingsSecretUnresolvedError extends Schema.TaggedError<SettingsSecretUnresolvedError>()(
+  "SettingsSecretUnresolvedError",
+  { provider: SecretProviderId },
+) {
+  override get message(): string {
+    return `Could not read the credential from the secret provider "${this.provider}". Unlock or fix it in Settings, then try again.`;
+  }
+}
+
 /**
- * The secret a credential setting holds or names, through the resolver's cache. An unreadable
- * secret comes back as `""`, so callers treat it exactly like a missing token.
+ * The secret a credential setting holds or names, through the resolver's cache. A named secret
+ * that cannot be read, or reads empty, fails instead of passing for a missing token, so callers
+ * that would fall back to another credential cannot silently switch accounts.
+ */
+export const requireSettingsSecret = (
+  resolver: ProviderSecretResolverShape,
+  value: SettingsSecretValue,
+): Effect.Effect<string, SettingsSecretUnresolvedError> =>
+  typeof value === "string"
+    ? Effect.succeed(value)
+    : resolver.resolve([{ name: "T3_SETTINGS_SECRET", value, sensitive: true }]).pipe(
+        Effect.flatMap(({ variables }) => {
+          const secret = variables[0]?.value ?? "";
+          return secret.trim() === ""
+            ? Effect.fail(new SettingsSecretUnresolvedError({ provider: value.provider }))
+            : Effect.succeed(secret);
+        }),
+      );
+
+/**
+ * Like `requireSettingsSecret`, but an unreadable secret comes back as `""`, so callers treat it
+ * exactly like a missing token. Only for credentials whose documented fallback is acceptable.
  */
 export const resolveSettingsSecret = (
   resolver: ProviderSecretResolverShape,
   value: SettingsSecretValue,
 ): Effect.Effect<string> =>
-  typeof value === "string"
-    ? Effect.succeed(value)
-    : resolver
-        .resolve([{ name: "T3_SETTINGS_SECRET", value, sensitive: true }])
-        .pipe(Effect.map(({ variables }) => variables[0]?.value ?? ""));
+  requireSettingsSecret(resolver, value).pipe(
+    Effect.catchTags({ SettingsSecretUnresolvedError: () => Effect.succeed("") }),
+  );

@@ -11,6 +11,7 @@ import {
   DeviceOperationError,
   type DevicePlatform,
   type EasDeviceHostConfig,
+  type SettingsSecretValue,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -34,7 +35,8 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import {
   ProviderSecretResolver,
-  resolveSettingsSecret,
+  type ProviderSecretResolverShape,
+  requireSettingsSecret,
 } from "../provider/ProviderSecretResolver.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { findEasProjectId } from "./easProjectId.ts";
@@ -109,6 +111,15 @@ const decodePathSegment = (segment: string): string | null => {
   }
 };
 
+/**
+ * The Expo credential a host's setting holds or names. Every session bills the account behind
+ * it, so a named secret that cannot be read fails rather than falling back to another login.
+ */
+export const resolveSavedExpoCredential = (
+  secrets: ProviderSecretResolverShape,
+  saved: SettingsSecretValue,
+) => requireSettingsSecret(secrets, saved).pipe(Effect.flatMap(resolveExpoCredential));
+
 export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDeviceHostConfig) {
   const http = yield* HttpClient.HttpClient;
   const fs = yield* FileSystem.FileSystem;
@@ -168,11 +179,10 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       ...(cause === undefined ? {} : { cause }),
     });
 
-  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveSettingsSecret(
+  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveSavedExpoCredential(
     secrets,
     config.accessToken,
   ).pipe(
-    Effect.flatMap(resolveExpoCredential),
     Effect.map((credential) => makeExpoApi(http, credential)),
     Effect.provide(services),
     Effect.mapError((error) => unavailable(error.message, error)),
