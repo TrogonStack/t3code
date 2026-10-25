@@ -3,6 +3,8 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   createCrashLoopBreaker,
   decideTakeover,
+  devAppPattern,
+  devBackendPattern,
   isVerifiedRunner,
   parseRunnerRecord,
 } from "./dev-runner-guards.mjs";
@@ -90,5 +92,32 @@ describe("crash loop breaker", () => {
     assert.isFalse(breaker.recordAbnormalExit(2_000).tripped);
     assert.isFalse(breaker.recordAbnormalExit(3_000).tripped);
     assert.isTrue(breaker.recordAbnormalExit(4_000).tripped);
+  });
+});
+
+describe("dev process patterns", () => {
+  const matches = (pattern, command) => new RegExp(pattern).test(command);
+  const electron =
+    "/work/a/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron";
+
+  it("matches the orphaned backend of this checkout only", () => {
+    const pattern = devBackendPattern(desktopDir);
+    assert.isTrue(
+      matches(pattern, `${electron} /work/a/apps/server/dist/bin.mjs --bootstrap-fd 3`),
+    );
+    assert.isFalse(
+      matches(pattern, `${electron} /work/b/apps/server/dist/bin.mjs --bootstrap-fd 3`),
+    );
+    assert.isFalse(matches(pattern, "node /work/a/apps/server/dist/bin.mjs serve"));
+  });
+
+  it("escapes checkout paths instead of treating them as regex", () => {
+    const pattern = devAppPattern("/work/a+b (1)/apps/desktop");
+    assert.isTrue(
+      matches(pattern, "Electron --t3code-dev-root=/work/a+b (1)/apps/desktop main.cjs"),
+    );
+    assert.isFalse(
+      matches(pattern, "Electron --t3code-dev-root=/work/aab 1/apps/desktop main.cjs"),
+    );
   });
 });
