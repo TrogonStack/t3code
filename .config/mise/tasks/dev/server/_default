@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Install, build the resource monitor, then start only the server from source"
+#MISE depends=["ensure:resource-monitor"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+vp run dev:server "$@"
