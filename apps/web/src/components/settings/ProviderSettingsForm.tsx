@@ -2,11 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
+  isSecretProviderSecretSource,
   isSecretSetting,
+  type EnvironmentId,
   type ProviderSettingsFormAnnotation,
   type ProviderSettingsFormControl,
   type ProviderSettingsFormOption,
   type ProviderSettingsFormSchemaAnnotation,
+  type SecretProviderSecretSource,
+  type SettingsSecretValue,
 } from "@t3tools/contracts";
 import { PlusIcon, XIcon } from "lucide-react";
 
@@ -15,6 +19,7 @@ import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { SecretInput } from "./SecretInput";
+import { hasSavedCredential, SecretField, type SecretProviders } from "./SecretSourceControls";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -265,10 +270,15 @@ function readProviderConfigBoolean(config: unknown, key: string, defaultValue = 
 export function nextProviderConfigWithFieldValue(
   config: unknown,
   field: ProviderSettingsFieldModel,
-  value: string | boolean,
+  value: string | boolean | SecretProviderSecretSource,
 ): Record<string, unknown> | undefined {
   const base: Record<string, unknown> =
     config !== null && typeof config === "object" ? { ...(config as Record<string, unknown>) } : {};
+
+  if (typeof value === "object") {
+    base[field.key] = value;
+    return base;
+  }
 
   if (typeof value === "boolean") {
     const emptyBooleanValue = field.defaultBooleanValue ?? false;
@@ -295,6 +305,63 @@ interface ProviderSettingsFormProps {
   readonly idPrefix: string;
   readonly variant: "card" | "dialog" | "settings";
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
+  /** Lets secret fields in the settings variant read from a configured secret provider. */
+  readonly secretSources?: SecretSourceOptions | undefined;
+}
+
+interface SecretSourceOptions {
+  readonly environmentId: EnvironmentId;
+  readonly secretProviders: SecretProviders;
+}
+
+function SecretSettingsControl({
+  field,
+  value,
+  inputId,
+  descriptionId,
+  secretSources,
+  onChange,
+}: {
+  readonly field: ProviderSettingsFieldModel;
+  readonly value: unknown;
+  readonly inputId: string;
+  readonly descriptionId: string | undefined;
+  readonly secretSources: SecretSourceOptions;
+  readonly onChange: ProviderSettingsFormProps["onChange"];
+}) {
+  const saved =
+    value !== null && typeof value === "object"
+      ? (value as Record<string, unknown>)[field.key]
+      : undefined;
+  const stored =
+    typeof saved === "string" || isSecretProviderSecretSource(saved) ? saved : undefined;
+  const commit = (next: SettingsSecretValue) =>
+    onChange(nextProviderConfigWithFieldValue(value, field, next));
+  return (
+    <div className="flex w-full min-w-0 items-start gap-2 @min-[32rem]/settings-row:w-80">
+      <SecretField
+        id={inputId}
+        label={field.label}
+        environmentId={secretSources.environmentId}
+        secretProviders={secretSources.secretProviders}
+        className="flex-1"
+        value={stored}
+        describedBy={descriptionId}
+        onCommit={commit}
+      />
+      {hasSavedCredential(saved) ? (
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost-destructive"
+          onClick={() => commit("")}
+          aria-label={`Clear ${field.label}`}
+        >
+          <XIcon className="size-3.5" />
+        </Button>
+      ) : null}
+    </div>
+  );
 }
 
 function ProviderSettingsSelect({
@@ -354,6 +421,7 @@ interface ProviderSettingsFieldRowProps {
   readonly idPrefix: string;
   readonly variant: ProviderSettingsFormProps["variant"];
   readonly onChange: ProviderSettingsFormProps["onChange"];
+  readonly secretSources: SecretSourceOptions | undefined;
 }
 
 function ProviderSettingsFieldRow({
@@ -362,6 +430,7 @@ function ProviderSettingsFieldRow({
   idPrefix,
   variant,
   onChange,
+  secretSources,
 }: ProviderSettingsFieldRowProps) {
   const inputId = `${idPrefix}-${field.key}`;
   const descriptionClassName =
@@ -407,6 +476,15 @@ function ProviderSettingsFieldRow({
           }
           placeholder={field.placeholder}
           spellCheck={false}
+        />
+      ) : field.secret && secretSources !== undefined ? (
+        <SecretSettingsControl
+          field={field}
+          value={value}
+          inputId={inputId}
+          descriptionId={descriptionId}
+          secretSources={secretSources}
+          onChange={onChange}
         />
       ) : field.secret ? (
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
@@ -565,6 +643,7 @@ export function ProviderSettingsForm({
   idPrefix,
   variant,
   onChange,
+  secretSources,
 }: ProviderSettingsFormProps) {
   const fields = deriveProviderSettingsFields(definition, value);
   const isLocalAcp =
@@ -585,6 +664,7 @@ export function ProviderSettingsForm({
           idPrefix={idPrefix}
           variant={variant}
           onChange={onChange}
+          secretSources={secretSources}
         />
       ))}
       {isLocalAcp ? <ProviderCommandArguments value={value} onChange={onChange} /> : null}

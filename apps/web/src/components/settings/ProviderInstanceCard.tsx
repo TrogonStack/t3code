@@ -7,32 +7,21 @@ import {
   CopyIcon,
   DownloadIcon,
   ExternalLinkIcon,
-  KeyRoundIcon,
   LayersIcon,
   PlusIcon,
-  RefreshCwIcon,
   Trash2Icon,
-  TypeIcon,
   XIcon,
 } from "lucide-react";
 import { Lock as LockGlyph, LockOpen } from "lucide";
-import { useAtomValue } from "@effect/atom-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
-  OnePasswordAccount,
-  OnePasswordSecretReference,
+  isSecretProviderSecretSource,
   resolveProviderInstanceEnabled,
-  SecretProviderId,
-  SecretProviderReference,
   type ProviderInstanceConfig,
   type ProviderSecretSource,
-  type SecretProviderConfig,
-  type SecretProviderKind,
-  type UnifiedSettings,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type AcpRegistryUrlAuthAction,
@@ -59,7 +48,6 @@ import { MorphIcon } from "~/components/MorphIcon";
 import { DraftInput } from "../ui/draft-input";
 import { SecretInput } from "./SecretInput";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -76,14 +64,17 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
-import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
-import { serverEnvironment } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
 import {
-  SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
-  secretProviderReferenceIssue,
-  secretProviderSummary,
-} from "./SecretProviderDialog.logic";
+  EMPTY_SECRET_PROVIDERS,
+  EnvironmentSourceSelect,
+  referencePlaceholderFor,
+  SecretCheckButton,
+  SecretField,
+  secretSourceFromDraft,
+  useSecretSourceChecks,
+  type EnvironmentDraftRow,
+  type SecretProviders,
+} from "./SecretSourceControls";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -112,172 +103,6 @@ function ProviderStatusDiagnostic({
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
-
-type EnvironmentDraftSource = "plain" | "1password" | "secret-provider";
-
-type SecretProviders = UnifiedSettings["secretProviders"];
-
-const PLAIN_SOURCE_OPTION = "plain";
-const EMPTY_SECRET_PROVIDERS: SecretProviders = {};
-const SECRET_PROVIDER_SOURCE_OPTION_PREFIX = "secret-provider:";
-/** Rows saved before named providers keep their own account; new rows cannot pick it. */
-const ONE_PASSWORD_SOURCE_OPTION_PREFIX = "1password:";
-
-function environmentDraftSourceOption(row: EnvironmentDraftRow): string {
-  switch (row.source) {
-    case "plain":
-      return PLAIN_SOURCE_OPTION;
-    case "secret-provider":
-      return `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${row.provider}`;
-    case "1password":
-      return `${ONE_PASSWORD_SOURCE_OPTION_PREFIX}${row.account}`;
-  }
-}
-
-type EnvironmentSourceOption = {
-  readonly value: string;
-  readonly label: string;
-  readonly detail?: string;
-  readonly secret: boolean;
-  readonly kind?: SecretProviderKind;
-};
-
-function lookupSecretProvider(
-  secretProviders: SecretProviders,
-  id: string,
-): SecretProviderConfig | undefined {
-  return Object.hasOwn(secretProviders, id)
-    ? secretProviders[SecretProviderId.make(id)]
-    : undefined;
-}
-
-/**
- * Value, then every configured provider. A row also keeps the option it is
- * already on: a provider that was removed, or its legacy 1Password account.
- */
-function environmentSourceOptions(
-  row: EnvironmentDraftRow,
-  secretProviders: SecretProviders,
-): ReadonlyArray<EnvironmentSourceOption> {
-  const options: EnvironmentSourceOption[] = [
-    { value: PLAIN_SOURCE_OPTION, label: "Value", secret: false },
-    ...Object.entries(secretProviders).map(([id, config]) => ({
-      value: `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${id}`,
-      label: config.label,
-      detail: secretProviderSummary(config),
-      secret: true,
-      kind: config.kind,
-    })),
-  ];
-  if (
-    row.source === "secret-provider" &&
-    lookupSecretProvider(secretProviders, row.provider) === undefined
-  ) {
-    options.push({
-      value: environmentDraftSourceOption(row),
-      label: row.provider,
-      detail: "Not configured in Settings → Secrets",
-      secret: true,
-    });
-  }
-  if (row.source === "1password") {
-    options.push({
-      value: environmentDraftSourceOption(row),
-      label: row.account.length > 0 ? row.account : "1Password",
-      detail: "1Password account set on this variable",
-      secret: true,
-      kind: "1password",
-    });
-  }
-  return options;
-}
-
-function EnvironmentSourceOptionLabel(props: { readonly option: EnvironmentSourceOption }) {
-  const Icon = props.option.secret ? KeyRoundIcon : TypeIcon;
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      {props.option.kind !== undefined ? (
-        <SecretProviderKindIcon kind={props.option.kind} className="size-3.5 shrink-0" />
-      ) : (
-        <Icon className="size-3.5 shrink-0" />
-      )}
-      <span className="truncate">{props.option.label}</span>
-    </span>
-  );
-}
-
-function EnvironmentSourceSelect(props: {
-  readonly row: EnvironmentDraftRow;
-  readonly secretProviders: SecretProviders;
-  readonly className: string;
-  readonly ariaLabel: string;
-  readonly onChange: (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => void;
-}) {
-  const sourceOptions = environmentSourceOptions(props.row, props.secretProviders);
-  const selectedOption = environmentDraftSourceOption(props.row);
-  const selectedSourceOption =
-    sourceOptions.find((option) => option.value === selectedOption) ?? sourceOptions[0]!;
-  return (
-    <Select
-      value={selectedOption}
-      onValueChange={(option) => {
-        if (option === null || option === selectedOption) return;
-        if (option === PLAIN_SOURCE_OPTION) {
-          props.onChange({ source: "plain", value: "", sensitive: true });
-          return;
-        }
-        if (option.startsWith(SECRET_PROVIDER_SOURCE_OPTION_PREFIX)) {
-          props.onChange({
-            source: "secret-provider",
-            provider: option.slice(SECRET_PROVIDER_SOURCE_OPTION_PREFIX.length),
-            value: "",
-            sensitive: false,
-          });
-        }
-      }}
-    >
-      <SelectTrigger size="sm" className={props.className} aria-label={props.ariaLabel}>
-        <SelectValue>
-          <EnvironmentSourceOptionLabel option={selectedSourceOption} />
-        </SelectValue>
-      </SelectTrigger>
-      <SelectPopup>
-        {sourceOptions.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            <span className="flex min-w-0 flex-col">
-              <EnvironmentSourceOptionLabel option={option} />
-              {option.detail !== undefined ? (
-                <span className="truncate text-xs text-muted-foreground">{option.detail}</span>
-              ) : null}
-            </span>
-          </SelectItem>
-        ))}
-      </SelectPopup>
-    </Select>
-  );
-}
-
-function referencePlaceholderFor(row: EnvironmentDraftRow, secretProviders: SecretProviders) {
-  return row.source === "1password"
-    ? SECRET_PROVIDER_REFERENCE_PLACEHOLDERS["1password"]
-    : SECRET_PROVIDER_REFERENCE_PLACEHOLDERS[
-        lookupSecretProvider(secretProviders, row.provider)?.kind ?? "1password"
-      ];
-}
-
-type EnvironmentDraftRow = {
-  readonly id: string;
-  readonly name: string;
-  readonly source: EnvironmentDraftSource;
-  readonly value: string;
-  readonly reference: string;
-  readonly account: string;
-  readonly provider: string;
-  readonly sensitive: boolean;
-  readonly valueRedacted?: boolean;
-  /** The name this row is saved under, so an unfinished edit can fall back to it. */
-  readonly savedName?: string;
-};
 
 /**
  * Plain `op://` values were once read from 1Password. They are literals now,
@@ -335,44 +160,6 @@ function makeEnvironmentDraftRow(
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
-}
-
-const decodeOnePasswordSecretReference = Schema.decodeUnknownResult(OnePasswordSecretReference);
-const decodeOnePasswordAccount = Schema.decodeUnknownResult(OnePasswordAccount);
-const decodeSecretProviderReference = Schema.decodeUnknownResult(SecretProviderReference);
-
-/**
- * The secret source a draft row describes, or the message explaining why it
- * is not one yet. A row may name a provider that is not configured: it saves,
- * and resolves once a provider with that name is added again.
- */
-export function secretSourceFromDraft(
-  row: Pick<EnvironmentDraftRow, "source" | "reference" | "account" | "provider">,
-  secretProviders: SecretProviders,
-): Result.Result<ProviderSecretSource, string> {
-  if (row.source === "1password") {
-    const reference = decodeOnePasswordSecretReference(row.reference);
-    if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
-    const account = decodeOnePasswordAccount(row.account);
-    if (Result.isFailure(account)) return Result.fail(account.failure.message);
-    return Result.succeed({
-      kind: "1password",
-      reference: reference.success,
-      account: account.success,
-    });
-  }
-  if (row.provider.length === 0) return Result.fail("Choose a secret provider.");
-  const reference = decodeSecretProviderReference(row.reference);
-  if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
-  const config = lookupSecretProvider(secretProviders, row.provider);
-  const issue =
-    config === undefined ? undefined : secretProviderReferenceIssue(config.kind, reference.success);
-  if (issue !== undefined) return Result.fail(issue);
-  return Result.succeed({
-    kind: "secret-provider",
-    provider: SecretProviderId.make(row.provider),
-    reference: reference.success,
-  });
 }
 
 function environmentValuesEqual(
@@ -577,56 +364,9 @@ function ProviderEnvironmentFieldRow(props: {
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const { variable } = props;
-  const savedRow = makeEnvironmentDraftRow(
-    variable ?? { name: props.field.name, value: "", sensitive: false },
-    0,
-  );
-  // An unfinished source choice waits here until it is valid, so the saved
-  // value stays in place meanwhile. It is dropped once the saved value changes.
-  const savedKey = JSON.stringify(variable);
-  const [pending, setPending] = useState<
-    { readonly savedKey: string; readonly row: EnvironmentDraftRow } | undefined
-  >(undefined);
-  const row = pending !== undefined && pending.savedKey === savedKey ? pending.row : savedRow;
-  const setDraft = (next: EnvironmentDraftRow | undefined) =>
-    setPending(next === undefined ? undefined : { savedKey, row: next });
-  const secretChecks = useSecretSourceChecks(props.environmentId);
-  const hasSecretProviders = Object.keys(props.secretProviders).length > 0;
-
-  const draftSource =
-    row.source === "plain" ? undefined : secretSourceFromDraft(row, props.secretProviders);
-  const sourceIssue =
-    draftSource !== undefined && Result.isFailure(draftSource) && row.reference.length > 0
-      ? `Not saved yet. ${draftSource.failure}`
-      : undefined;
-  const draftSourceKey =
-    draftSource !== undefined && Result.isSuccess(draftSource)
-      ? JSON.stringify(draftSource.success)
-      : undefined;
-  const rowCheck = secretChecks.checks[props.field.name];
-  const checkState =
-    rowCheck !== undefined && rowCheck.sourceKey === draftSourceKey ? rowCheck.state : undefined;
-
-  const changeSource = (patch: Partial<Omit<EnvironmentDraftRow, "id">>) => {
-    if (patch.source === "plain") {
-      setDraft(undefined);
-      if (savedRow.source !== "plain") props.onCommit(props.field, "");
-      return;
-    }
-    setDraft({ ...row, ...patch, reference: "" });
-  };
-  const commitReference = (reference: string) => {
-    const next = { ...row, reference: reference.trim() };
-    const source = secretSourceFromDraft(next, props.secretProviders);
-    if (Result.isSuccess(source)) props.onCommitSource(props.field, source.success);
-    else setDraft(next);
-  };
-  const value = row.valueRedacted ? "" : row.value;
-  const sensitive = props.field.sensitive !== false;
-
   // A legacy 1Password source needs its account field, which only the
   // Environment editor has, so the variable is edited there instead.
-  if (savedRow.source === "1password") {
+  if (variable !== undefined && makeEnvironmentDraftRow(variable, 0).source === "1password") {
     return (
       <SettingsRow
         title={<label htmlFor={inputId}>{props.field.label}</label>}
@@ -649,83 +389,31 @@ function ProviderEnvironmentFieldRow(props: {
     );
   }
 
+  const value = variable?.value;
   return (
     <SettingsRow
       title={<label htmlFor={inputId}>{props.field.label}</label>}
       description={props.field.description}
       control={
-        <div
-          className={cn(
-            "flex w-full min-w-0 items-center gap-2",
-            hasSecretProviders || row.source !== "plain"
-              ? "@min-[32rem]/settings-row:w-80"
-              : "@min-[32rem]/settings-row:w-56",
-          )}
-        >
-          {hasSecretProviders || row.source !== "plain" ? (
-            <EnvironmentSourceSelect
-              row={row}
-              secretProviders={props.secretProviders}
-              className="w-28 shrink-0"
-              ariaLabel={`${props.field.label} source`}
-              onChange={changeSource}
-            />
-          ) : null}
-          {row.source !== "plain" ? (
-            <>
-              <DraftInput
-                id={inputId}
-                size="sm"
-                font="mono"
-                className="min-w-0 flex-1"
-                autoComplete="off"
-                value={row.reference}
-                onCommit={commitReference}
-                placeholder={referencePlaceholderFor(row, props.secretProviders)}
-                spellCheck={false}
-                aria-invalid={sourceIssue !== undefined || undefined}
-                aria-label={`${props.field.label} secret reference`}
-              />
-              {secretChecks.canCheck && props.environmentId !== undefined ? (
-                <SecretCheckButton
-                  label={`Check secret for ${props.field.label}`}
-                  state={checkState}
-                  disabledReason={
-                    draftSource === undefined || Result.isSuccess(draftSource)
-                      ? undefined
-                      : draftSource.failure
-                  }
-                  onCheck={() => {
-                    if (draftSource !== undefined && Result.isSuccess(draftSource)) {
-                      void secretChecks.run(props.field.name, draftSource.success);
-                    }
-                  }}
-                />
-              ) : null}
-            </>
-          ) : sensitive ? (
-            <SecretInput
-              id={inputId}
-              size="sm"
-              className="min-w-0 flex-1"
-              value={value}
-              onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
-              configured={row.valueRedacted === true}
-              spellCheck={false}
-            />
-          ) : (
-            <DraftInput
-              id={inputId}
-              size="sm"
-              className="min-w-0 flex-1"
-              autoComplete="off"
-              value={value}
-              onCommit={(next) => props.onCommit(props.field, next)}
-              placeholder={props.field.placeholder}
-              spellCheck={false}
-            />
-          )}
+        <div className="flex w-full min-w-0 items-start gap-2 @min-[32rem]/settings-row:w-80">
+          <SecretField
+            id={inputId}
+            label={props.field.label}
+            environmentId={props.environmentId}
+            secretProviders={props.secretProviders}
+            className="flex-1"
+            value={
+              typeof value === "string" || isSecretProviderSecretSource(value) ? value : undefined
+            }
+            configured={variable?.valueRedacted === true}
+            sensitive={props.field.sensitive !== false}
+            placeholder={props.field.placeholder}
+            onCommit={(next) =>
+              typeof next === "string"
+                ? props.onCommit(props.field, next)
+                : props.onCommitSource(props.field, next)
+            }
+          />
           {variable ? (
             <Button
               type="button"
@@ -739,106 +427,7 @@ function ProviderEnvironmentFieldRow(props: {
           ) : null}
         </div>
       }
-    >
-      {sourceIssue !== undefined ? (
-        <p className="pb-2 text-xs text-destructive">{sourceIssue}</p>
-      ) : null}
-    </SettingsRow>
-  );
-}
-
-type SecretCheckState =
-  | { readonly status: "checking" }
-  | { readonly status: "resolved" }
-  | { readonly status: "failed"; readonly detail: string };
-
-interface RowSecretCheck {
-  readonly sourceKey: string;
-  readonly state: SecretCheckState;
-}
-
-function useSecretSourceChecks(environmentId: EnvironmentId | undefined) {
-  const canCheck = useAtomValue(
-    serverEnvironment.checkSecretSource.permissionAtom(environmentId ?? null),
-  );
-  const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
-  const [checks, setChecks] = useState<Readonly<Record<string, RowSecretCheck>>>({});
-
-  const run = async (rowId: string, source: ProviderSecretSource) => {
-    if (environmentId === undefined) return;
-    const sourceKey = JSON.stringify(source);
-    setChecks((previous) => ({
-      ...previous,
-      [rowId]: { sourceKey, state: { status: "checking" } },
-    }));
-    const response = await checkSecretSource({ environmentId, input: { source } });
-    const state: SecretCheckState =
-      response._tag !== "Success"
-        ? { status: "failed", detail: "Could not reach the server" }
-        : response.value._tag === "Resolved"
-          ? { status: "resolved" }
-          : { status: "failed", detail: response.value.detail };
-    setChecks((previous) =>
-      previous[rowId]?.sourceKey === sourceKey
-        ? { ...previous, [rowId]: { sourceKey, state } }
-        : previous,
-    );
-  };
-
-  return { canCheck, checks, run };
-}
-
-function SecretCheckButton(props: {
-  readonly label: string;
-  readonly state: SecretCheckState | undefined;
-  readonly disabledReason: string | undefined;
-  readonly onCheck: () => void;
-}) {
-  const { state, disabledReason } = props;
-  const checking = state?.status === "checking";
-  const description =
-    disabledReason ??
-    (state === undefined
-      ? "Check that the secret resolves"
-      : state.status === "checking"
-        ? "Checking the secret"
-        : state.status === "resolved"
-          ? "Secret resolved"
-          : state.detail);
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="icon-micro"
-              variant="ghost-muted"
-              disabled={disabledReason !== undefined || checking}
-              onClick={props.onCheck}
-              aria-label={
-                state?.status === "failed" && disabledReason === undefined
-                  ? `${props.label} failed: ${state.detail}`
-                  : state?.status === "resolved" && disabledReason === undefined
-                    ? `${props.label} resolved`
-                    : props.label
-              }
-            >
-              {checking ? (
-                <Spinner />
-              ) : state?.status === "resolved" ? (
-                <CheckIcon className="size-3 text-success-foreground" />
-              ) : state?.status === "failed" ? (
-                <AlertTriangleIcon className="size-3 text-destructive" />
-              ) : (
-                <RefreshCwIcon className="size-3" />
-              )}
-            </Button>
-          </span>
-        }
-      />
-      <TooltipPopup side="top">{description}</TooltipPopup>
-    </Tooltip>
+    />
   );
 }
 

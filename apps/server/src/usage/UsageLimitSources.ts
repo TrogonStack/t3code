@@ -21,6 +21,10 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import {
+  ProviderSecretResolver,
+  resolveSettingsSecret,
+} from "../provider/ProviderSecretResolver.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -46,10 +50,17 @@ function sourceLabel(id: string, config: UsageLimitSourceConfig): string {
   }
 }
 
+function missingManagementKey(config: UsageLimitSourceConfig): string {
+  return typeof config.managementKey === "string"
+    ? "No management key configured."
+    : "Could not read the management key from its secret provider.";
+}
+
 /** @public */
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
+  const secrets = yield* ProviderSecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
@@ -63,10 +74,13 @@ export const make = Effect.gen(function* () {
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    if (config.managementKey.length === 0) {
-      return { ...base, accounts: [], error: "No management key configured." };
+    const managementKey = yield* resolveSettingsSecret(secrets, config.managementKey);
+    if (managementKey.length === 0) {
+      return { ...base, accounts: [], error: missingManagementKey(config) };
     }
-    const accounts = yield* api.readAccounts(config).pipe(Effect.result);
+    const accounts = yield* api
+      .readAccounts({ url: config.url, managementKey })
+      .pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };
@@ -108,12 +122,20 @@ export const make = Effect.gen(function* () {
       Effect.mapError(() => new UsageLimitSourceError({ detail: "Could not read hub settings." })),
     );
     const config = settings.usageLimitSources[input.sourceId];
-    if (!config?.enabled || !config.managementKey) {
+    if (!config?.enabled) {
       return yield* new UsageLimitSourceError({
         detail: "The usage limit source is missing or disabled.",
       });
     }
-    const result = yield* api.consume(config, input.accountId, input.creditId);
+    const managementKey = yield* resolveSettingsSecret(secrets, config.managementKey);
+    if (managementKey.length === 0) {
+      return yield* new UsageLimitSourceError({ detail: missingManagementKey(config) });
+    }
+    const result = yield* api.consume(
+      { url: config.url, managementKey },
+      input.accountId,
+      input.creditId,
+    );
     const snapshot = yield* readSource(input.sourceId, config);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));

@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import {
   AuthSettingsWriteScope,
   type DeviceEasAccount,
@@ -34,7 +35,14 @@ import {
   parseEasDeviceHostDraft,
   updateEasDeviceHosts,
 } from "./easDeviceHostsSettings.logic";
-import { SecretInput } from "./SecretInput";
+import {
+  EMPTY_SECRET_FIELD_DRAFT,
+  EMPTY_SECRET_PROVIDERS,
+  SecretField,
+  secretFieldDraft,
+  secretFieldSubmission,
+  type SecretProviders,
+} from "./SecretSourceControls";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsRow } from "./settingsLayout";
 
@@ -61,6 +69,8 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
     (candidate) => candidate.environmentId === props.environmentId,
   );
   const hosts = environment?.serverConfig?.settings.easDeviceHosts ?? [];
+  const secretProviders =
+    environment?.serverConfig?.settings.secretProviders ?? EMPTY_SECRET_PROVIDERS;
   const [editing, setEditing] = useState<{ host: EasDeviceHostConfig; isNew: boolean } | null>(
     null,
   );
@@ -144,6 +154,7 @@ export function EasDeviceHostsSettings(props: { environmentId: EnvironmentId | n
             environmentId={props.environmentId}
             host={editing.host}
             isNew={editing.isNew}
+            secretProviders={secretProviders}
             busy={busy}
             onSave={(host) => void save(host, false)}
             onClose={() => setEditing(null)}
@@ -158,6 +169,7 @@ function EasDeviceHostEditor(props: {
   environmentId: EnvironmentId;
   host: EasDeviceHostConfig;
   isNew: boolean;
+  secretProviders: SecretProviders;
   busy: boolean;
   onSave: (host: EasDeviceHostConfig) => void;
   onClose: () => void;
@@ -165,10 +177,20 @@ function EasDeviceHostEditor(props: {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
   const [draft, setDraft] = useState(props.host);
   const tokenId = useId();
-  // A saved token arrives redacted; only a replacement or a clear changes it.
-  const [token, setToken] = useState<
-    { kind: "saved" } | { kind: "new"; value: string } | { kind: "cleared" }
-  >(props.host.accessToken ? { kind: "saved" } : { kind: "cleared" });
+  const savedLiteral =
+    typeof props.host.accessToken === "string" && props.host.accessToken.length > 0;
+  const [tokenDraft, setTokenDraft] = useState(() => secretFieldDraft(props.host.accessToken));
+  const [cleared, setCleared] = useState(false);
+  const tokenSubmission = secretFieldSubmission(tokenDraft, props.secretProviders);
+  const referenceIssue = Result.isFailure(tokenSubmission) ? tokenSubmission.failure : null;
+  // A saved token arrives redacted, so an empty literal keeps it until Clear drops it.
+  const keepsSavedToken =
+    savedLiteral &&
+    !cleared &&
+    Result.isSuccess(tokenSubmission) &&
+    tokenSubmission.success === undefined;
+  const tokenCleared =
+    !keepsSavedToken && tokenDraft.kind === "literal" && tokenDraft.text.trim() === "";
   const [account, setAccount] = useState<
     | { status: "idle" }
     | { status: "checking" }
@@ -179,16 +201,19 @@ function EasDeviceHostEditor(props: {
   const next: EasDeviceHostConfig = {
     ...draft,
     label: draft.label.trim(),
-    accessToken:
-      token.kind === "saved" ? props.host.accessToken : token.kind === "new" ? token.value : "",
+    accessToken: keepsSavedToken
+      ? props.host.accessToken
+      : (Result.getOrUndefined(tokenSubmission) ?? ""),
   };
-  const valid = Option.isSome(parseEasDeviceHostDraft(next));
+  const valid = referenceIssue === null && Option.isSome(parseEasDeviceHostDraft(next));
   // Why Save is off, for the limits the fields' ranges do not show.
   const problem = valid
     ? null
-    : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
-      ? "Idle minutes must be smaller than session minutes."
-      : "Give the host a label and limits within the ranges shown.";
+    : referenceIssue !== null
+      ? `Expo access token: ${referenceIssue}`
+      : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
+        ? "Idle minutes must be smaller than session minutes."
+        : "Give the host a label and limits within the ranges shown.";
   const apps = account.status === "signed-in" ? account.account.apps : [];
 
   // A check answers for the credential it was asked about: a later check or a
@@ -202,16 +227,13 @@ function EasDeviceHostEditor(props: {
     const run = ++latestCheck.current;
     const result = await check({
       environmentId: props.environmentId,
-      input: {
-        ...(token.kind === "saved" && !props.isNew ? { hostId: props.host.id } : {}),
-        // A cleared token is sent as empty, so the check does not fall back to
-        // the saved one that Save is about to drop.
-        ...(token.kind === "new"
-          ? { accessToken: token.value }
-          : token.kind === "cleared"
-            ? { accessToken: "" }
-            : {}),
-      },
+      // A cleared token is sent as empty, so the check does not fall back to
+      // the saved one that Save is about to drop.
+      input: !keepsSavedToken
+        ? { accessToken: next.accessToken }
+        : props.isNew
+          ? {}
+          : { hostId: props.host.id },
     });
     if (run !== latestCheck.current) return;
     setAccount(
@@ -293,36 +315,32 @@ function EasDeviceHostEditor(props: {
               <label htmlFor={tokenId} className="block">
                 Expo access token
               </label>
-              <div className="flex items-center gap-2">
-                <SecretInput
+              <div className="flex items-start gap-2">
+                <SecretField
                   id={tokenId}
-                  className="min-w-0 flex-1"
-                  configured={token.kind === "saved"}
-                  value={token.kind === "new" ? token.value : ""}
+                  label="Expo access token"
+                  environmentId={props.environmentId}
+                  secretProviders={props.secretProviders}
+                  className="flex-1"
                   disabled={props.busy}
                   placeholder="Optional"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    // Emptying the field is not clearing the saved token; the
-                    // Clear button is, so a saved token comes back here.
-                    setToken(
-                      value
-                        ? { kind: "new", value }
-                        : props.host.accessToken
-                          ? { kind: "saved" }
-                          : { kind: "cleared" },
-                    );
+                  value={props.host.accessToken}
+                  configured={keepsSavedToken}
+                  draft={tokenDraft}
+                  onDraftChange={(next) => {
+                    setTokenDraft(next);
                     resetAccount();
                   }}
                 />
-                {token.kind !== "cleared" ? (
+                {!tokenCleared ? (
                   <Button
                     type="button"
                     size="icon-sm"
                     variant="ghost-destructive"
                     aria-label="Clear access token"
                     onClick={() => {
-                      setToken({ kind: "cleared" });
+                      setTokenDraft(EMPTY_SECRET_FIELD_DRAFT);
+                      setCleared(true);
                       resetAccount();
                     }}
                   >
@@ -345,7 +363,7 @@ function EasDeviceHostEditor(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.busy || account.status === "checking"}
+                disabled={props.busy || account.status === "checking" || referenceIssue !== null}
                 onClick={() => void checkAccount()}
               >
                 {account.status === "checking" ? <Spinner size="xs" /> : null} Check account

@@ -2,10 +2,15 @@ import * as SourceControlHost from "@t3tools/source-control-core/server/SourceCo
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import {
+  ProviderSecretResolver,
+  resolveSettingsSecret,
+} from "../provider/ProviderSecretResolver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { resolveSourceControlHostSecrets } from "./sourceControlHostSecrets.ts";
 
 export const layer = Layer.effect(
   SourceControlHost.SourceControlHost,
@@ -14,8 +19,23 @@ export const layer = Layer.effect(
     const process = yield* VcsProcess.VcsProcess;
     const git = yield* GitVcsDriver.GitVcsDriver;
     const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+    const secrets = yield* ProviderSecretResolver;
     return SourceControlHost.SourceControlHost.of({
-      settings: { get: serverSettings.getSettings },
+      settings: {
+        get: serverSettings.getSettings.pipe(
+          Effect.flatMap((settings) =>
+            resolveSourceControlHostSecrets(settings.sourceControlHosts, (source) =>
+              resolveSettingsSecret(secrets, source),
+            ).pipe(
+              Effect.map((sourceControlHosts) =>
+                sourceControlHosts === settings.sourceControlHosts
+                  ? settings
+                  : { ...settings, sourceControlHosts },
+              ),
+            ),
+          ),
+        ),
+      },
       process: { run: process.run },
       git: {
         execute: git.execute,

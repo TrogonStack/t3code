@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  type EasDeviceHostConfig,
   ModelSelection,
   ProjectId,
   ProjectScript,
@@ -9,7 +10,9 @@ import {
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
   SecretProviderId,
+  SecretProviderReference,
   ServerSettings,
+  type UsageLimitSourceConfig,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -1457,6 +1460,121 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         assert.isTrue(Option.isNone(yield* stored("github", "tokens", "github.com")));
         assert.isTrue(Option.isSome(yield* stored("github", "tokens", "ghe.acme.test")));
       }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect(
+    "keeps credential settings that name a secret provider as written, outside the secret store",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const source = (reference: string) => ({
+          kind: "secret-provider" as const,
+          provider: SecretProviderId.make("homelab"),
+          reference: SecretProviderReference.make(reference),
+        });
+        const stored = (kind: string, field: string, serverHost: string | null) =>
+          secrets.get(sourceControlHostSecretName({ kind, field, serverHost }));
+        const easHost = (accessToken: EasDeviceHostConfig["accessToken"]) => ({
+          kind: "eas" as const,
+          id: "eas",
+          label: "EAS Simulator",
+          accessToken,
+          maxSessionMinutes: 30,
+          idleMinutes: 10,
+          maxConcurrentSessions: 2,
+        });
+
+        yield* serverSettings.updateSettings({
+          sourceControlHosts: {
+            bitbucket: { accessToken: "bb-access" },
+            github: { tokens: { "github.com": "ghp_dotcom" } },
+          },
+          easDeviceHosts: [easHost("expo-literal")],
+        });
+        assert.isTrue(Option.isSome(yield* stored("bitbucket", "accessToken", null)));
+
+        const saved = yield* serverSettings.updateSettings({
+          sourceControlHosts: {
+            bitbucket: { accessToken: source("bitbucket#token") },
+            github: {
+              tokens: { "github.com": source("github#token"), "ghe.acme.test": "ghp_ghe" },
+            },
+          },
+          easDeviceHosts: [easHost(source("expo#token"))],
+        });
+        assert.isTrue(Option.isNone(yield* stored("bitbucket", "accessToken", null)));
+        assert.isTrue(Option.isNone(yield* stored("github", "tokens", "github.com")));
+        assert.isTrue(Option.isSome(yield* stored("github", "tokens", "ghe.acme.test")));
+
+        const client = ServerSettingsModule.redactServerSettingsForClient(saved);
+        assert.deepEqual(
+          client.sourceControlHosts.bitbucket?.accessToken,
+          source("bitbucket#token"),
+        );
+        const tokens = client.sourceControlHosts.github?.tokens as Record<string, unknown>;
+        assert.deepEqual(tokens["github.com"], source("github#token"));
+        assert.notEqual(tokens["ghe.acme.test"], "ghp_ghe");
+        assert.deepEqual(client.easDeviceHosts[0]?.accessToken, source("expo#token"));
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.include(raw, "bitbucket#token");
+        assert.notInclude(raw, "ghp_ghe");
+
+        yield* serverSettings.updateSettings({
+          sourceControlHosts: client.sourceControlHosts,
+          easDeviceHosts: client.easDeviceHosts,
+        });
+        const echoed = yield* serverSettings.getSettings;
+        assert.deepEqual(echoed.sourceControlHosts.github?.tokens, {
+          "github.com": source("github#token"),
+          "ghe.acme.test": "ghp_ghe",
+        });
+
+        const literal = yield* serverSettings.updateSettings({
+          sourceControlHosts: { bitbucket: { accessToken: "bb-again" } },
+          easDeviceHosts: [easHost("")],
+        });
+        assert.equal(literal.sourceControlHosts.bitbucket?.accessToken, "bb-again");
+        assert.equal(literal.easDeviceHosts[0]?.accessToken, "");
+        assert.isTrue(Option.isSome(yield* stored("bitbucket", "accessToken", null)));
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("keeps a usage limit key that names a secret provider outside the secret store", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      const id = UsageLimitSourceId.make("hub");
+      const source = {
+        kind: "secret-provider" as const,
+        provider: SecretProviderId.make("homelab"),
+        reference: SecretProviderReference.make("cliproxy#key"),
+      };
+      const hub = (managementKey: UsageLimitSourceConfig["managementKey"]) => ({
+        [id]: {
+          kind: "cliproxy" as const,
+          url: "https://hub.example.test",
+          managementKey,
+          enabled: true,
+        },
+      });
+
+      yield* serverSettings.updateSettings({ usageLimitSources: hub("quota-literal") });
+      assert.isTrue(Option.isSome(yield* secrets.get("usage-limit-source-aHVi")));
+
+      const saved = yield* serverSettings.updateSettings({ usageLimitSources: hub(source) });
+      assert.isTrue(Option.isNone(yield* secrets.get("usage-limit-source-aHVi")));
+      const client = ServerSettingsModule.redactServerSettingsForClient(saved);
+      assert.deepEqual(client.usageLimitSources[id]?.managementKey, source);
+
+      yield* serverSettings.updateSettings({ usageLimitSources: client.usageLimitSources });
+      assert.deepEqual(
+        (yield* serverSettings.getSettings).usageLimitSources[id]?.managementKey,
+        source,
+      );
+    }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
   );
 
   it.effect("keeps the retired keys for another load when a token cannot be copied", () => {

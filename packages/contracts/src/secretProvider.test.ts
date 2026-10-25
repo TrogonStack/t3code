@@ -5,9 +5,34 @@ import {
   AwsSecretsManagerSecretProviderConfig,
   OpenBaoSecretProviderConfig,
   SecretProviderConfig,
+  SettingsSecretValue,
 } from "./secretProvider.ts";
 import { secretSettingsFields } from "./settingsSecret.ts";
 import { ProviderInstanceEnvironmentVariable } from "./providerInstance.ts";
+import { EasDeviceHostConfig } from "./device.ts";
+
+describe("SettingsSecretValue", () => {
+  const decode = Schema.decodeUnknownSync(SettingsSecretValue);
+  const source = { kind: "secret-provider", provider: "homelab", reference: "expo#token" };
+
+  it("decodes a literal and a secret provider reference", () => {
+    expect(decode("  literal-token ")).toBe("literal-token");
+    expect(decode(source)).toEqual(source);
+  });
+
+  it("rejects a reference without a provider", () => {
+    expect(() => decode({ kind: "secret-provider", reference: "expo#token" })).toThrow();
+  });
+
+  it("lets an EAS host keep either shape as its access token", () => {
+    const decodeHost = Schema.decodeUnknownSync(EasDeviceHostConfig);
+    const host = { kind: "eas", id: "eas", label: "EAS Simulator" };
+    expect(decodeHost({ ...host, accessToken: "expo-literal" }).accessToken).toBe("expo-literal");
+    expect(decodeHost({ ...host, accessToken: source }).accessToken).toEqual(source);
+    expect(decodeHost(host).accessToken).toBe("");
+    expect(secretSettingsFields(EasDeviceHostConfig)).toContain("accessToken");
+  });
+});
 
 const decodeConfig = Schema.decodeUnknownSync(SecretProviderConfig);
 const decodeVariable = Schema.decodeUnknownSync(ProviderInstanceEnvironmentVariable);
