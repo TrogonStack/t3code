@@ -225,17 +225,8 @@ describe("ProviderSecretResolverLive", () => {
 const SECOND_REFERENCE = "op://Private/codex/credential";
 
 /**
- * Spawner that answers each `op` invocation from `handler`, which is handed the
- * argv and, for `op inject`, the template `op` would have read.
- *
- * The template is read back off disk through the `-i` path in the argv, which
- * is how `op` itself receives it. Reading it any other way would let a change
- * that stops writing the file pass, and that is the shape of the bug this
- * spawner exists to catch.
- *
- * The template matters: `prime` picks a random separator per call, so a test
- * cannot hard-code the output. Recovering the separator from the template is
- * also what proves the batch and the split agree on a format.
+ * Spawner that answers each `op` invocation from `handler`. The `op inject` template is read
+ * back from the `-i` path in argv, and its random separator proves batch and split agree.
  */
 function scriptedOpSpawner(
   handler: (

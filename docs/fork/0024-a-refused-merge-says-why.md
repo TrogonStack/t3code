@@ -58,5 +58,5 @@ per provider, so GitLab, Bitbucket and Azure DevOps carry on saying nothing and
 offering nothing.
 
 The rebase burden is small but spread across the pull request stack, from the
-process boundary to the detail panel. If upstream takes it, the divergence goes
+GitHub API client to the detail panel. If upstream takes it, the divergence goes
 and this entry with it.

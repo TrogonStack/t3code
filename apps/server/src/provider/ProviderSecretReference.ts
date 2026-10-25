@@ -1,18 +1,6 @@
 /**
- * Provider environment values that name a secret instead of carrying one.
- *
- * A user who keeps a provider credential in a secret store configures the
- * variable with a secret source instead of the secret itself: either a named
- * secret provider from `settings.secretProviders`
- * (`{ kind: "secret-provider", provider, reference }`) or the older inline
- * 1Password source (`{ kind: "1password", reference, account }`).
- * `ProviderSecretResolver` swaps the source for the real value on the way into
- * the provider process, so the credential never lands in `settings.json` or
- * the on-disk secret store, and rotating it in the store rotates it here.
- *
- * These helpers are pure so the instance registry can ask "does this
- * environment read from a secret store?" without depending on the resolver.
- *
+ * Provider environment values that name a secret (`secret-provider` or inline `1password`)
+ * instead of carrying one. Pure helpers, so the registry need not depend on the resolver.
  * @module provider/ProviderSecretReference
  */
 import type {
@@ -85,13 +73,8 @@ export function hasProviderSecretReference(
 }
 
 /**
- * Every distinct secret across a set of environments, in the order they were
- * first seen.
- *
- * Resolution is per secret but unlocking is per `op` invocation, so the caller
- * that is about to build many instances wants the whole list up front: one
- * call covering every secret costs one authorization, where one call per
- * instance costs one each.
+ * Every distinct secret across a set of environments, in first-seen order. Unlocking is per `op`
+ * invocation, so callers building many instances want the whole list up front.
  */
 export function collectProviderSecretReferences(
   environments: Iterable<ProviderInstanceEnvironment | undefined>,

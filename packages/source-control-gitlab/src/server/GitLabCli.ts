@@ -11,6 +11,7 @@ import {
   TrimmedNonEmptyString,
   type SourceControlRepositoryVisibility,
   type VcsError,
+  type VcsProcessExitFailureKind,
 } from "@t3tools/contracts";
 
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
@@ -141,11 +142,6 @@ export class GitLabCliCommandError extends Schema.TaggedError<GitLabCliCommandEr
             return new GitLabCliAuthenticationError({ ...context, cause });
           case "rate-limited":
             return new GitLabCliRateLimitError({ ...context, cause });
-          // The merge refusals are gh's wording and glab never produces them, so there is
-          // nothing here to say beyond what a command failure already says.
-          case "merge-blocked":
-          case "merge-conflict":
-          case "already-merged":
           case "not-found":
           case "command-failed":
           case undefined:
@@ -273,7 +269,7 @@ export class GitLabCli extends Context.Service<
       readonly cwd: string;
       readonly args: ReadonlyArray<string>;
       readonly timeoutMs?: number;
-      /** Piped to the child's stdin, for payloads that must never appear in argv. */
+      /** Keeps sensitive payloads out of argv. */
       readonly stdin?: string;
       readonly maxOutputBytes?: number;
     }) => Effect.Effect<SourceControlHost.SourceControlProcessOutput, GitLabCliError>;
@@ -414,7 +410,15 @@ function parseRepositoryPath(repository: string): {
   return { namespacePath, projectPath };
 }
 
-/** @public Service construction is part of the canonical Effect module API. */
+// glab prints a missing project or merge request as a bare 404.
+const classifyGlabFailure = (stderr: string): VcsProcessExitFailureKind | null => {
+  const normalized = stderr.toLowerCase();
+  if (normalized.includes("glab auth login")) return "authentication";
+  if (normalized.includes("not found") || normalized.includes("404")) return "not-found";
+  return null;
+};
+
+/** @public */
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
 
@@ -428,6 +432,8 @@ export const make = Effect.gen(function* () {
         command: "glab",
         args: input.args,
         cwd: input.cwd,
+        classifyFailure: classifyGlabFailure,
+        notFoundDetail: "Merge request not found.",
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
         ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),

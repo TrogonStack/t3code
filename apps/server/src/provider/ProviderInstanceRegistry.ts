@@ -33,33 +33,20 @@ export class ProviderInstanceRegistry extends Context.Service<
     ) => Effect.Effect<ProviderInstance | undefined>;
     readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
     readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
-    /**
-     * The configured environment of every instance `rebuildInstanceWhen` can act on: live ones
-     * and ones whose last build failed. Lets a caller resolve every external secret before a
-     * batch of rebuilds instead of once per rebuild.
-     */
+    /** Every instance `rebuildInstanceWhen` can act on, so secrets resolve once per batch of rebuilds. */
     readonly listEnvironments: Effect.Effect<
       ReadonlyMap<ProviderInstanceId, ProviderInstanceEnvironment | undefined>
     >;
     /**
-     * Rebuilds one instance from the configuration it already has when `shouldRebuild` accepts
-     * it, for inputs a driver reads at create time that change without the settings file
-     * changing (a credential in an external secret store), which `reconcile`'s diff cannot see.
-     * The instance keeps its settings-author position, an unknown id is a no-op, and sessions
-     * already using the old instance keep it. Resolves to whether a rebuild happened.
+     * Rebuilds an instance from its current config when `shouldRebuild` accepts it, for create-time
+     * inputs `reconcile` cannot see (an external secret). Unknown ids are a no-op; running sessions
+     * keep the old instance. Resolves to whether a rebuild happened.
      */
     readonly rebuildInstanceWhen: (
       instanceId: ProviderInstanceId,
       shouldRebuild: (entry: ProviderInstanceConfig) => boolean,
     ) => Effect.Effect<boolean>;
-    /**
-     * NOTE: because `Stream.fromPubSub` defers `PubSub.subscribe` until the stream starts
-     * running, forking a consumer via `Stream.runForEach(...).pipe(Effect.forkScoped)` races
-     * the next publish — the forked fiber may not have subscribed yet when the publish lands.
-     * Hot-reload consumers that must not miss a publish should use `subscribeChanges` below
-     * instead, which acquires the subscription synchronously in the caller's fiber before the
-     * consumer loop is forked.
-     */
+    /** streamChanges subscribes on consumption; use subscribeChanges before forking to avoid missing the next publish. */
     readonly streamChanges: Stream.Stream<void>;
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
   }
@@ -84,13 +71,9 @@ function withoutKey<V>(
 }
 
 /**
- * Reinstate a rebuilt instance where it used to sit. Map iteration order is
- * settings-author order all the way out to the provider list, so appending a
- * rebuilt instance would shuffle the UI every time a secret is refreshed.
- *
- * An instance that is not in `previousEntries` was never live to begin with
- * (a rebuild that recovers a previously unavailable instance), so it has no
- * position to return to and goes last until the next settings change.
+ * Reinstate a rebuilt instance at its old position: map order is settings-author order, so
+ * appending would shuffle the UI on every refresh. An instance absent from `previousEntries`
+ * goes last until the next settings change.
  */
 function withInstanceAt(
   previousEntries: ReadonlyMap<ProviderInstanceId, LiveEntry>,
@@ -114,11 +97,7 @@ interface RegistryState {
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
   Equal.equals(a, b);
 
-/**
- * An explicit false on either the envelope or the raw config blob wins (most
- * restrictive) — old settings files can carry both flags with conflicting
- * values, and a user's disable must never be silently undone.
- */
+/** Conflicting saved flags must preserve any explicit disable. */
 const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown): boolean => {
   const rawConfigEnabled = providerInstanceConfigEnabledFlag(entry.config);
   if (entry.enabled === false || rawConfigEnabled === false) {
@@ -273,9 +252,7 @@ const makeReconcile = <R>(input: {
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
       );
 
-      // 1. Close scopes for instances that disappeared or whose config
-      //    changed. Do this BEFORE creating replacements so ids map 1-to-1
-      //    to live scopes at all times.
+      // Close changed/removed scopes before replacements to preserve one live scope per id.
       const removedIds: Array<ProviderInstanceId> = [];
       const replacedIds = new Set<ProviderInstanceId>();
       for (const [instanceId, live] of previousEntries) {
@@ -443,25 +420,17 @@ export const makeProviderInstanceRegistry = Effect.fn(
           return false;
         }
 
-        // Everything except the build itself is bookkeeping over refs, and it
-        // is uninterruptible so the instance is never half-moved. Only the
-        // build is interruptible, because it is the part that can take
-        // minutes waiting on a secret store.
-        //
-        // Remembering the envelope comes first: an interrupt anywhere after
-        // this point still leaves the instance retryable on the next
-        // refresh, which is the only recovery path it has left.
+        // Only the build is interruptible (it can wait minutes on a secret store); the bookkeeping is
+        // uninterruptible so the instance is never half-moved. Remembering the envelope comes first so
+        // an interrupt leaves it retryable on the next refresh.
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             yield* Ref.update(rebuildable, (previous) => new Map(previous).set(instanceId, entry));
             if (live === undefined) {
               return;
             }
-            // Drop the instance before closing it, or the map hands callers
-            // a bundle whose scope is gone for the whole build. Its last
-            // snapshot stands in meanwhile: aggregators treat an id that is
-            // in neither list as gone and prune it, so leaving the id
-            // nowhere would blank the provider's card until the build lands.
+            // Drop the instance before closing it so callers never get a bundle with a dead scope. Its last
+            // snapshot stands in meanwhile: an id in neither list is pruned, blanking the provider card.
             const parked = yield* live.instance.snapshot.getSnapshot;
             yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
             yield* Ref.update(unavailable, (previous) => new Map(previous).set(instanceId, parked));

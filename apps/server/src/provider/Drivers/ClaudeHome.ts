@@ -40,13 +40,9 @@ const decodeSettingsEnv = Schema.decodeUnknownEffect(
 );
 
 /**
- * Claude Code copies the `env` of each settings file over its own environment
- * at startup, so a user's `OTEL_RESOURCE_ATTRIBUTES` there replaces the one T3
- * Code launched it with and drops `t3code.launched`. Flag settings outrank those
- * files, so this returns the `env` to pass there: the value the files would
- * leave in effect, plus the attribute. It returns nothing when no file sets the
- * variable, the file value already carries the attribute, or the launch
- * environment holds a value the user chose, such as `false`.
+ * Claude Code copies each settings file's `env` over its own environment, so a user's
+ * `OTEL_RESOURCE_ATTRIBUTES` there drops `t3code.launched`. Returns the flag-settings `env` that
+ * restores it, or nothing when no file sets it, it already carries it, or the user chose a value.
  */
 export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(function* (
   cwd: string | null,
@@ -106,21 +102,12 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
   return {
     ...resolvedBaseEnv,
-    // Overriding HOME also relocates the macOS login keychain lookup
-    // ($HOME/Library/Keychains), so the spawned CLI can't find its stored
-    // OAuth credentials and reports "Not logged in". CLAUDE_CONFIG_DIR points
-    // Claude Code at its config dir directly while leaving HOME (and the
-    // keychain) intact.
+    // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
   };
 });
 
-/**
- * While it exists Claude refuses `--strict-mcp-config` and exits before
- * initializing, but it already ignores user, project and `--mcp-config` servers
- * on its own, so callers that pass the flag for isolation can drop it. Paths
- * match the ones Claude Code checks.
- */
+/** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
 export const hasClaudeManagedMcpConfig = Effect.fn("hasClaudeManagedMcpConfig")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
@@ -154,10 +141,7 @@ export const makeClaudeCapabilitiesCacheKey = Effect.fn("makeClaudeCapabilitiesC
   },
 );
 
-/**
- * Describe the spawned CLI's environment separately from the login command so
- * paths remain literal on every shell, including relative inherited values.
- */
+/** Separate spawn env from login commands to preserve literal paths, including relative inherited values. */
 export const claudeSignedOutMessage = (input: {
   readonly configDir: string | undefined;
   readonly cwd: string;

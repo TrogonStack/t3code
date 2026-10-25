@@ -1,47 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off -- the op inject separator only needs a random token at this subprocess boundary
 /**
- * ProviderSecretResolverLive: implementation of `ProviderSecretResolver` that
- * reads each secret store through its HTTP API or its own CLI.
- *
- * A named secret provider is looked up in `settings.secretProviders` when its
- * secret is read, not when the reference is collected, so the reference stays
- * a pure value and the provider's current configuration is what gets used.
- * Removing a provider leaves its references unresolved rather than failing.
- *
- * OpenBao reads the KV v2 secret over its HTTP API:
- * `GET <address>/v1/<mount>/data/<path>` with the token in `X-Vault-Token`.
- * The provider's `auth` names the one place the token comes from, with no
- * fallback to another: `token` is the one stored on the provider, `env` is the
- * server process's `BAO_TOKEN`, and `cli` is the output of `bao print token`,
- * so the CLI's own login applies, the same way `op` uses the user's existing
- * session.
- *
- * AWS Secrets Manager reads `aws secretsmanager get-secret-value` in the
- * provider's region, with its named profile when one is set. No credentials
- * are stored: the CLI resolves them from that profile or its default chain
- * (environment, default profile, SSO, instance role). A reference is
- * `name-or-arn` for the whole secret string or `name-or-arn#key` for one key
- * of a JSON secret. Binary secrets are not supported.
- *
- * 1Password resolution is `op read --account <account> <reference>`, which is the same
- * command the user would run by hand and inherits their existing `op` session,
- * so there is no second place to configure credentials. The account is what
- * keeps a user signed into several 1Password accounts from reading against
- * whichever one `op` picks by default. Reads run one at a time: two
- * concurrent reads against a locked vault stack up two biometric prompts.
- *
- * The prompt is charged per `op` invocation rather than per secret, so reading
- * one reference at a time makes the whole fleet cost one authorization each.
- * `prime` exists for that: `op inject` substitutes any number of references in
- * a single process, so the caller that is about to build every instance pays
- * one prompt per account for all of them.
- *
- * Failures are cached alongside successes. If the vault is locked when the
- * first thread starts, every later thread in that session would otherwise
- * re-prompt; caching the miss keeps the failure quiet and puts recovery on
- * the refresh button, which is where the user already looks when a provider
- * shows as logged out.
- *
+ * Reads each secret store through its HTTP API or CLI. Providers are looked up in
+ * `settings.secretProviders` at read time. Failures are cached so a locked vault does not
+ * re-prompt; recovery is the refresh button.
  * @module provider/ProviderSecretResolverLive
  */
 import {
@@ -127,26 +88,9 @@ const OPENBAO_REQUEST_TIMEOUT = Duration.seconds(10);
 const SECRET_CACHE_CAPACITY = 64;
 
 /**
- * Read many references from one account in one `op inject`.
- *
- * `op inject` substitutes references inside a template, so the template is the
- * references themselves joined by a separator, and the output is the secrets
- * in the same order. The separator is random per call because a secret can
- * contain anything at all, newlines included: splitting on a fixed marker
- * would let a secret that happened to contain it shift every later value.
- *
- * Returns `undefined` when the batch cannot be trusted as a whole, which
- * includes a single bad reference, since `op` resolves the template or fails
- * it. The caller treats that as "not primed" and reads one at a time, which is
- * both the per-variable failure isolation and the way the user finds out which
- * reference is the broken one.
- *
- * The template goes to `op` through a scoped temp file rather than stdin.
- * `op` only reads piped input from a named pipe, and a child spawned from Node
- * is handed a socket pair, so a piped template is never seen and the batch
- * fails with "expected data on stdin but none found" every single time. The
- * file holds only `op://` references, which already sit in settings in plain
- * text; the secrets themselves come back on stdout and never touch disk.
+ * Read many references from one account in one `op inject`, via a scoped temp file because `op`
+ * ignores piped stdin from Node. The separator is random per call so a secret cannot shift later
+ * values. Returns `undefined` when the batch fails as a whole; the caller reads one at a time.
  */
 const readSecretsTogether = Effect.fn("readSecretsTogether")(function* (
   account: OnePasswordAccount,
@@ -274,12 +218,9 @@ const nonEmpty = (value: string | undefined) =>
   value === undefined || value.length === 0 ? undefined : value;
 
 /**
- * The token the API read authenticates with, from the one source the
- * provider's `auth` names. `cli` asks `bao print token`, which owns where its
- * login lives, so nothing here reads a token file or a `VAULT_*` variable, and
- * the token variables are withheld from that child so it reports the login
- * rather than the server's environment.
- * Returns the reason, after logging it, when that source has no token.
+ * The token from the source the provider's `auth` names, with no fallback. `cli` asks
+ * `bao print token` with token variables withheld so it reports its own login. Returns the
+ * logged reason when that source has no token.
  */
 const resolveOpenBaoToken = Effect.fn("resolveOpenBaoToken")(function* (
   provider: SecretProviderId,

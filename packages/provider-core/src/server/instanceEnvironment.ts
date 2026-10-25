@@ -8,11 +8,8 @@ import * as Effect from "effect/Effect";
 import { expandHomePath } from "./pathExpansion.ts";
 
 /**
- * A provider environment variable whose value is ready for a child process.
- * Configured variables may name a secret source instead of a value; only
- * `ProviderSecretResolver` turns those into this shape, so a source cannot
- * reach a process by accident. A value read from a secret store is always
- * sensitive.
+ * A variable ready for a child process. Only `ProviderSecretResolver` turns a secret source
+ * into this shape, so a source cannot reach a process unresolved. Secret-store values are sensitive.
  */
 export interface ResolvedProviderEnvironmentVariable {
   readonly name: ProviderInstanceEnvironmentVariableName;
@@ -107,7 +104,6 @@ export const overlayProviderInstanceEnvironment = Effect.fn(function* (
   const home = yield* HostProcess.HomeDirectory;
   const next: NodeJS.ProcessEnv = { ...baseEnv };
   for (const variable of environment) {
-    // Child processes do not apply shell expansion to environment values.
     next[variable.name] =
       variable.name === "CODEX_HOME" || variable.name === "CLAUDE_CONFIG_DIR"
         ? expandHomePath(variable.value, home)

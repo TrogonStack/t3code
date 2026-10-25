@@ -1,16 +1,7 @@
 /**
- * ProviderSecretResolver: turns environment values that name a secret (such as
- * a 1Password secret source) into the secrets they name, once, and holds them
- * in memory.
- *
- * Every provider instance resolves its environment when the driver builds it,
- * and a single instance can rebuild several times per session. Shelling out
- * to `op` on each of those is slow (seconds) and, worse, can put a biometric
- * prompt in front of a user who only started a thread. The resolver therefore
- * caches by secret (reference plus account) for the lifetime of the process; `invalidate` is wired
- * to the Settings refresh button, which is the user's way of saying "go read
- * it again" after rotating a credential.
- *
+ * ProviderSecretResolver: resolves secret-naming environment values once and caches them per
+ * secret (reference plus account) for the process lifetime, so rebuilds do not re-run `op` or
+ * re-prompt. `invalidate` is wired to the Settings refresh button.
  * @module provider/ProviderSecretResolver
  */
 import type {
@@ -27,14 +18,9 @@ import type { ResolvedProviderEnvironment } from "@t3tools/provider-core/server/
 import type { ProviderSecretReference } from "./ProviderSecretReference.ts";
 
 /**
- * An instance environment after its secret references have been read.
- *
- * `unresolved` names the variables the instance configures but whose value
- * could not be read. They are tracked separately because being absent from
- * `variables` is not enough: the child environment starts from the server's
- * own, so a name left alone keeps whatever the server inherited under it.
- * That is the wrong credential precisely when the user asked for a specific
- * one, and it hides as "authenticated".
+ * An instance environment after its secret references were read. `unresolved` is tracked apart
+ * from `variables` because the child environment starts from the server's own, so an unset name
+ * would keep an inherited credential.
  */
 export interface ResolvedProviderInstanceEnvironment {
   readonly variables: ResolvedProviderEnvironment;
@@ -43,49 +29,26 @@ export interface ResolvedProviderInstanceEnvironment {
 
 export interface ProviderSecretResolverShape {
   /**
-   * Replace every secret the environment names with its value. Literal values
-   * pass through untouched.
-   *
-   * Never fails. A reference that cannot be read (1Password locked, `op` not
-   * installed, item deleted) is reported as unresolved rather than
-   * substituted with an empty string, so the provider reports the honest
-   * "unauthenticated" instead of failing later with a credential that looks
-   * present and is not. The instance registry unsets those names,
-   * which is what keeps the provider off a same-named credential the server
-   * happens to have inherited.
+   * Replace every named secret with its value; literals pass through. Never fails: an unreadable
+   * reference is reported unresolved, never as an empty string, and the registry unsets its name
+   * so an inherited same-named credential is not used.
    */
   readonly resolve: (
     environment: ProviderInstanceEnvironment | undefined,
   ) => Effect.Effect<ResolvedProviderInstanceEnvironment>;
   /**
-   * Resolve `references` ahead of the callers that will ask for them, in as
-   * few reads as the secret store allows.
-   *
-   * Unlocking is charged per invocation of the store's CLI, not per secret, so
-   * a caller about to build ten instances that each resolve their own
-   * environment would otherwise cost ten authorizations. Priming turns that
-   * into one.
-   *
-   * Purely an optimization, and deliberately best effort: it never fails, and
-   * a batch that does not come back leaves the cache exactly as cold as it
-   * found it, so `resolve` falls back to reading one reference at a time with
-   * the same per-variable failure isolation it has always had.
+   * Resolve `references` ahead of callers in as few store invocations as possible, since unlocking
+   * is charged per invocation. Best effort and never fails: a failed batch leaves the cache cold.
    */
   readonly prime: (references: ReadonlyArray<ProviderSecretReference>) => Effect.Effect<void>;
   /**
-   * Drop cached secrets so the next `resolve` re-reads them from the store:
-   * every secret by default, or only those read through the named providers
-   * given, so editing one provider never re-prompts for the others. Callers
-   * that need the new value to reach a running provider must also rebuild the
-   * instance: a provider process keeps the environment it was spawned with.
+   * Drop cached secrets so the next `resolve` re-reads them: all by default, or only those from
+   * the named providers. Running providers keep their spawn-time environment until rebuilt.
    */
   readonly invalidate: (providers?: ReadonlySet<SecretProviderId>) => Effect.Effect<void>;
   /**
-   * Read one secret source now, for the Settings "check" button, and report
-   * whether it resolved. Reads fresh, bypassing the cache, and stores a
-   * successful read in the cache so the next provider refresh does not prompt
-   * again. Never fails and never returns the value; a failure carries the
-   * store's own reason.
+   * Read one secret source fresh for the Settings "check" button. A success is cached; never
+   * fails and never returns the value.
    */
   readonly check: (source: ProviderSecretSource) => Effect.Effect<SecretSourceCheckResult>;
   /**
