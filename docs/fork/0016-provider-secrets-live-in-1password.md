@@ -19,9 +19,11 @@
 - Rotate a secret and pick it up without restarting anything. Refreshing
   provider status in Settings goes back to 1Password and rebuilds only the
   providers that read from it. Threads already running keep working.
-- Tell when a vault is locked. A reference T3 Code cannot read leaves the
-  variable unset, so the provider reports as not authenticated instead of
-  starting with a blank credential and failing on your first message.
+- Tell when a vault is locked. A reference T3 Code cannot read marks the
+  provider unavailable and names the variable, instead of starting with a blank
+  credential and failing on your first message. Nothing is remembered about the
+  failed read, so unlocking the vault and refreshing, or running the Settings
+  check on that variable, brings the provider back.
 
 ## Why
 

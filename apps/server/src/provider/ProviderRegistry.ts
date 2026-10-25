@@ -3,6 +3,8 @@ import {
   isProviderWorkspaceSnapshotCurrent,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderSecretSource,
+  type SecretSourceCheckResult,
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
@@ -31,6 +33,7 @@ import * as ProviderSecretResolver from "./ProviderSecretResolver.ts";
 import {
   collectProviderSecretReferences,
   hasProviderSecretReference,
+  providerSecretReference,
 } from "./ProviderSecretReference.ts";
 import {
   hydrateCachedProvider,
@@ -89,6 +92,14 @@ export class ProviderRegistry extends Context.Service<
       readonly action: ProviderMaintenanceActionKind;
       readonly state: ServerProviderUpdateState | null;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+    /**
+     * Settings "check" for one secret source. A readable source also rebuilds the unavailable
+     * instances that were waiting on it, from the value the check just cached.
+     */
+    readonly checkSecretSource: (
+      source: ProviderSecretSource,
+    ) => Effect.Effect<SecretSourceCheckResult>;
 
     readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
   }
@@ -852,6 +863,44 @@ export const layer = Layer.effect(
         });
       }),
     );
+    const rebuildSecretBackedInstances = Effect.fn("rebuildSecretBackedInstances")(function* (
+      targets: ReadonlyArray<ProviderInstanceId>,
+    ) {
+      const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
+        instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
+          hasProviderSecretReference(entry.environment),
+        ),
+      );
+      if (rebuilt.some(Boolean)) {
+        // Adopt the replacement instances now rather than waiting on the
+        // registry's change tick, so the refresh that triggered the rebuild
+        // probes the new process instead of the one it just closed.
+        yield* syncLiveSources.pipe(Effect.provideService(Scope.Scope, serviceScope));
+      }
+    });
+
+    const checkSecretSource = Effect.fn("checkSecretSource")(function* (
+      source: ProviderSecretSource,
+    ) {
+      const result = yield* secretResolver.check(source);
+      const reference = providerSecretReference(source);
+      if (result._tag !== "Resolved" || reference === undefined) {
+        return result;
+      }
+      // The check left the value in the resolver's cache, so these rebuilds
+      // read it from memory and never reach the store again.
+      const environments = yield* instanceRegistry.listEnvironments;
+      const waiting = (yield* instanceRegistry.listUnavailable)
+        .map(snapshotInstanceKey)
+        .filter((instanceId) =>
+          collectProviderSecretReferences([environments.get(instanceId)]).some((candidate) =>
+            Equal.equals(candidate, reference),
+          ),
+        );
+      yield* rebuildSecretBackedInstances(waiting);
+      return result;
+    });
+
     /**
      * Re-read every external-store credential and rebuild the instances that consume one: drivers
      * resolve their environment once at create time, so dropping the cache alone changes nothing.
@@ -881,17 +930,7 @@ export const layer = Layer.effect(
       yield* secretResolver.prime(
         collectProviderSecretReferences(targets.map((instanceId) => environments.get(instanceId))),
       );
-      const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
-        instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
-          hasProviderSecretReference(entry.environment),
-        ),
-      );
-      if (rebuilt.some(Boolean)) {
-        // Adopt the replacement instances now rather than waiting on the
-        // registry's change tick, so the refresh that triggered the rebuild
-        // probes the new process instead of the one it just closed.
-        yield* syncLiveSources.pipe(Effect.provideService(Scope.Scope, serviceScope));
-      }
+      yield* rebuildSecretBackedInstances(targets);
     });
 
     const syncLiveSourcesAndContinue = syncLiveSources.pipe(
@@ -1045,6 +1084,7 @@ export const layer = Layer.effect(
       refreshAfterUpdate,
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
+      checkSecretSource,
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

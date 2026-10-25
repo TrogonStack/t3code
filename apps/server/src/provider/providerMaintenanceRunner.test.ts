@@ -193,6 +193,7 @@ function makeRegistry(
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
       refreshAfterUpdate: () => Ref.get(providersRef),
+      checkSecretSource: () => Effect.succeed({ _tag: "Resolved" }),
       refreshWorkspaceSnapshot: () => Ref.get(providersRef),
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),

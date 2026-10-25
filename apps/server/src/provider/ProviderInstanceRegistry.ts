@@ -106,25 +106,6 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
   return entry.enabled ?? providerInstanceConfigEnabledFlag(typedConfig) ?? true;
 };
 
-/**
- * What a provider process inherits from the server. A variable whose secret
- * could not be read is removed rather than left to the server's own value,
- * because that would run the provider as an account the user did not pick.
- */
-function hostEnvironmentWithout(
-  hostEnvironment: NodeJS.ProcessEnv,
-  names: ReadonlyArray<string>,
-): NodeJS.ProcessEnv {
-  if (names.length === 0) {
-    return hostEnvironment;
-  }
-  const next: NodeJS.ProcessEnv = { ...hostEnvironment };
-  for (const name of names) {
-    delete next[name];
-  }
-  return next;
-}
-
 const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
@@ -186,6 +167,18 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
 
   const typedConfig = decodeResult.success;
   const resolvedEnvironment = yield* secretResolver.resolve(entry.environment);
+  if (resolvedEnvironment.unresolved.length > 0) {
+    return {
+      kind: "unavailable" as const,
+      snapshot: yield* buildUnavailableProviderSnapshot({
+        driverKind: entry.driver,
+        instanceId,
+        displayName: entry.displayName,
+        accentColor: entry.accentColor,
+        reason: `Could not read ${resolvedEnvironment.unresolved.join(", ")} from its secret store. Unlock it, then refresh.`,
+      }),
+    };
+  }
   const childScope = yield* Scope.make();
   yield* Scope.addFinalizer(parentScope, Scope.close(childScope, Exit.void).pipe(Effect.ignore));
 
@@ -200,10 +193,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
     })
     .pipe(
       Effect.provideService(Scope.Scope, childScope),
-      Effect.provideService(
-        HostProcess.Environment,
-        hostEnvironmentWithout(hostEnvironment, resolvedEnvironment.unresolved),
-      ),
+      Effect.provideService(HostProcess.Environment, hostEnvironment),
       Effect.result,
     );
   if (createResult._tag === "Failure") {
@@ -394,7 +384,20 @@ export const makeProviderInstanceRegistry = Effect.fn(
     (configMap) =>
       mutations.withPermits(1)(
         reconcileWithR(configMap).pipe(
-          Effect.tap(() => Ref.set(rebuildable, new Map())),
+          Effect.tap(() =>
+            Ref.get(unavailable).pipe(
+              Effect.flatMap((pending) =>
+                Ref.set(
+                  rebuildable,
+                  new Map(
+                    Object.entries(configMap)
+                      .map(([id, entry]) => [ProviderInstanceId.make(id), entry] as const)
+                      .filter(([id]) => pending.has(id)),
+                  ),
+                ),
+              ),
+            ),
+          ),
           Effect.provideContext(driverContext),
         ),
       );
