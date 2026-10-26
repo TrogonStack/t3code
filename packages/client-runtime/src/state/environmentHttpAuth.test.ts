@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import type { HttpClient } from "effect/http";
@@ -552,6 +553,33 @@ describe("authenticated environment HTTP requests", () => {
         expect(yield* Fiber.join(session)).toEqual(SESSION);
         expect(harness.calls).toHaveLength(2);
       }),
+  );
+
+  it.effect("gives up on session permissions once the longest wait also times out", () =>
+    Effect.gen(function* () {
+      const requestSent = yield* Queue.unbounded<number>();
+      const harness = makeHarness((requestNumber) => {
+        Queue.offerUnsafe(requestSent, requestNumber);
+        return new Promise<Response>(() => {});
+      });
+      const session = yield* fetchEnvironmentSessionState({
+        prepared: { ...PREPARED, httpAuthorization: { _tag: "Bearer", token: "bearer-token" } },
+        signer: Option.none(),
+        timeoutMs: 15_000,
+      }).pipe(
+        Effect.provide(harness.httpLayer),
+        Effect.flip,
+        Effect.forkChild({ startImmediately: true }),
+      );
+
+      for (const waitMs of [15_000, 30_000, 60_000]) {
+        yield* Queue.take(requestSent);
+        yield* TestClock.adjust(waitMs);
+      }
+
+      expect((yield* Fiber.join(session))._tag).toBe("RemoteEnvironmentAuthTimeoutError");
+      expect(harness.calls).toHaveLength(3);
+    }),
   );
 
   it.effect("reports persistent session rejection instead of showing missing permissions", () =>
