@@ -54,6 +54,8 @@ const layerTestHttpClient = Layer.succeed(
 // The mock CLIs from makeTildeProviderFixtures are scripts Windows cannot execute.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
+const decodeProviderInstanceEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
@@ -655,7 +657,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       [instanceId]: {
         driver: ProviderDriverKind.make("codex"),
         enabled: true,
-        environment: Schema.decodeSync(ProviderInstanceEnvironment)([
+        environment: decodeProviderInstanceEnvironment([
           {
             name: "CODEX_TOKEN",
             value: { kind: "1password", reference: "op://Private/codex/token", account: "a.b.com" },
