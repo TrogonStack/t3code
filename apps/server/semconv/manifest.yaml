@@ -1,2 +1,2 @@
-name: t3
-schema_url: https://t3.codes/schemas/1.0.0
+name: t3code
+schema_url: https://github.com/TrogonStack/t3code/tree/main/apps/server/semconv
