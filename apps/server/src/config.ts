@@ -9,14 +9,22 @@ import type * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import type { OtlpEndpointSource } from "@t3tools/contracts";
-import packageJson from "../package.json" with { type: "json" };
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 import {
   DEFAULT_SIGNAL_EXPORT,
-  nodeProcessResourceAttributes,
+  nodeProcessRuntimeAttributes,
+  processServiceInstanceId,
   type SignalExport,
 } from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
+import { type ReleaseChannel, releaseResourceAttributes } from "@t3tools/shared/releaseResource";
+import packageJson from "../package.json" with { type: "json" };
+
+// Official release workflows set this telemetry channel; other builds report dev.
+// Unlike __T3CODE_BUILD_CHANNEL__, this is not the sign-in page's latest/nightly channel.
+declare const __T3CODE_TELEMETRY_CHANNEL__: ReleaseChannel | undefined;
+export const telemetryChannel: ReleaseChannel =
+  typeof __T3CODE_TELEMETRY_CHANNEL__ === "undefined" ? "dev" : __T3CODE_TELEMETRY_CHANNEL__;
 
 export const DEFAULT_PORT = 3773;
 
@@ -109,20 +117,19 @@ export class ServerConfig extends Context.Service<
 export const make = (config: ServerConfig["Service"]) => ServerConfig.of(config);
 
 export const otlpResource = (
-  config: Pick<ServerConfig["Service"], "mode" | "otelEnvironment" | "devUrl">,
+  config: Pick<ServerConfig["Service"], "mode" | "otelEnvironment">,
   hostName: string,
 ) => ({
   serviceName: "t3code-server",
   serviceVersion: packageJson.version,
   attributes: {
     "service.namespace": "t3code",
+    "service.runtime": "t3-server",
     "t3code.server.managed_by": config.mode === "desktop" ? "desktop" : "standalone",
-    ...nodeProcessResourceAttributes({
-      version: packageJson.version,
-      operatorAttributes: config.otelEnvironment.resourceAttributes,
-      isDevelopment: config.devUrl !== undefined,
-    }),
+    "service.instance.id": processServiceInstanceId(config.otelEnvironment.resourceAttributes),
+    ...releaseResourceAttributes(telemetryChannel, config.otelEnvironment.resourceAttributes),
     "host.name": config.otelEnvironment.resourceAttributes["host.name"] || hostName,
+    ...nodeProcessRuntimeAttributes(),
   },
 });
 

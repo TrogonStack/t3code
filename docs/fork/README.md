@@ -39,8 +39,6 @@ Each entry uses these sections:
   active, [#28](https://github.com/TrogonStack/t3code/pull/28)
 - **0024** [A refused merge says why, and an administrator can merge anyway](./0024-a-refused-merge-says-why.md)
   active, [#38](https://github.com/TrogonStack/t3code/pull/38)
-- **0026** [Telemetry says which app sent it](./0026-telemetry-says-which-app-sent-it.md)
-  active, [#68](https://github.com/TrogonStack/t3code/pull/68)
 - **0028** [A thread whose worktree was deleted recovers on the next message](./0028-a-thread-with-a-deleted-worktree-recovers.md)
   active, [#89](https://github.com/TrogonStack/t3code/pull/89)
 - **0031** [Harness telemetry says T3 Code launched it](./0031-harness-telemetry-says-t3code-launched-it.md)

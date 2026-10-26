@@ -1,4 +1,3 @@
-// @effect-diagnostics cryptoRandomUUID:off -- The process instance id is read synchronously while module-level tracing layers are built.
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -15,7 +14,6 @@ import * as Tracer from "effect/Tracer";
 import { OtlpResource, OtlpTracer, OtlpSerialization } from "effect/observability";
 
 import { makeAsyncRotatingFileSink } from "./logging.ts";
-import { releaseResourceAttributes } from "./releaseResource.ts";
 
 export const OtlpProtocol = Schema.Literals(["http/json", "http/protobuf"]);
 export type OtlpProtocol = typeof OtlpProtocol.Type;
@@ -27,16 +25,6 @@ export interface SignalExport {
   readonly headers: Readonly<Record<string, string>> | undefined;
   readonly exportIntervalMs: number;
 }
-
-let serviceInstanceId: string | undefined;
-
-/**
- * `service.instance.id` for this process. Every resource the process exports
- * shares it, so a restart reads as a new instance and two resources of one
- * process can be joined.
- */
-export const processServiceInstanceId = (): string =>
-  (serviceInstanceId ??= globalThis.crypto.randomUUID());
 
 /**
  * `process.runtime.*` resource attributes for a Node process, matching the
@@ -50,22 +38,20 @@ export const nodeProcessRuntimeAttributes = (): Record<string, string> => ({
     ? `Electron ${process.versions.electron}`
     : "Node.js",
 });
+let generatedServiceInstanceId: string | undefined;
 
 /**
- * Resource attributes a Node process reports besides its service identity.
- * Effect lets explicit attributes beat `OTEL_RESOURCE_ATTRIBUTES`, so values an
- * operator set there are carried over by hand to keep winning.
+ * `service.instance.id` shared by every resource this process exports. Effect lets code
+ * attributes beat `OTEL_RESOURCE_ATTRIBUTES`, so callers pass the operator's in to keep it winning.
  */
-export const nodeProcessResourceAttributes = (input: {
-  readonly version: string;
-  readonly operatorAttributes: Readonly<Record<string, unknown>>;
-  readonly isDevelopment: boolean;
-}): Record<string, unknown> => ({
-  "service.instance.id":
-    input.operatorAttributes["service.instance.id"] ?? processServiceInstanceId(),
-  ...releaseResourceAttributes(input),
-  ...nodeProcessRuntimeAttributes(),
-});
+export const processServiceInstanceId = (
+  operatorAttributes: Readonly<Record<string, string>> = {},
+): string => {
+  if (operatorAttributes["service.instance.id"]) return operatorAttributes["service.instance.id"];
+  // @effect-diagnostics-next-line cryptoRandomUUID:off -- Resources are built synchronously, outside any Effect.
+  generatedServiceInstanceId ??= crypto.randomUUID();
+  return generatedServiceInstanceId;
+};
 
 export const DEFAULT_SIGNAL_EXPORT: SignalExport = {
   protocol: "http/json",

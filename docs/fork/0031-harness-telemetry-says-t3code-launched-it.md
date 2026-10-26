@@ -22,7 +22,7 @@ in their telemetry separated a session T3 Code launched from one started in a
 terminal, so any usage report built from it described the machine, not the
 product.
 
-The key follows [0026](./0026-telemetry-says-which-app-sent-it.md) and sits
+The key follows the resource attributes T3 Code already reports and sits
 under the `t3code.` prefix, since no semantic convention says which program
 launched a process.
 

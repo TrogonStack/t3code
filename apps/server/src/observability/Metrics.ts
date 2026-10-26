@@ -23,12 +23,11 @@ export const orchestrationEventsProcessedTotal = Metric.counter(
 );
 
 export const orchestrationCommandsTotal = Metric.counter("t3_orchestration_commands_total", {
-  description: "Total orchestration commands dispatched by result.",
+  description: "Total orchestration commands dispatched, by outcome.",
 });
 
 export const orchestrationCommandDuration = Metric.timer("t3_orchestration_command_duration", {
-  description:
-    "Orchestration command dispatch duration while holding its dispatch lock, excluding lock wait.",
+  description: "Orchestration command handling duration, excluding thread dispatch lock wait.",
 });
 
 export const orchestrationCommandAckDuration = Metric.timer(
@@ -216,3 +215,14 @@ export const withMetrics: {
   ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(effect: Effect.Effect<A, E, R>, options: WithMetricsOptions): Effect.Effect<A, E, R>;
 } = dual(2, withMetricsImpl);
+
+// Shaped as an `Effect.fn` combinator: the command is the instrumented function's argument.
+export const withCommandMetrics = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  command: { readonly type: string },
+): Effect.Effect<A, E, R> =>
+  withMetrics(effect, {
+    counter: orchestrationCommandsTotal,
+    timer: orchestrationCommandDuration,
+    attributes: { commandType: command.type },
+  });
