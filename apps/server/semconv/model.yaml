@@ -1,0 +1,36 @@
+file_format: definition/2
+attributes:
+  - key: t3.outcome
+    type:
+      members:
+        - id: success
+          value: success
+          brief: The operation succeeded.
+          stability: development
+        - id: failure
+          value: failure
+          brief: The operation failed.
+          stability: development
+        - id: interrupt
+          value: interrupt
+          brief: The operation was interrupted before it finished.
+          stability: development
+    brief: How an operation ended.
+    stability: development
+  - key: t3.git.operation
+    type: string
+    brief: The server operation that ran a git command.
+    examples: ["GitVcsDriver.statusDetails.status"]
+    stability: development
+metrics:
+  - name: t3.git.command.duration
+    brief: Git command execution duration.
+    instrument: histogram
+    unit: s
+    stability: development
+    requirement_level: recommended
+    attributes:
+      - ref: t3.git.operation
+        requirement_level: required
+      - ref: t3.outcome
+        requirement_level: required
