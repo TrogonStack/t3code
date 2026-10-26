@@ -5,6 +5,7 @@ import * as Socket from "effect/socket/Socket";
 
 import { layerRemoteHttpClient } from "@t3tools/client-runtime/rpc";
 import * as RelayTracing from "@t3tools/shared/relayTracing";
+import { releaseResourceAttributes } from "@t3tools/shared/releaseResource";
 import * as PrimaryEnvironmentHttpClient from "../environments/primary/httpClient";
 import * as PrimaryEnvironmentHttpLayer from "../environments/primary/httpLayer";
 
@@ -24,6 +25,7 @@ const layerRelayTracing = RelayTracing.layer(resolveRelayTracingConfig(), {
   runtime: "browser",
   serviceInstanceId: ClientTracer.serviceInstanceId,
   client: typeof window !== "undefined" && window.desktopBridge ? "desktop" : "web",
+  attributes: releaseResourceAttributes(ClientTracer.releaseChannel),
 }).pipe(Layer.provide(layerHttpClient));
 
 type RuntimeLayerSource =
