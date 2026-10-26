@@ -1,0 +1,13 @@
+file_format: definition/2
+metrics:
+  - name: t3code.git.command.duration
+    brief: Git command execution duration.
+    instrument: histogram
+    unit: s
+    stability: development
+    requirement_level: recommended
+    attributes:
+      - ref: t3code.git.operation
+        requirement_level: required
+      - ref: t3code.outcome
+        requirement_level: required

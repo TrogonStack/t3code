@@ -212,7 +212,7 @@ export const withMetrics: {
   <A, E, R>(effect: Effect.Effect<A, E, R>, options: WithMetricsOptions): Effect.Effect<A, E, R>;
 } = dual(2, withMetricsImpl);
 
-// Records through a generated semconv helper, which owns the instrument and its attribute keys.
+// Records through a generated registry helper, which owns the instrument and its attribute keys.
 export const withOutcomeTiming =
   (record: (duration: Duration.Duration, outcome: ObservabilityOutcome) => Effect.Effect<void>) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>

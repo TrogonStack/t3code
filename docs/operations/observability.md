@@ -395,7 +395,7 @@ Good metric families to watch:
 - `t3_rpc_request_duration`
 - `t3_orchestration_command_duration`
 - `t3_provider_turn_duration` (how long the provider adapter takes to start a turn, not the turn's run time)
-- `t3.git.command.duration`, in seconds, by `t3.git.operation` and `t3.outcome`; its count is the
+- `t3code.git.command.duration`, in seconds, by `t3code.git.operation` and `t3code.outcome`; its count is the
   number of git commands
 
 Counters tell you volume and failure rate:
