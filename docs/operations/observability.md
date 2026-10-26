@@ -395,14 +395,14 @@ Good metric families to watch:
 - `t3_rpc_request_duration`
 - `t3_orchestration_command_duration`
 - `t3_provider_turn_duration` (how long the provider adapter takes to start a turn, not the turn's run time)
-- `t3_git_command_duration`
+- `t3code.git.command.duration`, in seconds, by `t3code.git.operation` and `t3code.outcome`; its count is the
+  number of git commands
 
 Counters tell you volume and failure rate:
 
 - `t3_rpc_requests_total`
 - `t3_orchestration_commands_total`
 - `t3_provider_turns_total`
-- `t3_git_commands_total`
 
 Webhooks have their own families:
 

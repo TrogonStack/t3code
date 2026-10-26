@@ -1,0 +1,7 @@
+file_format: definition/2
+attributes:
+  - key: t3code.git.operation
+    type: string
+    brief: The server operation that ran a git command.
+    examples: ["GitVcsDriver.statusDetails.status"]
+    stability: development

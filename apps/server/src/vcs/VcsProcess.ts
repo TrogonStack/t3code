@@ -22,7 +22,8 @@ import {
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import type { SourceControlProcessInput } from "@t3tools/source-control-core/server/SourceControlHost";
 
-import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
+import { withOutcomeTiming } from "../observability/Metrics.ts";
+import { updateT3codeGitCommandDuration } from "../observability/otel/metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 export interface VcsProcessInput {
@@ -253,16 +254,12 @@ export const make = Effect.gen(function* () {
 
     return yield* input.command === "git"
       ? execution.pipe(
-          withMetrics({
-            counter: gitCommandsTotal,
-            timer: gitCommandDuration,
-            attributes: {
-              operation: gitMetricOperations.has(input.operation) ? input.operation : "other",
-            },
-            outcomeAttributes: (outcome) => ({
+          withOutcomeTiming((duration, outcome) =>
+            updateT3codeGitCommandDuration(duration, {
+              gitOperation: gitMetricOperations.has(input.operation) ? input.operation : "other",
               outcome: outcome === "success" && failedExit ? "failure" : outcome,
             }),
-          }),
+          ),
         )
       : execution;
   });
