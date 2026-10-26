@@ -172,6 +172,7 @@ const readOnePasswordSecret = Effect.fn("readOnePasswordSecret")(function* ({
 const OnePasswordAccountListJson = Schema.fromJsonString(
   Schema.Array(Schema.Struct({ url: OnePasswordAccount, email: Schema.String })),
 );
+const decodeOnePasswordAccountList = Schema.decodeUnknownEffect(OnePasswordAccountListJson);
 
 const readOnePasswordAccounts = Effect.fn("readOnePasswordAccounts")(function* () {
   const spawnCommand = yield* resolveOnePasswordCommand(["account", "list", "--format", "json"]);
@@ -186,7 +187,7 @@ const readOnePasswordAccounts = Effect.fn("readOnePasswordAccounts")(function* (
     });
     return [];
   }
-  const accounts = yield* Schema.decodeUnknownEffect(OnePasswordAccountListJson)(result.stdout);
+  const accounts = yield* decodeOnePasswordAccountList(result.stdout);
   return accounts.map(({ url, email }): OnePasswordAccountSummary => ({ account: url, email }));
 });
 

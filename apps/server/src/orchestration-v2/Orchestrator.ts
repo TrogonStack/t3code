@@ -126,7 +126,6 @@ import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import {
   SESSION_BOUND_EFFECT_TYPES,
-  type OrchestrationEffectRequestV2,
   type PendingOrchestrationEffectV2,
   type UnsettledEffectCancellation,
 } from "./EffectOutbox.ts";

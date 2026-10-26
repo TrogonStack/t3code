@@ -1452,6 +1452,7 @@ it.layer(
         const instanceRegistryLayer = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           {
+            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
             getInstance: () => Effect.succeed(undefined),
             listInstances: Effect.succeed([]),
             listUnavailable: Effect.succeed([unavailableProvider]),
@@ -1534,6 +1535,7 @@ it.layer(
         const instanceRegistryLayer = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           {
+            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
             getInstance: () => Effect.succeed(undefined),
             listInstances: Effect.succeed([]),
             listUnavailable: Effect.succeed([
@@ -1632,6 +1634,7 @@ it.layer(
         const instanceRegistryLayer = Layer.succeed(
           ProviderInstanceRegistry.ProviderInstanceRegistry,
           {
+            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
             getInstance: () => Effect.succeed(undefined),
             listInstances: Effect.succeed([]),
             listUnavailable: Effect.succeed([
@@ -1749,6 +1752,8 @@ it.layer(
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
+              rebuildInstanceWhen: () => Effect.succeed(false),
+              listEnvironments: Effect.succeed(new Map()),
             },
           );
           const scope = yield* Scope.make();

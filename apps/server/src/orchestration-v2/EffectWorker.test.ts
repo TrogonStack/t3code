@@ -537,8 +537,8 @@ it.effect("records a processed-event metric for a successfully executed claim", 
       lastError: null,
     };
     const outboxLayer = Layer.mock(EffectOutbox.EffectOutboxV2)({
-      claimNext: () => Effect.succeed(Option.some(claimedEffect)),
-      get: () => Effect.succeed(Option.some(claimedEffect)),
+      claimNext: () => Effect.succeedSome(claimedEffect),
+      get: () => Effect.succeedSome(claimedEffect),
       awaitCancellation: () => Effect.never,
       clearCancellation: () => Effect.void,
       succeed: () => Effect.succeed(true),
