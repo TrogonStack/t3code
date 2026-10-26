@@ -5,7 +5,11 @@ import * as Exit from "effect/Exit";
 import * as Metric from "effect/Metric";
 import { dual } from "effect/Function";
 
-import { compactMetricAttributes, outcomeFromExit } from "./Attributes.ts";
+import {
+  compactMetricAttributes,
+  outcomeFromExit,
+  type ObservabilityOutcome,
+} from "./Attributes.ts";
 
 export const rpcRequestsTotal = Metric.counter("t3_rpc_requests_total", {
   description: "Total RPC requests handled by the websocket RPC server.",
@@ -102,14 +106,6 @@ export const runDuration = Metric.timer("t3_run_duration", {
 
 export const runQueueWait = Metric.timer("t3_run_queue_wait", {
   description: "Time a run waited between being requested and starting.",
-});
-
-export const gitCommandsTotal = Metric.counter("t3_git_commands_total", {
-  description: "Total git commands executed by the server runtime.",
-});
-
-export const gitCommandDuration = Metric.timer("t3_git_command_duration", {
-  description: "Git command execution duration.",
 });
 
 export const terminalSessionsTotal = Metric.counter("t3_terminal_sessions_total", {
@@ -215,6 +211,18 @@ export const withMetrics: {
   ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   <A, E, R>(effect: Effect.Effect<A, E, R>, options: WithMetricsOptions): Effect.Effect<A, E, R>;
 } = dual(2, withMetricsImpl);
+
+// Records through a generated semconv helper, which owns the instrument and its attribute keys.
+export const withOutcomeTiming =
+  (record: (duration: Duration.Duration, outcome: ObservabilityOutcome) => Effect.Effect<void>) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.flatMap(Clock.monotonicTimeNanos, (startedAt) =>
+      Effect.onExit(effect, (exit) =>
+        Effect.flatMap(Clock.monotonicTimeNanos, (endedAt) =>
+          record(Duration.nanos(endedAt - startedAt), outcomeFromExit(exit)),
+        ),
+      ),
+    );
 
 // Shaped as an `Effect.fn` combinator: the command is the instrumented function's argument.
 export const withCommandMetrics = <A, E, R>(
