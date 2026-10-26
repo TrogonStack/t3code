@@ -1023,10 +1023,10 @@ const gitCommandDurations = (operation: string, outcome?: string) =>
   Metric.snapshot.pipe(
     Effect.map((snapshots) =>
       snapshots.flatMap((snapshot) =>
-        snapshot.id === "t3.git.command.duration" &&
+        snapshot.id === "t3code.git.command.duration" &&
         snapshot.type === "Histogram" &&
-        snapshot.attributes?.["t3.git.operation"] === operation &&
-        (outcome === undefined || snapshot.attributes["t3.outcome"] === outcome)
+        snapshot.attributes?.["t3code.git.operation"] === operation &&
+        (outcome === undefined || snapshot.attributes["t3code.outcome"] === outcome)
           ? [snapshot.state]
           : [],
       ),

@@ -30,7 +30,7 @@
     "record:muse-replay": "node scripts/record-muse-msp-replay-fixture.ts",
     "generate": "graphqlgen",
     "generate:expo-schema": "node scripts/fetch-expo-schema.ts",
-    "generate:semconv": "rm -rf src/observability/semconv && mise exec github:open-telemetry/weaver@0.26.1 -- weaver registry generate --v2 -r semconv -t 'https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.7[templates]' code/typescript_effect src/observability/semconv && vp fmt src/observability/semconv"
+    "generate:otel": "rm -rf src/observability/otel && mise exec github:open-telemetry/weaver@0.26.1 -- weaver registry generate --v2 -r ../../otel/registry -p ../../otel/policies -t 'https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.7[templates]' code/typescript_effect src/observability/otel && vp fmt src/observability/otel"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.276",

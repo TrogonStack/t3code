@@ -1,11 +1,11 @@
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 
-import { T3Outcome } from "./semconv/metrics.ts";
+import { T3codeOutcome } from "./otel/metrics.ts";
 
 export type MetricAttributeValue = string;
 export type MetricAttributes = Readonly<Record<string, MetricAttributeValue>>;
-export type ObservabilityOutcome = T3Outcome;
+export type ObservabilityOutcome = T3codeOutcome;
 
 export function compactMetricAttributes(
   attributes: Readonly<Record<string, unknown>>,
@@ -28,9 +28,9 @@ export function compactMetricAttributes(
 
 export function outcomeFromExit(exit: Exit.Exit<unknown, unknown>): ObservabilityOutcome {
   if (Exit.isSuccess(exit)) {
-    return T3Outcome.Success;
+    return T3codeOutcome.Success;
   }
-  return Cause.hasInterruptsOnly(exit.cause) ? T3Outcome.Interrupt : T3Outcome.Failure;
+  return Cause.hasInterruptsOnly(exit.cause) ? T3codeOutcome.Interrupt : T3codeOutcome.Failure;
 }
 
 export function normalizeModelMetricLabel(model: string | null | undefined): string | undefined {

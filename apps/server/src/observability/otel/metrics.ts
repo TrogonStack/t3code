@@ -2,21 +2,21 @@
 import * as Metric from "effect/Metric";
 import * as Duration from "effect/Duration";
 
-export const T3Outcome = {
+export const T3codeOutcome = {
   Failure: "failure",
   Interrupt: "interrupt",
   Success: "success",
 } as const;
 
-export type T3Outcome = (typeof T3Outcome)[keyof typeof T3Outcome];
+export type T3codeOutcome = (typeof T3codeOutcome)[keyof typeof T3codeOutcome];
 
-export type T3GitCommandDurationAttributes = {
+export type T3codeGitCommandDurationAttributes = {
   readonly gitOperation: string;
-  readonly outcome: T3Outcome;
+  readonly outcome: T3codeOutcome;
 };
 
-const t3GitCommandDuration = Metric.mapInput(
-  Metric.histogram("t3.git.command.duration", {
+const t3codeGitCommandDuration = Metric.mapInput(
+  Metric.histogram("t3code.git.command.duration", {
     description: "Git command execution duration.",
     attributes: { unit: "s" },
     boundaries: [
@@ -40,14 +40,14 @@ const t3GitCommandDuration = Metric.mapInput(
   Duration.toSeconds,
 );
 
-export function updateT3GitCommandDuration(
+export function updateT3codeGitCommandDuration(
   value: Duration.Duration,
-  attributes: T3GitCommandDurationAttributes,
+  attributes: T3codeGitCommandDurationAttributes,
 ) {
   return Metric.update(
-    Metric.withAttributes(t3GitCommandDuration, {
-      "t3.git.operation": attributes.gitOperation,
-      "t3.outcome": attributes.outcome,
+    Metric.withAttributes(t3codeGitCommandDuration, {
+      "t3code.git.operation": attributes.gitOperation,
+      "t3code.outcome": attributes.outcome,
     }),
     value,
   );
