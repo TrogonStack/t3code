@@ -2,7 +2,6 @@ import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/con
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
@@ -13,6 +12,7 @@ import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
+import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 import { followStreamInEnvironment } from "./environmentStreams.ts";
@@ -60,10 +60,16 @@ export const fetchEnvironmentSessionState = Effect.fn(
       request: ({ client, headers }) => client.session({ headers }),
       // This endpoint returns 200 with authenticated:false for expired credentials.
       isUnauthorizedResponse: (response) => !response.authenticated,
-    }).pipe(Effect.result);
-    if (Result.isSuccess(result)) return result.success;
-    // A timeout says nothing about grants; failing would show a busy host as read-only.
-    if (result.failure._tag !== "RemoteEnvironmentAuthTimeoutError") return yield* result.failure;
+    }).pipe(
+      Effect.asSome,
+      // A timeout says nothing about grants; failing would show a busy host as read-only.
+      Effect.catch((error: RemoteEnvironmentRequestError) =>
+        error._tag === "RemoteEnvironmentAuthTimeoutError"
+          ? Effect.succeedNone
+          : Effect.fail<RemoteEnvironmentRequestError>(error),
+      ),
+    );
+    if (Option.isSome(result)) return result.value;
     timeoutMs = Math.min(timeoutMs * 2, MAX_SESSION_STATE_TIMEOUT_MS);
   }
 });
