@@ -85,4 +85,20 @@ describe("sidebar pointer lifecycle", () => {
     expect(drag.onEnd).not.toHaveBeenCalled();
     expect(drag.onFinish).toHaveBeenCalledExactlyOnceWith(true);
   });
+
+  it("claims the Escape that cancels a drag", () => {
+    using _environment = setup();
+    const drag = gesture();
+    document.dispatchEvent(pointer("pointermove", { clientX: 90, clientY: 30 }));
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      code: "Escape",
+      cancelable: true,
+    });
+
+    document.dispatchEvent(escape);
+
+    expect(drag.onCancel).toHaveBeenCalledOnce();
+    expect(escape.defaultPrevented).toBe(true);
+  });
 });

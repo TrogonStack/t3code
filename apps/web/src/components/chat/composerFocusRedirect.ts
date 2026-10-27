@@ -75,6 +75,17 @@ export function shouldTypeToFocusComposer(event: KeyboardEvent): boolean {
   return true;
 }
 
+export function shouldEscapeFocusComposer(event: KeyboardEvent): boolean {
+  if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+  if (!shouldRedirectInputToComposer(event)) return false;
+  // MCP app fullscreen is a native popover that only light-dismisses on an unclaimed Escape.
+  if (document.fullscreenElement) return false;
+  if (document.querySelector("[data-mcp-app-fullscreen]")) return false;
+  const selection = document.getSelection();
+  return selection === null || selection.isCollapsed;
+}
+
 export function pasteTextToFocusComposer(event: ClipboardEvent): string | null {
   if (!event.clipboardData || event.clipboardData.files.length > 0) return null;
   if (!shouldRedirectInputToComposer(event)) return null;
