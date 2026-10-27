@@ -100,11 +100,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       input.closeThreadFind();
       return;
     }
-    if (!input.enabled || !shouldEscapeFocusComposer(event)) return;
-    const composer = input.composerRef.current;
-    if (!composer) return;
-    event.preventDefault();
-    composer.focusAtEnd();
+    if (input.enabled && shouldEscapeFocusComposer(event)) input.composerRef.current?.focusAtEnd();
   });
   useEffect(() => {
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);

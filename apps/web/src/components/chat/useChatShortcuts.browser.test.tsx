@@ -149,11 +149,11 @@ it("leaves Escape alone while text is selected", async () => {
   expect(composerFocuses).toEqual([]);
 });
 
-it("leaves Escape to an open native popover so it can light-dismiss", async () => {
+it("leaves Escape to a fullscreen MCP app so its popover can light-dismiss", async () => {
   const composerFocuses: string[] = [];
   await using screen = await render(
     <Chat composerKeys={[]} composerFocuses={composerFocuses}>
-      <div popover="auto" data-testid="fullscreen-app">
+      <div popover="auto" data-mcp-app-fullscreen="" data-testid="fullscreen-app">
         App
       </div>
     </Chat>,
