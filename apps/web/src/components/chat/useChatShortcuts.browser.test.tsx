@@ -168,6 +168,20 @@ it("leaves Escape to an open native popover so it can light-dismiss", async () =
   expect(popover.matches(":popover-open")).toBe(false);
 });
 
+it("leaves Escape alone while an MCP app is fullscreen without native popovers", async () => {
+  const composerFocuses: string[] = [];
+  await using _screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses}>
+      <div data-mcp-app-fullscreen="">App</div>
+    </Chat>,
+    options,
+  );
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual([]);
+});
+
 it("leaves Escape alone once something else handled it", async () => {
   const composerFocuses: string[] = [];
   await using _screen = await render(
