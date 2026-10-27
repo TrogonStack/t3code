@@ -965,6 +965,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // target that could never resolve one.
   const canDropProjectFolders =
     typeof window !== "undefined" && window.desktopBridge?.getPathForFile !== undefined;
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens on window for a drag that ends outside the sidebar so the drop target does not stay lit
   useEffect(() => {
     if (!isProjectFolderDragActive) return;
     const clearProjectFolderDrag = () => setIsProjectFolderDragActive(false);

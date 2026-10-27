@@ -2420,6 +2420,7 @@ it.layer(
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         yield* Layer.build(
           ProviderInstanceRegistryHydration.layer.pipe(
+            Layer.provide(PortScanner.layerTest),
             Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),

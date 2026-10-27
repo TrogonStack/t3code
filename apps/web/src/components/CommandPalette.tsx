@@ -1244,7 +1244,7 @@ function OpenCommandPaletteDialog(props: {
   const openDroppedFolder = useEffectEvent((path: string) => {
     void startAddProjectAtPath(path);
   });
-  // oxlint-disable-next-line t3code/react-effect-budget -- A dropped folder resolves its environment asynchronously and can close the palette with a toast, neither of which may run during render.
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- A dropped folder resolves its environment asynchronously and can close the palette with a toast, neither of which may run during render.
   useEffect(() => {
     if (droppedFolderPath) openDroppedFolder(droppedFolderPath);
   }, [droppedFolderPath]);
