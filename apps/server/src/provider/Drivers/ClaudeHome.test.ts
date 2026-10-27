@@ -116,6 +116,17 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
     );
 
+    it.effect("extends the --settings launch argument value over every settings file", () =>
+      Effect.gen(function* () {
+        const { cwd, environment } = yield* setup({ local: settingsWith("from=local") });
+        expect(
+          yield* claudeSettingsLaunchedEnv(cwd, environment, {
+            OTEL_RESOURCE_ATTRIBUTES: "from=flag",
+          }),
+        ).toEqual({ OTEL_RESOURCE_ATTRIBUTES: `from=flag,${LAUNCHED}` });
+      }).pipe(Effect.scoped, Effect.provideService(HostProcess.HomeDirectory, "/home/ada")),
+    );
+
     it.effect("reads the user file when there is no workspace", () =>
       Effect.gen(function* () {
         const { environment } = yield* setup({ user: settingsWith("org.name=Acme") });

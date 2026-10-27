@@ -102,6 +102,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     }
     if (input.enabled && shouldEscapeFocusComposer(event)) input.composerRef.current?.focusAtEnd();
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches window keydown listeners for chat shortcuts and find dismissal for the component's lifetime
   useEffect(() => {
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);
     const onKeyDown = (event: KeyboardEvent) => handleEscape(event);

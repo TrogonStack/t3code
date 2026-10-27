@@ -43,10 +43,12 @@ const decodeSettingsEnv = Schema.decodeUnknownEffect(
  * Claude Code copies each settings file's `env` over its own environment, so a user's
  * `OTEL_RESOURCE_ATTRIBUTES` there drops `t3code.launched`. Returns the flag-settings `env` that
  * restores it, or nothing when no file sets it, it already carries it, or the user chose a value.
+ * `flagEnv` is the `env` of the user's own flag settings, which outrank every file.
  */
 export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(function* (
   cwd: string | null,
   environment: NodeJS.ProcessEnv,
+  flagEnv?: Readonly<Record<string, unknown>>,
 ): Effect.fn.Return<
   Readonly<Record<string, string>> | undefined,
   never,
@@ -55,6 +57,14 @@ export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(
   const launched = userLaunchedAttribute(environment[RESOURCE_ATTRIBUTES] ?? "");
   if (launched !== undefined && launched !== "true") {
     return undefined;
+  }
+  const markLaunched = (attributes: string) =>
+    userLaunchedAttribute(attributes) === undefined
+      ? { [RESOURCE_ATTRIBUTES]: withLaunchedAttribute(attributes) }
+      : undefined;
+  const flagAttributes = flagEnv?.[RESOURCE_ATTRIBUTES];
+  if (typeof flagAttributes === "string") {
+    return markLaunched(flagAttributes);
   }
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -85,9 +95,7 @@ export const claudeSettingsLaunchedEnv = Effect.fn("claudeSettingsLaunchedEnv")(
     if (typeof attributes !== "string") {
       continue;
     }
-    return userLaunchedAttribute(attributes) === undefined
-      ? { [RESOURCE_ATTRIBUTES]: withLaunchedAttribute(attributes) }
-      : undefined;
+    return markLaunched(attributes);
   }
   return undefined;
 });
