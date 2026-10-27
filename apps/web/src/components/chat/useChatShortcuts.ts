@@ -10,7 +10,7 @@ import {
 import { getTerminalFocusOwner, type TerminalFocusOwner } from "../../lib/terminalFocus";
 import type { ComposerHandleRef } from "../../composerHandleContext";
 import type { BranchToolbarHandle } from "../BranchToolbar";
-import { shouldTypeToFocusComposer } from "./composerFocusRedirect";
+import { shouldEscapeFocusComposer, shouldTypeToFocusComposer } from "./composerFocusRedirect";
 import { composerShortcutCommands } from "./composerShortcuts";
 
 /** Returning false lets the key event through untouched. */
@@ -39,7 +39,8 @@ export interface ChatShortcutsInput {
 }
 
 /**
- * The chat's window keyboard shortcuts, plus Escape closing thread find.
+ * The chat's window keyboard shortcuts, plus Escape closing thread find or,
+ * when nothing else claimed it, focusing the composer.
  * Listeners attach once; the effect events read the latest input, so handlers
  * act on the current render without re-registering on every change.
  */
@@ -83,10 +84,9 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     event.stopPropagation();
   });
-  const dismissFind = useEffectEvent((event: KeyboardEvent) => {
+  const handleEscape = useEffectEvent((event: KeyboardEvent) => {
     if (
       event.key !== "Escape" ||
-      !input.threadFindActive ||
       event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
@@ -95,12 +95,20 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       return;
     const context = input.getShortcutContext(event.target);
     if (context.terminalFocus || context.previewFocus || context.modelPickerOpen) return;
+    if (input.threadFindActive) {
+      event.preventDefault();
+      input.closeThreadFind();
+      return;
+    }
+    if (!input.enabled || !shouldEscapeFocusComposer(event)) return;
+    const composer = input.composerRef.current;
+    if (!composer) return;
     event.preventDefault();
-    input.closeThreadFind();
+    composer.focusAtEnd();
   });
   useEffect(() => {
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);
-    const onKeyDown = (event: KeyboardEvent) => dismissFind(event);
+    const onKeyDown = (event: KeyboardEvent) => handleEscape(event);
     window.addEventListener("keydown", onKeyDownCapture, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {

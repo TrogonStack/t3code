@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { expect, it } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -44,19 +44,27 @@ function Launcher(props: { keys: string; received: string[] }) {
 
 // The chat's shortcut listener registers when the chat mounts, so a launcher that opens
 // later registers after it. Tests mount the chat first and add the launcher by rerendering.
-function Chat(props: { composerKeys: string[]; launcher?: { keys: string; received: string[] } }) {
+function Chat(props: {
+  composerKeys: string[];
+  composerFocuses?: string[];
+  launcher?: { keys: string; received: string[] };
+  children?: ReactNode;
+}) {
   useChatShortcuts({
     enabled: true,
     keybindings: [],
     scriptKeybindings: [],
     getShortcutContext: () => shortcutContext,
     threadFindActive: false,
-    // Type-to-focus only calls insertTextAtEnd, so the stand-in composer implements just that.
+    // Type-to-focus and Escape-to-focus only call these, so the stand-in composer implements just them.
     composerRef: {
       current: {
         insertTextAtEnd: (key: string) => {
           props.composerKeys.push(key);
           return true;
+        },
+        focusAtEnd: () => {
+          props.composerFocuses?.push("end");
         },
       } as Partial<ChatComposerHandle> as ChatComposerHandle,
     },
@@ -65,7 +73,12 @@ function Chat(props: { composerKeys: string[]; launcher?: { keys: string; receiv
     commands: {},
     fallback: () => undefined,
   });
-  return props.launcher ? <Launcher {...props.launcher} /> : null;
+  return (
+    <>
+      {props.launcher ? <Launcher {...props.launcher} /> : null}
+      {props.children}
+    </>
+  );
 }
 
 // router: false because the chat shortcuts and the launcher stand-in never navigate.
@@ -94,3 +107,63 @@ it("still types other letters into the composer while the launcher is open", asy
   expect(composerKeys).toEqual(["a"]);
   expect(received).toEqual([]);
 });
+
+it("focuses the composer on Escape when nothing has focus", async () => {
+  const composerFocuses: string[] = [];
+  await using _screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses} />,
+    options,
+  );
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual(["end"]);
+});
+
+it("leaves Escape to a focused field", async () => {
+  const composerFocuses: string[] = [];
+  await using _screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses}>
+      <input ref={focusOnMount} aria-label="Rename" />
+    </Chat>,
+    options,
+  );
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual([]);
+});
+
+it("leaves Escape alone while text is selected", async () => {
+  const composerFocuses: string[] = [];
+  await using screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses}>
+      <p>Assistant reply</p>
+    </Chat>,
+    options,
+  );
+  await userEvent.tripleClick(screen.getByText("Assistant reply"));
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual([]);
+});
+
+it("leaves Escape alone once something else handled it", async () => {
+  const composerFocuses: string[] = [];
+  await using _screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses} />,
+    options,
+  );
+  using _listener = claimEscape();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual([]);
+});
+
+function claimEscape(): Disposable {
+  const claim = (event: KeyboardEvent) => event.preventDefault();
+  window.addEventListener("keydown", claim, true);
+  return { [Symbol.dispose]: () => window.removeEventListener("keydown", claim, true) };
+}
