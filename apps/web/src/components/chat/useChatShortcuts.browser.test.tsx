@@ -149,6 +149,25 @@ it("leaves Escape alone while text is selected", async () => {
   expect(composerFocuses).toEqual([]);
 });
 
+it("leaves Escape to an open native popover so it can light-dismiss", async () => {
+  const composerFocuses: string[] = [];
+  await using screen = await render(
+    <Chat composerKeys={[]} composerFocuses={composerFocuses}>
+      <div popover="auto" data-testid="fullscreen-app">
+        App
+      </div>
+    </Chat>,
+    options,
+  );
+  const popover = screen.getByTestId("fullscreen-app").element() as HTMLElement;
+  popover.showPopover();
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(composerFocuses).toEqual([]);
+  expect(popover.matches(":popover-open")).toBe(false);
+});
+
 it("leaves Escape alone once something else handled it", async () => {
   const composerFocuses: string[] = [];
   await using _screen = await render(

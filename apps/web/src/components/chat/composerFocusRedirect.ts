@@ -79,6 +79,8 @@ export function shouldEscapeFocusComposer(event: KeyboardEvent): boolean {
   if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return false;
   if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
   if (!shouldRedirectInputToComposer(event)) return false;
+  // Native popovers (MCP app fullscreen) only light-dismiss on an unclaimed Escape.
+  if (document.fullscreenElement !== null || document.querySelector(":popover-open")) return false;
   const selection = document.getSelection();
   return selection === null || selection.isCollapsed;
 }
