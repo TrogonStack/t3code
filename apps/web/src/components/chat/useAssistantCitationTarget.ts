@@ -81,16 +81,17 @@ export function useAssistantCitationTarget({
       // User navigation stops a pending citation scroll; Escape dismisses it outright.
       const dismiss = (onlyPending: boolean) => {
         const activation = activationRef.current;
-        if (activation.dismissed || (onlyPending && (activation.scrolled || done))) return;
+        if (activation.dismissed || (onlyPending && (activation.scrolled || done))) return false;
         activation.dismissed = true;
         activation.cancelScroll?.();
         if (!activation.scrolled && !done) onManualNavigation();
         done = true;
         setSettlement({ target, dismissed: true });
+        return true;
       };
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.key === "Escape") {
-          dismiss(false);
+          if (dismiss(false)) event.preventDefault();
         } else if (
           CITATION_SCROLL_KEYS.has(event.key) &&
           event.target instanceof Node &&
