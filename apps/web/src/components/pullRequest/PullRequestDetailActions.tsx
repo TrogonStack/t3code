@@ -191,7 +191,7 @@ export function PullRequestResolveConflictsButton({
 function watchDogTooltip(status: WatchDogStatus): string {
   switch (status.kind) {
     case "clear":
-      return "All checks pass and no review threads are unresolved";
+      return "All checks pass and no review threads are unresolved. Hand this to an agent to watch for later reviews.";
     case "unknown":
       return "Checks or review threads have not fully loaded yet. Hand this to an agent to watch.";
     case "pending":
@@ -232,7 +232,7 @@ export function PullRequestWatchDogButton({
             <Button
               size="xs"
               variant={clear ? "secondary" : "outline"}
-              disabled={handoff !== null || unavailable || clear}
+              disabled={handoff !== null || unavailable}
               onClick={onWatch}
               aria-label={label}
             >

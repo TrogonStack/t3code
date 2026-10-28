@@ -1289,7 +1289,7 @@ export function PullRequestDetailPanel({
     detail?.state === "open" ? (
       <PullRequestWatchDogButton
         handoff={handoff}
-        unavailable={attachTarget === null && checkoutRoot === null}
+        unavailable={attachTarget === null && (checkoutRoot === null || !canPrepareWorktree)}
         status={resolveWatchDogStatus(checksStale ? { ...detail, checks: [] } : detail)}
         onWatch={startWatchDog}
       />
