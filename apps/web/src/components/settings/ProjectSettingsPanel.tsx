@@ -511,6 +511,14 @@ function ProjectDetail({
               />
             }
           />
+          {hasMultipleCheckouts ? null : (
+            <SettingsRow
+              title="Location"
+              description={
+                <span className="select-text break-all">{representative.workspaceRoot}</span>
+              }
+            />
+          )}
           <SettingsRow
             title="Project icon"
             description={
