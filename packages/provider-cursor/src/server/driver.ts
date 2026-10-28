@@ -168,7 +168,9 @@ export const CursorDriver: ProviderDriver<
     const orchestrationAdapter = yield* makeCursorAdapterV2({
       instanceId,
       environment: processEnv,
-      globalConfig: effectiveConfig.globalConfig,
+      ...(effectiveConfig.cliConfigPath === undefined
+        ? {}
+        : { cliConfigPath: effectiveConfig.cliConfigPath }),
       ...(effectiveConfig.instructionsPath === undefined
         ? {}
         : { instructionsPath: effectiveConfig.instructionsPath }),

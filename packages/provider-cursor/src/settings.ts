@@ -15,12 +15,12 @@ export const CursorSettings = makeProviderSettingsSchema(
     apiEndpoint: Schema.optionalKey(TrimmedString).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    globalConfig: Schema.Boolean.pipe(
-      Schema.withDecodingDefault(Effect.succeed(true)),
+    cliConfigPath: Schema.optionalKey(TrimmedString).pipe(
       Schema.annotateKey({
-        title: "Use global Cursor config",
+        title: "cli-config.json path",
         description:
-          "Load MCP servers, hooks, and sandbox settings from ~/.cursor, and honor the commit and PR attribution choices in its cli-config.json.",
+          "Cursor CLI config whose commit and PR attribution choices T3 Code honors. A leading ~/ means your home directory.",
+        providerSettingsForm: { placeholder: "~/.cursor/cli-config.json", clearWhenEmpty: "omit" },
       }),
     ),
     instructionsPath: Schema.optionalKey(TrimmedString).pipe(
@@ -37,7 +37,7 @@ export const CursorSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["globalConfig", "instructionsPath"],
+    order: ["cliConfigPath", "instructionsPath"],
   },
 );
 export type CursorSettings = typeof CursorSettings.Type;
