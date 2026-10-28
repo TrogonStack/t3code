@@ -1495,11 +1495,12 @@ it.layer(
       }),
     );
 
-    it.effect("recovers the unavailable instances a successful secret check unlocks", () =>
+    it.effect("rebuilds every instance that reads a secret a check succeeds on", () =>
       Effect.gen(function* () {
         const codexDriver = ProviderDriverKind.make("codex");
         const readableId = ProviderInstanceId.make("codex");
         const otherId = ProviderInstanceId.make("codex_other");
+        const liveId = ProviderInstanceId.make("codex_live");
         const reference = "op://Vault/Item/token";
         const unavailableProvider = (instanceId: ProviderInstanceId) =>
           ({
@@ -1550,6 +1551,7 @@ it.layer(
                   otherId,
                   decodeEnvironment([onePasswordVariable("CODEX_TOKEN", "op://Vault/Other/token")]),
                 ],
+                [liveId, decodeEnvironment([onePasswordVariable("CODEX_TOKEN", reference)])],
               ]),
             ),
             subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
@@ -1581,7 +1583,7 @@ it.layer(
           const result = yield* registry.checkSecretSource(source);
 
           assert.deepStrictEqual(result, { _tag: "Resolved" });
-          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [readableId]);
+          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [readableId, liveId]);
           assert.strictEqual(yield* Ref.get(invalidations), 0);
         }).pipe(Effect.provide(runtimeServices));
       }),

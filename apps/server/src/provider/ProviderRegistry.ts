@@ -95,8 +95,8 @@ export class ProviderRegistry extends Context.Service<
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
-     * Settings "check" for one secret source. A readable source also rebuilds the unavailable
-     * instances that were waiting on it, from the value the check just cached.
+     * Settings "check" for one secret source. A readable source also rebuilds every instance
+     * that reads it, from the value the check just cached.
      */
     readonly checkSecretSource: (
       source: ProviderSecretSource,
@@ -894,17 +894,18 @@ export const layer = Layer.effect(
       if (result._tag !== "Resolved" || reference === undefined) {
         return result;
       }
-      // The check left the value in the resolver's cache, so these rebuilds
-      // read it from memory and never reach the store again.
+      // Live instances are targets too: they read the secret at create time, so a
+      // rotated value only reaches them through a rebuild. The check left the
+      // value in the resolver's cache, so these rebuilds never reach the store again.
       const environments = yield* instanceRegistry.listEnvironments;
-      const waiting = (yield* instanceRegistry.listUnavailable)
-        .map(snapshotInstanceKey)
-        .filter((instanceId) =>
-          collectProviderSecretReferences([environments.get(instanceId)]).some((candidate) =>
+      const consumers = Array.from(environments)
+        .filter(([, environment]) =>
+          collectProviderSecretReferences([environment]).some((candidate) =>
             Equal.equals(candidate, reference),
           ),
-        );
-      yield* rebuildSecretBackedInstances(waiting);
+        )
+        .map(([instanceId]) => instanceId);
+      yield* rebuildSecretBackedInstances(consumers);
       return result;
     });
 
