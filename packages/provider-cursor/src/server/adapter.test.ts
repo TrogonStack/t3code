@@ -33,6 +33,7 @@ import {
   nestedToolCallFromEnvelope,
 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./userInstructions.ts";
 import { ConfigurationError } from "./sdk.ts";
 
 describe("CursorAdapterV2", () => {
@@ -441,6 +442,14 @@ describe("CursorAdapterV2", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-errors-" });
+      yield* fileSystem.makeDirectory(`${workspace}/.cursor`);
+      yield* fileSystem.writeFileString(`${workspace}/AGENTS.md`, "Prefer small commits.\n");
+      yield* fileSystem.writeFileString(
+        `${workspace}/.cursor/cli-config.json`,
+        JSON.stringify({
+          attribution: { attributeCommitsToAgent: false, attributePRsToAgent: true },
+        }),
+      );
       const sentMessages: Array<string> = [];
       let sendCalls = 0;
       const instanceId = ProviderInstanceId.make("cursor");
@@ -454,6 +463,7 @@ describe("CursorAdapterV2", () => {
       const adapter = yield* makeCursorAdapterV2({
         instanceId,
         environment: { HOME: workspace },
+        instructionsPath: "~/AGENTS.md",
       }).pipe(
         Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
           assertComplete: Effect.void,
@@ -577,6 +587,9 @@ describe("CursorAdapterV2", () => {
         Stream.filter((event) => event.type === "turn.terminal"),
         Stream.runHead,
       );
+      assert.include(sentMessages[0], "Prefer small commits.");
+      assert.include(sentMessages[0], "Do not add Cursor attribution to commit messages:");
+      assert.notInclude(sentMessages[0], "pull request descriptions");
       assert.equal(sentMessages[1], "/compress");
     }).pipe(
       Effect.scoped,
@@ -1294,6 +1307,47 @@ describe("CursorAdapterV2", () => {
     assert.notInclude(logged, "secret-cursor-api-key");
     assert.notInclude(logged, "secret-cursor-mcp-token");
   });
+
+  it.effect(
+    "reads attribution from a custom cli-config path and skips missing instruction files",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-global-" });
+        yield* fileSystem.writeFileString(
+          `${home}/custom-cli-config.json`,
+          JSON.stringify({ attribution: { attributePRsToAgent: false } }),
+        );
+        const instructions = (cliConfigPath: string | undefined) =>
+          cursorUserInstructions({
+            cliConfigPath,
+            instructionsPath: "~/missing.md",
+            environment: { HOME: home },
+          });
+        assert.equal(
+          yield* instructions("~/custom-cli-config.json"),
+          '## Attribution\n\nDo not add Cursor attribution to pull request descriptions: no "Made with Cursor" footers and no Co-authored-by Cursor trailers.',
+        );
+        assert.isUndefined(yield* instructions(undefined));
+        yield* fileSystem.makeDirectory(`${home}/cursor-config`);
+        yield* fileSystem.writeFileString(
+          `${home}/cursor-config/cli-config.json`,
+          JSON.stringify({ attribution: { attributeCommitsToAgent: false } }),
+        );
+        assert.include(
+          yield* cursorUserInstructions({
+            cliConfigPath: undefined,
+            instructionsPath: undefined,
+            environment: { HOME: home, CURSOR_CONFIG_DIR: "~/cursor-config" },
+          }),
+          "commit messages",
+        );
+        assert.equal(
+          prependCursorUserInstructions({ prompt: "hi", instructions: "rules", runOrdinal: 2 }),
+          "hi",
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it("recognizes direct and SDK-wrapped abort failures as cancellation", () => {
     assert.isTrue(CursorAgentSdk.isCursorCancellationError({ name: "AbortError" }));

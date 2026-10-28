@@ -168,6 +168,12 @@ export const CursorDriver: ProviderDriver<
     const orchestrationAdapter = yield* makeCursorAdapterV2({
       instanceId,
       environment: processEnv,
+      ...(effectiveConfig.cliConfigPath === undefined
+        ? {}
+        : { cliConfigPath: effectiveConfig.cliConfigPath }),
+      ...(effectiveConfig.instructionsPath === undefined
+        ? {}
+        : { instructionsPath: effectiveConfig.instructionsPath }),
       getModels: () => catalogModels,
     }).pipe(
       Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
