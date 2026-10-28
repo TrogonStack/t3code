@@ -7,6 +7,7 @@ import {
   SourceControlProviderKind,
   type SourceControlProviderInfo,
   TrimmedNonEmptyString,
+  TrimmedString,
 } from "@t3tools/contracts";
 import { normalizeGitRemoteUrl, parseGitRemoteRepository } from "@t3tools/shared/git";
 import * as Effect from "effect/Effect";

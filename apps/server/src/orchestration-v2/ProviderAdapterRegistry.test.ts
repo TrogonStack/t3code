@@ -23,10 +23,6 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import { hasProviderSecretReference } from "../provider/ProviderSecretReference.ts";
 import * as ProviderSecretResolver from "../provider/ProviderSecretResolver.ts";
-import {
-  ProviderAdapterDriverCreateError,
-  type ProviderAdapterDriver,
-} from "@t3tools/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
