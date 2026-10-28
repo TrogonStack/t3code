@@ -33,7 +33,7 @@ import {
   nestedToolCallFromEnvelope,
 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
-import { cursorUserInstructions, prependCursorUserInstructions } from "./globalConfig.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./userInstructions.ts";
 import { ConfigurationError } from "./sdk.ts";
 
 describe("CursorAdapterV2", () => {
@@ -463,7 +463,6 @@ describe("CursorAdapterV2", () => {
       const adapter = yield* makeCursorAdapterV2({
         instanceId,
         environment: { HOME: workspace },
-        globalConfig: true,
         instructionsPath: "~/AGENTS.md",
       }).pipe(
         Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
@@ -1303,28 +1302,6 @@ describe("CursorAdapterV2", () => {
       platform: "linux",
     });
     assert.deepEqual(options.mcpServers, cursorMcpServers(mcpSession));
-    assert.isTrue(options.local?.settingSources?.includes("user"));
-    const withoutGlobalConfig = makeCursorAgentOptions({
-      globalConfig: false,
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("cursor"),
-        model: "composer-2.5",
-      },
-      runtimePolicy: {
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        cwd: "/workspace",
-      },
-      threadId,
-      mcpSession,
-      platform: "linux",
-    });
-    assert.deepEqual(withoutGlobalConfig.local?.settingSources, [
-      "project",
-      "team",
-      "mdm",
-      "plugins",
-    ]);
 
     const logged = JSON.stringify(CursorAgentSdk.loggedCursorAgentOptions(options));
     assert.notInclude(logged, "secret-cursor-api-key");
@@ -1332,20 +1309,26 @@ describe("CursorAdapterV2", () => {
   });
 
   it.effect(
-    "skips global instructions and attribution when global config is off or on later runs",
+    "reads attribution from a custom cli-config path and skips missing instruction files",
     () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-global-" });
-        yield* fileSystem.makeDirectory(`${home}/.cursor`);
         yield* fileSystem.writeFileString(
-          `${home}/.cursor/cli-config.json`,
-          JSON.stringify({ attribution: { attributeCommitsToAgent: false } }),
+          `${home}/custom-cli-config.json`,
+          JSON.stringify({ attribution: { attributePRsToAgent: false } }),
         );
-        const instructions = (globalConfig: boolean, instructionsPath: string | undefined) =>
-          cursorUserInstructions({ globalConfig, instructionsPath, environment: { HOME: home } });
-        assert.include(yield* instructions(true, "~/missing.md"), "commit messages");
-        assert.isUndefined(yield* instructions(false, "~/missing.md"));
+        const instructions = (cliConfigPath: string | undefined) =>
+          cursorUserInstructions({
+            cliConfigPath,
+            instructionsPath: "~/missing.md",
+            environment: { HOME: home },
+          });
+        assert.equal(
+          yield* instructions("~/custom-cli-config.json"),
+          '## Attribution\n\nDo not add Cursor attribution to pull request descriptions: no "Made with Cursor" footers and no Co-authored-by Cursor trailers.',
+        );
+        assert.isUndefined(yield* instructions(undefined));
         assert.equal(
           prependCursorUserInstructions({ prompt: "hi", instructions: "rules", runOrdinal: 2 }),
           "hi",

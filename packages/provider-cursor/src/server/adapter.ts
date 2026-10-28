@@ -52,7 +52,7 @@ import {
   hasCursorSkillMention,
   rewriteCursorSkillMentions,
 } from "./skills.ts";
-import { cursorUserInstructions, prependCursorUserInstructions } from "./globalConfig.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./userInstructions.ts";
 import { t3OrchestrationPromptForFirstRun } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -295,7 +295,6 @@ const CURSOR_AGENT_SETTING_SOURCES = [
 ] as const satisfies ReadonlyArray<SettingSource>;
 
 export function makeCursorAgentOptions(input: {
-  readonly globalConfig?: boolean;
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -313,9 +312,7 @@ export function makeCursorAgentOptions(input: {
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,
-      settingSources: CURSOR_AGENT_SETTING_SOURCES.filter(
-        (source) => source !== "user" || input.globalConfig !== false,
-      ),
+      settingSources: [...CURSOR_AGENT_SETTING_SOURCES],
       sandboxOptions: {
         enabled: policy.sandboxEnabled,
       },
@@ -870,7 +867,7 @@ interface CursorLiveAgent {
 export interface CursorAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
-  readonly globalConfig?: boolean;
+  readonly cliConfigPath?: string;
   readonly instructionsPath?: string;
   readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
 }
@@ -2148,9 +2145,6 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             yield* Ref.set(liveAgent, null);
           }
           const options = makeCursorAgentOptions({
-            ...(adapterOptions.globalConfig === undefined
-              ? {}
-              : { globalConfig: adapterOptions.globalConfig }),
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
             runtimePolicy: openInput.runtimePolicy,
@@ -2212,7 +2206,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           const instructions =
             turnInput.runOrdinal === 1
               ? yield* cursorUserInstructions({
-                  globalConfig: adapterOptions.globalConfig ?? true,
+                  cliConfigPath: adapterOptions.cliConfigPath,
                   instructionsPath: adapterOptions.instructionsPath,
                   environment: adapterOptions.environment,
                 }).pipe(
