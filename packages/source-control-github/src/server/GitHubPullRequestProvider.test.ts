@@ -300,7 +300,6 @@ describe("gitHubViewerPermissions", () => {
               ...coreFields,
               comparison: null,
               viewerAccess: { ...coreFields.viewerAccess, canWrite: false, canTriage: false },
-              authorId: null,
               number: 7,
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
@@ -392,7 +391,6 @@ describe("gitHubViewerPermissions", () => {
           getPullRequestDetail: () =>
             Effect.succeed({
               ...coreFields,
-              authorId: null,
               number: 7,
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
@@ -456,7 +454,6 @@ describe("gitHubViewerPermissions", () => {
 
 const openDetail = {
   ...coreFields,
-  authorId: null,
   number: 7,
   title: "Pull request 7",
   url: "https://github.com/acme/web/pull/7",
@@ -665,7 +662,6 @@ describe("getViewerPermissions", () => {
 
 describe("getChangeRequest commits", () => {
   const baseDetail = {
-    authorId: null,
     number: 7,
     title: "Pull request 7",
     url: "https://github.com/acme/web/pull/7",
@@ -850,7 +846,6 @@ describe("listChangeRequestsAcross", () => {
     title: "Change",
     url: `https://github.com/${repository}/pull/1`,
     author: null,
-    authorId: null,
     headBranch: "feature",
     baseBranch: "main",
     state: "open" as const,
