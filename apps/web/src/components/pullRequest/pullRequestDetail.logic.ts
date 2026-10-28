@@ -1042,7 +1042,7 @@ export function buildWatchDogPrompt(input: {
 }): string {
   return [
     `Babysit ${terminologyForUrl(input.url).shortLabel} #${input.number} (${boundedField(input.url)}) until it is green and fully reviewed. Its branch \`${boundedField(input.headBranch)}\` is the checkout prepared for this thread.`,
-    "1. Call `watch_pull_request` for it so T3 Code wakes you on CI and comment changes, then end your turn. Do not poll or sleep.",
+    "1. Before watching, read the current checks and every unresolved review thread, outdated ones included. A watch wakes you only for later changes, so handle anything already failed or unresolved as in step 5 now. Then call `watch_pull_request` for it so T3 Code wakes you on later CI and comment changes, and end your turn. Do not poll or sleep.",
     "2. Wait for every CI job to finish. If any check is still pending, end your turn and wait for the next wake.",
     '3. Also wait for AI code reviewers (review bots such as CodeRabbit, Cursor Bugbot, Copilot, and Codex) to finish. A reviewer check, or an "in progress" or "reviewing" status comment, counts as pending.',
     "4. Once everything has settled, list every failed job and every unresolved review thread, outdated ones included.",
