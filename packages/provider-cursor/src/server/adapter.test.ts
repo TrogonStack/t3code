@@ -1329,6 +1329,19 @@ describe("CursorAdapterV2", () => {
           '## Attribution\n\nDo not add Cursor attribution to pull request descriptions: no "Made with Cursor" footers and no Co-authored-by Cursor trailers.',
         );
         assert.isUndefined(yield* instructions(undefined));
+        yield* fileSystem.makeDirectory(`${home}/cursor-config`);
+        yield* fileSystem.writeFileString(
+          `${home}/cursor-config/cli-config.json`,
+          JSON.stringify({ attribution: { attributeCommitsToAgent: false } }),
+        );
+        assert.include(
+          yield* cursorUserInstructions({
+            cliConfigPath: undefined,
+            instructionsPath: undefined,
+            environment: { HOME: home, CURSOR_CONFIG_DIR: "~/cursor-config" },
+          }),
+          "commit messages",
+        );
         assert.equal(
           prependCursorUserInstructions({ prompt: "hi", instructions: "rules", runOrdinal: 2 }),
           "hi",

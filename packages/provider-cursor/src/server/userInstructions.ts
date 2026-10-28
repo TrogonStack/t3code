@@ -3,6 +3,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 // The SDK ignores ~/.cursor/cli-config.json and defaults commit/PR attribution to on.
 const CursorCliConfig = Schema.Struct({
@@ -26,6 +27,20 @@ const resolveHome = Effect.fn("CursorUserInstructions.resolveHome")(function* (
   );
 });
 
+const defaultCliConfigDirectory = Effect.fn("CursorUserInstructions.defaultCliConfigDirectory")(
+  function* (environment: NodeJS.ProcessEnv, home: string) {
+    const path = yield* Path.Path;
+    const platform = yield* HostProcess.Platform;
+    const configDir = environment.CURSOR_CONFIG_DIR?.trim();
+    if (configDir) return expandHomePath(configDir, home);
+    const xdgConfigHome = environment.XDG_CONFIG_HOME?.trim();
+    if (platform !== "darwin" && platform !== "win32" && xdgConfigHome) {
+      return path.join(xdgConfigHome, "cursor");
+    }
+    return path.join(home, ".cursor");
+  },
+);
+
 export const cursorUserInstructions = Effect.fn("CursorUserInstructions.read")(function* (input: {
   readonly cliConfigPath: string | undefined;
   readonly instructionsPath: string | undefined;
@@ -34,12 +49,10 @@ export const cursorUserInstructions = Effect.fn("CursorUserInstructions.read")(f
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* resolveHome(input.environment);
-  const expandHome = (filePath: string) =>
-    filePath.startsWith("~/") ? path.join(home, filePath.slice(2)) : filePath;
   const sections: Array<string> = [];
 
   if (input.instructionsPath !== undefined) {
-    const instructionsPath = expandHome(input.instructionsPath);
+    const instructionsPath = expandHomePath(input.instructionsPath, home);
     const contents = yield* fileSystem.readFileString(instructionsPath).pipe(
       Effect.map((text) => text.trim()),
       Effect.tapError((cause) =>
@@ -57,8 +70,8 @@ export const cursorUserInstructions = Effect.fn("CursorUserInstructions.read")(f
 
   const cliConfigPath =
     input.cliConfigPath === undefined
-      ? path.join(home, ".cursor", "cli-config.json")
-      : expandHome(input.cliConfigPath);
+      ? path.join(yield* defaultCliConfigDirectory(input.environment, home), "cli-config.json")
+      : expandHomePath(input.cliConfigPath, home);
   const attribution = yield* fileSystem.readFileString(cliConfigPath).pipe(
     Effect.flatMap(decodeCliConfig),
     Effect.map((config) => config.attribution),
