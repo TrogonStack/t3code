@@ -18,6 +18,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProviderAdapterDriverCreateError } from "@t3tools/provider-core/server/adapterDriver";
+import { literalProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
 import type { OrchestratorV2ProviderReplayHarness } from "../testkit/ProviderReplayHarness.ts";
 import { PI_PROVIDER, PiAdapterV2Driver } from "@t3tools/provider-pi/server";
@@ -368,7 +369,7 @@ export function layer<E, R>(input: {
   return ProviderAdapterRegistry.layerFromAdaptersEffect(
     PiAdapterV2Driver.create({
       instanceId: ProviderInstanceId.make(PI_PROVIDER),
-      environment: input.environment ?? [],
+      environment: literalProviderInstanceEnvironment(input.environment),
       displayName: undefined,
       enabled: true,
       config: {
