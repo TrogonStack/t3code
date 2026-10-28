@@ -104,7 +104,7 @@ does.
 
 ## I Rotated The Secret, How Do I Pick Up The New One
 
-Refresh provider status in Settings.
+Refresh provider status in Settings, or use the check button on the variable that reads it.
 
 Refresh drops everything that was held in memory and rebuilds the providers that use references, so
 the next read goes back to the secret manager. Providers with only literal variables are left alone.
@@ -112,6 +112,8 @@ the next read goes back to the secret manager. Providers with only literal varia
 The 1Password CLI's own cache is never used, so a refresh cannot be answered with the old value. Skipping
 it also means T3 Code never starts the CLI's background `op daemon`, which can hang behind a macOS
 permission prompt when the server runs in the background.
+
+The check button reads only that one reference and rebuilds only the providers that use it.
 
 Changing a provider under Settings, Secrets also makes the variables that use it read again.
 
