@@ -33,6 +33,7 @@ import {
   nestedToolCallFromEnvelope,
 } from "./adapter.ts";
 import * as CursorAgentSdk from "./CursorAgentSdk.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./globalConfig.ts";
 import { ConfigurationError } from "./sdk.ts";
 
 describe("CursorAdapterV2", () => {
@@ -441,6 +442,14 @@ describe("CursorAdapterV2", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-errors-" });
+      yield* fileSystem.makeDirectory(`${workspace}/.cursor`);
+      yield* fileSystem.writeFileString(`${workspace}/AGENTS.md`, "Prefer small commits.\n");
+      yield* fileSystem.writeFileString(
+        `${workspace}/.cursor/cli-config.json`,
+        JSON.stringify({
+          attribution: { attributeCommitsToAgent: false, attributePRsToAgent: true },
+        }),
+      );
       const sentMessages: Array<string> = [];
       let sendCalls = 0;
       const instanceId = ProviderInstanceId.make("cursor");
@@ -454,6 +463,8 @@ describe("CursorAdapterV2", () => {
       const adapter = yield* makeCursorAdapterV2({
         instanceId,
         environment: { HOME: workspace },
+        globalConfig: true,
+        instructionsPath: "~/AGENTS.md",
       }).pipe(
         Effect.provideService(CursorAgentSdk.CursorAgentSdkRunner, {
           assertComplete: Effect.void,
@@ -577,6 +588,9 @@ describe("CursorAdapterV2", () => {
         Stream.filter((event) => event.type === "turn.terminal"),
         Stream.runHead,
       );
+      assert.include(sentMessages[0], "Prefer small commits.");
+      assert.include(sentMessages[0], "Do not add Cursor attribution to commit messages:");
+      assert.notInclude(sentMessages[0], "pull request descriptions");
       assert.equal(sentMessages[1], "/compress");
     }).pipe(
       Effect.scoped,
@@ -1289,11 +1303,55 @@ describe("CursorAdapterV2", () => {
       platform: "linux",
     });
     assert.deepEqual(options.mcpServers, cursorMcpServers(mcpSession));
+    assert.isTrue(options.local?.settingSources?.includes("user"));
+    const withoutGlobalConfig = makeCursorAgentOptions({
+      globalConfig: false,
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("cursor"),
+        model: "composer-2.5",
+      },
+      runtimePolicy: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: "/workspace",
+      },
+      threadId,
+      mcpSession,
+      platform: "linux",
+    });
+    assert.deepEqual(withoutGlobalConfig.local?.settingSources, [
+      "project",
+      "team",
+      "mdm",
+      "plugins",
+    ]);
 
     const logged = JSON.stringify(CursorAgentSdk.loggedCursorAgentOptions(options));
     assert.notInclude(logged, "secret-cursor-api-key");
     assert.notInclude(logged, "secret-cursor-mcp-token");
   });
+
+  it.effect(
+    "skips global instructions and attribution when global config is off or on later runs",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-global-" });
+        yield* fileSystem.makeDirectory(`${home}/.cursor`);
+        yield* fileSystem.writeFileString(
+          `${home}/.cursor/cli-config.json`,
+          JSON.stringify({ attribution: { attributeCommitsToAgent: false } }),
+        );
+        const instructions = (globalConfig: boolean, instructionsPath: string | undefined) =>
+          cursorUserInstructions({ globalConfig, instructionsPath, environment: { HOME: home } });
+        assert.include(yield* instructions(true, "~/missing.md"), "commit messages");
+        assert.isUndefined(yield* instructions(false, "~/missing.md"));
+        assert.equal(
+          prependCursorUserInstructions({ prompt: "hi", instructions: "rules", runOrdinal: 2 }),
+          "hi",
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it("recognizes direct and SDK-wrapped abort failures as cancellation", () => {
     assert.isTrue(CursorAgentSdk.isCursorCancellationError({ name: "AbortError" }));

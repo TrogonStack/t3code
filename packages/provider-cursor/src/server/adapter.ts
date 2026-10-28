@@ -52,6 +52,7 @@ import {
   hasCursorSkillMention,
   rewriteCursorSkillMentions,
 } from "./skills.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./globalConfig.ts";
 import { t3OrchestrationPromptForFirstRun } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -294,6 +295,7 @@ const CURSOR_AGENT_SETTING_SOURCES = [
 ] as const satisfies ReadonlyArray<SettingSource>;
 
 export function makeCursorAgentOptions(input: {
+  readonly globalConfig?: boolean;
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
@@ -311,7 +313,9 @@ export function makeCursorAgentOptions(input: {
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,
-      settingSources: [...CURSOR_AGENT_SETTING_SOURCES],
+      settingSources: CURSOR_AGENT_SETTING_SOURCES.filter(
+        (source) => source !== "user" || input.globalConfig !== false,
+      ),
       sandboxOptions: {
         enabled: policy.sandboxEnabled,
       },
@@ -866,6 +870,8 @@ interface CursorLiveAgent {
 export interface CursorAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
+  readonly globalConfig?: boolean;
+  readonly instructionsPath?: string;
   readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
 }
 
@@ -2142,6 +2148,9 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             yield* Ref.set(liveAgent, null);
           }
           const options = makeCursorAgentOptions({
+            ...(adapterOptions.globalConfig === undefined
+              ? {}
+              : { globalConfig: adapterOptions.globalConfig }),
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
             runtimePolicy: openInput.runtimePolicy,
@@ -2200,18 +2209,33 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 .map((skill) => skill.name),
             );
           }
-          const userText = t3OrchestrationPromptForFirstRun({
-            prompt: yield* providerMessageTextWithAttachmentPaths({
-              text:
-                cursorSkillNames === undefined
-                  ? rawText
-                  : rewriteCursorSkillMentions(rawText, cursorSkillNames),
-              attachments: turnInput.message.attachments,
-              resolveAttachmentPath: host.resolveAttachmentPath,
-              resolveExtractedTextPath: host.resolveExtractedTextPath,
-            }),
+          const instructions =
+            turnInput.runOrdinal === 1
+              ? yield* cursorUserInstructions({
+                  globalConfig: adapterOptions.globalConfig ?? true,
+                  instructionsPath: adapterOptions.instructionsPath,
+                  environment: adapterOptions.environment,
+                }).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                )
+              : undefined;
+          const userText = prependCursorUserInstructions({
+            instructions,
             runOrdinal: turnInput.runOrdinal,
-            hasT3Mcp: mcpServers !== undefined,
+            prompt: t3OrchestrationPromptForFirstRun({
+              prompt: yield* providerMessageTextWithAttachmentPaths({
+                text:
+                  cursorSkillNames === undefined
+                    ? rawText
+                    : rewriteCursorSkillMentions(rawText, cursorSkillNames),
+                attachments: turnInput.message.attachments,
+                resolveAttachmentPath: host.resolveAttachmentPath,
+                resolveExtractedTextPath: host.resolveExtractedTextPath,
+              }),
+              runOrdinal: turnInput.runOrdinal,
+              hasT3Mcp: mcpServers !== undefined,
+            }),
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
