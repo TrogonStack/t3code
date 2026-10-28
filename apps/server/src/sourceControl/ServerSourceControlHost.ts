@@ -35,6 +35,7 @@ export const layer = Layer.effect(
             ),
           ),
         ),
+        update: serverSettings.updateSettings,
       },
       process: { run: process.run },
       git: {
