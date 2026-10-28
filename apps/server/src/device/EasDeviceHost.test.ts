@@ -527,6 +527,24 @@ describe("EAS Simulator host", () => {
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
+  it.effect("reports iOS unavailable on a server with no Expo credential", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-expo-home-" });
+      const host = yield* makeHost(
+        fakeExpo(),
+        config({ accessToken: "" }),
+        yield* Scope.make(),
+      ).pipe(
+        Effect.provideService(HostProcess.HomeDirectory, home),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      const [ios] = (yield* host.summary).platforms;
+      expect(ios).toMatchObject({ platform: "ios", available: false });
+      expect(ios?.reason).toContain("No Expo credential on the server");
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
+
   it.effect("stops a session that is still starting when the host stops", () =>
     Effect.gen(function* () {
       const previewGate = yield* makeGate;
