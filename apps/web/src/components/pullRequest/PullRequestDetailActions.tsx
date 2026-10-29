@@ -22,7 +22,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import type { resolvePullRequestPrimaryControl } from "./pullRequestDetail.logic";
+import type { resolvePullRequestPrimaryControl, WatchDogStatus } from "./pullRequestDetail.logic";
 import { PullRequestGlyph } from "./pullRequestIcons";
 import type { resolvePullRequestState } from "./pullRequestPresentation";
 import type { PickableEnvironment } from "./pullRequestProjectAssignment.logic";
@@ -184,6 +184,68 @@ export function PullRequestResolveConflictsButton({
       <TooltipPopup side="top">
         {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function watchDogTooltip(status: WatchDogStatus): string {
+  switch (status.kind) {
+    case "clear":
+      return "All checks pass, no review threads are unresolved, and no review requests changes. Hand this to an agent to watch for later reviews.";
+    case "unknown":
+      return "Checks or review threads have not fully loaded yet. Hand this to an agent to watch.";
+    case "pending":
+      return "CI is still running. Hand this to an agent to watch.";
+    case "attention": {
+      const parts = [
+        status.failedChecks > 0
+          ? `${status.failedChecks} failed ${status.failedChecks === 1 ? "job" : "jobs"}`
+          : null,
+        status.unresolvedThreads > 0
+          ? `${status.unresolvedThreads} unresolved ${status.unresolvedThreads === 1 ? "thread" : "threads"}`
+          : null,
+        status.changeRequests > 0
+          ? `${status.changeRequests} ${status.changeRequests === 1 ? "review requests" : "reviews request"} changes`
+          : null,
+      ].filter((part) => part !== null);
+      return `${parts.join(", ")}. Hand this to an agent to fix.`;
+    }
+  }
+}
+
+export function PullRequestWatchDogButton({
+  handoff,
+  unavailable,
+  status,
+  onWatch,
+}: {
+  handoff: string | null;
+  unavailable: boolean;
+  status: WatchDogStatus;
+  onWatch: () => void;
+}) {
+  const clear = status.kind === "clear";
+  const preparing = handoff === "watch-dog";
+  const label = preparing ? "Preparing..." : clear ? "All clear" : "Watch Dog";
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="inline-flex shrink-0">
+            <Button
+              size="xs"
+              variant={clear ? "secondary" : "outline"}
+              disabled={handoff !== null || unavailable}
+              onClick={onWatch}
+              aria-label={label}
+            >
+              <span aria-hidden>🐶</span>
+              <span className="@max-[30rem]/pr-header:hidden">{label}</span>
+            </Button>
+          </span>
+        }
+      />
+      <TooltipPopup side="top">{preparing ? "Preparing..." : watchDogTooltip(status)}</TooltipPopup>
     </Tooltip>
   );
 }

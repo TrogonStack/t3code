@@ -21,6 +21,8 @@ import {
   buildAddSelectionToAgentHandoff,
   buildExplainPullRequestHandoff,
   buildResolveConflictsPrompt,
+  buildWatchDogPrompt,
+  resolveWatchDogStatus,
   resolveThreadPanelPullRequestAction,
   buildPullRequestReferenceContext,
   buildFixFindingHandoff,
@@ -965,6 +967,88 @@ describe("asking about a change rather than working on it", () => {
         url: "https://gitlab.com/pingdotgg/t3code/-/merge_requests/42",
       }),
     ).toMatch(/^MR #42 /u);
+  });
+});
+
+describe("the watch dog", () => {
+  const check = (status: PullRequestCheck["status"]): PullRequestCheck => ({
+    name: `job-${status}`,
+    status,
+    description: null,
+    url: null,
+  });
+  const thread = (isResolved: boolean, isOutdated = false) =>
+    ({ id: "t", isResolved, isOutdated }) as unknown as PullRequestReviewThread;
+
+  it.each([
+    ["no checks reported", [], [], { kind: "unknown" }],
+    ["passing checks and no threads", ["success", "skipped", "neutral"], [], { kind: "clear" }],
+    ["a pending check", ["success", "pending"], [], { kind: "pending", pendingChecks: 1 }],
+    [
+      "failed, cancelled, and action-required checks",
+      ["failure", "cancelled", "action-required", "pending"],
+      [],
+      { kind: "attention", failedChecks: 3, unresolvedThreads: 0, changeRequests: 0 },
+    ],
+    [
+      "an unresolved outdated thread",
+      ["success"],
+      [thread(false, true), thread(true)],
+      { kind: "attention", failedChecks: 0, unresolvedThreads: 1, changeRequests: 0 },
+    ],
+  ] as const)("reports %s", (_name, statuses, threads, expected) => {
+    expect(
+      resolveWatchDogStatus({
+        checks: statuses.map(check),
+        reviewThreads: threads,
+      }),
+    ).toEqual(expected);
+  });
+
+  it("asks for attention while a reviewer's latest verdict requests changes", () => {
+    const review = (id: string, login: string, reviewState: string, day: number) =>
+      ({
+        id,
+        kind: "review",
+        author: { login },
+        reviewState,
+        createdAt: `2026-07-0${day}T00:00:00Z`,
+      }) as unknown as PullRequestComment;
+    expect(
+      resolveWatchDogStatus({
+        checks: [check("success")],
+        reviewThreads: [],
+        comments: [
+          review("a", "bilal", "CHANGES_REQUESTED", 1),
+          review("b", "octocat", "CHANGES_REQUESTED", 1),
+          review("c", "octocat", "APPROVED", 2),
+        ],
+      }),
+    ).toEqual({ kind: "attention", failedChecks: 0, unresolvedThreads: 0, changeRequests: 1 });
+  });
+
+  it.each([
+    ["review threads", { reviewThreadsTruncated: true }],
+    ["comments", { commentsTruncated: true }],
+  ] as const)("does not claim clear when %s were truncated", (_name, truncated) => {
+    expect(
+      resolveWatchDogStatus({
+        checks: [check("success")],
+        reviewThreads: [],
+        ...truncated,
+      }),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("names the watch tools and the pull request", () => {
+    const prompt = buildWatchDogPrompt({
+      number: 42,
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+      headBranch: "feat/page",
+    });
+    expect(prompt).toContain("watch_pull_request");
+    expect(prompt).toContain("unwatch_pull_request");
+    expect(prompt).toContain("https://github.com/pingdotgg/t3code/pull/42");
   });
 });
 

@@ -97,6 +97,7 @@ import {
   PullRequestCheckoutMenu,
   PullRequestPrimaryAction,
   PullRequestResolveConflictsButton,
+  PullRequestWatchDogButton,
 } from "./PullRequestDetailActions";
 import { PullRequestBaseBranch } from "./PullRequestBaseBranch";
 import { PullRequestDetailCrumbs } from "./PullRequestDetailCrumbs";
@@ -119,10 +120,12 @@ import {
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
+  buildWatchDogPrompt,
   handoffPrompt,
   handoffReviewComments,
   latestPullRequestReviewOutcomes,
   loadingPullRequestCheckoutCommand,
+  resolveWatchDogStatus,
   isPullRequestNotFound,
   isStackedPullRequestBase,
   pullRequestOffersBypassRetry,
@@ -1122,6 +1125,17 @@ export function PullRequestDetailPanel({
     });
   };
 
+  const startWatchDog = () => {
+    if (!handoffSummary) return;
+    void startHandoff("watch-dog", {
+      prompt: buildWatchDogPrompt({
+        number: handoffSummary.number,
+        url: handoffSummary.url,
+        headBranch: handoffSummary.headBranch,
+      }),
+    });
+  };
+
   const selectMergeMethod = (method: PullRequestMergeMethod) => {
     setMergeMethod(method);
     setLastSelectedMergeMethod(method);
@@ -1271,6 +1285,26 @@ export function PullRequestDetailPanel({
     />
   );
 
+  const watchDogControl =
+    detail?.state === "open" ? (
+      <PullRequestWatchDogButton
+        handoff={handoff}
+        unavailable={attachTarget === null && (checkoutRoot === null || !canPrepareWorktree)}
+        status={resolveWatchDogStatus({
+          checks: checksStale ? [] : detail.checks,
+          reviewThreads: activity?.reviewThreads ?? [],
+          reviewThreadsTruncated:
+            activity === null ||
+            activityQuery.error !== null ||
+            activity.reviewThreadsTruncated === true,
+          commentsTruncated: activity?.commentsTruncated ?? false,
+          comments: activity?.comments ?? [],
+          commits: activity?.commits ?? [],
+        })}
+        onWatch={startWatchDog}
+      />
+    ) : null;
+
   if (detailQuery.isPending && !detail) {
     return (
       <PullRequestDetailGhost
@@ -1383,6 +1417,7 @@ export function PullRequestDetailPanel({
                 perform={perform}
                 resolveConflicts={resolveConflictsControl}
               />
+              {watchDogControl}
               {checkoutControl}
               <PullRequestActionsMenu
                 environmentId={environmentId}
