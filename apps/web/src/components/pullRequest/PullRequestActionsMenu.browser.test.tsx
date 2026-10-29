@@ -99,8 +99,10 @@ function setup() {
       showsMergeNow={false}
       showsAutoMerge={false}
       showsMergeMethods={false}
+      showsMergeBypass={false}
       allowedMergeMethods={[]}
       selectedMergeMethod="squash"
+      selectedMergeMethodLabel="Squash"
       onSelectMergeMethod={() => {}}
       showsDeleteBranch={false}
       environmentConnected={true}
