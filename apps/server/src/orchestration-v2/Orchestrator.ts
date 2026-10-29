@@ -645,6 +645,16 @@ function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): 
   return projection.runs.some(isLiveRun);
 }
 
+function withWatchInstructions(
+  watch: ThreadPullRequestWatch,
+  instructions: string | undefined,
+): ThreadPullRequestWatch {
+  const { instructions: current, ...rest } = watch;
+  if (instructions === undefined || instructions === "")
+    return current === undefined ? watch : rest;
+  return current === instructions ? watch : { ...rest, instructions };
+}
+
 function withPullRequestWatch(
   link: ThreadPullRequestLink,
   watch: ThreadPullRequestWatch | undefined,
@@ -2694,6 +2704,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "The pull request watch ended or its thread settled while it was read.",
         });
       }
+      const told = command.watch ?? command.endedWatch;
+      if (command.wake && told && told.instructions !== link.watch.instructions) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "The pull request watch instructions changed while it was read.",
+        });
+      }
       yield* dispatchThreadMutation(command, events, effects);
       if (command.wake === undefined) return;
       yield* dispatchMessage(
@@ -3568,39 +3586,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const watch =
             command.type === "thread.pull-request-watch.sync"
               ? existing.watch?.startedAt === command.startedAt
-                ? (command.watch ?? undefined)
+                ? command.watch === null
+                  ? undefined
+                  : withWatchInstructions(command.watch, existing.watch.instructions)
                 : existing.watch
               : !command.watching
                 ? undefined
-                : (existing.watch ?? {
-                    startedAt,
-                    headSha: null,
-                    failedChecks: [],
-                    passed: false,
-                    passedChecks: [],
-                    conflicting: false,
-                    // Watching again must not repeat check or conflict news the last watch told.
-                    ...(existing.endedWatch && {
-                      headSha: existing.endedWatch.headSha,
-                      failedChecks: existing.endedWatch.failedChecks,
-                      passed: existing.endedWatch.passed,
-                      passedChecks: existing.endedWatch.passedChecks,
-                      conflicting: existing.endedWatch.conflicting,
-                    }),
-                    ...(existing.endedWatch?.owedChecks !== undefined && {
-                      owedChecks: existing.endedWatch.owedChecks,
-                    }),
-                    ...(existing.endedWatch?.checksAwaitedSince !== undefined && {
-                      checksAwaitedSince: existing.endedWatch.checksAwaitedSince,
-                    }),
-                    remarksThrough: startedAt,
-                    remarkIds: [],
-                    wakes: 0,
-                  });
+                : existing.watch === undefined
+                  ? withWatchInstructions(
+                      {
+                        startedAt,
+                        headSha: null,
+                        failedChecks: [],
+                        passed: false,
+                        passedChecks: [],
+                        conflicting: false,
+                        // Watching again must not repeat check or conflict news the last watch told.
+                        ...(existing.endedWatch && {
+                          headSha: existing.endedWatch.headSha,
+                          failedChecks: existing.endedWatch.failedChecks,
+                          passed: existing.endedWatch.passed,
+                          passedChecks: existing.endedWatch.passedChecks,
+                          conflicting: existing.endedWatch.conflicting,
+                        }),
+                        ...(existing.endedWatch?.owedChecks !== undefined && {
+                          owedChecks: existing.endedWatch.owedChecks,
+                        }),
+                        ...(existing.endedWatch?.checksAwaitedSince !== undefined && {
+                          checksAwaitedSince: existing.endedWatch.checksAwaitedSince,
+                        }),
+                        remarksThrough: startedAt,
+                        remarkIds: [],
+                        wakes: 0,
+                      },
+                      command.instructions === undefined
+                        ? existing.endedWatch?.instructions
+                        : command.instructions,
+                    )
+                  : command.instructions === undefined
+                    ? existing.watch
+                    : withWatchInstructions(existing.watch, command.instructions);
           if (watch === existing.watch && links === linked) return thread;
           const final =
-            command.type === "thread.pull-request-watch.sync" && watch === undefined
-              ? command.endedWatch
+            command.type === "thread.pull-request-watch.sync" &&
+            watch === undefined &&
+            command.endedWatch !== undefined
+              ? withWatchInstructions(command.endedWatch, existing.watch?.instructions)
               : undefined;
           return {
             ...thread,

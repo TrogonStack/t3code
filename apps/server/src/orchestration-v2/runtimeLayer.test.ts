@@ -1,3 +1,4 @@
+import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -2674,6 +2675,113 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("watching again updates the instructions without resetting the watch", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-instructions");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-instructions-create"),
+        threadId,
+        projectId: ProjectId.make("pr-watch-instructions-project"),
+        title: "Watch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+      const url = "https://github.com/pingdotgg/t3code/pull/7";
+      const watchOf = Effect.map(
+        orchestrator.getThreadShell(threadId),
+        (thread) => thread?.pullRequests?.[0]?.watch,
+      );
+      const watchAgain = (id: string, instructions?: string) =>
+        orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-watch-instructions-${id}`),
+          threadId,
+          ...key,
+          watching: true,
+          link: { url, source: "agent" },
+          ...(instructions === undefined ? {} : { instructions }),
+        });
+
+      yield* watchAgain("start", "Ignore CodeRabbit nits.");
+      const started = yield* watchOf;
+      assert.equal(started?.instructions, "Ignore CodeRabbit nits.");
+      if (started === undefined) return;
+
+      const recorded = { ...started, headSha: "abc123", failedChecks: ["lint"], wakes: 1 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-watch-instructions-record"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: recorded,
+      });
+
+      yield* watchAgain("keep");
+      assert.deepEqual(yield* watchOf, recorded);
+
+      yield* watchAgain("update", "Only fix CI.");
+      assert.deepEqual(yield* watchOf, { ...recorded, instructions: "Only fix CI." });
+
+      const staleWake = yield* orchestrator
+        .dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make("pr-watch-instructions-stale-wake"),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch: { ...recorded, wakes: 2 },
+          wake: {
+            messageId: MessageId.make("pr-watch-instructions-stale-wake"),
+            text: "Update",
+            notification: { source: { kind: "monitor" }, outcome: "updated", summary: "#7" },
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        staleWake._tag === "OrchestratorDispatchError" ? staleWake.commandType : staleWake._tag,
+        "thread.pull-request-watch.sync",
+      );
+      assert.deepEqual(yield* watchOf, { ...recorded, instructions: "Only fix CI." });
+      assert.deepEqual((yield* orchestrator.getThreadRecords(threadId, ["messages"])).messages, []);
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-watch-instructions-stale-record"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: { ...recorded, wakes: 2 },
+      });
+      assert.deepEqual(yield* watchOf, {
+        ...recorded,
+        wakes: 2,
+        instructions: "Only fix CI.",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-instructions-stop"),
+        threadId,
+        ...key,
+        watching: false,
+      });
+      yield* watchAgain("resume");
+      assert.equal((yield* watchOf)?.instructions, "Only fix CI.");
+
+      yield* watchAgain("clear", "");
+      assert.isUndefined((yield* watchOf)?.instructions);
+    }),
+  );
+
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -2877,6 +2985,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              invalidate: () => Effect.void,
               detail: () => Effect.die("host unreachable"),
               activity: () => Effect.die("host unreachable"),
             }),
@@ -2938,6 +3047,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
@@ -3036,6 +3146,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
@@ -3180,6 +3291,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({ projectId, number: 13, at: commentAt }),
@@ -3278,6 +3390,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
@@ -3340,6 +3453,134 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("sweeps quickly only while checks run and the fingerprint is conditional", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-cadence");
+      const projectId = ProjectId.make("pr-watch-cadence-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch cadence",
+        workspaceRoot: "/workspace/watch-cadence",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-cadence-create"),
+        threadId,
+        projectId,
+        title: "Watch cadence",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-cadence-start"),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 15,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/15", source: "agent" },
+      });
+
+      let checkStatus: "pending" | "success" = "pending";
+      let fingerprint: "conditional" | "graphql" | "paused" = "conditional";
+      let detailReads = 0;
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              watchFingerprint: () =>
+                fingerprint === "paused"
+                  ? Effect.fail(
+                      new PullRequestOperationError({
+                        operation: "watchFingerprint",
+                        detail: "Rate limited",
+                        cause: new PullRequestProviderError({
+                          provider: SourceControlProviderKind.make("github"),
+                          operation: "getChangeRequestWatchFingerprint",
+                          reason: "rate-limited",
+                          detail: "Rate limited",
+                        }),
+                      }),
+                    )
+                  : Effect.succeed({
+                      status: checkStatus,
+                      remarks: "0",
+                      ...(fingerprint === "conditional" ? { conditional: true as const } : {}),
+                    }),
+              invalidate: () => Effect.void,
+              detail: () =>
+                Effect.sync(() => {
+                  detailReads += 1;
+                  return {
+                    ...watchedPullRequestDetail({
+                      projectId,
+                      number: 15,
+                      at: "2026-10-02T12:00:00.000Z",
+                    }),
+                    headSha: "6074dd48ff",
+                    checks: [
+                      {
+                        name: "lint",
+                        status: checkStatus,
+                        description: null,
+                        url: null,
+                        required: true,
+                      },
+                    ],
+                  };
+                }),
+              activity: () =>
+                Effect.succeed({
+                  comments: [],
+                  commentCount: 0,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+            }),
+          ),
+        ),
+      );
+      const delayAfterSweep = Effect.andThen(reactor.sweep, reactor.sweepDelayMs);
+
+      assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
+      assert.equal(yield* delayAfterSweep, 30_000, "checks are still running");
+      assert.equal(detailReads, 1, "an unchanged conditional fingerprint needs no reread");
+      fingerprint = "graphql";
+      assert.equal(
+        yield* delayAfterSweep,
+        120_000,
+        "reading costs quota without a conditional fingerprint",
+      );
+      fingerprint = "paused";
+      assert.equal(yield* delayAfterSweep, 120_000, "the host is rate limited");
+      fingerprint = "conditional";
+      checkStatus = "success";
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* delayAfterSweep, 120_000, "nothing is in flight");
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-cadence-end"),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 15,
+        watching: false,
+      });
+    }),
+  );
+
   it.effect("wakes for checks that complete after the no-checks notice on the same head", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -3381,6 +3622,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const host = Layer.mergeAll(
         NodeServices.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
@@ -3611,6 +3853,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              invalidate: () => Effect.void,
               detail: () => Effect.succeed(detail),
               activity: () =>
                 Effect.succeed({

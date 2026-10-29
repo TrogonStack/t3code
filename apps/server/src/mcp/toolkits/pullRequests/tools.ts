@@ -7,6 +7,7 @@ import {
   PullRequestReviewGuideRun,
   PullRequestState,
   ThreadPullRequestLinkSource,
+  ThreadPullRequestWatchInstructionsInput,
   TrimmedNonEmptyString,
   ThreadId,
 } from "@t3tools/contracts";
@@ -314,10 +315,21 @@ const ListThreadPullRequestsTool = Tool.make("list_thread_pull_requests", {
   .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
+export const WatchPullRequestInput = Schema.Struct({
+  ...PullRequestTargetInput.fields,
+  instructions: Schema.optional(
+    ThreadPullRequestWatchInstructionsInput.annotate({
+      description:
+        "The user's standing instructions for this PR, repeated on every wake. Omit to keep the current ones. Empty string clears them.",
+    }),
+  ),
+});
+export type WatchPullRequestInput = typeof WatchPullRequestInput.Type;
+
 const WatchPullRequestTool = Tool.make("watch_pull_request", {
   description:
-    "Watch an open PR for this thread, linking it first if needed. T3 wakes you on failed checks, passed required checks, new comments or reviews, or conflicts. Handle old comments first. Only later ones wake you. After this call, end your turn. The watch stays on after each wake, so do not call this again on a wake. A wake is not a merge decision. Check readiness yourself.",
-  parameters: PullRequestTargetInput,
+    "Watch an open PR for this thread, linking it first if needed. T3 wakes you on failed checks, passed required checks, new comments or reviews, or conflicts. Handle old comments first. Only later ones wake you. Pass `instructions` with any standing instructions the user gave for this PR. Call again only to change them when the user does, never on a wake. After this call, end your turn. The watch stays on after each wake. A wake is not a merge decision. Check readiness yourself.",
+  parameters: WatchPullRequestInput,
   success: WatchPullRequestResult,
   failure: PullRequestToolError,
   dependencies,

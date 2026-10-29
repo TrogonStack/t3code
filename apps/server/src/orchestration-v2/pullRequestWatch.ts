@@ -126,12 +126,15 @@ export function evaluatePullRequestWatch(
     ...atLatest.map((remark) => remark.id),
   ];
 
-  if (detail.mergeability === "conflicting" && !watch.conflicting) {
+  if (detail.mergeability === "conflicting" && (!watch.conflicting || headMoved)) {
     changes.push({ kind: "conflicting" });
   }
-  // "unknown" is a host still computing after a push; only a clean answer clears a conflict.
+  // "unknown" is a host still computing; only a clean answer clears a conflict. A conflict seen on
+  // a replaced head says nothing about the new one, which must be reported if it conflicts too.
   const conflicting =
-    detail.mergeability === "unknown" ? watch.conflicting : detail.mergeability === "conflicting";
+    detail.mergeability === "unknown"
+      ? watch.conflicting && !headMoved
+      : detail.mergeability === "conflicting";
 
   const commentsOnly = changes.length > 0 && changes.every((change) => change.kind === "remarks");
   const progress = headMoved || (changes.length > 0 && !commentsOnly);
@@ -150,6 +153,7 @@ export function evaluatePullRequestWatch(
       conflicting,
       wakes,
       checksAwaitedSince,
+      ...(watch.instructions !== undefined && { instructions: watch.instructions }),
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
   };
@@ -219,6 +223,7 @@ export function pullRequestWatchMessage(input: {
   readonly url: string;
   readonly baseBranch: string;
   readonly headSha: string | null;
+  readonly instructions?: string | undefined;
   readonly report: PullRequestWatchReport;
 }): { readonly text: string; readonly notification: OrchestrationV2Notification } {
   const { changes, exhausted } = input.report;
@@ -230,6 +235,19 @@ export function pullRequestWatchMessage(input: {
     `Update on pull request #${input.number} (${input.url}), which T3 Code is watching for you:`,
     ...changes.flatMap((change) => changeLines(change, context)),
     "",
+    ...(input.headSha === null
+      ? []
+      : [
+          `These findings are about ${input.headSha.slice(0, 7)}. Before acting, confirm the pull request head is still that commit, and ignore findings about a commit that is no longer the head.`,
+          "",
+        ]),
+    ...(input.instructions === undefined
+      ? []
+      : [
+          "The user's standing instructions for this pull request. Follow them when you act on the items above:",
+          input.instructions,
+          "",
+        ]),
     exhausted
       ? `T3 Code stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call watch_pull_request to watch it again.`
       : "Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and T3 Code wakes you on the next change. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.",

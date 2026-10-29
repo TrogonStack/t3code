@@ -7,6 +7,7 @@ import {
   PositiveInt,
   ProjectId,
   TrimmedNonEmptyString,
+  TrimmedString,
 } from "./baseSchemas.ts";
 import {
   PullRequestActor,
@@ -79,6 +80,17 @@ export const ThreadPullRequestKey = Schema.Struct({
 });
 export type ThreadPullRequestKey = typeof ThreadPullRequestKey.Type;
 
+const PULL_REQUEST_WATCH_INSTRUCTIONS_MAX_LENGTH = 1_000;
+
+export const ThreadPullRequestWatchInstructions = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(PULL_REQUEST_WATCH_INSTRUCTIONS_MAX_LENGTH),
+);
+
+/** Empty clears the instructions when watching again. */
+export const ThreadPullRequestWatchInstructionsInput = TrimmedString.check(
+  Schema.isMaxLength(PULL_REQUEST_WATCH_INSTRUCTIONS_MAX_LENGTH),
+);
+
 export const ThreadPullRequestWatch = Schema.Struct({
   startedAt: IsoDateTime,
   headSha: Schema.NullOr(TrimmedNonEmptyString),
@@ -100,6 +112,8 @@ export const ThreadPullRequestWatch = Schema.Struct({
    * none did. Null once either happened; absent on watches saved before it existed.
    */
   checksAwaitedSince: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** The user's standing instructions for this pull request, repeated on every wake. */
+  instructions: Schema.optional(ThreadPullRequestWatchInstructions),
 });
 export type ThreadPullRequestWatch = typeof ThreadPullRequestWatch.Type;
 

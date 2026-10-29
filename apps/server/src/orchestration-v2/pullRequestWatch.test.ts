@@ -8,6 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch as evaluate,
+  pullRequestWatchMessage,
 } from "./pullRequestWatch.ts";
 
 // These cases read the head once or at one moment, so the no-checks notice never comes due.
@@ -354,6 +355,35 @@ describe("evaluatePullRequestWatch", () => {
     ]);
   });
 
+  it("reports a conflict on a new head even if the replaced head conflicted too", () => {
+    const first = evaluatePullRequestWatch(
+      watch(),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    const pushed = evaluatePullRequestWatch(
+      first.next,
+      detail({ headSha: "bbbbbbbbbb", mergeability: "unknown" }),
+      noRemarks,
+    );
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        pushed.next,
+        detail({ headSha: "bbbbbbbbbb", mergeability: "conflicting" }),
+        noRemarks,
+      ).changes,
+      [{ kind: "conflicting" }],
+    );
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        first.next,
+        detail({ headSha: "bbbbbbbbbb", mergeability: "conflicting" }),
+        noRemarks,
+      ).changes,
+      [{ kind: "conflicting" }],
+    );
+  });
+
   it("does not spend the comment wake limit on check results", () => {
     const tired = watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 });
     const result = evaluatePullRequestWatch(
@@ -399,5 +429,43 @@ describe("evaluatePullRequestWatch", () => {
   it("never reports missing checks on a host where an empty list says nothing", () => {
     const silent = detail({ capabilities: capabilities(false), checks: [] });
     assert.isTrue(anHourLater(watch(), silent).every((kinds) => kinds.length === 0));
+  });
+
+  it("keeps the user's instructions and repeats them on every wake", () => {
+    const instructions = "Ignore CodeRabbit nits.";
+    const report = evaluatePullRequestWatch(
+      watch({ instructions }),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    assert.equal(report.next.instructions, instructions);
+    const input = {
+      number: 7,
+      url: "https://github.com/pingdotgg/t3code/pull/7",
+      baseBranch: "main",
+      headSha: null,
+      report,
+    };
+    assert.include(pullRequestWatchMessage({ ...input, instructions }).text, instructions);
+    assert.notInclude(pullRequestWatchMessage(input).text, "standing instructions");
+  });
+
+  it("names the head its findings are about and tells the agent to confirm it", () => {
+    const report = evaluatePullRequestWatch(
+      watch(),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    const input = {
+      number: 7,
+      url: "https://github.com/pingdotgg/t3code/pull/7",
+      baseBranch: "main",
+      report,
+    };
+    assert.include(
+      pullRequestWatchMessage({ ...input, headSha: "aaaaaaaaaa" }).text,
+      "These findings are about aaaaaaa. Before acting, confirm the pull request head is still that commit",
+    );
+    assert.notInclude(pullRequestWatchMessage({ ...input, headSha: null }).text, "head is still");
   });
 });
