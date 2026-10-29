@@ -63,6 +63,7 @@ import {
   ThreadPullRequestSnapshot,
   ThreadPullRequestStack,
   ThreadPullRequestWatch,
+  ThreadPullRequestWatchInstructionsInput,
 } from "./threadPullRequest.ts";
 import {
   ProviderApprovalDecision,
@@ -3024,6 +3025,8 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     ...ThreadPullRequestKey.fields,
     watching: Schema.Boolean,
+    /** Absent keeps the current instructions; empty clears them. */
+    instructions: Schema.optional(ThreadPullRequestWatchInstructionsInput),
     link: Schema.optional(
       Schema.Struct({
         url: TrimmedNonEmptyString,

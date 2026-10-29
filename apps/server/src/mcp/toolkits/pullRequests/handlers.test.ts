@@ -333,6 +333,23 @@ describe("pull request toolkit handlers", () => {
     }),
   );
 
+  it.effect("passes the user's instructions to the watch", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        thread: makeThread([makeLink(1, { headBranch: "feature" })]),
+      });
+      yield* harness.call("watch_pull_request", {
+        repository: "t3tools/t3code",
+        number: 1,
+        instructions: "Ignore CodeRabbit nits.",
+      });
+      yield* harness.call("watch_pull_request", { repository: "t3tools/t3code", number: 1 });
+      const commands = yield* Ref.get(harness.commands);
+      expect(commands[0]).toMatchObject({ instructions: "Ignore CodeRabbit nits." });
+      expect(commands[1]).not.toHaveProperty("instructions");
+    }),
+  );
+
   it.effect("refuses a watch from a subagent thread, whose parent owns the pull request", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({

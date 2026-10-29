@@ -150,6 +150,7 @@ export function evaluatePullRequestWatch(
       conflicting,
       wakes,
       checksAwaitedSince,
+      ...(watch.instructions !== undefined && { instructions: watch.instructions }),
     },
     exhausted: commentsOnly && wakes >= PULL_REQUEST_WATCH_WAKE_LIMIT,
   };
@@ -219,6 +220,7 @@ export function pullRequestWatchMessage(input: {
   readonly url: string;
   readonly baseBranch: string;
   readonly headSha: string | null;
+  readonly instructions?: string | undefined;
   readonly report: PullRequestWatchReport;
 }): { readonly text: string; readonly notification: OrchestrationV2Notification } {
   const { changes, exhausted } = input.report;
@@ -230,6 +232,13 @@ export function pullRequestWatchMessage(input: {
     `Update on pull request #${input.number} (${input.url}), which T3 Code is watching for you:`,
     ...changes.flatMap((change) => changeLines(change, context)),
     "",
+    ...(input.instructions === undefined
+      ? []
+      : [
+          "The user's standing instructions for this pull request. Follow them when you act on the items above:",
+          input.instructions,
+          "",
+        ]),
     exhausted
       ? `T3 Code stopped watching after ${PULL_REQUEST_WATCH_WAKE_LIMIT} comment-only updates in a row. Call watch_pull_request to watch it again.`
       : "Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and T3 Code wakes you on the next change. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.",

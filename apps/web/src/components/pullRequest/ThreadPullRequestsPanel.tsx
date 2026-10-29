@@ -199,6 +199,7 @@ function LinkRowImpl({
                     <TooltipPopup>
                       Watching: the agent wakes when checks finish, someone comments, or the branch
                       conflicts
+                      {link.watch?.instructions ? `. Instructions: ${link.watch.instructions}` : ""}
                     </TooltipPopup>
                   </Tooltip>
                 ) : null}

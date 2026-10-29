@@ -2674,6 +2674,91 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("watching again updates the instructions without resetting the watch", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-instructions");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-instructions-create"),
+        threadId,
+        projectId: ProjectId.make("pr-watch-instructions-project"),
+        title: "Watch",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "github.com", repository: "pingdotgg/t3code", number: 7 };
+      const url = "https://github.com/pingdotgg/t3code/pull/7";
+      const watchOf = Effect.map(
+        orchestrator.getThreadShell(threadId),
+        (thread) => thread?.pullRequests?.[0]?.watch,
+      );
+      const watchAgain = (id: string, instructions?: string) =>
+        orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make(`pr-watch-instructions-${id}`),
+          threadId,
+          ...key,
+          watching: true,
+          link: { url, source: "agent" },
+          ...(instructions === undefined ? {} : { instructions }),
+        });
+
+      yield* watchAgain("start", "Ignore CodeRabbit nits.");
+      const started = yield* watchOf;
+      assert.equal(started?.instructions, "Ignore CodeRabbit nits.");
+      if (started === undefined) return;
+
+      const recorded = { ...started, headSha: "abc123", failedChecks: ["lint"], wakes: 1 };
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-watch-instructions-record"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: recorded,
+      });
+
+      yield* watchAgain("keep");
+      assert.deepEqual(yield* watchOf, recorded);
+
+      yield* watchAgain("update", "Only fix CI.");
+      assert.deepEqual(yield* watchOf, { ...recorded, instructions: "Only fix CI." });
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-watch-instructions-stale-record"),
+        threadId,
+        ...key,
+        startedAt: started.startedAt,
+        watch: { ...recorded, wakes: 2 },
+      });
+      assert.deepEqual(yield* watchOf, {
+        ...recorded,
+        wakes: 2,
+        instructions: "Only fix CI.",
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-instructions-stop"),
+        threadId,
+        ...key,
+        watching: false,
+      });
+      yield* watchAgain("resume");
+      assert.equal((yield* watchOf)?.instructions, "Only fix CI.");
+
+      yield* watchAgain("clear", "");
+      assert.isUndefined((yield* watchOf)?.instructions);
+    }),
+  );
+
   it.effect.each(["manual", "automatic"])("settling ends every pull request watch: %s", (mode) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

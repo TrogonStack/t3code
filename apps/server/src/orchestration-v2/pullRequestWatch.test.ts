@@ -8,6 +8,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch as evaluate,
+  pullRequestWatchMessage,
 } from "./pullRequestWatch.ts";
 
 // These cases read the head once or at one moment, so the no-checks notice never comes due.
@@ -399,5 +400,24 @@ describe("evaluatePullRequestWatch", () => {
   it("never reports missing checks on a host where an empty list says nothing", () => {
     const silent = detail({ capabilities: capabilities(false), checks: [] });
     assert.isTrue(anHourLater(watch(), silent).every((kinds) => kinds.length === 0));
+  });
+
+  it("keeps the user's instructions and repeats them on every wake", () => {
+    const instructions = "Ignore CodeRabbit nits.";
+    const report = evaluatePullRequestWatch(
+      watch({ instructions }),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    assert.equal(report.next.instructions, instructions);
+    const input = {
+      number: 7,
+      url: "https://github.com/pingdotgg/t3code/pull/7",
+      baseBranch: "main",
+      headSha: null,
+      report,
+    };
+    assert.include(pullRequestWatchMessage({ ...input, instructions }).text, instructions);
+    assert.notInclude(pullRequestWatchMessage(input).text, "standing instructions");
   });
 });

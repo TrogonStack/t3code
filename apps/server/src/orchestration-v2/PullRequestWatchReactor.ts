@@ -166,7 +166,8 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
     left.wakes === right.wakes &&
-    left.checksAwaitedSince === right.checksAwaitedSince
+    left.checksAwaitedSince === right.checksAwaitedSince &&
+    left.instructions === right.instructions
   );
 }
 
@@ -537,6 +538,7 @@ export const make = Effect.gen(function* () {
           url: target.link.url,
           baseBranch: detail.baseBranch,
           headSha: report.next.headSha,
+          instructions: target.watch.instructions,
           report,
         });
         // An ending watch keeps what this pass saw, so watching again starts from it.

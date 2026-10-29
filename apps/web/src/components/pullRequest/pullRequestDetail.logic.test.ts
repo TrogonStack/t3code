@@ -1049,6 +1049,7 @@ describe("the watch dog", () => {
     expect(prompt).toContain("watch_pull_request");
     expect(prompt).toContain("unwatch_pull_request");
     expect(prompt).toContain("https://github.com/pingdotgg/t3code/pull/42");
+    expect(prompt).toContain("as `instructions`");
   });
 });
 
