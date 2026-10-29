@@ -129,9 +129,12 @@ export function evaluatePullRequestWatch(
   if (detail.mergeability === "conflicting" && !watch.conflicting) {
     changes.push({ kind: "conflicting" });
   }
-  // "unknown" is a host still computing after a push; only a clean answer clears a conflict.
+  // "unknown" is a host still computing; only a clean answer clears a conflict. A conflict seen on
+  // a replaced head says nothing about the new one, which must be reported if it conflicts too.
   const conflicting =
-    detail.mergeability === "unknown" ? watch.conflicting : detail.mergeability === "conflicting";
+    detail.mergeability === "unknown"
+      ? watch.conflicting && !headMoved
+      : detail.mergeability === "conflicting";
 
   const commentsOnly = changes.length > 0 && changes.every((change) => change.kind === "remarks");
   const progress = headMoved || (changes.length > 0 && !commentsOnly);
@@ -232,6 +235,12 @@ export function pullRequestWatchMessage(input: {
     `Update on pull request #${input.number} (${input.url}), which T3 Code is watching for you:`,
     ...changes.flatMap((change) => changeLines(change, context)),
     "",
+    ...(input.headSha === null
+      ? []
+      : [
+          `These findings are about ${input.headSha.slice(0, 7)}. Before acting, confirm the pull request head is still that commit, and ignore findings about a commit that is no longer the head.`,
+          "",
+        ]),
     ...(input.instructions === undefined
       ? []
       : [

@@ -355,6 +355,27 @@ describe("evaluatePullRequestWatch", () => {
     ]);
   });
 
+  it("reports a conflict on a new head even if the replaced head conflicted too", () => {
+    const first = evaluatePullRequestWatch(
+      watch(),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    const pushed = evaluatePullRequestWatch(
+      first.next,
+      detail({ headSha: "bbbbbbbbbb", mergeability: "unknown" }),
+      noRemarks,
+    );
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        pushed.next,
+        detail({ headSha: "bbbbbbbbbb", mergeability: "conflicting" }),
+        noRemarks,
+      ).changes,
+      [{ kind: "conflicting" }],
+    );
+  });
+
   it("does not spend the comment wake limit on check results", () => {
     const tired = watch({ headSha: "aaaaaaaaaa", wakes: PULL_REQUEST_WATCH_WAKE_LIMIT - 1 });
     const result = evaluatePullRequestWatch(
@@ -419,5 +440,24 @@ describe("evaluatePullRequestWatch", () => {
     };
     assert.include(pullRequestWatchMessage({ ...input, instructions }).text, instructions);
     assert.notInclude(pullRequestWatchMessage(input).text, "standing instructions");
+  });
+
+  it("names the head its findings are about and tells the agent to confirm it", () => {
+    const report = evaluatePullRequestWatch(
+      watch(),
+      detail({ mergeability: "conflicting" }),
+      noRemarks,
+    );
+    const input = {
+      number: 7,
+      url: "https://github.com/pingdotgg/t3code/pull/7",
+      baseBranch: "main",
+      report,
+    };
+    assert.include(
+      pullRequestWatchMessage({ ...input, headSha: "aaaaaaaaaa" }).text,
+      "These findings are about aaaaaaa. Before acting, confirm the pull request head is still that commit",
+    );
+    assert.notInclude(pullRequestWatchMessage({ ...input, headSha: null }).text, "head is still");
   });
 });
