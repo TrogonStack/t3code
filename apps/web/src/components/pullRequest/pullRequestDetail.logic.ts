@@ -1065,7 +1065,7 @@ export type WatchDogStatus =
 
 export function resolveWatchDogStatus(
   detail: Pick<PullRequestDetailView, "checks" | "reviewThreads"> &
-    Partial<Pick<PullRequestDetailView, "reviewThreadsTruncated">>,
+    Partial<Pick<PullRequestDetailView, "reviewThreadsTruncated" | "commentsTruncated">>,
 ): WatchDogStatus {
   const failedChecks = detail.checks.filter(
     (check) =>
@@ -1079,7 +1079,11 @@ export function resolveWatchDogStatus(
   }
   const pendingChecks = detail.checks.filter((check) => check.status === "pending").length;
   if (pendingChecks > 0) return { kind: "pending", pendingChecks };
-  if (detail.checks.length === 0 || detail.reviewThreadsTruncated === true) {
+  if (
+    detail.checks.length === 0 ||
+    detail.reviewThreadsTruncated === true ||
+    detail.commentsTruncated === true
+  ) {
     return { kind: "unknown" };
   }
   return { kind: "clear" };

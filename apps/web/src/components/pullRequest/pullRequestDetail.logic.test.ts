@@ -1005,12 +1005,15 @@ describe("the watch dog", () => {
     ).toEqual(expected);
   });
 
-  it("does not claim clear when review threads were truncated", () => {
+  it.each([
+    ["review threads", { reviewThreadsTruncated: true }],
+    ["comments", { commentsTruncated: true }],
+  ] as const)("does not claim clear when %s were truncated", (_name, truncated) => {
     expect(
       resolveWatchDogStatus({
         checks: [check("success")],
         reviewThreads: [],
-        reviewThreadsTruncated: true,
+        ...truncated,
       }),
     ).toEqual({ kind: "unknown" });
   });

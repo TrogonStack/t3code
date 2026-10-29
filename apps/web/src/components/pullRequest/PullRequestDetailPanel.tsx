@@ -1297,6 +1297,7 @@ export function PullRequestDetailPanel({
             activity === null ||
             activityQuery.error !== null ||
             activity.reviewThreadsTruncated === true,
+          commentsTruncated: activity?.commentsTruncated ?? false,
         })}
         onWatch={startWatchDog}
       />
