@@ -988,13 +988,13 @@ describe("the watch dog", () => {
       "failed, cancelled, and action-required checks",
       ["failure", "cancelled", "action-required", "pending"],
       [],
-      { kind: "attention", failedChecks: 3, unresolvedThreads: 0 },
+      { kind: "attention", failedChecks: 3, unresolvedThreads: 0, changeRequests: 0 },
     ],
     [
       "an unresolved outdated thread",
       ["success"],
       [thread(false, true), thread(true)],
-      { kind: "attention", failedChecks: 0, unresolvedThreads: 1 },
+      { kind: "attention", failedChecks: 0, unresolvedThreads: 1, changeRequests: 0 },
     ],
   ] as const)("reports %s", (_name, statuses, threads, expected) => {
     expect(
@@ -1003,6 +1003,28 @@ describe("the watch dog", () => {
         reviewThreads: threads,
       }),
     ).toEqual(expected);
+  });
+
+  it("asks for attention while a reviewer's latest verdict requests changes", () => {
+    const review = (id: string, login: string, reviewState: string, day: number) =>
+      ({
+        id,
+        kind: "review",
+        author: { login },
+        reviewState,
+        createdAt: `2026-07-0${day}T00:00:00Z`,
+      }) as unknown as PullRequestComment;
+    expect(
+      resolveWatchDogStatus({
+        checks: [check("success")],
+        reviewThreads: [],
+        comments: [
+          review("a", "bilal", "CHANGES_REQUESTED", 1),
+          review("b", "octocat", "CHANGES_REQUESTED", 1),
+          review("c", "octocat", "APPROVED", 2),
+        ],
+      }),
+    ).toEqual({ kind: "attention", failedChecks: 0, unresolvedThreads: 0, changeRequests: 1 });
   });
 
   it.each([

@@ -1061,11 +1061,17 @@ export type WatchDogStatus =
       readonly kind: "attention";
       readonly failedChecks: number;
       readonly unresolvedThreads: number;
+      readonly changeRequests: number;
     };
 
 export function resolveWatchDogStatus(
   detail: Pick<PullRequestDetailView, "checks" | "reviewThreads"> &
-    Partial<Pick<PullRequestDetailView, "reviewThreadsTruncated" | "commentsTruncated">>,
+    Partial<
+      Pick<
+        PullRequestDetailView,
+        "reviewThreadsTruncated" | "commentsTruncated" | "comments" | "commits"
+      >
+    >,
 ): WatchDogStatus {
   const failedChecks = detail.checks.filter(
     (check) =>
@@ -1074,8 +1080,12 @@ export function resolveWatchDogStatus(
       check.status === "action-required",
   ).length;
   const unresolvedThreads = detail.reviewThreads.filter((thread) => !thread.isResolved).length;
-  if (failedChecks > 0 || unresolvedThreads > 0) {
-    return { kind: "attention", failedChecks, unresolvedThreads };
+  const changeRequests = latestPullRequestReviewOutcomes(
+    detail.comments ?? [],
+    detail.commits,
+  ).filter((entry) => entry.outcome === "changes-requested").length;
+  if (failedChecks > 0 || unresolvedThreads > 0 || changeRequests > 0) {
+    return { kind: "attention", failedChecks, unresolvedThreads, changeRequests };
   }
   const pendingChecks = detail.checks.filter((check) => check.status === "pending").length;
   if (pendingChecks > 0) return { kind: "pending", pendingChecks };

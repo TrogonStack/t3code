@@ -191,7 +191,7 @@ export function PullRequestResolveConflictsButton({
 function watchDogTooltip(status: WatchDogStatus): string {
   switch (status.kind) {
     case "clear":
-      return "All checks pass and no review threads are unresolved. Hand this to an agent to watch for later reviews.";
+      return "All checks pass, no review threads are unresolved, and no review requests changes. Hand this to an agent to watch for later reviews.";
     case "unknown":
       return "Checks or review threads have not fully loaded yet. Hand this to an agent to watch.";
     case "pending":
@@ -203,6 +203,9 @@ function watchDogTooltip(status: WatchDogStatus): string {
           : null,
         status.unresolvedThreads > 0
           ? `${status.unresolvedThreads} unresolved ${status.unresolvedThreads === 1 ? "thread" : "threads"}`
+          : null,
+        status.changeRequests > 0
+          ? `${status.changeRequests} ${status.changeRequests === 1 ? "review requests" : "reviews request"} changes`
           : null,
       ].filter((part) => part !== null);
       return `${parts.join(", ")}. Hand this to an agent to fix.`;
