@@ -158,7 +158,10 @@ function planRead(
     last.remarks !== fingerprint.remarks ||
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
-  return { detail: activity || last.status !== fingerprint.status || last.inFlight, activity };
+  // A conditional fingerprint already carries check and mergeability state, so in-flight work
+  // shows up as a status change there.
+  const settling = last.inFlight && fingerprint.conditional !== true;
+  return { detail: activity || last.status !== fingerprint.status || settling, activity };
 }
 
 function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatch): boolean {

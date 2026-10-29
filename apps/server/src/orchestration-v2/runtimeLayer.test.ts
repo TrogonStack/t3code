@@ -3492,6 +3492,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       let checkStatus: "pending" | "success" = "pending";
       let fingerprint: "conditional" | "graphql" | "paused" = "conditional";
+      let detailReads = 0;
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -3518,22 +3519,25 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                     }),
               invalidate: () => Effect.void,
               detail: () =>
-                Effect.succeed({
-                  ...watchedPullRequestDetail({
-                    projectId,
-                    number: 15,
-                    at: "2026-10-02T12:00:00.000Z",
-                  }),
-                  headSha: "6074dd48ff",
-                  checks: [
-                    {
-                      name: "lint",
-                      status: checkStatus,
-                      description: null,
-                      url: null,
-                      required: true,
-                    },
-                  ],
+                Effect.sync(() => {
+                  detailReads += 1;
+                  return {
+                    ...watchedPullRequestDetail({
+                      projectId,
+                      number: 15,
+                      at: "2026-10-02T12:00:00.000Z",
+                    }),
+                    headSha: "6074dd48ff",
+                    checks: [
+                      {
+                        name: "lint",
+                        status: checkStatus,
+                        description: null,
+                        url: null,
+                        required: true,
+                      },
+                    ],
+                  };
                 }),
               activity: () =>
                 Effect.succeed({
@@ -3550,6 +3554,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const delayAfterSweep = Effect.andThen(reactor.sweep, reactor.sweepDelayMs);
 
       assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
+      assert.equal(yield* delayAfterSweep, 30_000, "checks are still running");
+      assert.equal(detailReads, 1, "an unchanged conditional fingerprint needs no reread");
       fingerprint = "graphql";
       assert.equal(
         yield* delayAfterSweep,
