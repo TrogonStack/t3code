@@ -1293,7 +1293,10 @@ export function PullRequestDetailPanel({
         status={resolveWatchDogStatus({
           checks: checksStale ? [] : detail.checks,
           reviewThreads: activity?.reviewThreads ?? [],
-          reviewThreadsTruncated: activity === null || activity.reviewThreadsTruncated === true,
+          reviewThreadsTruncated:
+            activity === null ||
+            activityQuery.error !== null ||
+            activity.reviewThreadsTruncated === true,
         })}
         onWatch={startWatchDog}
       />
