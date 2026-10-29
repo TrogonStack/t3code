@@ -22,7 +22,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
@@ -38,6 +37,13 @@ import { evaluatePullRequestWatch, pullRequestWatchMessage } from "./pullRequest
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
+/**
+ * While checks run, a sweep of conditional fingerprints spends no quota when nothing moved, so
+ * it can follow CI closely. GitHub's secondary limits count requests, hence not faster.
+ */
+const ACTIVE_SWEEP_SECONDS = 30;
+/** A push starts checks that may not be listed yet, so keep the quick pace for a while. */
+const RECENT_PUSH_MS = 5 * 60_000;
 const READ_FAILURE_LIMIT = 8;
 /** Without fingerprints, reread quiet PRs on snapshot changes or this interval to catch edits. */
 const QUIET_REREAD_MS = 10 * 60_000;
@@ -78,6 +84,7 @@ interface LastRead {
   readonly at: number;
   readonly fingerprint: string;
   readonly inFlight: boolean;
+  readonly conditional: boolean;
   readonly remarksComplete: boolean;
   readonly watches: ReadonlySet<string>;
   readonly status: string | null;
@@ -176,6 +183,8 @@ export class PullRequestWatchReactor extends Context.Service<
   {
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     readonly sweep: Effect.Effect<void>;
+    /** How long to wait after the latest sweep before the next one. */
+    readonly sweepDelayMs: Effect.Effect<number>;
   }
 >()("t3/orchestration-v2/PullRequestWatchReactor") {}
 
@@ -522,6 +531,7 @@ export const make = Effect.gen(function* () {
           ? (threadTails.get(group.key)?.fetchedAt ?? now)
           : last.at,
       fingerprint: group.fingerprint,
+      conditional: fingerprint?.conditional === true,
       inFlight:
         detail.mergeability === "unknown" ||
         detail.checks.some((check) => check.status === "pending"),
@@ -554,6 +564,8 @@ export const make = Effect.gen(function* () {
       return watchesEqual(report.next, target.watch) ? Effect.void : record(target, report.next);
     });
   });
+
+  let nextSweepMs = SWEEP_MINUTES * 60_000;
 
   const sweep = Effect.gen(function* () {
     const threads = yield* projections.getThreadsWithPullRequests();
@@ -606,6 +618,7 @@ export const make = Effect.gen(function* () {
     const fingerprints = yield* Effect.forEach(groups, fingerprintOf, {
       concurrency: "unbounded",
     });
+    const paused = fingerprints.includes("paused");
     yield* Effect.forEach(
       groups,
       (group, index) => {
@@ -620,17 +633,35 @@ export const make = Effect.gen(function* () {
       },
       { concurrency: 4, discard: true },
     );
+    const now = yield* Clock.currentTimeMillis;
+    const quick =
+      !paused &&
+      groups.some((group) => {
+        const last = lastReads.get(group.key);
+        return (
+          last?.conditional === true &&
+          (last.inFlight ||
+            group.targets.some((target) => now - lifeOf(target).pushedAt < RECENT_PUSH_MS))
+        );
+      });
+    nextSweepMs = quick ? ACTIVE_SWEEP_SECONDS * 1000 : SWEEP_MINUTES * 60_000;
   }).pipe(
     Effect.catchCause(logFailure("pull request watch sweep failed", {})),
     Effect.withSpan("PullRequestWatchReactor.sweep"),
   );
 
+  const sweepDelayMs = Effect.sync(() => nextSweepMs);
+
   const start: PullRequestWatchReactor["Service"]["start"] = () =>
     forkParked(
-      sweep.pipe(Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)), Effect.asVoid),
+      sweep.pipe(
+        Effect.andThen(Effect.flatMap(sweepDelayMs, Effect.sleep)),
+        Effect.forever,
+        Effect.asVoid,
+      ),
     );
 
-  return { start, sweep } satisfies PullRequestWatchReactor["Service"];
+  return { start, sweep, sweepDelayMs } satisfies PullRequestWatchReactor["Service"];
 });
 
 export const layer = Layer.effect(PullRequestWatchReactor, make);

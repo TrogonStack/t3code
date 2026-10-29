@@ -1,3 +1,4 @@
+import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -3447,6 +3448,128 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         commandId: CommandId.make("pr-watch-no-checks-end"),
         threadId,
         ...key,
+        watching: false,
+      });
+    }),
+  );
+
+  it.effect("sweeps quickly only while checks run and the fingerprint is conditional", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-cadence");
+      const projectId = ProjectId.make("pr-watch-cadence-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch cadence",
+        workspaceRoot: "/workspace/watch-cadence",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-cadence-create"),
+        threadId,
+        projectId,
+        title: "Watch cadence",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-cadence-start"),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 15,
+        watching: true,
+        link: { url: "https://github.com/pingdotgg/t3code/pull/15", source: "agent" },
+      });
+
+      let checkStatus: "pending" | "success" = "pending";
+      let fingerprint: "conditional" | "graphql" | "paused" = "conditional";
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            Layer.mock(PullRequestService.PullRequestService)({
+              watchFingerprint: () =>
+                fingerprint === "paused"
+                  ? Effect.fail(
+                      new PullRequestOperationError({
+                        operation: "watchFingerprint",
+                        detail: "Rate limited",
+                        cause: new PullRequestProviderError({
+                          provider: SourceControlProviderKind.make("github"),
+                          operation: "getChangeRequestWatchFingerprint",
+                          reason: "rate-limited",
+                          detail: "Rate limited",
+                        }),
+                      }),
+                    )
+                  : Effect.succeed({
+                      status: checkStatus,
+                      remarks: "0",
+                      ...(fingerprint === "conditional" ? { conditional: true as const } : {}),
+                    }),
+              invalidate: () => Effect.void,
+              detail: () =>
+                Effect.succeed({
+                  ...watchedPullRequestDetail({
+                    projectId,
+                    number: 15,
+                    at: "2026-10-02T12:00:00.000Z",
+                  }),
+                  headSha: "6074dd48ff",
+                  checks: [
+                    {
+                      name: "lint",
+                      status: checkStatus,
+                      description: null,
+                      url: null,
+                      required: true,
+                    },
+                  ],
+                }),
+              activity: () =>
+                Effect.succeed({
+                  comments: [],
+                  commentCount: 0,
+                  commentsTruncated: false,
+                  reviewThreads: [],
+                  commits: [],
+                }),
+            }),
+          ),
+        ),
+      );
+      const delayAfterSweep = Effect.andThen(reactor.sweep, reactor.sweepDelayMs);
+
+      assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
+      fingerprint = "graphql";
+      assert.equal(
+        yield* delayAfterSweep,
+        120_000,
+        "reading costs quota without a conditional fingerprint",
+      );
+      fingerprint = "paused";
+      assert.equal(yield* delayAfterSweep, 120_000, "the host is rate limited");
+      fingerprint = "conditional";
+      checkStatus = "success";
+      yield* TestClock.adjust("10 minutes");
+      assert.equal(yield* delayAfterSweep, 120_000, "nothing is in flight");
+
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-cadence-end"),
+        threadId,
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 15,
         watching: false,
       });
     }),

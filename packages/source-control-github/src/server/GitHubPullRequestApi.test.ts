@@ -1137,6 +1137,164 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  {
+    const pull = (fields: Record<string, unknown> = {}) =>
+      encodeJson({
+        state: "open",
+        merged_at: null,
+        mergeable: true,
+        mergeable_state: "blocked",
+        updated_at: "2026-10-01T00:00:00Z",
+        comments: 1,
+        review_comments: 2,
+        head: { sha: "abc123" },
+        ...fields,
+      });
+    const runs = encodeJson({
+      check_runs: [
+        { status: "completed", conclusion: "success" },
+        { status: "in_progress", conclusion: null },
+      ],
+    });
+    const statuses = encodeJson({ statuses: [{ state: "success" }] });
+    const read = Effect.flatMap(GitHubPullRequestApi.GitHubPullRequestApi, (cli) =>
+      cli.getPullRequestWatchFingerprint({ ...pullRequestInput, repository: "acme/watch" }),
+    );
+    const answerFrom = (
+      bodies: Readonly<Record<"pulls" | "check-runs" | "status", string>>,
+      revalidated: boolean,
+    ) =>
+      mockedExecute.mockImplementation((call) => {
+        assert.strictEqual(call.kind, "rest");
+        const kind = (["check-runs", "status"] as const).find((name) =>
+          call.kind === "rest" ? call.path.includes(`/${name}?`) : false,
+        );
+        return Effect.succeed(
+          revalidated && call.kind === "rest" && call.ifNoneMatch !== undefined
+            ? output("", false, false, {}, 304)
+            : output(bodies[kind ?? "pulls"], false, false, { etag: `W/"${kind ?? "pulls"}"` }),
+        );
+      });
+
+    it.effect("costs no quota while nothing moved, and reads again when it did", () =>
+      Effect.gen(function* () {
+        answerFrom({ pulls: pull(), "check-runs": runs, status: statuses }, true);
+        const first = yield* read;
+        const second = yield* read;
+        assert.deepStrictEqual(second, first);
+        assert.deepStrictEqual(first, {
+          status: "OPEN MERGEABLE blocked abc123 in_progress:1,success:1 success:1",
+          remarks: "1 2 2026-10-01T00:00:00Z",
+          conditional: true,
+        });
+        expect(mockedExecute).toHaveBeenCalledTimes(6);
+        for (const index of [0, 1, 2]) expect(callAt(index)).not.toHaveProperty("ifNoneMatch");
+        for (const index of [3, 4, 5]) {
+          expect(callAt(index)).toMatchObject({ ifNoneMatch: expect.stringContaining("W/") });
+        }
+
+        answerFrom(
+          {
+            pulls: pull({ comments: 2, updated_at: "2026-10-01T00:05:00Z" }),
+            "check-runs": runs,
+            status: statuses,
+          },
+          false,
+        );
+        const edited = yield* read;
+        assert.strictEqual(edited?.remarks, "2 2 2026-10-01T00:05:00Z");
+        assert.strictEqual(edited?.status, first?.status);
+      }),
+    );
+
+    it.effect("moves the status when checks change under an unchanged pull request", () =>
+      Effect.gen(function* () {
+        answerFrom({ pulls: pull(), "check-runs": runs, status: statuses }, false);
+        const before = yield* read;
+        answerFrom(
+          {
+            pulls: pull(),
+            "check-runs": encodeJson({
+              check_runs: [{ status: "completed", conclusion: "failure" }],
+            }),
+            status: statuses,
+          },
+          false,
+        );
+        const after = yield* read;
+        assert.notStrictEqual(after?.status, before?.status);
+        assert.strictEqual(after?.remarks, before?.remarks);
+      }),
+    );
+
+    it.effect("falls back to GraphQL when REST cannot answer", () =>
+      Effect.gen(function* () {
+        mockedExecute.mockImplementation((call) =>
+          call.kind === "rest"
+            ? Effect.fail(
+                new GitHubRequestPolicy.GitHubApiNotFoundError({
+                  host: "github.com",
+                  operation: "getPullRequestWatchFingerprint",
+                }),
+              )
+            : Effect.succeed(
+                output(
+                  encodeJson({
+                    data: {
+                      _0_repository: {
+                        pullRequest: {
+                          state: "OPEN",
+                          mergeable: "MERGEABLE",
+                          headRefOid: "abc123",
+                          comments: { totalCount: 0, nodes: [] },
+                          reviews: { totalCount: 0, nodes: [] },
+                          reviewThreads: { totalCount: 0 },
+                          commits: { nodes: [] },
+                        },
+                      },
+                    },
+                  }),
+                ),
+              ),
+        );
+        const fingerprint = yield* read.pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        const result = yield* Fiber.join(fingerprint);
+        assert.isDefined(result);
+        assert.notProperty(result, "conditional");
+        expect(restCallsTo("pulls/7")).toHaveLength(1);
+
+        // The host is remembered as unsupported, so the next read goes straight to GraphQL.
+        const again = yield* read.pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        yield* Fiber.join(again);
+        expect(restCallsTo("pulls/7")).toHaveLength(1);
+      }),
+    );
+
+    it.effect("falls back to GraphQL when the checks span more than one page", () =>
+      Effect.gen(function* () {
+        mockedExecute.mockImplementation((call) =>
+          call.kind === "rest"
+            ? Effect.succeed(
+                call.path.includes("/check-runs?")
+                  ? output(runs, false, false, {
+                      etag: 'W/"runs"',
+                      link: '<https://api.github.com/x?page=2>; rel="next"',
+                    })
+                  : call.path.includes("/status?")
+                    ? output(statuses, false, false, { etag: 'W/"status"' })
+                    : output(pull(), false, false, { etag: 'W/"pull"' }),
+              )
+            : Effect.succeed(output('{"data":{"_0_repository":{"pullRequest":null}}}')),
+        );
+        const fingerprint = yield* read.pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        assert.isNull(yield* Fiber.join(fingerprint));
+      }),
+    );
+  }
+
   it.effect("reads a host that refuses the stacks preview as not stacked", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
