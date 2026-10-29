@@ -5,6 +5,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   SecretProviderId,
+  SecretProviderKind,
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -26,6 +27,24 @@ import {
 const FOLDED_SERVER_SETTINGS = { ...DEFAULT_SERVER_SETTINGS, projectSettingsFolded: true };
 
 describe("fallbackTextGenerationModelSelection", () => {
+  it("replaces and clears the fallback without carrying model options", () => {
+    const fallbackModelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "new" };
+    const settings = applyServerSettingsPatch(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        fallbackModelSelection: {
+          ...fallbackModelSelection,
+          model: "old",
+          options: [{ id: "effort", value: "high" }],
+        },
+      },
+      { fallbackModelSelection },
+    );
+    expect(settings.fallbackModelSelection).toEqual(fallbackModelSelection);
+    expect(
+      applyServerSettingsPatch(settings, { fallbackModelSelection: null }).fallbackModelSelection,
+    ).toBeNull();
+  });
   it("ignores a configured non-default instance at machine scope, matching no fallback", () => {
     const configured = ProviderInstanceId.make("codex_work");
     const providerInstances = {
@@ -531,6 +550,12 @@ describe("serverSettings helpers", () => {
   it("upserts and removes secretProviders per entry so concurrent edits cannot clobber", () => {
     const personal = SecretProviderId.make("personal");
     const homelab = SecretProviderId.make("homelab");
+    const work = SecretProviderId.make("work");
+    const onePassword = (label: string, account: string) => ({
+      kind: SecretProviderKind.make("one_password"),
+      label,
+      config: { account: OnePasswordAccount.make(account) },
+    });
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       secretProviders: {
@@ -551,12 +576,13 @@ describe("serverSettings helpers", () => {
           mount: "secret",
           auth: "token",
         },
+        [work]: onePassword("Work", "team.1password.com"),
       },
     });
-    expect(Object.keys(added.secretProviders)).toEqual([personal, homelab]);
+    expect(Object.keys(added.secretProviders)).toEqual([personal, homelab, work]);
 
     const removed = applyServerSettingsPatch(added, { secretProviders: { [personal]: null } });
-    expect(Object.keys(removed.secretProviders)).toEqual([homelab]);
+    expect(Object.keys(removed.secretProviders)).toEqual([homelab, work]);
   });
 
   it("replaces and removes individual usage prices without clobbering other models", () => {

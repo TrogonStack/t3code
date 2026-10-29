@@ -6,32 +6,77 @@ import {
   OpenBaoAddress,
   OpenBaoAuth,
   OpenBaoMount,
+  OnePasswordSecretProviderConfig,
   OpenBaoNamespace,
   SecretProviderId,
   SecretProviderLabel,
-  type SecretProviderConfig,
-  type SecretProviderKind,
+  isFlatSecretProviderConfig,
+  type FlatSecretProviderConfig,
+  type FlatSecretProviderKind,
+  type StoredSecretProviderConfig,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<SecretProviderKind, string>> = {
+const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<FlatSecretProviderKind, string>> = {
   "1password": "1Password",
   openbao: "OpenBao",
   "aws-secrets-manager": "AWS Secrets Manager",
 };
 
-export const SECRET_PROVIDER_REFERENCE_PLACEHOLDERS: Readonly<Record<SecretProviderKind, string>> =
-  {
-    "1password": "op://Private/OpenAI/credential",
-    openbao: "apps/openai#api_key",
-    "aws-secrets-manager": "prod/openai#api_key",
-  };
+export const SECRET_PROVIDER_REFERENCE_PLACEHOLDERS: Readonly<
+  Record<FlatSecretProviderKind, string>
+> = {
+  "1password": "op://Private/OpenAI/credential",
+  openbao: "apps/openai#api_key",
+  "aws-secrets-manager": "prod/openai#api_key",
+};
 
 export const DEFAULT_OPENBAO_MOUNT = "secret";
 
+const decodeOnePasswordConfig = Schema.decodeUnknownOption(OnePasswordSecretProviderConfig);
+
+export type ClassifiedSecretProvider =
+  | { readonly kind: "flat"; readonly config: FlatSecretProviderConfig }
+  | { readonly kind: "one_password"; readonly account: OnePasswordAccount }
+  | { readonly kind: "unsupported" };
+
+/** Unknown kinds and configs that no longer decode are shown read-only; removal stays available. */
+export function classifySecretProvider(
+  provider: StoredSecretProviderConfig,
+): ClassifiedSecretProvider {
+  if (isFlatSecretProviderConfig(provider)) return { kind: "flat", config: provider };
+  if (provider.kind !== "one_password") return { kind: "unsupported" };
+  const decoded = decodeOnePasswordConfig(provider.config);
+  return decoded._tag === "Some"
+    ? { kind: "one_password", account: decoded.value.account }
+    : { kind: "unsupported" };
+}
+
+/** The kind shown next to a provider: an upstream `one_password` envelope reads as 1Password. */
+export function secretProviderDisplayKind(
+  provider: StoredSecretProviderConfig | undefined,
+): FlatSecretProviderKind | undefined {
+  if (provider === undefined) return undefined;
+  const classified = classifySecretProvider(provider);
+  switch (classified.kind) {
+    case "flat":
+      return classified.config.kind;
+    case "one_password":
+      return "1password";
+    case "unsupported":
+      return undefined;
+  }
+}
+
 /** One line naming the kind and where it reads from, for rows and pickers. */
-export function secretProviderSummary(config: SecretProviderConfig): string {
+export function secretProviderSummary(provider: StoredSecretProviderConfig): string {
+  const classified = classifySecretProvider(provider);
+  if (classified.kind === "one_password") {
+    return `${SECRET_PROVIDER_KIND_LABELS["1password"]} · ${classified.account}`;
+  }
+  if (classified.kind === "unsupported") return provider.kind;
+  const config = classified.config;
   const kind = SECRET_PROVIDER_KIND_LABELS[config.kind];
   switch (config.kind) {
     case "1password":
@@ -50,7 +95,7 @@ const decodeOnePasswordSecretReference = Schema.decodeResult(OnePasswordSecretRe
  * mistake before the provider starts and silently gets no value.
  */
 export function secretProviderReferenceIssue(
-  kind: SecretProviderKind,
+  kind: FlatSecretProviderKind,
   reference: string,
 ): string | undefined {
   switch (kind) {
@@ -92,7 +137,7 @@ export function secretProviderIdFromName(name: string): SecretProviderId | null 
 }
 
 export interface SecretProviderDraft {
-  readonly kind: SecretProviderKind;
+  readonly kind: FlatSecretProviderKind;
   readonly name: string;
   readonly account: string;
   readonly address: string;
@@ -119,7 +164,18 @@ export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
   profile: "",
 };
 
-export function secretProviderDraftFromConfig(config: SecretProviderConfig): SecretProviderDraft {
+export function secretProviderDraftFromConfig(
+  provider: StoredSecretProviderConfig,
+): SecretProviderDraft {
+  const classified = classifySecretProvider(provider);
+  if (classified.kind !== "flat") {
+    return {
+      ...EMPTY_SECRET_PROVIDER_DRAFT,
+      name: provider.label,
+      account: classified.kind === "one_password" ? classified.account : "",
+    };
+  }
+  const config = classified.config;
   const base = { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: config.kind, name: config.label };
   switch (config.kind) {
     case "1password":
@@ -167,6 +223,9 @@ export type SecretProviderDraftField =
 export type SecretProviderDraftIssues = Partial<Readonly<Record<SecretProviderDraftField, string>>>;
 
 /**
+ * Fork follow-up: drafts still produce flat entries; emit upstream's `one_password` envelope once
+ * upstream resolves it end to end and carries OpenBao and AWS kinds.
+ *
  * The settings entry a draft adds or replaces, or every field that blocks it. Only the
  * fields of the draft's kind are checked, and each field reports one message.
  */
@@ -175,7 +234,7 @@ export function secretProviderFromDraft(
   existingIds: ReadonlySet<string>,
   target: SecretProviderTarget,
 ): Result.Result<
-  { readonly id: SecretProviderId; readonly config: SecretProviderConfig },
+  { readonly id: SecretProviderId; readonly config: FlatSecretProviderConfig },
   SecretProviderDraftIssues
 > {
   const issues: { -readonly [Field in SecretProviderDraftField]?: string } = {};

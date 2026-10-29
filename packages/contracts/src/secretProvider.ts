@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { OnePasswordAccount } from "./onePassword.ts";
-import { SecretProviderId } from "./secretProviderId.ts";
+import { SecretProviderId, SecretProviderKind } from "./secretProviderId.ts";
 import { secretSetting } from "./settingsSecret.ts";
 
 const SECRET_PROVIDER_LABEL_MAX_CHARS = 64;
@@ -101,12 +101,13 @@ export const AwsProfile = TrimmedNonEmptyString.check(
 );
 export type AwsProfile = typeof AwsProfile.Type;
 
-export const OnePasswordSecretProviderConfig = Schema.Struct({
+/** The fork's flat 1Password entry; upstream's envelope carries the same account as `OnePasswordSecretProviderConfig`. */
+export const FlatOnePasswordSecretProviderConfig = Schema.Struct({
   kind: Schema.Literal("1password"),
   label: SecretProviderLabel,
   account: OnePasswordAccount,
 });
-export type OnePasswordSecretProviderConfig = typeof OnePasswordSecretProviderConfig.Type;
+export type FlatOnePasswordSecretProviderConfig = typeof FlatOnePasswordSecretProviderConfig.Type;
 
 export const OpenBaoSecretProviderConfig = Schema.Struct({
   kind: Schema.Literal("openbao"),
@@ -134,15 +135,97 @@ export const AwsSecretsManagerSecretProviderConfig = Schema.Struct({
 export type AwsSecretsManagerSecretProviderConfig =
   typeof AwsSecretsManagerSecretProviderConfig.Type;
 
-export const SecretProviderConfig = Schema.Union([
-  OnePasswordSecretProviderConfig,
+// Fork follow-up: the flat kinds below should converge on the `{ kind, label, config }` envelope
+// (`one_password` and friends) once upstream resolves them and adds OpenBao and AWS kinds.
+export const FlatSecretProviderConfig = Schema.Union([
+  FlatOnePasswordSecretProviderConfig,
   OpenBaoSecretProviderConfig,
   AwsSecretsManagerSecretProviderConfig,
 ]);
+export type FlatSecretProviderConfig = typeof FlatSecretProviderConfig.Type;
+
+export const FlatSecretProviderKind = Schema.Literals([
+  "1password",
+  "openbao",
+  "aws-secrets-manager",
+]);
+export type FlatSecretProviderKind = FlatSecretProviderConfig["kind"];
+
+const isFlatSecretProviderKindValue = Schema.is(FlatSecretProviderKind);
+
+function isFlatSecretProviderKind(kind: string): kind is FlatSecretProviderKind {
+  return isFlatSecretProviderKindValue(kind);
+}
+
+/** A flat entry keeps its fields beside `kind`; a `config` key makes it an envelope even when the kind collides. */
+export function isFlatSecretProviderConfig(
+  config: StoredSecretProviderConfig,
+): config is FlatSecretProviderConfig {
+  return isFlatSecretProviderKind(config.kind) && !Object.hasOwn(config, "config");
+}
+
+export const OnePasswordSecretProviderConfig = Schema.Struct({
+  account: OnePasswordAccount,
+});
+export type OnePasswordSecretProviderConfig = typeof OnePasswordSecretProviderConfig.Type;
+
+/** Kinds decode their own config; unknown-kind envelopes round-trip verbatim across versions. */
+export const SecretProviderConfig = Schema.Struct({
+  kind: SecretProviderKind,
+  label: TrimmedNonEmptyString,
+  config: Schema.optionalKey(Schema.Unknown),
+});
 export type SecretProviderConfig = typeof SecretProviderConfig.Type;
 
-export const SecretProviderKind = Schema.Literals(["1password", "openbao", "aws-secrets-manager"]);
-export type SecretProviderKind = SecretProviderConfig["kind"];
+/** Kinds this build can resolve. Their `config` holds no credentials, so clients may read it. */
+const SECRET_PROVIDER_KIND_CONFIG_GUARDS: Readonly<Record<string, (config: unknown) => boolean>> = {
+  one_password: Schema.is(OnePasswordSecretProviderConfig),
+};
+
+export function isKnownSecretProviderKind(kind: string): boolean {
+  return Object.hasOwn(SECRET_PROVIDER_KIND_CONFIG_GUARDS, kind);
+}
+
+// Limits that may change later are enforced on writes only, never on the stored envelope.
+// Writes must be a kind this build knows with a config it accepts, so an older server
+// rejects a newer kind instead of storing what it cannot check.
+export const SecretProviderConfigWrite = Schema.Struct({
+  ...SecretProviderConfig.fields,
+  label: SecretProviderLabel,
+}).check(
+  Schema.makeFilter((entry) => {
+    if (!isKnownSecretProviderKind(entry.kind)) {
+      return `Unsupported secret provider kind: ${entry.kind}.`;
+    }
+    return SECRET_PROVIDER_KIND_CONFIG_GUARDS[entry.kind]!(entry.config)
+      ? true
+      : `Invalid ${entry.kind} secret provider config.`;
+  }),
+);
+
+// A fork kind that fails its own member must fail here instead of degrading into an envelope
+// that drops its fields. Only an entry carrying `config` is a genuine envelope of a colliding kind.
+const SecretProviderEnvelope = SecretProviderConfig.check(
+  Schema.makeFilter((entry) =>
+    isFlatSecretProviderKind(entry.kind) && entry.config === undefined
+      ? `Invalid ${entry.kind} secret provider config.`
+      : true,
+  ),
+);
+
+/** What `settings.secretProviders` stores: the fork's flat entries, tried first, or an upstream envelope. */
+export const StoredSecretProviderConfig = Schema.Union([
+  ...FlatSecretProviderConfig.members,
+  SecretProviderEnvelope,
+]);
+export type StoredSecretProviderConfig = typeof StoredSecretProviderConfig.Type;
+
+/** What a settings patch may write for one provider. */
+export const SecretProviderConfigPatch = Schema.Union([
+  ...FlatSecretProviderConfig.members,
+  SecretProviderConfigWrite,
+]);
+export type SecretProviderConfigPatch = typeof SecretProviderConfigPatch.Type;
 
 /**
  * A secret's location inside a named provider: `op://vault/item/field` for

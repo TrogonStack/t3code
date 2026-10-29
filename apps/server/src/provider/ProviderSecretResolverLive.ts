@@ -9,6 +9,8 @@ import {
   type AwsSecretsManagerSecretProviderConfig,
   OnePasswordAccount,
   OnePasswordAccountSummary,
+  OnePasswordSecretProviderConfig,
+  isFlatSecretProviderConfig,
   type OpenBaoSecretProviderConfig,
   type SecretProviderId,
 } from "@t3tools/contracts";
@@ -483,6 +485,17 @@ const describeSecret = (secret: ProviderSecretReference) =>
     ? { reference: secret.reference, account: secret.account }
     : { reference: secret.reference, provider: secret.provider };
 
+// Fork follow-up: fold the flat `1password` kind into this envelope once upstream resolves secrets itself.
+const decodeOnePasswordEnvelopeConfig = Schema.decodeUnknownOption(OnePasswordSecretProviderConfig);
+
+/** The account of an upstream `one_password` envelope, or `undefined` for any other kind or an undecodable config. */
+const envelopeOnePasswordAccount = (entry: { readonly kind: string; readonly config?: unknown }) =>
+  entry.kind === "one_password"
+    ? Option.getOrUndefined(
+        Option.map(decodeOnePasswordEnvelopeConfig(entry.config), (config) => config.account),
+      )
+    : undefined;
+
 export const ProviderSecretResolverLive = Layer.effect(
   ProviderSecretResolver,
   Effect.gen(function* () {
@@ -511,6 +524,20 @@ export const ProviderSecretResolverLive = Layer.effect(
           reference,
         });
         return unreadable("Secret provider is not configured");
+      }
+      if (!isFlatSecretProviderConfig(config)) {
+        const account = envelopeOnePasswordAccount(config);
+        if (account === undefined) {
+          yield* Effect.logWarning(
+            "Provider secret names a secret provider kind that is not supported",
+            {
+              provider,
+              kind: config.kind,
+            },
+          );
+          return unreadable("Secret provider kind is not supported");
+        }
+        return yield* readOnePasswordSecret(new OnePasswordSecretReference({ reference, account }));
       }
       switch (config.kind) {
         case "1password":
@@ -657,7 +684,11 @@ export const ProviderSecretResolverLive = Layer.effect(
           return Effect.succeed(reference.account);
         case "secret-provider":
           return secretProviderConfig(reference.provider).pipe(
-            Effect.map((config) => (config?.kind === "1password" ? config.account : undefined)),
+            Effect.map((config) => {
+              if (config === undefined) return undefined;
+              if (!isFlatSecretProviderConfig(config)) return envelopeOnePasswordAccount(config);
+              return config.kind === "1password" ? config.account : undefined;
+            }),
           );
       }
     };

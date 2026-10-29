@@ -36,10 +36,21 @@ out of each variable.
 
 ## Upstream considerations
 
-Upstream has no secret-store integration, so this builds on the one we already
-carry (0016) and shares its argument: whether to carry any secret-store
-integration at all. A new kind of store is a new kind of provider, not a new
-concept.
+Upstream now carries a first slice of named secret providers: settings-only
+1Password providers stored as a kind, a label, and a kind-specific config. It
+does not read secrets from them yet and has no OpenBao or AWS kinds. The fork
+accepts both shapes. Providers it already stores keep their flat shape and
+behave as before, and providers written in upstream's shape are listed and read
+from the same way, so settings move freely between the fork and upstream.
+
+The flat kinds are a pending convergence: once upstream resolves secrets and
+adds more kinds, the fork should store its providers in upstream's shape and
+drop the flat one. Until then, the Secrets page is always on in the fork,
+where upstream gates it behind a feature flag.
+
+Beyond that, this builds on the secret-store integration we already carry
+(0016) and shares its argument: whether to carry any secret-store integration
+at all. A new kind of store is a new kind of provider, not a new concept.
 
 The rebase burden is small beyond what 0016 already costs. It adds a settings
 section and a page, so a sync that reshapes settings navigation or the provider
