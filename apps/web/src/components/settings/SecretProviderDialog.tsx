@@ -1,9 +1,9 @@
 import type {
   EnvironmentId,
+  FlatSecretProviderKind,
   OpenBaoAuth,
-  SecretProviderConfig,
   SecretProviderId,
-  SecretProviderKind,
+  StoredSecretProviderConfig,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
@@ -42,19 +42,22 @@ import {
 import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
-const KIND_OPTIONS: ReadonlyArray<{ readonly kind: SecretProviderKind; readonly label: string }> = [
+const KIND_OPTIONS: ReadonlyArray<{
+  readonly kind: FlatSecretProviderKind;
+  readonly label: string;
+}> = [
   { kind: "1password", label: "1Password CLI" },
   { kind: "openbao", label: "OpenBao" },
   { kind: "aws-secrets-manager", label: "AWS Secrets Manager" },
 ];
 
-const NAME_PLACEHOLDERS: Readonly<Record<SecretProviderKind, string>> = {
+const NAME_PLACEHOLDERS: Readonly<Record<FlatSecretProviderKind, string>> = {
   "1password": "Personal",
   openbao: "Homelab",
   "aws-secrets-manager": "Production",
 };
 
-function SecretProviderKindLabel({ kind }: { readonly kind: SecretProviderKind }) {
+function SecretProviderKindLabel({ kind }: { readonly kind: FlatSecretProviderKind }) {
   const label = KIND_OPTIONS.find((option) => option.kind === kind)?.label;
   return (
     <span className="flex items-center gap-2">
@@ -104,7 +107,10 @@ export function SecretProviderDialog({
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   readonly existingIds: ReadonlySet<string>;
-  readonly existing?: { readonly id: SecretProviderId; readonly config: SecretProviderConfig };
+  readonly existing?: {
+    readonly id: SecretProviderId;
+    readonly config: StoredSecretProviderConfig;
+  };
 }) {
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [draft, setDraft] = useState<SecretProviderDraft>(
@@ -435,6 +441,7 @@ export function SecretProviderDialog({
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
                 readOnly={existing !== undefined}
+                maxLength={64}
                 aria-invalid={nameError !== undefined}
                 aria-describedby={
                   nameError !== undefined ? "secret-provider-name-error" : undefined

@@ -7,10 +7,10 @@ import {
   isSecretProviderSecretSource,
   type EnvironmentId,
   type ProviderSecretSource,
-  type SecretProviderConfig,
-  type SecretProviderKind,
+  type FlatSecretProviderKind,
   type SecretProviderSecretSource,
   type SettingsSecretValue,
+  type StoredSecretProviderConfig,
   type UnifiedSettings,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
@@ -39,6 +39,7 @@ import {
   SECRET_PROVIDER_REFERENCE_PLACEHOLDERS,
   secretProviderReferenceIssue,
   secretProviderSummary,
+  secretProviderDisplayKind,
 } from "./SecretProviderDialog.logic";
 import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
@@ -72,13 +73,13 @@ type EnvironmentSourceOption = {
   readonly label: string;
   readonly detail?: string;
   readonly secret: boolean;
-  readonly kind?: SecretProviderKind;
+  readonly kind?: FlatSecretProviderKind;
 };
 
 function lookupSecretProvider(
   secretProviders: SecretProviders,
   id: string,
-): SecretProviderConfig | undefined {
+): StoredSecretProviderConfig | undefined {
   return Object.hasOwn(secretProviders, id)
     ? secretProviders[SecretProviderId.make(id)]
     : undefined;
@@ -94,13 +95,16 @@ function environmentSourceOptions(
 ): ReadonlyArray<EnvironmentSourceOption> {
   const options: EnvironmentSourceOption[] = [
     { value: PLAIN_SOURCE_OPTION, label: "Value", secret: false },
-    ...Object.entries(secretProviders).map(([id, config]) => ({
-      value: `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${id}`,
-      label: config.label,
-      detail: secretProviderSummary(config),
-      secret: true,
-      kind: config.kind,
-    })),
+    ...Object.entries(secretProviders).map(([id, config]) => {
+      const kind = secretProviderDisplayKind(config);
+      return {
+        value: `${SECRET_PROVIDER_SOURCE_OPTION_PREFIX}${id}`,
+        label: config.label,
+        detail: secretProviderSummary(config),
+        secret: true,
+        ...(kind === undefined ? {} : { kind }),
+      };
+    }),
   ];
   if (
     row.source === "secret-provider" &&
@@ -208,7 +212,8 @@ export function referencePlaceholderFor(
   return row.source === "1password"
     ? SECRET_PROVIDER_REFERENCE_PLACEHOLDERS["1password"]
     : SECRET_PROVIDER_REFERENCE_PLACEHOLDERS[
-        lookupSecretProvider(secretProviders, row.provider)?.kind ?? "1password"
+        secretProviderDisplayKind(lookupSecretProvider(secretProviders, row.provider)) ??
+          "1password"
       ];
 }
 
@@ -261,8 +266,9 @@ function secretProviderSourceFromDraft(
   const reference = decodeSecretProviderReference(row.reference);
   if (Result.isFailure(reference)) return Result.fail(reference.failure.message);
   const config = lookupSecretProvider(secretProviders, row.provider);
+  const kind = secretProviderDisplayKind(config);
   const issue =
-    config === undefined ? undefined : secretProviderReferenceIssue(config.kind, reference.success);
+    kind === undefined ? undefined : secretProviderReferenceIssue(kind, reference.success);
   if (issue !== undefined) return Result.fail(issue);
   return Result.succeed({
     kind: "secret-provider",

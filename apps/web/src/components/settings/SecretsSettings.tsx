@@ -1,7 +1,7 @@
 import type {
-  SecretProviderConfig,
+  FlatSecretProviderKind,
   SecretProviderId,
-  SecretProviderKind,
+  StoredSecretProviderConfig,
 } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
@@ -20,17 +20,25 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { SecretProviderDialog } from "./SecretProviderDialog";
-import { secretProviderSummary } from "./SecretProviderDialog.logic";
+import {
+  classifySecretProvider,
+  secretProviderDisplayKind,
+  secretProviderSummary,
+} from "./SecretProviderDialog.logic";
 import {
   classifyProviderEnvironmentAccess,
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
-function secretProviderDescription(config: SecretProviderConfig): string {
+function secretProviderDescription(provider: StoredSecretProviderConfig): string {
+  const classified = classifySecretProvider(provider);
+  if (classified.kind !== "flat") return secretProviderSummary(provider);
+  const config = classified.config;
   switch (config.kind) {
     case "1password":
       return secretProviderSummary(config);
@@ -49,17 +57,24 @@ function secretProviderDescription(config: SecretProviderConfig): string {
   }
 }
 
-/** Secret providers belong to one environment, so this page shows the representative one. */
 export function SecretsSettingsPanel() {
-  const { scope, environment, connectedEnvironments } = useSettingsScope();
-  const aggregate = scope.environmentIds.length !== 1 && connectedEnvironments.length > 1;
+  const { scope, environment } = useSettingsScope();
+  const connected = environment?.connection.phase === "connected";
   return (
     <SettingsPageContainer>
-      {environment?.connection.phase === "connected" ? (
+      {connected &&
+      environment.serverConfig !== null &&
+      environment.serverConfig.secretProviderSettings !== true ? (
+        <SettingsSection {...searchableSetting("secret-providers")}>
+          <p className="px-4 py-3 text-sm text-muted-foreground">
+            Update T3 Code on {environment.label} to manage its secret providers.
+          </p>
+        </SettingsSection>
+      ) : connected ? (
         <EnvironmentSecretProviders
           key={environment.environmentId}
           environment={environment}
-          titleSuffix={aggregate ? ` · ${environment.label}` : ""}
+          projectScoped={scope.kind === "project" || scope.kind === "checkout"}
         />
       ) : (
         <SettingsSection {...searchableSetting("secret-providers")}>
@@ -74,10 +89,10 @@ export function SecretsSettingsPanel() {
 
 function EnvironmentSecretProviders({
   environment,
-  titleSuffix,
+  projectScoped,
 }: {
   readonly environment: EnvironmentPresentation;
-  readonly titleSuffix: string;
+  readonly projectScoped: boolean;
 }) {
   const environmentId = environment.environmentId;
   const sessionState = useEnvironmentSessionState(environmentId);
@@ -91,25 +106,24 @@ function EnvironmentSecretProviders({
       hasError: sessionState.hasError,
     }),
   });
-  const readOnly = access.kind !== "editable";
+  const readOnly = access.kind !== "editable" || projectScoped;
   const providers = useEnvironmentSettings(environmentId, (settings) => settings.secretProviders);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [dialog, setDialog] = useState<
     null | { readonly mode: "add" } | { readonly mode: "edit"; readonly id: SecretProviderId }
   >(null);
-  const entries = Object.entries(providers) as Array<[SecretProviderId, SecretProviderConfig]>;
+  const entries = Object.entries(providers) as Array<
+    [SecretProviderId, StoredSecretProviderConfig]
+  >;
   const editingConfig = dialog?.mode === "edit" ? providers[dialog.id] : undefined;
   const editing =
     dialog?.mode === "edit" && editingConfig !== undefined
       ? { id: dialog.id, config: editingConfig }
       : undefined;
-  const section = searchableSetting("secret-providers");
-
   return (
     <>
       <SettingsSection
-        id={section.id}
-        title={`${section.title}${titleSuffix}`}
+        {...searchableSetting("secret-providers")}
         headerAction={
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
@@ -119,36 +133,64 @@ function EnvironmentSecretProviders({
           ) : null
         }
       >
+        {projectScoped ? (
+          <p className="px-4 pt-3 text-xs text-muted-foreground">
+            Environment-wide setting. Select an environment to change it.
+          </p>
+        ) : null}
         {entries.length === 0 ? (
           <SettingsRow
             title="No secret providers configured."
             description="Add 1Password, OpenBao, or AWS Secrets Manager, then pick it as the source of a provider variable."
           />
         ) : (
-          entries.map(([id, config]) => (
-            <SettingsRow
-              key={id}
-              title={<SecretProviderTitle kind={config.kind} label={config.label} />}
-              description={<span className="break-all">{secretProviderDescription(config)}</span>}
-              control={
-                !readOnly ? (
-                  <div className="flex items-center gap-1">
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => setDialog({ mode: "edit", id })}
-                    >
-                      Edit
-                    </Button>
-                    <RemoveSecretProviderButton
-                      label={config.label}
-                      onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
-                    />
-                  </div>
-                ) : null
-              }
-            />
-          ))
+          entries.map(([id, config]) => {
+            const kind = secretProviderDisplayKind(config);
+            const classified = classifySecretProvider(config);
+            return (
+              <SettingsRow
+                key={id}
+                title={<SecretProviderTitle kind={kind} label={config.label} />}
+                description={
+                  classified.kind === "one_password" ? (
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="shrink-0">1Password ·</span>
+                      <RedactedSensitiveText
+                        value={classified.account}
+                        ariaLabel="Toggle account visibility"
+                        revealTooltip="Click to reveal account"
+                        hideTooltip="Click to hide account"
+                        className="max-w-full truncate"
+                      />
+                    </span>
+                  ) : classified.kind === "unsupported" ? (
+                    `Unsupported provider (${config.kind})`
+                  ) : (
+                    <span className="break-all">{secretProviderDescription(config)}</span>
+                  )
+                }
+                control={
+                  !readOnly ? (
+                    <div className="flex items-center gap-1">
+                      {kind !== undefined ? (
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => setDialog({ mode: "edit", id })}
+                        >
+                          Edit
+                        </Button>
+                      ) : null}
+                      <RemoveSecretProviderButton
+                        label={config.label}
+                        onConfirm={() => updateSettings({ secretProviders: { [id]: null } })}
+                      />
+                    </div>
+                  ) : null
+                }
+              />
+            );
+          })
         )}
       </SettingsSection>
       {dialog !== null && !readOnly && (dialog.mode === "add" || editing !== undefined) ? (
@@ -171,17 +213,19 @@ function SecretProviderTitle({
   kind,
   label,
 }: {
-  readonly kind: SecretProviderKind;
+  readonly kind: FlatSecretProviderKind | undefined;
   readonly label: string;
 }) {
   return (
-    <span className="flex items-center gap-2">
-      <SecretProviderKindIcon
-        kind={kind}
-        className="size-4.5 shrink-0 text-foreground/80"
-        aria-hidden
-      />
-      {label}
+    <span className="flex min-w-0 items-center gap-2">
+      {kind !== undefined ? (
+        <SecretProviderKindIcon
+          kind={kind}
+          className="size-4.5 shrink-0 text-foreground/80"
+          aria-hidden
+        />
+      ) : null}
+      <span className="min-w-0 wrap-anywhere">{label}</span>
     </span>
   );
 }

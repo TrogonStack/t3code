@@ -4,6 +4,7 @@ import {
   OnePasswordAccount,
   ProviderInstanceEnvironment,
   SecretProviderId,
+  SecretProviderKind,
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -665,6 +666,43 @@ describe("ProviderSecretResolverLive with named secret providers", () => {
         ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
       ]);
     }).pipe(Effect.provide(resolverLayer(spawner.layer, { [HOME_PROVIDER]: onePasswordProvider })));
+  });
+
+  it.effect("reads an upstream one_password envelope provider like the flat 1password kind", () => {
+    const spawner = scriptedOpSpawner(() => ({ stdout: "sk-home-token", stderr: "", code: 0 }));
+    return Effect.gen(function* () {
+      const resolver = yield* ProviderSecretResolver;
+
+      const resolved = yield* resolver.resolve(
+        decodeEnvironment([
+          namedVariable("CODEX_TOKEN", HOME_PROVIDER, TOKEN_REFERENCE),
+          namedVariable("OTHER_TOKEN", VAULT_PROVIDER, "agents/codex#api_key"),
+        ]),
+      );
+
+      assert.deepStrictEqual(resolved, {
+        variables: [{ name: "CODEX_TOKEN", value: "sk-home-token", sensitive: true }],
+        unresolved: ["OTHER_TOKEN"],
+      });
+      assert.deepStrictEqual(spawner.invocations, [
+        ["--cache=false", "read", "--account", HOME_ACCOUNT, "--no-newline", TOKEN_REFERENCE],
+      ]);
+    }).pipe(
+      Effect.provide(
+        resolverLayer(spawner.layer, {
+          [HOME_PROVIDER]: {
+            kind: SecretProviderKind.make("one_password"),
+            label: "Home",
+            config: { account: HOME_ACCOUNT },
+          },
+          [VAULT_PROVIDER]: {
+            kind: SecretProviderKind.make("vault_x"),
+            label: "Newer kind",
+            config: { anything: true },
+          },
+        }),
+      ),
+    );
   });
 
   it.effect("reports an OpenBao reference without a field unresolved without a request", () => {

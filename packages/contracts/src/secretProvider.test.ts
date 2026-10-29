@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import {
   AwsSecretsManagerSecretProviderConfig,
   OpenBaoSecretProviderConfig,
-  SecretProviderConfig,
+  FlatSecretProviderConfig,
   SettingsSecretValue,
 } from "./secretProvider.ts";
 import { secretSettingsFields } from "./settingsSecret.ts";
@@ -34,10 +34,10 @@ describe("SettingsSecretValue", () => {
   });
 });
 
-const decodeConfig = Schema.decodeUnknownSync(SecretProviderConfig);
+const decodeConfig = Schema.decodeUnknownSync(FlatSecretProviderConfig);
 const decodeVariable = Schema.decodeUnknownSync(ProviderInstanceEnvironmentVariable);
 
-describe("SecretProviderConfig", () => {
+describe("FlatSecretProviderConfig", () => {
   it("decodes a 1Password provider", () => {
     const config = { kind: "1password", label: "Personal", account: "my.1password.com" };
     expect(decodeConfig(config)).toEqual(config);

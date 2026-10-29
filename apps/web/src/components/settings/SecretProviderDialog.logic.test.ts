@@ -1,13 +1,21 @@
-import { OnePasswordAccount, SecretProviderId } from "@t3tools/contracts";
+import {
+  OnePasswordAccount,
+  SecretProviderId,
+  SecretProviderKind,
+  type StoredSecretProviderConfig,
+} from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  classifySecretProvider,
   EMPTY_SECRET_PROVIDER_DRAFT,
+  secretProviderDisplayKind,
   secretProviderDraftFromConfig,
   secretProviderFromDraft,
   secretProviderIdFromName,
   secretProviderReferenceIssue,
+  secretProviderSummary,
   type SecretProviderTarget,
 } from "./SecretProviderDialog.logic";
 
@@ -51,6 +59,34 @@ describe("secretProviderFromDraft", () => {
         ADD,
       ),
     ).toEqual(Result.fail({ name: "A secret provider named Work Vault exists." }));
+  });
+
+  it("keys a provider by its slugged name and keeps the id when an edit renames it", () => {
+    expect(
+      secretProviderFromDraft(
+        { ...EMPTY_SECRET_PROVIDER_DRAFT, name: "  1Password!  ", account: "my.1password.com" },
+        NO_IDS,
+        ADD,
+      ),
+    ).toEqual(
+      Result.succeed({
+        id: "1password",
+        config: { kind: "1password", label: "1Password!", account: "my.1password.com" },
+      }),
+    );
+    const id = SecretProviderId.make("personal");
+    expect(
+      secretProviderFromDraft(
+        { ...EMPTY_SECRET_PROVIDER_DRAFT, name: "Personal (team)", account: "team.1password.com" },
+        new Set(["personal"]),
+        { mode: "edit", id },
+      ),
+    ).toEqual(
+      Result.succeed({
+        id,
+        config: { kind: "1password", label: "Personal (team)", account: "team.1password.com" },
+      }),
+    );
   });
 
   it("requires a 1Password account", () => {
@@ -366,5 +402,48 @@ describe("secretProviderFromDraft in edit mode", () => {
     expect(secretProviderFromDraft({ ...bao, storedToken: "" }, NO_IDS, ADD)).toEqual(
       Result.fail({ token: "Enter the OpenBao token." }),
     );
+  });
+});
+
+describe("upstream envelope entries", () => {
+  const envelope = (kind: string, config?: unknown): StoredSecretProviderConfig => ({
+    kind: SecretProviderKind.make(kind),
+    label: "Personal",
+    ...(config === undefined ? {} : { config }),
+  });
+  const onePassword = envelope("one_password", { account: "my.1password.com" });
+
+  it("shows a one_password envelope as a 1Password provider with its account", () => {
+    expect(classifySecretProvider(onePassword)).toEqual({
+      kind: "one_password",
+      account: "my.1password.com",
+    });
+    expect(secretProviderDisplayKind(onePassword)).toBe("1password");
+    expect(secretProviderSummary(onePassword)).toBe("1Password · my.1password.com");
+    expect(secretProviderDraftFromConfig(onePassword)).toEqual({
+      ...EMPTY_SECRET_PROVIDER_DRAFT,
+      name: "Personal",
+      account: "my.1password.com",
+    });
+  });
+
+  it("shows unknown kinds and undecodable configs as unsupported", () => {
+    for (const entry of [
+      envelope("vault_x", { a: 1 }),
+      envelope("one_password", { account: "" }),
+    ]) {
+      expect(classifySecretProvider(entry)).toEqual({ kind: "unsupported" });
+      expect(secretProviderDisplayKind(entry)).toBeUndefined();
+    }
+  });
+
+  it("classifies a fork flat entry as flat", () => {
+    const flat = {
+      kind: "1password",
+      label: "Home",
+      account: OnePasswordAccount.make("my"),
+    } as const;
+    expect(classifySecretProvider(flat)).toEqual({ kind: "flat", config: flat });
+    expect(secretProviderDisplayKind(flat)).toBe("1password");
   });
 });
