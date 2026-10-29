@@ -2730,6 +2730,28 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* watchAgain("update", "Only fix CI.");
       assert.deepEqual(yield* watchOf, { ...recorded, instructions: "Only fix CI." });
 
+      const staleWake = yield* orchestrator
+        .dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make("pr-watch-instructions-stale-wake"),
+          threadId,
+          ...key,
+          startedAt: started.startedAt,
+          watch: { ...recorded, wakes: 2 },
+          wake: {
+            messageId: MessageId.make("pr-watch-instructions-stale-wake"),
+            text: "Update",
+            notification: { source: { kind: "monitor" }, outcome: "updated", summary: "#7" },
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(
+        staleWake._tag === "OrchestratorDispatchError" ? staleWake.commandType : staleWake._tag,
+        "thread.pull-request-watch.sync",
+      );
+      assert.deepEqual(yield* watchOf, { ...recorded, instructions: "Only fix CI." });
+      assert.deepEqual((yield* orchestrator.getThreadRecords(threadId, ["messages"])).messages, []);
+
       yield* orchestrator.dispatch({
         type: "thread.pull-request-watch.sync",
         commandId: CommandId.make("pr-watch-instructions-stale-record"),
