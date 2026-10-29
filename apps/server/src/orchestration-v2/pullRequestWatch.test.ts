@@ -374,6 +374,14 @@ describe("evaluatePullRequestWatch", () => {
       ).changes,
       [{ kind: "conflicting" }],
     );
+    assert.deepEqual(
+      evaluatePullRequestWatch(
+        first.next,
+        detail({ headSha: "bbbbbbbbbb", mergeability: "conflicting" }),
+        noRemarks,
+      ).changes,
+      [{ kind: "conflicting" }],
+    );
   });
 
   it("does not spend the comment wake limit on check results", () => {

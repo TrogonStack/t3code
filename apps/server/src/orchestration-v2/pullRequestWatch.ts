@@ -126,7 +126,7 @@ export function evaluatePullRequestWatch(
     ...atLatest.map((remark) => remark.id),
   ];
 
-  if (detail.mergeability === "conflicting" && !watch.conflicting) {
+  if (detail.mergeability === "conflicting" && (!watch.conflicting || headMoved)) {
     changes.push({ kind: "conflicting" });
   }
   // "unknown" is a host still computing; only a clean answer clears a conflict. A conflict seen on
