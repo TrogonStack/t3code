@@ -26,10 +26,6 @@ export function SourceControlHostSettings({
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `save ${definition.label} settings`,
   });
-  const secretProviders = useEnvironmentSettings(
-    environmentId,
-    (settings) => settings.secretProviders,
-  );
   const [saving, setSaving] = useState(false);
   const formDefinition = { settingsSchema: definition.settings };
   const hasSaved = Object.values(saved ?? {}).some((value) => value !== "");
@@ -52,7 +48,7 @@ export function SourceControlHostSettings({
         value={saved ?? {}}
         idPrefix={`source-control-${definition.kind}-${environmentId}`}
         variant="settings"
-        secretSources={{ environmentId, secretProviders }}
+        environmentId={environmentId}
         onChange={(next) => {
           const fields = next ?? {};
           const changed = Object.fromEntries(

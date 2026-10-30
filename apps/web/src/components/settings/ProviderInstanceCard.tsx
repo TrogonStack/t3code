@@ -278,6 +278,7 @@ function ProviderEnvironmentFieldRow(props: {
   ) => void;
   readonly onRemove: (field: ProviderEnvironmentField) => void;
   readonly secretSources: ReadonlyArray<SecretSource>;
+  readonly environmentId?: EnvironmentId | undefined;
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
   const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
@@ -311,6 +312,7 @@ function ProviderEnvironmentFieldRow(props: {
               spellCheck={false}
               aria-label={props.field.label}
               sources={props.secretSources}
+              environmentId={props.environmentId}
               onSecretChange={(secret) => props.onSecretChange(props.field, secret)}
             />
           )}
@@ -335,6 +337,7 @@ export function ProviderEnvironmentSection(props: {
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
   readonly secretSources?: ReadonlyArray<SecretSource>;
+  readonly environmentId?: EnvironmentId | undefined;
 }) {
   const [storedDraft, setDraft] = useState(() =>
     seedRowsDraft(props.environment, toEnvironmentDraftRows),
@@ -510,6 +513,7 @@ export function ProviderEnvironmentSection(props: {
                     spellCheck={false}
                     aria-label={`Environment variable value ${index + 1}`}
                     sources={props.secretSources ?? []}
+                    environmentId={props.environmentId}
                     onSecretChange={(secret) => setVariableSecret(variable.id, secret)}
                   >
                     {(parts) => layout(parts.source, parts.value)}
@@ -1263,6 +1267,7 @@ export function ProviderInstanceCard({
                   onSecretChange={updateEnvironmentFieldSecret}
                   onRemove={removeEnvironmentField}
                   secretSources={secretSources}
+                  environmentId={environmentId}
                 />
               ))}
             </div>
@@ -1306,6 +1311,7 @@ export function ProviderInstanceCard({
           environment={genericEnvironment}
           onChange={updateGenericEnvironment}
           secretSources={secretSources}
+          environmentId={environmentId}
         />
       </SettingsSection>
       {environmentId !== undefined && liveProvider?.driver === "acpRegistry" ? (

@@ -79,4 +79,31 @@ describe("SecretSourceInput", () => {
     await expect.element(reference(screen)).toHaveAttribute("aria-invalid", "true");
     await expect.element(reference(screen)).toHaveValue("Private/OpenAI/credential");
   });
+
+  it("validates a reference against the kind of the provider it is for", async () => {
+    const onSecretChange = vi.fn();
+    const vault = SecretProviderId.make("vault");
+    await using screen = await render(
+      <SecretSourceInput
+        aria-label="API key"
+        value={{ provider: vault, reference: "apps/openai#api_key" }}
+        sources={[
+          ...sources,
+          { id: vault, kind: SecretProviderKind.make("openbao"), label: "Vault" },
+        ]}
+        onCommit={() => {}}
+        onSecretChange={onSecretChange}
+      />,
+    );
+
+    await commitReference(screen, "apps/openai");
+    expect(onSecretChange).not.toHaveBeenCalled();
+    await expect.element(reference(screen)).toHaveAttribute("aria-invalid", "true");
+
+    await commitReference(screen, "apps/anthropic#api_key");
+    expect(onSecretChange).toHaveBeenCalledExactlyOnceWith({
+      provider: vault,
+      reference: "apps/anthropic#api_key",
+    });
+  });
 });
