@@ -18,7 +18,6 @@ import type * as Scope from "effect/Scope";
 import type * as ProviderAdapter from "./ProviderAdapter.ts";
 import type { ProviderAuthController } from "./auth.ts";
 import type { ProviderDriverError } from "./errors.ts";
-import type { ResolvedProviderEnvironment } from "./instanceEnvironment.ts";
 import type { ManagedServerProvider } from "./snapshot.ts";
 import type { ProviderTextGeneration } from "./textGeneration.ts";
 import type { ProviderUsageReader } from "./usage.ts";

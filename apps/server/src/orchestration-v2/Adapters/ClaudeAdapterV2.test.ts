@@ -95,7 +95,6 @@ import type * as ProviderContinuationRequests from "@t3tools/provider-core/serve
 import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
-import type { ResolvedProviderEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
 import { provideDeterministicTestRuntime } from "../testkit/DeterministicRuntime.ts";
 import { runOrchestratorV2Scenario } from "../testkit/OrchestratorScenario.ts";
