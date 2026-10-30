@@ -2,10 +2,12 @@ import { assert, it } from "@effect/vitest";
 import { SecretProviderId } from "@t3tools/contracts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
-import { resolveSettingsSecret } from "../secrets/settingsSecretValue.ts";
-import { resolveSourceControlHostSecrets } from "./sourceControlHostSecrets.ts";
+import {
+  collectSourceControlHostSecretReferences,
+  invalidateSettingsSecrets,
+  resolveSourceControlHostSecrets,
+} from "./sourceControlHostSecrets.ts";
 
 const source = (reference: string) => ({
   provider: SecretProviderId.make("homelab"),
@@ -13,44 +15,131 @@ const source = (reference: string) => ({
 });
 
 const secretsByReference = new Map([
-  ["github#token", "ghp_from_provider"],
   ["bitbucket#token", "bb_from_provider"],
+  ["github#token", "ghp_from_provider"],
 ]);
 
-const layerResolver = Layer.succeed(SecretResolver.SecretResolver, {
-  read: (references) =>
-    Effect.succeed(references.map((reference) => secretsByReference.get(reference.reference))),
-  invalidate: () => Effect.void,
-});
+const perHostHosts = {
+  github: { tokens: { "github.com": source("github#token"), "ghe.acme.test": "ghp_literal" } },
+};
 
-const fakeResolver = SecretResolver.SecretResolver.use((resolver) => Effect.succeed(resolver));
+const hosts = {
+  bitbucket: { email: "me@example.test", accessToken: source("bitbucket#token") },
+  gitcafe: { token: source("missing#token") },
+  github: { tokens: { "github.com": "ghp_literal" } },
+};
 
-it.effect("replaces credential references with the secrets they name", () =>
-  Effect.gen(function* () {
-    const resolver = yield* fakeResolver;
-    const hosts = {
-      github: { tokens: { "github.com": source("github#token"), "ghe.acme.test": "ghp_literal" } },
-      bitbucket: { email: "me@example.test", accessToken: source("bitbucket#token") },
-      gitcafe: { token: source("missing#token") },
-    };
-    const resolved = yield* resolveSourceControlHostSecrets(hosts, (value) =>
-      resolveSettingsSecret(resolver, value),
-    );
-    assert.deepEqual(resolved, {
-      github: { tokens: { "github.com": "ghp_from_provider", "ghe.acme.test": "ghp_literal" } },
-      bitbucket: { email: "me@example.test", accessToken: "bb_from_provider" },
-      gitcafe: { token: "" },
-    });
-  }).pipe(Effect.provide(layerResolver)),
+function countingResolver() {
+  const reads: Array<string> = [];
+  const resolver = SecretResolver.SecretResolver.of({
+    read: (references) =>
+      Effect.sync(() =>
+        references.map((reference) => {
+          reads.push(reference.reference);
+          return secretsByReference.get(reference.reference);
+        }),
+      ),
+    invalidate: () => Effect.void,
+  });
+  return { reads, resolver };
+}
+
+it.effect(
+  "replaces only the requested kind's credential references with the secrets they name",
+  () =>
+    Effect.gen(function* () {
+      const { reads, resolver } = countingResolver();
+      const resolved = yield* resolveSourceControlHostSecrets(resolver, hosts, "bitbucket");
+      assert.deepEqual(resolved, {
+        ...hosts,
+        bitbucket: { email: "me@example.test", accessToken: "bb_from_provider" },
+      });
+      assert.deepEqual(reads, ["bitbucket#token"]);
+    }),
 );
 
-it.effect("hands back the same settings when no credential names a secret", () =>
+it.effect("treats a reference the provider cannot read as an unset credential", () =>
   Effect.gen(function* () {
-    const resolver = yield* fakeResolver;
-    const hosts = { github: { tokens: { "github.com": "ghp_literal" } } };
-    const resolved = yield* resolveSourceControlHostSecrets(hosts, (value) =>
-      resolveSettingsSecret(resolver, value),
-    );
+    const { reads, resolver } = countingResolver();
+    const resolved = yield* resolveSourceControlHostSecrets(resolver, hosts, "gitcafe");
+    assert.deepEqual(resolved.gitcafe, { token: "" });
+    assert.deepEqual(reads, ["missing#token"]);
+  }),
+);
+
+it.effect("leaves the resolver unused for a kind that holds no reference", () =>
+  Effect.gen(function* () {
+    const { reads, resolver } = countingResolver();
+    const resolved = yield* resolveSourceControlHostSecrets(resolver, hosts, "github");
     assert.strictEqual(resolved, hosts);
-  }).pipe(Effect.provide(layerResolver)),
+    assert.deepEqual(reads, []);
+  }),
+);
+
+it.effect("replaces a per-host token reference and keeps the literal beside it", () =>
+  Effect.gen(function* () {
+    const { reads, resolver } = countingResolver();
+    const resolved = yield* resolveSourceControlHostSecrets(resolver, perHostHosts, "github");
+    assert.deepEqual(resolved, {
+      github: { tokens: { "github.com": "ghp_from_provider", "ghe.acme.test": "ghp_literal" } },
+    });
+    assert.deepEqual(reads, ["github#token"]);
+  }),
+);
+
+it("collects the references held in credential fields and skips literal values", () => {
+  assert.deepEqual(collectSourceControlHostSecretReferences(hosts), [
+    source("missing#token"),
+    source("bitbucket#token"),
+  ]);
+  assert.deepEqual(collectSourceControlHostSecretReferences(perHostHosts), [
+    source("github#token"),
+  ]);
+  assert.deepEqual(
+    collectSourceControlHostSecretReferences({
+      bitbucket: { accessToken: "literal" },
+      github: { tokens: { "github.com": "ghp_literal" } },
+    }),
+    [],
+  );
+});
+
+it.effect("reads a collected reference again once it is invalidated", () =>
+  Effect.gen(function* () {
+    let current = "stale";
+    const cache = new Map<string, string>();
+    const resolver = SecretResolver.SecretResolver.of({
+      read: (references) =>
+        Effect.sync(() =>
+          references.map((reference) => {
+            const hit = cache.get(reference.reference);
+            if (hit !== undefined) return hit;
+            cache.set(reference.reference, current);
+            return current;
+          }),
+        ),
+      invalidate: (references) =>
+        Effect.sync(() => {
+          if (references === undefined) cache.clear();
+          else for (const reference of references) cache.delete(reference.reference);
+        }),
+    });
+    const read = () => resolveSourceControlHostSecrets(resolver, hosts, "bitbucket");
+    assert.deepEqual((yield* read()).bitbucket, {
+      email: "me@example.test",
+      accessToken: "stale",
+    });
+    current = "rotated";
+    yield* invalidateSettingsSecrets(resolver, Effect.succeed({ sourceControlHosts: hosts }));
+    assert.deepEqual((yield* read()).bitbucket, {
+      email: "me@example.test",
+      accessToken: "rotated",
+    });
+    current = "rotated again";
+    yield* invalidateSettingsSecrets(resolver, Effect.fail("settings unreadable"));
+    assert.deepEqual((yield* read()).bitbucket, {
+      email: "me@example.test",
+      accessToken: "rotated again",
+    });
+  }),
 );

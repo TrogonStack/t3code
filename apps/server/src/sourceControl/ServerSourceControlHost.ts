@@ -1,9 +1,9 @@
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as SourceControlHost from "@t3tools/source-control-core/server/SourceControlHost";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
-import { resolveSettingsSecret } from "../secrets/settingsSecretValue.ts";
+import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -20,19 +20,19 @@ export const layer = Layer.effect(
     const secrets = yield* SecretResolver.SecretResolver;
     return SourceControlHost.SourceControlHost.of({
       settings: {
-        get: serverSettings.getSettings.pipe(
-          Effect.flatMap((settings) =>
-            resolveSourceControlHostSecrets(settings.sourceControlHosts, (source) =>
-              resolveSettingsSecret(secrets, source),
-            ).pipe(
-              Effect.map((sourceControlHosts) =>
-                sourceControlHosts === settings.sourceControlHosts
-                  ? settings
-                  : { ...settings, sourceControlHosts },
+        get: serverSettings.getSettings,
+        getWithSecrets: (kind) =>
+          serverSettings.getSettings.pipe(
+            Effect.flatMap((settings) =>
+              resolveSourceControlHostSecrets(secrets, settings.sourceControlHosts, kind).pipe(
+                Effect.map((sourceControlHosts) =>
+                  sourceControlHosts === settings.sourceControlHosts
+                    ? settings
+                    : { ...settings, sourceControlHosts },
+                ),
               ),
             ),
           ),
-        ),
         update: serverSettings.updateSettings,
       },
       process: { run: process.run },
@@ -54,4 +54,4 @@ export const layer = Layer.effect(
       },
     });
   }),
-);
+).pipe(Layer.provide(SecretResolverLayer.layer));
