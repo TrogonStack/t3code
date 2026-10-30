@@ -9,8 +9,6 @@
   its own stored token, `BAO_TOKEN`, or the `bao` CLI login.
 - Read from AWS Secrets Manager. An AWS provider reads through the `aws` CLI in one region, with
   an optional named profile, so credentials stay in the CLI's own configuration.
-- Read a provider's own setup fields, such as the Cursor API key, from a secret provider. Pick the
-  provider next to the field instead of adding the same variable by hand under Environment.
 - Edit a provider in place. Change its region, address, mount, namespace, or token from the same
   dialog. The name stays, so variables stay pointed at it, though a reference written for the old
   mount or region may need updating.
@@ -32,8 +30,8 @@ spot.
 ## Upstream considerations
 
 The pieces are built on upstream's secret provider architecture: OpenBao and AWS are drivers
-beside the 1Password one, so they could be proposed as separate drivers. The check button, in-place
-edit, and the Cursor setup-field source are small additions to upstream's secret UI.
+beside the 1Password one, so they could be proposed as separate drivers. The check button and in-place
+edit are small additions to upstream's secret UI.
 
 The rebase burden is small. New kinds are separate packages registered in one list, and the
 conversion of earlier settings is one pass before settings decode. A sync that reshapes the secret

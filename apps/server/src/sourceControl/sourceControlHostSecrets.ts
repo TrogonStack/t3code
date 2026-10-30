@@ -1,5 +1,14 @@
-import { isSecretReference, type SecretReference, secretSettingsFields } from "@t3tools/contracts";
+import {
+  isSecretReference,
+  secretReferencesInSettings,
+  secretSettingsFields,
+  type SecretReference,
+  type ServerSettings,
+} from "@t3tools/contracts";
+import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
+
+import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 
 import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
 
@@ -58,36 +67,71 @@ export function writeSecretFieldValues(
 
 type SourceControlHostsSettings = Readonly<Record<string, Readonly<Record<string, unknown>>>>;
 
-/** Replaces each secret provider reference in a credential field with the secret it names. */
-export function resolveSourceControlHostSecrets<R>(
+const hostSettingsSchemas = new Map(
+  sourceControlDefinitions.definitions.flatMap((definition) =>
+    definition.settings ? [[definition.kind as string, definition.settings] as const] : [],
+  ),
+);
+
+/** Every secret provider reference held in any host kind's credential fields. */
+export function collectSourceControlHostSecretReferences(
   hosts: SourceControlHostsSettings,
-  resolve: (source: SecretReference) => Effect.Effect<string, never, R>,
-): Effect.Effect<SourceControlHostsSettings, never, R> {
-  const resolveField = (value: unknown): Effect.Effect<unknown, never, R> | null => {
-    if (isSecretReference(value)) return resolve(value);
-    if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-    const entries = Object.entries(value);
-    if (!entries.some(([, entry]) => isSecretReference(entry))) return null;
-    return Effect.forEach(entries, ([serverHost, entry]) =>
-      isSecretReference(entry)
-        ? resolve(entry).pipe(Effect.map((secret) => [serverHost, secret] as const))
-        : Effect.succeed([serverHost, entry] as const),
-    ).pipe(Effect.map((resolved) => Object.fromEntries(resolved)));
-  };
-  const pending = Object.entries(hosts).flatMap(([kind, fields]) =>
-    (SOURCE_CONTROL_HOST_SECRET_FIELDS.get(kind) ?? []).flatMap((field) => {
-      const resolved = resolveField(fields[field]);
-      return resolved === null ? [] : [{ kind, field, resolved }];
-    }),
-  );
-  if (pending.length === 0) return Effect.succeed(hosts);
-  return Effect.forEach(pending, ({ kind, field, resolved }) =>
-    resolved.pipe(Effect.map((value) => ({ kind, field, value }))),
-  ).pipe(
-    Effect.map((fields) => {
-      const next: Record<string, Readonly<Record<string, unknown>>> = { ...hosts };
-      for (const { kind, field, value } of fields) next[kind] = { ...next[kind], [field]: value };
-      return next;
-    }),
-  );
+): ReadonlyArray<SecretReference> {
+  return [...hostSettingsSchemas].flatMap(([kind, schema]) => [
+    ...secretReferencesInSettings(schema, hosts[kind]).map(({ reference }) => reference),
+    ...perHostSecretReferences(kind, hosts[kind]).map(({ reference }) => reference),
+  ]);
 }
+
+/** References kept per hostname, such as GitHub `tokens`, which the schema walker does not reach. */
+function perHostSecretReferences(
+  kind: string,
+  fields: Readonly<Record<string, unknown>> | undefined,
+): ReadonlyArray<{
+  readonly field: string;
+  readonly serverHost: string;
+  readonly reference: SecretReference;
+}> {
+  if (fields === undefined) return [];
+  return (SOURCE_CONTROL_HOST_SECRET_FIELDS.get(kind) ?? []).flatMap((field) => {
+    const value = fields[field];
+    if (value === null || typeof value !== "object" || isSecretReference(value)) return [];
+    return Object.entries(value).flatMap(([serverHost, reference]) =>
+      isSecretReference(reference) ? [{ field, serverHost, reference }] : [],
+    );
+  });
+}
+
+/** Replaces each secret provider reference in one host kind's credential fields with the secret it names. */
+export const resolveSourceControlHostSecrets = Effect.fn("SourceControlHost.resolveSecrets")(
+  function* (
+    resolver: SecretResolver.SecretResolver["Service"],
+    hosts: SourceControlHostsSettings,
+    kind: string,
+  ) {
+    const schema = hostSettingsSchemas.get(kind);
+    const fields = hosts[kind];
+    if (schema === undefined || fields === undefined) return hosts;
+    const resolved = yield* resolveSettingsSecrets(resolver, schema, fields);
+    const pending = perHostSecretReferences(kind, resolved);
+    if (pending.length === 0) return resolved === fields ? hosts : { ...hosts, [kind]: resolved };
+    const values = yield* resolver.read(pending.map(({ reference }) => reference));
+    const next: Record<string, unknown> = { ...resolved };
+    pending.forEach(({ field, serverHost }, index) => {
+      next[field] = { ...(next[field] as object), [serverHost]: values[index] ?? "" };
+    });
+    return { ...hosts, [kind]: next };
+  },
+);
+
+/** Settings that cannot be read clear every cached secret, so a refresh never keeps a stale one. */
+export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")(function* <E>(
+  resolver: SecretResolver.SecretResolver["Service"],
+  settings: Effect.Effect<Pick<ServerSettings, "sourceControlHosts">, E>,
+) {
+  const references = yield* settings.pipe(
+    Effect.map((current) => collectSourceControlHostSecretReferences(current.sourceControlHosts)),
+    Effect.orElseSucceed(() => undefined),
+  );
+  yield* resolver.invalidate(references);
+});

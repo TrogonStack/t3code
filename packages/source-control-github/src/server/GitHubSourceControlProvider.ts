@@ -1,4 +1,8 @@
-import { settingsSecretLiteral, SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  isSecretReference,
+  settingsSecretLiteral,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -237,7 +241,8 @@ export const makeDiscovery = Effect.gen(function* () {
         },
         spec: { ...discovery, parseAuth: (input) => parseGitHubAuth(input, settings) },
       });
-      const savedToken = settingsSecretLiteral(settings.tokens["github.com"]).trim() !== "";
+      const token = settings.tokens["github.com"];
+      const savedToken = isSecretReference(token) || settingsSecretLiteral(token).trim() !== "";
       const signedIn =
         appSignIn.enabled && !savedToken && (settings.signIns["github.com"] ?? "").trim() !== "";
       const variable = environmentTokenVariable(environment);
@@ -859,6 +864,9 @@ export const make = Effect.gen(function* () {
 
   return SourceControlProvider.SourceControlProvider.of({
     kind: SourceControlProviderKind.make("github"),
+    resolveRemoteWebHost: Effect.fn("GitHubSourceControlProvider.resolveRemoteWebHost")(
+      ({ context }) => Effect.succeed(gitHubApiHostForRemote(context.remoteUrl)),
+    ),
     // GitHub matches bare heads; read a full page to disambiguate forks by owner.
     headBranchProbe: ({ headSelectors }) => ({
       headSelectors: headSelectors.filter((selector) => !selector.includes(":")),

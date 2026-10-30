@@ -194,7 +194,7 @@ export const make = Effect.gen(function* () {
     );
 
   const savedToken = (host: string) =>
-    sourceControlHost.settings.get.pipe(
+    sourceControlHost.settings.getWithSecrets(GitHubClient.definition.kind).pipe(
       Effect.map(
         (settings) => settingsSecretLiteral(readSettings(settings).tokens[host]).trim() || null,
       ),

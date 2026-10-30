@@ -35,6 +35,7 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
+import { releaseAgentDeviceSession } from "./AgentDeviceTarget.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { findEasProjectId } from "./easProjectId.ts";
 import { type ExpoApi, makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
@@ -841,6 +842,12 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       hub: { origin: "https://api.expo.dev" },
       devices,
       upstream,
+      // Each session runs its own daemon, so one that has ended holds no agent sessions.
+      releaseAgentSession: (session, deviceId) =>
+        Option.match(sessionFor(deviceId), {
+          onNone: () => Effect.void,
+          onSome: (running) => releaseAgentDeviceSession(http, running.agent)(session),
+        }),
       // Device settings run simctl on the simulator's own machine, which EAS does not expose.
       run: () =>
         Effect.succeed({
