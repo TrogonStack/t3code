@@ -12,12 +12,12 @@ describe("web runtime relay telemetry policy", () => {
   it.each([
     {
       surface: "desktop opt-out",
-      desktopBridge: { getRelayTelemetryEnabled: () => false },
+      desktopBridge: { getAppBranding: () => null, getRelayTelemetryEnabled: () => false },
       exports: false,
     },
     {
       surface: "desktop enabled",
-      desktopBridge: { getRelayTelemetryEnabled: () => true },
+      desktopBridge: { getAppBranding: () => null, getRelayTelemetryEnabled: () => true },
       exports: true,
     },
     {
