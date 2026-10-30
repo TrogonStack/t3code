@@ -58,8 +58,6 @@ const layerTestHttpClient = Layer.succeed(
 // The mock CLIs from makeTildeProviderFixtures are scripts Windows cannot execute.
 const windowsHost = HostProcess.Platform.defaultValue() === "win32";
 
-const decodeProviderInstanceEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
-
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
@@ -653,89 +651,6 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         expect(ghost.unavailableReason).toMatch(/ghostDriver/);
       }).pipe(Effect.provide(layerTest)),
   );
-
-  describe("when a secret cannot be read", () => {
-    const instanceId = ProviderInstanceId.make("codex_locked");
-    const configMap: ProviderInstanceConfigMap = {
-      [instanceId]: {
-        driver: ProviderDriverKind.make("codex"),
-        enabled: true,
-        environment: decodeProviderInstanceEnvironment([
-          {
-            name: "CODEX_TOKEN",
-            value: { kind: "1password", reference: "op://Private/codex/token", account: "a.b.com" },
-          },
-        ]),
-        config: makeCodexConfig({ enabled: true }),
-      },
-    };
-    const lockedStore = (unlocked: Ref.Ref<boolean>, reads?: Ref.Ref<number>) => ({
-      prime: () => Effect.void,
-      invalidate: () => Effect.void,
-      check: () => Effect.succeed({ _tag: "Resolved" } as const),
-      listOnePasswordAccounts: Effect.succeed([]),
-      resolve: () =>
-        (reads === undefined ? Effect.void : Ref.update(reads, (n) => n + 1)).pipe(
-          Effect.andThen(Ref.get(unlocked)),
-          Effect.map((open) =>
-            open
-              ? {
-                  variables: [{ name: "CODEX_TOKEN", value: "sk", sensitive: true }],
-                  unresolved: [],
-                }
-              : { variables: [], unresolved: ["CODEX_TOKEN"] },
-          ),
-        ),
-    });
-
-    it.live("is unavailable with a reason that names the variable", () =>
-      Effect.gen(function* () {
-        const unlocked = yield* Ref.make(false);
-        const { registry } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
-          drivers: [CodexDriver],
-          configMap,
-        }).pipe(Effect.provideService(ProviderSecretResolver, lockedStore(unlocked)));
-
-        expect(yield* registry.getInstance(instanceId)).toBeUndefined();
-        const [snapshot] = yield* registry.listUnavailable;
-        expect(snapshot?.unavailableReason).toContain("CODEX_TOKEN");
-      }).pipe(Effect.provide(layerTest)),
-    );
-
-    it.live("is rebuilt once the store can be read", () =>
-      Effect.gen(function* () {
-        const unlocked = yield* Ref.make(false);
-        const { registry } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
-          drivers: [CodexDriver],
-          configMap,
-        }).pipe(Effect.provideService(ProviderSecretResolver, lockedStore(unlocked)));
-
-        expect(yield* registry.listUnavailable).toHaveLength(1);
-        yield* Ref.set(unlocked, true);
-        const rebuilt = yield* registry.rebuildInstanceWhen(instanceId, () => true);
-
-        expect(rebuilt).toBe(true);
-        expect(yield* registry.getInstance(instanceId)).toBeDefined();
-        expect(yield* registry.listUnavailable).toHaveLength(0);
-      }).pipe(Effect.provide(layerTest)),
-    );
-
-    it.live("is not read again by a settings change that leaves it alone", () =>
-      Effect.gen(function* () {
-        const unlocked = yield* Ref.make(false);
-        const reads = yield* Ref.make(0);
-        const { registry, mutator } = yield* makeProviderInstanceRegistry<CodexDriverEnv>({
-          drivers: [CodexDriver],
-          configMap,
-        }).pipe(Effect.provideService(ProviderSecretResolver, lockedStore(unlocked, reads)));
-
-        yield* mutator.reconcile({ ...configMap });
-
-        expect(yield* Ref.get(reads)).toBe(1);
-        expect(yield* registry.listUnavailable).toHaveLength(1);
-      }).pipe(Effect.provide(layerTest)),
-    );
-  });
 });
 
 const DisabledByDefaultConfig = Schema.Struct({

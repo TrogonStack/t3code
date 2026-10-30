@@ -2,7 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useId, useRef, useState } from "react";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
-import * as Result from "effect/Result";
 import {
   type DeviceEasAccount,
   type EasDeviceHostConfig,
@@ -26,13 +25,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { parseEasDeviceHostDraft } from "./easDeviceHostsSettings.logic";
-import {
-  EMPTY_SECRET_FIELD_DRAFT,
-  SecretField,
-  secretFieldDraft,
-  secretFieldSubmission,
-  type SecretProviders,
-} from "./SecretSourceControls";
+import { SecretInput } from "./SecretInput";
 
 const FROM_THREAD_PROJECT = "thread-project";
 
@@ -57,7 +50,6 @@ export function EasDeviceHostEditor(props: {
   environmentId: EnvironmentId;
   host: EasDeviceHostConfig;
   isNew: boolean;
-  secretProviders: SecretProviders;
   busy: boolean;
   onSave: (host: EasDeviceHostConfig) => void;
   onClose: () => void;
@@ -65,20 +57,10 @@ export function EasDeviceHostEditor(props: {
   const check = useAtomCommand(deviceEnvironment.easAccount, { reportFailure: false });
   const [draft, setDraft] = useState(props.host);
   const tokenId = useId();
-  const savedLiteral =
-    typeof props.host.accessToken === "string" && props.host.accessToken.length > 0;
-  const [tokenDraft, setTokenDraft] = useState(() => secretFieldDraft(props.host.accessToken));
-  const [cleared, setCleared] = useState(false);
-  const tokenSubmission = secretFieldSubmission(tokenDraft, props.secretProviders);
-  const referenceIssue = Result.isFailure(tokenSubmission) ? tokenSubmission.failure : null;
-  // A saved token arrives redacted, so an empty literal keeps it until Clear drops it.
-  const keepsSavedToken =
-    savedLiteral &&
-    !cleared &&
-    Result.isSuccess(tokenSubmission) &&
-    tokenSubmission.success === undefined;
-  const tokenCleared =
-    !keepsSavedToken && tokenDraft.kind === "literal" && tokenDraft.text.trim() === "";
+  // A saved token arrives redacted; only a replacement or a clear changes it.
+  const [token, setToken] = useState<
+    { kind: "saved" } | { kind: "new"; value: string } | { kind: "cleared" }
+  >(props.host.accessToken ? { kind: "saved" } : { kind: "cleared" });
   // Checking on open names the saved project and shows a rejected credential
   // before anything is changed. A manual check or a token edit replaces it.
   const openCheck = useAtomValue(
@@ -102,19 +84,16 @@ export function EasDeviceHostEditor(props: {
   const next: EasDeviceHostConfig = {
     ...draft,
     label: draft.label.trim(),
-    accessToken: keepsSavedToken
-      ? props.host.accessToken
-      : (Result.getOrUndefined(tokenSubmission) ?? ""),
+    accessToken:
+      token.kind === "saved" ? props.host.accessToken : token.kind === "new" ? token.value : "",
   };
-  const valid = referenceIssue === null && Option.isSome(parseEasDeviceHostDraft(next));
+  const valid = Option.isSome(parseEasDeviceHostDraft(next));
   // Why Save is off, for the limits the fields' ranges do not show.
   const problem = valid
     ? null
-    : referenceIssue !== null
-      ? `Expo access token: ${referenceIssue}`
-      : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
-        ? "Idle minutes must be smaller than session minutes."
-        : "Give the host a label and limits within the ranges shown.";
+    : draft.maxSessionMinutes > 0 && draft.idleMinutes >= draft.maxSessionMinutes
+      ? "Idle minutes must be smaller than session minutes."
+      : "Give the host a label and limits within the ranges shown.";
   const apps = account.status === "signed-in" ? account.account.apps : [];
 
   // A check answers for the credential it was asked about: a later check or a
@@ -128,13 +107,16 @@ export function EasDeviceHostEditor(props: {
     const run = ++latestCheck.current;
     const result = await check({
       environmentId: props.environmentId,
-      // A cleared token is sent as empty, so the check does not fall back to
-      // the saved one that Save is about to drop.
-      input: !keepsSavedToken
-        ? { accessToken: next.accessToken }
-        : props.isNew
-          ? {}
-          : { hostId: props.host.id },
+      input: {
+        ...(token.kind === "saved" && !props.isNew ? { hostId: props.host.id } : {}),
+        // A cleared token is sent as empty, so the check does not fall back to
+        // the saved one that Save is about to drop.
+        ...(token.kind === "new"
+          ? { accessToken: token.value }
+          : token.kind === "cleared"
+            ? { accessToken: "" }
+            : {}),
+      },
     });
     if (run !== latestCheck.current) return;
     setAccount(
@@ -209,32 +191,36 @@ export function EasDeviceHostEditor(props: {
               <label htmlFor={tokenId} className="block">
                 Expo access token
               </label>
-              <div className="flex items-start gap-2">
-                <SecretField
+              <div className="flex items-center gap-2">
+                <SecretInput
                   id={tokenId}
-                  label="Expo access token"
-                  environmentId={props.environmentId}
-                  secretProviders={props.secretProviders}
-                  className="flex-1"
+                  className="min-w-0 flex-1"
+                  configured={token.kind === "saved"}
+                  value={token.kind === "new" ? token.value : ""}
                   disabled={props.busy}
                   placeholder="Optional"
-                  value={props.host.accessToken}
-                  configured={keepsSavedToken}
-                  draft={tokenDraft}
-                  onDraftChange={(next) => {
-                    setTokenDraft(next);
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    // Emptying the field is not clearing the saved token; the
+                    // Clear button is, so a saved token comes back here.
+                    setToken(
+                      value
+                        ? { kind: "new", value }
+                        : props.host.accessToken
+                          ? { kind: "saved" }
+                          : { kind: "cleared" },
+                    );
                     resetAccount();
                   }}
                 />
-                {!tokenCleared ? (
+                {token.kind !== "cleared" ? (
                   <Button
                     type="button"
                     size="icon-sm"
                     variant="ghost-destructive"
                     aria-label="Clear access token"
                     onClick={() => {
-                      setTokenDraft(EMPTY_SECRET_FIELD_DRAFT);
-                      setCleared(true);
+                      setToken({ kind: "cleared" });
                       resetAccount();
                     }}
                   >
@@ -257,7 +243,7 @@ export function EasDeviceHostEditor(props: {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={props.busy || account.status === "checking" || referenceIssue !== null}
+                disabled={props.busy || account.status === "checking"}
                 onClick={() => void checkAccount()}
               >
                 {account.status === "checking" ? <Spinner size="xs" /> : null} Check account

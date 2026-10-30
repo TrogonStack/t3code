@@ -3,14 +3,11 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
   ProviderDriverKind,
-  OpenBaoSecretProviderConfig,
-  ProviderInstanceEnvironment,
   ProviderInstanceId,
   type ProviderAuthState,
   type ServerProvider,
   type UnifiedSettings,
 } from "@t3tools/contracts";
-import * as Schema from "effect/Schema";
 import { AsyncResult, type Atom } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -38,7 +35,6 @@ const state = vi.hoisted(() => ({
   updateModelPreferences: vi.fn(),
   toggleFavorite: vi.fn(),
   mutateProviderInstance: vi.fn(),
-  checkSecretSource: vi.fn(),
 }));
 
 vi.mock(import("../../state/server"), async (original) => {
@@ -67,11 +63,6 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       ...labelled,
-      checkSecretSource: {
-        ...actual.serverEnvironment.checkSecretSource,
-        label: "check-secret-source",
-        permissionAtom: (() => Atom.make(true)) as never,
-      },
       configValueAtom: (() => config) as never,
       providerAuthState: (() => providerAuth) as never,
       providersValueAtom: (() => providers) as never,
@@ -86,7 +77,6 @@ vi.mock(import("../../state/use-atom-command"), async (original) => ({
       update: state.updateProvider,
       uninstall: state.uninstall,
       "accept-url-auth": state.acceptUrlAuth,
-      "check-secret-source": state.checkSecretSource,
     })[command.label ?? ""] ?? vi.fn()) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
@@ -172,9 +162,6 @@ vi.mock(import("../ProviderUpdatesAction"), async (original) => ({
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
-const decodeOpenBaoProvider = Schema.decodeSync(OpenBaoSecretProviderConfig);
-const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
-
 const environmentId = EnvironmentId.make("remote-device");
 const codexId = ProviderInstanceId.make("codex");
 const customId = ProviderInstanceId.make("codex_work");
@@ -247,7 +234,6 @@ async function setup() {
   state.updateProvider.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.uninstall.mockReset().mockResolvedValue(AsyncResult.success({}));
   state.acceptUrlAuth.mockReset().mockResolvedValue(AsyncResult.success({ accepted: true }));
-  state.checkSecretSource.mockReset();
   await setProviders([]);
 }
 
@@ -282,117 +268,6 @@ describe("EnvironmentProviderSettings routing", () => {
         operation: "upsert",
         instanceId: customId,
         instance: { driver: ProviderDriverKind.make("codex"), enabled: false, displayName: "Work" },
-      },
-      {},
-    );
-  });
-
-  it("checks a secret reference on the selected environment and shows the outcome", async () => {
-    await setup();
-    const vault = SecretProviderId.make("vault");
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      secretProviders: {
-        [vault]: decodeOpenBaoProvider({
-          kind: "openbao",
-          label: "Team vault",
-          address: "https://bao.example.com",
-          mount: "kv",
-        }),
-      },
-      providerInstances: {
-        [customId]: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-          displayName: "Work",
-          environment: decodeEnvironment([
-            {
-              name: "CODEX_TOKEN",
-              value: { kind: "secret-provider", provider: vault, reference: "agents/codex#key" },
-            },
-          ]),
-        },
-      },
-    };
-    state.checkSecretSource
-      .mockResolvedValueOnce(AsyncResult.success({ _tag: "Failed", detail: "permission denied" }))
-      .mockResolvedValueOnce(AsyncResult.success({ _tag: "Resolved" }));
-    await using _screen = await render(panel({ targetInstanceId: customId }));
-
-    await userEvent.click(
-      page.getByRole("button", { name: "Check secret for environment variable CODEX_TOKEN" }),
-    );
-    expect(state.checkSecretSource).toHaveBeenLastCalledWith({
-      environmentId,
-      input: {
-        source: { kind: "secret-provider", provider: vault, reference: "agents/codex#key" },
-      },
-    });
-    await expect
-      .element(
-        page.getByRole("button", {
-          name: "Check secret for environment variable CODEX_TOKEN failed: permission denied",
-        }),
-      )
-      .toBeVisible();
-
-    await userEvent.click(
-      page.getByRole("button", { name: /^Check secret for environment variable CODEX_TOKEN/ }),
-    );
-    await expect
-      .element(
-        page.getByRole("button", {
-          name: "Check secret for environment variable CODEX_TOKEN resolved",
-        }),
-      )
-      .toBeVisible();
-  });
-
-  it("saves a dedicated field from a named secret provider", async () => {
-    await setup();
-    const vault = SecretProviderId.make("vault");
-    const cursorId = ProviderInstanceId.make("cursor_work");
-    const cursor = ProviderDriverKind.make("cursor");
-    state.settings = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      secretProviders: {
-        [vault]: decodeOpenBaoProvider({
-          kind: "openbao",
-          label: "Team vault",
-          address: "https://bao.example.com",
-          mount: "kv",
-        }),
-      },
-      providerInstances: {
-        [cursorId]: { driver: cursor, enabled: true, displayName: "Cursor Work" },
-      },
-    };
-    await using _screen = await render(panel({ targetInstanceId: cursorId }));
-
-    await userEvent.click(page.getByRole("combobox", { name: "Cursor API key source" }));
-    await userEvent.click(page.getByRole("option", { name: /Team vault/ }));
-    expect(state.mutateProviderInstance).not.toHaveBeenCalled();
-
-    const reference = page.getByRole("textbox", { name: "Cursor API key secret reference" });
-    await userEvent.fill(reference, "agents/cursor#key");
-    await userEvent.tab();
-
-    expect(state.mutateProviderInstance).toHaveBeenLastCalledWith(
-      {
-        operation: "upsert",
-        instanceId: cursorId,
-        instance: {
-          driver: cursor,
-          enabled: true,
-          displayName: "Cursor Work",
-          environment: [
-            {
-              name: "CURSOR_API_KEY",
-              value: { kind: "secret-provider", provider: vault, reference: "agents/cursor#key" },
-              sensitive: false,
-            },
-          ],
-        },
       },
       {},
     );

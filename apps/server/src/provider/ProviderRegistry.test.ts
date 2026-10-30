@@ -25,8 +25,6 @@ import {
   DEFAULT_SERVER_SETTINGS,
   PROVIDER_WORKSPACE_SNAPSHOT_TTL_MS,
   ProviderDriverKind,
-  ProviderInstanceEnvironment,
-  ProviderSecretSource,
   ProviderInstanceId,
   ServerSettings,
   ServerSettingsError,
@@ -69,7 +67,6 @@ import type {
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
-import { literalProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 vi.mock("@anthropic-ai/claude-agent-sdk", { spy: true });
@@ -79,14 +76,6 @@ const encodeServerProvider = Schema.encodeSync(ServerProvider);
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
-const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
-const decodeSecretSource = Schema.decodeSync(ProviderSecretSource);
-const HOME_ACCOUNT = "my.1password.com";
-const onePasswordVariable = (name: string, reference: string, sensitive = true) => ({
-  name,
-  value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
-  sensitive,
-});
 
 const disabledDefaultSlots = (
   ...drivers: ReadonlyArray<string>
@@ -122,13 +111,6 @@ const layerTestHttpClient = Layer.succeed(
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
 ).pipe(Layer.provideMerge(ModelManifest.layerTest));
-
-function layerClaudeCredentialHttp(respond: () => Response) {
-  return Layer.succeed(
-    HttpClient.HttpClient,
-    HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, respond()))),
-  );
-}
 
 const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
@@ -939,8 +921,6 @@ it.layer(
                 listUnavailable: Effect.succeed([]),
                 streamChanges: Stream.empty,
                 subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-                listEnvironments: Effect.succeed(new Map()),
-                rebuildInstanceWhen: () => Effect.succeed(false),
               },
             );
             const retainedModels = [defaultModel, customModel, currentModel];
@@ -1074,8 +1054,6 @@ it.layer(
                 Effect.succeed(id === instance.instanceId ? instance : undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
-              listEnvironments: Effect.succeed(new Map()),
-              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
             },
@@ -1319,394 +1297,6 @@ it.layer(
       );
     });
 
-    // Refresh must drop cached secrets AND rebuild instances that read one: the environment is
-    // resolved once at driver build, so a re-probe would report the old credential.
-    it.effect("drops cached secrets and rebuilds the instances that read them", () =>
-      Effect.gen(function* () {
-        const codexDriver = ProviderDriverKind.make("codex");
-        const codexInstanceId = ProviderInstanceId.make("codex");
-        const initialProvider = {
-          instanceId: codexInstanceId,
-          driver: codexDriver,
-          status: "warning",
-          enabled: true,
-          installed: false,
-          auth: { status: "unknown" },
-          checkedAt: "2026-06-10T00:00:00.000Z",
-          version: null,
-          models: [],
-          slashCommands: [],
-          skills: [],
-        } as const satisfies ServerProvider;
-        const instance = {
-          instanceId: codexInstanceId,
-          driverKind: codexDriver,
-          continuationIdentity: {
-            driverKind: codexDriver,
-            continuationKey: "codex:instance:codex",
-          },
-          displayName: undefined,
-          enabled: true,
-          snapshot: {
-            resolveMaintenance: () =>
-              Effect.succeed(
-                makeManualOnlyProviderMaintenanceCapabilities({
-                  provider: codexDriver,
-                  packageName: null,
-                }),
-              ),
-            getSnapshot: Effect.succeed(initialProvider),
-            refresh: Effect.succeed(initialProvider),
-            streamChanges: Stream.empty,
-            applyUsageLimits: () => Effect.void,
-          },
-          orchestrationAdapter: {} as ProviderInstance["orchestrationAdapter"],
-          textGeneration: {} as ProviderInstance["textGeneration"],
-        } satisfies ProviderInstance;
-
-        const invalidations = yield* Ref.make(0);
-        const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
-        const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-          resolve: (environment) =>
-            Effect.succeed({
-              variables: literalProviderInstanceEnvironment(environment),
-              unresolved: [],
-            }),
-          prime: () => Effect.void,
-          invalidate: () => Ref.update(invalidations, (count) => count + 1),
-          check: () => Effect.succeed({ _tag: "Resolved" }),
-          listOnePasswordAccounts: Effect.succeed([]),
-        });
-        const instanceRegistryLayer = Layer.succeed(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          {
-            getInstance: (instanceId) =>
-              Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
-            listInstances: Effect.succeed([instance]),
-            listUnavailable: Effect.succeed([]),
-            rebuildInstanceWhen: (instanceId, shouldRebuild) =>
-              shouldRebuild({
-                driver: codexDriver,
-                environment: decodeEnvironment([
-                  onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
-                ]),
-              })
-                ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
-                    Effect.as(true),
-                  )
-                : Effect.succeed(false),
-            streamChanges: Stream.empty,
-            listEnvironments: Effect.succeed(new Map()),
-            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-          },
-        );
-
-        const scope = yield* Scope.make();
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-        const runtimeServices = yield* Layer.build(
-          ProviderRegistry.layer.pipe(
-            Layer.provideMerge(instanceRegistryLayer),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-secret-refresh-",
-              }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-            Layer.provideMerge(secretResolverLayer),
-          ),
-        ).pipe(Scope.provide(scope));
-
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry.ProviderRegistry;
-          yield* registry.refreshInstance(codexInstanceId);
-
-          assert.strictEqual(yield* Ref.get(invalidations), 1);
-          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
-        }).pipe(Effect.provide(runtimeServices));
-      }),
-    );
-
-    // A rebuild that could not finish - a locked vault, a secret store that
-    // was not running - leaves the instance out of the live set. Refresh is
-    // the user saying "try again", so it has to reach the instances that
-    // need trying again, not just the ones that are already working.
-    it.effect("retries instances that are not live when nothing is targeted", () =>
-      Effect.gen(function* () {
-        const codexDriver = ProviderDriverKind.make("codex");
-        const codexInstanceId = ProviderInstanceId.make("codex");
-        const unavailableProvider = {
-          instanceId: codexInstanceId,
-          driver: codexDriver,
-          status: "error",
-          enabled: true,
-          installed: false,
-          auth: { status: "unknown" },
-          checkedAt: "2026-06-10T00:00:00.000Z",
-          version: null,
-          models: [],
-          slashCommands: [],
-          skills: [],
-          message: "Driver 'codex' failed to create instance: secret store is locked",
-        } as const satisfies ServerProvider;
-
-        const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
-        const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-          resolve: (environment) =>
-            Effect.succeed({
-              variables: literalProviderInstanceEnvironment(environment),
-              unresolved: [],
-            }),
-          prime: () => Effect.void,
-          invalidate: () => Effect.void,
-          check: () => Effect.succeed({ _tag: "Resolved" }),
-          listOnePasswordAccounts: Effect.succeed([]),
-        });
-        const instanceRegistryLayer = Layer.succeed(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          {
-            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-            getInstance: () => Effect.succeed(undefined),
-            listInstances: Effect.succeed([]),
-            listUnavailable: Effect.succeed([unavailableProvider]),
-            rebuildInstanceWhen: (instanceId, shouldRebuild) =>
-              shouldRebuild({
-                driver: codexDriver,
-                environment: decodeEnvironment([
-                  onePasswordVariable("CODEX_TOKEN", "op://Vault/Item/token"),
-                ]),
-              })
-                ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
-                    Effect.as(true),
-                  )
-                : Effect.succeed(false),
-            streamChanges: Stream.empty,
-            listEnvironments: Effect.succeed(new Map()),
-            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-          },
-        );
-
-        const scope = yield* Scope.make();
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-        const runtimeServices = yield* Layer.build(
-          ProviderRegistry.layer.pipe(
-            Layer.provideMerge(instanceRegistryLayer),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-secret-retry-",
-              }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-            Layer.provideMerge(secretResolverLayer),
-          ),
-        ).pipe(Scope.provide(scope));
-
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry.ProviderRegistry;
-          yield* registry.refresh();
-
-          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [codexInstanceId]);
-        }).pipe(Effect.provide(runtimeServices));
-      }),
-    );
-
-    it.effect("rebuilds every instance that reads a secret a check succeeds on", () =>
-      Effect.gen(function* () {
-        const codexDriver = ProviderDriverKind.make("codex");
-        const readableId = ProviderInstanceId.make("codex");
-        const otherId = ProviderInstanceId.make("codex_other");
-        const liveId = ProviderInstanceId.make("codex_live");
-        const reference = "op://Vault/Item/token";
-        const unavailableProvider = (instanceId: ProviderInstanceId) =>
-          ({
-            instanceId,
-            driver: codexDriver,
-            status: "error",
-            enabled: true,
-            installed: false,
-            auth: { status: "unknown" },
-            checkedAt: "2026-06-10T00:00:00.000Z",
-            version: null,
-            models: [],
-            slashCommands: [],
-            skills: [],
-            message: "Could not read CODEX_TOKEN from its secret store. Unlock it, then refresh.",
-          }) as const satisfies ServerProvider;
-
-        const invalidations = yield* Ref.make(0);
-        const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
-        const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-          resolve: (environment) =>
-            Effect.succeed({
-              variables: literalProviderInstanceEnvironment(environment),
-              unresolved: [],
-            }),
-          prime: () => Effect.void,
-          invalidate: () => Ref.update(invalidations, (count) => count + 1),
-          check: () => Effect.succeed({ _tag: "Resolved" }),
-          listOnePasswordAccounts: Effect.succeed([]),
-        });
-        const instanceRegistryLayer = Layer.succeed(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          {
-            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-            getInstance: () => Effect.succeed(undefined),
-            listInstances: Effect.succeed([]),
-            listUnavailable: Effect.succeed([
-              unavailableProvider(readableId),
-              unavailableProvider(otherId),
-            ]),
-            rebuildInstanceWhen: (instanceId) =>
-              Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(Effect.as(true)),
-            streamChanges: Stream.empty,
-            listEnvironments: Effect.succeed(
-              new Map([
-                [readableId, decodeEnvironment([onePasswordVariable("CODEX_TOKEN", reference)])],
-                [
-                  otherId,
-                  decodeEnvironment([onePasswordVariable("CODEX_TOKEN", "op://Vault/Other/token")]),
-                ],
-                [liveId, decodeEnvironment([onePasswordVariable("CODEX_TOKEN", reference)])],
-              ]),
-            ),
-            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-          },
-        );
-
-        const scope = yield* Scope.make();
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-        const runtimeServices = yield* Layer.build(
-          ProviderRegistry.layer.pipe(
-            Layer.provideMerge(instanceRegistryLayer),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-secret-check-",
-              }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-            Layer.provideMerge(secretResolverLayer),
-          ),
-        ).pipe(Scope.provide(scope));
-
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry.ProviderRegistry;
-          const source = decodeSecretSource({
-            kind: "1password",
-            reference,
-            account: HOME_ACCOUNT,
-          });
-          const result = yield* registry.checkSecretSource(source);
-
-          assert.deepStrictEqual(result, { _tag: "Resolved" });
-          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [readableId, liveId]);
-          assert.strictEqual(yield* Ref.get(invalidations), 0);
-        }).pipe(Effect.provide(runtimeServices));
-      }),
-    );
-
-    it.effect("reads every instance's secret in one go before rebuilding any of them", () =>
-      Effect.gen(function* () {
-        const codexDriver = ProviderDriverKind.make("codex");
-        const claudeInstanceId = ProviderInstanceId.make("claude");
-        const codexInstanceId = ProviderInstanceId.make("codex");
-        const claudeReference = "op://Vault/claude/token";
-        const codexReference = "op://Vault/codex/token";
-        const unavailableProvider = (instanceId: ProviderInstanceId) =>
-          ({
-            instanceId,
-            driver: codexDriver,
-            status: "error",
-            enabled: true,
-            installed: false,
-            auth: { status: "unknown" },
-            checkedAt: "2026-06-10T00:00:00.000Z",
-            version: null,
-            models: [],
-            slashCommands: [],
-            skills: [],
-            message: "Driver 'codex' failed to create instance: secret store is locked",
-          }) as const satisfies ServerProvider;
-
-        const primed = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
-        const rebuiltIds = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
-        const secretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-          resolve: (environment) =>
-            Effect.succeed({
-              variables: literalProviderInstanceEnvironment(environment),
-              unresolved: [],
-            }),
-          prime: (references) =>
-            Ref.update(primed, (previous) => [
-              ...previous,
-              references.map((secret) => secret.reference),
-            ]).pipe(Effect.asVoid),
-          invalidate: () => Effect.void,
-          check: () => Effect.succeed({ _tag: "Resolved" }),
-          listOnePasswordAccounts: Effect.succeed([]),
-        });
-        const environmentFor = (reference: string) =>
-          decodeEnvironment([onePasswordVariable("TOKEN", reference)]);
-        const instanceRegistryLayer = Layer.succeed(
-          ProviderInstanceRegistry.ProviderInstanceRegistry,
-          {
-            // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
-            getInstance: () => Effect.succeed(undefined),
-            listInstances: Effect.succeed([]),
-            listUnavailable: Effect.succeed([
-              unavailableProvider(claudeInstanceId),
-              unavailableProvider(codexInstanceId),
-            ]),
-            listEnvironments: Effect.succeed(
-              new Map([
-                [claudeInstanceId, environmentFor(claudeReference)],
-                [codexInstanceId, environmentFor(codexReference)],
-              ]),
-            ),
-            rebuildInstanceWhen: (instanceId, shouldRebuild) =>
-              shouldRebuild({
-                driver: codexDriver,
-                environment: environmentFor(
-                  instanceId === claudeInstanceId ? claudeReference : codexReference,
-                ),
-              })
-                ? Ref.update(rebuiltIds, (previous) => [...previous, instanceId]).pipe(
-                    Effect.as(true),
-                  )
-                : Effect.succeed(false),
-            streamChanges: Stream.empty,
-            subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-          },
-        );
-
-        const scope = yield* Scope.make();
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-        const runtimeServices = yield* Layer.build(
-          ProviderRegistry.layer.pipe(
-            Layer.provideMerge(instanceRegistryLayer),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-secret-prime-",
-              }),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-            Layer.provideMerge(secretResolverLayer),
-          ),
-        ).pipe(Scope.provide(scope));
-
-        yield* Effect.gen(function* () {
-          const registry = yield* ProviderRegistry.ProviderRegistry;
-          yield* registry.refresh();
-
-          // One call carrying both references. Priming per instance would be
-          // one unlock prompt per provider, which is the thing this exists to
-          // avoid, so the count matters as much as the contents.
-          const calls = yield* Ref.get(primed);
-          assert.strictEqual(calls.length, 1);
-          assert.deepStrictEqual(Array.from(calls[0] ?? []), [claudeReference, codexReference]);
-          assert.deepStrictEqual(yield* Ref.get(rebuiltIds), [claudeInstanceId, codexInstanceId]);
-        }).pipe(Effect.provide(runtimeServices));
-      }),
-    );
-
     it.effect(
       "a second request for a cwd being scanned gets its result, even if the first leaves",
       () =>
@@ -1766,8 +1356,6 @@ it.layer(
               listUnavailable: Effect.succeed([]),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-              rebuildInstanceWhen: () => Effect.succeed(false),
-              listEnvironments: Effect.succeed(new Map()),
             },
           );
           const scope = yield* Scope.make();
@@ -1864,8 +1452,6 @@ it.layer(
             listUnavailable: Effect.succeed([]),
             streamChanges: Stream.empty,
             subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
-            listEnvironments: Effect.succeed(new Map()),
-            rebuildInstanceWhen: () => Effect.succeed(false),
           },
         );
         const scope = yield* Scope.make();
@@ -1985,8 +1571,6 @@ it.layer(
               Effect.succeed(instances.find((instance) => instance.instanceId === requestedId)),
             listInstances: Effect.succeed(instances),
             listUnavailable: Effect.succeed([]),
-            listEnvironments: Effect.succeed(new Map()),
-            rebuildInstanceWhen: () => Effect.succeed(false),
             streamChanges: Stream.empty,
             subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), PubSub.subscribe),
           },
@@ -2092,8 +1676,6 @@ it.layer(
               Effect.succeed(instanceId === cursorInstanceId ? instance : undefined),
             listInstances: Effect.succeed([instance]),
             listUnavailable: Effect.succeed([]),
-            listEnvironments: Effect.succeed(new Map()),
-            rebuildInstanceWhen: () => Effect.succeed(false),
             streamChanges: Stream.empty,
             subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
               PubSub.subscribe(pubsub),
@@ -2223,8 +1805,6 @@ it.layer(
                 Effect.succeed(instanceId === openCodeInstanceId ? instance : undefined),
               listInstances: Effect.succeed([instance]),
               listUnavailable: Effect.succeed([]),
-              listEnvironments: Effect.succeed(new Map()),
-              rebuildInstanceWhen: () => Effect.succeed(false),
               streamChanges: Stream.empty,
               subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
                 PubSub.subscribe(pubsub),
@@ -2329,8 +1909,6 @@ it.layer(
               Effect.succeed(instanceId === codexInstanceId ? instance : undefined),
             listInstances: Effect.succeed([instance]),
             listUnavailable: Effect.succeed([]),
-            listEnvironments: Effect.succeed(new Map()),
-            rebuildInstanceWhen: () => Effect.succeed(false),
             streamChanges: Stream.empty,
             subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
               PubSub.subscribe(pubsub),
@@ -2366,118 +1944,6 @@ it.layer(
             withBundledCompatibility(cachedProvider),
           ]);
         }).pipe(Effect.provide(runtimeServices));
-      }),
-    );
-
-    it.effect("reads every boot instance's secret before building any of them", () =>
-      Effect.gen(function* () {
-        const claudeReference = "op://Vault/claude/token";
-        const codexReference = "op://Vault/codex/token";
-        // `streamChanges` carries later writes only, so the watcher never
-        // sees this snapshot. Boot is the run where nothing is cached yet
-        // and therefore the one that pays the most prompts without priming.
-        const serverSettings = yield* makeMutableServerSettingsService(
-          decodeServerSettings(
-            deepMerge(encodedDefaultServerSettings, {
-              providerInstances: {
-                ...disabledDefaultSlots("codex", "claudeAgent", "cursor", "grok", "opencode"),
-                claude_secret: {
-                  driver: "claudeAgent",
-                  displayName: "Claude Secret",
-                  enabled: false,
-                  environment: [
-                    {
-                      name: "CLAUDE_CODE_OAUTH_TOKEN",
-                      value: {
-                        kind: "1password",
-                        reference: claudeReference,
-                        account: HOME_ACCOUNT,
-                      },
-                    },
-                  ],
-                },
-                codex_secret: {
-                  driver: "codex",
-                  displayName: "Codex Secret",
-                  enabled: false,
-                  environment: [
-                    {
-                      name: "TOKEN",
-                      value: {
-                        kind: "1password",
-                        reference: codexReference,
-                        account: HOME_ACCOUNT,
-                      },
-                    },
-                  ],
-                },
-              } as unknown as ContractServerSettings["providerInstances"],
-            }),
-          ),
-        );
-
-        const calls = yield* Ref.make<ReadonlyArray<string>>([]);
-        const recordingSecretResolverLayer = Layer.succeed(ProviderSecretResolver, {
-          resolve: (environment) =>
-            Ref.update(calls, (previous) => [...previous, "resolve"]).pipe(
-              Effect.as({
-                variables: literalProviderInstanceEnvironment(environment),
-                unresolved: [],
-              }),
-            ),
-          prime: (references) =>
-            Ref.update(calls, (previous) => [
-              ...previous,
-              `prime:${references.map((secret) => secret.reference).join(",")}`,
-            ]).pipe(Effect.asVoid),
-          invalidate: () => Effect.void,
-          check: () => Effect.succeed({ _tag: "Resolved" }),
-          listOnePasswordAccounts: Effect.succeed([]),
-        });
-
-        const scope = yield* Scope.make();
-        yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-        yield* Layer.build(
-          ProviderInstanceRegistryHydration.layer.pipe(
-            Layer.provide(PortScanner.layerTest),
-            Layer.provideMerge(AntigravityInstallation.AntigravityInstallation.layer),
-            Layer.provideMerge(
-              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
-            ),
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), {
-                prefix: "t3-provider-registry-boot-prime-",
-              }),
-            ),
-            Layer.provideMerge(layerTestHttpClient),
-            Layer.provideMerge(
-              Layer.succeed(
-                ProviderEventLoggers.ProviderEventLoggers,
-                ProviderEventLoggers.NoOpProviderEventLoggers,
-              ),
-            ),
-            Layer.provideMerge(ProviderLatestVersions.layer),
-            Layer.provideMerge(McpProviderSessions.layer),
-            Layer.provideMerge(ModelManifest.layerTest),
-            Layer.provideMerge(ResetCreditCoordinator.layerTest),
-            Layer.provideMerge(
-              OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
-            ),
-            Layer.provideMerge(NodeServices.layer),
-            Layer.provideMerge(layerBackgroundPolicyAlwaysRun),
-            Layer.provideMerge(recordingSecretResolverLayer),
-          ),
-        ).pipe(Scope.provide(scope));
-
-        // Both references in one call, and that call ahead of the first
-        // instance that would have read one on its own.
-        const recorded = yield* Ref.get(calls);
-        assert.strictEqual(
-          recorded[0],
-          `prime:${claudeReference},${codexReference}`,
-          `Expected boot to prime both references first; instead saw: ${recorded.join(" | ")}`,
-        );
-        assert.strictEqual(recorded.filter((entry) => entry.startsWith("prime")).length, 1);
       }),
     );
 
@@ -2838,144 +2304,6 @@ it.layer(
         );
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.auth.status, "unauthenticated");
-      }).pipe(
-        Effect.provide(
-          layerMockSpawner((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("signs out an instance whose OAuth token Anthropic rejects", () =>
-      Effect.gen(function* () {
-        // The probe only proves the CLI found a token; Anthropic is the one
-        // that knows whether it still works.
-        const status = yield* checkClaudeProviderStatus(
-          defaultClaudeSettings,
-          claudeCapabilities({
-            tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
-            apiProvider: "firstParty",
-          }),
-          { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-stale" },
-        ).pipe(
-          Effect.provide(layerClaudeCredentialHttp(() => new Response("no", { status: 401 }))),
-        );
-        assert.strictEqual(status.status, "error");
-        assert.strictEqual(status.auth.status, "unauthenticated");
-        assert.include(status.message ?? "", "CLAUDE_CODE_OAUTH_TOKEN");
-      }).pipe(
-        Effect.provide(
-          layerMockSpawner((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("leaves the instance alone when the token is an unresolved reference", () =>
-      Effect.gen(function* () {
-        // Nothing resolved the reference into a credential, so Anthropic has
-        // no opinion worth asking for and the token is not what is wrong.
-        let requests = 0;
-        const status = yield* checkClaudeProviderStatus(
-          defaultClaudeSettings,
-          claudeCapabilities({
-            tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
-            apiProvider: "firstParty",
-          }),
-          { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "op://Vault/item/credential" },
-        ).pipe(
-          Effect.provide(
-            layerClaudeCredentialHttp(() => {
-              requests += 1;
-              return new Response("no", { status: 401 });
-            }),
-          ),
-        );
-        assert.strictEqual(requests, 0);
-        assert.strictEqual(status.auth.status, "authenticated");
-      }).pipe(
-        Effect.provide(
-          layerMockSpawner((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("stays authenticated while Anthropic still accepts the OAuth token", () =>
-      Effect.gen(function* () {
-        const status = yield* checkClaudeProviderStatus(
-          defaultClaudeSettings,
-          claudeCapabilities({
-            tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
-            apiProvider: "firstParty",
-          }),
-          { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-good" },
-        ).pipe(Effect.provide(layerClaudeCredentialHttp(() => Response.json({ data: [] }))));
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.auth.status, "authenticated");
-      }).pipe(
-        Effect.provide(
-          layerMockSpawner((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("keeps a working instance authenticated when the check cannot reach Anthropic", () =>
-      Effect.gen(function* () {
-        // An outage or a captive network must never read as a revoked token.
-        const status = yield* checkClaudeProviderStatus(
-          defaultClaudeSettings,
-          claudeCapabilities({
-            tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
-            apiProvider: "firstParty",
-          }),
-          { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-good" },
-        ).pipe(
-          Effect.provide(layerClaudeCredentialHttp(() => new Response("down", { status: 503 }))),
-        );
-        assert.strictEqual(status.status, "ready");
-        assert.strictEqual(status.auth.status, "authenticated");
-      }).pipe(
-        Effect.provide(
-          layerMockSpawner((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("asks Anthropic nothing when the CLI authenticates some other way", () =>
-      Effect.gen(function* () {
-        let requests = 0;
-        const status = yield* checkClaudeProviderStatus(
-          defaultClaudeSettings,
-          claudeCapabilities({ tokenSource: "claude.ai", apiProvider: "firstParty" }),
-          { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-ignored-by-the-cli" },
-        ).pipe(
-          Effect.provide(
-            layerClaudeCredentialHttp(() => {
-              requests += 1;
-              return new Response("no", { status: 401 });
-            }),
-          ),
-        );
-        assert.strictEqual(requests, 0);
-        assert.strictEqual(status.auth.status, "authenticated");
       }).pipe(
         Effect.provide(
           layerMockSpawner((args) => {

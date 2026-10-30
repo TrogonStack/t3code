@@ -1,5 +1,4 @@
-import type { EnvironmentId, SettingsSecretValue } from "@t3tools/contracts";
-import * as Result from "effect/Result";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -13,14 +12,8 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
+import { SecretInput } from "./SecretInput";
 import { Label } from "../ui/label";
-import {
-  hasSavedCredential,
-  SecretField,
-  secretFieldDraft,
-  secretFieldSubmission,
-  type SecretFieldDraft,
-} from "./SecretSourceControls";
 
 export function SourceControlTokenSettings({
   environmentId,
@@ -36,31 +29,20 @@ export function SourceControlTokenSettings({
   const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
-  const secretProviders = useEnvironmentSettings(
-    environmentId,
-    (settings) => settings.secretProviders,
-  );
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `save ${definition.label} token`,
   });
   const defaultHost = definition.publicHost ?? "";
   const [host, setHost] = useState(defaultHost);
-  const [pending, setPending] = useState<{
-    readonly key: string;
-    readonly draft: SecretFieldDraft;
-  } | null>(null);
+  const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const normalizedHost = host.trim().toLowerCase();
-  const savedToken = tokens[normalizedHost];
-  const isSaved = hasSavedCredential(savedToken);
+  const isSaved = (tokens[normalizedHost] ?? "").length > 0;
   const savedHosts = Object.entries(tokens)
-    .filter(([, value]) => hasSavedCredential(value))
+    .filter(([, value]) => value.length > 0)
     .map(([saved]) => saved);
-  const sourceKey = JSON.stringify([normalizedHost, savedToken ?? ""]);
-  const draft = pending?.key === sourceKey ? pending.draft : secretFieldDraft(savedToken);
-  const submission = Result.getOrUndefined(secretFieldSubmission(draft, secretProviders));
 
-  const save = async (target: string, token: SettingsSecretValue) => {
+  const save = async (target: string, token: string) => {
     setSaving(true);
     const result = await updateSettings({
       environmentId,
@@ -73,7 +55,7 @@ export function SourceControlTokenSettings({
     });
     setSaving(false);
     if (result._tag === "Success") {
-      setPending(null);
+      setDraft("");
       onSaved();
     }
   };
@@ -83,7 +65,7 @@ export function SourceControlTokenSettings({
       className="grid gap-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (normalizedHost && submission !== undefined) void save(normalizedHost, submission);
+        if (normalizedHost && draft.trim()) void save(normalizedHost, draft.trim());
       }}
     >
       {/* Locked while saving: a successful save clears the draft, which would drop edits made mid-request. */}
@@ -124,14 +106,12 @@ export function SourceControlTokenSettings({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
-            <SecretField
+            <SecretInput
               id={`${definition.kind}-token-${environmentId}`}
-              label={`${definition.label} token`}
-              environmentId={environmentId}
-              secretProviders={secretProviders}
-              value={savedToken}
-              draft={draft}
-              onDraftChange={(next) => setPending({ key: sourceKey, draft: next })}
+              size="sm"
+              configured={isSaved}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
             />
           </div>
         </div>
@@ -152,11 +132,7 @@ export function SourceControlTokenSettings({
                 Remove
               </Button>
             ) : null}
-            <Button
-              type="submit"
-              size="xs"
-              disabled={!normalizedHost || submission === undefined || saving}
-            >
+            <Button type="submit" size="xs" disabled={!normalizedHost || !draft.trim() || saving}>
               Save
             </Button>
           </div>

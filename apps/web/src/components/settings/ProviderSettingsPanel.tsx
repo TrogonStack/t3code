@@ -921,7 +921,6 @@ export function EnvironmentProviderSettings({
         key={row.instanceId}
         environmentId={environmentId}
         environmentLabel={environmentLabel}
-        secretProviders={settings.secretProviders}
         instanceId={row.instanceId}
         driver={row.driver}
         explicitInstance={row.explicitInstance}
@@ -1224,7 +1223,6 @@ function ProviderInstanceRow({
   projectOverrideEffectiveEnabled,
   modelPreferences,
   favorites,
-  secretProviders,
   actions,
 }: {
   readonly environmentId: EnvironmentId;
@@ -1247,7 +1245,6 @@ function ProviderInstanceRow({
     | { readonly hiddenModels: ReadonlyArray<string>; readonly modelOrder: ReadonlyArray<string> }
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
-  readonly secretProviders: UnifiedSettings["secretProviders"];
   readonly actions: ProviderInstanceRowActions;
 }) {
   const allProjects = useProjects();
@@ -1293,7 +1290,6 @@ function ProviderInstanceRow({
       secretSources={secretSources}
       acpProjects={acpProjects}
       projectOverride={projectOverride}
-      secretProviders={secretProviders}
       onAcceptUrlAuth={
         readOnly ? undefined : (action) => actions.acceptUrlAuthentication(instanceId, action)
       }

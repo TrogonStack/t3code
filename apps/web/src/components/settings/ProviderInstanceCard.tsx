@@ -18,10 +18,8 @@ import * as Result from "effect/Result";
 import { Fragment, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
-  isSecretProviderSecretSource,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
-  type ProviderSecretSource,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type AcpRegistryUrlAuthAction,
@@ -38,7 +36,6 @@ import {
   readCustomModelEntries,
   toCustomModelSetting,
 } from "@t3tools/shared/model";
-import { Link } from "@tanstack/react-router";
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -70,17 +67,6 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
-import {
-  EMPTY_SECRET_PROVIDERS,
-  EnvironmentSourceSelect,
-  referencePlaceholderFor,
-  SecretCheckButton,
-  SecretField,
-  secretSourceFromDraft,
-  useSecretSourceChecks,
-  type EnvironmentDraftRow,
-  type SecretProviders,
-} from "./SecretSourceControls";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -122,65 +108,13 @@ function makeEnvironmentDraftRow(
   variable: ProviderInstanceEnvironmentVariable,
   index: number,
 ): EnvironmentDraftRow {
-  const id = `${index}:${variable.name}`;
-  if (typeof variable.value !== "string") {
-    const source = variable.value;
-    return {
-      id,
-      name: variable.name,
-      source: source.kind,
-      savedName: variable.name,
-      value: "",
-      reference: source.reference,
-      account: source.kind === "1password" ? source.account : "",
-      provider: source.kind === "secret-provider" ? source.provider : "",
-      sensitive: false,
-    };
-  }
-  if (isLegacyOnePasswordReference(variable)) {
-    return {
-      id,
-      name: variable.name,
-      source: "1password",
-      savedName: variable.name,
-      value: "",
-      reference: variable.value.trim(),
-      account: "",
-      provider: "",
-      sensitive: false,
-    };
-  }
   return {
-    id,
+    id: `${index}:${variable.name}`,
     name: variable.name,
-    source: "plain",
-    savedName: variable.name,
     value: variable.value,
-    reference: "",
-    account: "",
-    provider: "",
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
-}
-
-function environmentValuesEqual(
-  left: ProviderInstanceEnvironmentVariable["value"],
-  right: ProviderInstanceEnvironmentVariable["value"],
-): boolean {
-  if (typeof left === "string" || typeof right === "string") return left === right;
-  if (left.kind === "1password") {
-    return (
-      right.kind === "1password" &&
-      left.reference === right.reference &&
-      left.account === right.account
-    );
-  }
-  return (
-    right.kind === "secret-provider" &&
-    left.provider === right.provider &&
-    left.reference === right.reference
-  );
 }
 
 const toEnvironmentDraftRows = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) =>
@@ -287,33 +221,6 @@ function providerEnvironmentWithoutNames(
   return (environment ?? []).filter((variable) => !names.has(variable.name));
 }
 
-/**
- * Dedicated fields edit a plain value or a named secret provider reference.
- * A legacy 1Password source, or a plain `op://` value that still has to become
- * one, stays in the generic editor, which has the account field it needs.
- */
-export function splitDedicatedProviderEnvironment(
-  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
-  names: ReadonlySet<string>,
-): {
-  readonly dedicated: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-  readonly generic: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-} {
-  const dedicated: ProviderInstanceEnvironmentVariable[] = [];
-  const generic: ProviderInstanceEnvironmentVariable[] = [];
-  for (const variable of environment ?? []) {
-    if (
-      names.has(variable.name) &&
-      (typeof variable.value === "string"
-        ? !isLegacyOnePasswordReference(variable)
-        : variable.value.kind === "secret-provider")
-    ) {
-      dedicated.push(variable);
-    } else generic.push(variable);
-  }
-  return { dedicated, generic };
-}
-
 export function nextProviderEnvironmentWithFieldValue(
   environment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
   field: ProviderEnvironmentField,
@@ -364,8 +271,6 @@ function ProviderEnvironmentFieldRow(props: {
   readonly field: ProviderEnvironmentField;
   readonly variable: ProviderInstanceEnvironmentVariable | undefined;
   readonly idPrefix: string;
-  readonly environmentId?: EnvironmentId | undefined;
-  readonly secretProviders: SecretProviders;
   readonly onCommit: (field: ProviderEnvironmentField, value: string) => void;
   readonly onSecretChange: (
     field: ProviderEnvironmentField,
@@ -375,33 +280,8 @@ function ProviderEnvironmentFieldRow(props: {
   readonly secretSources: ReadonlyArray<SecretSource>;
 }) {
   const inputId = `${props.idPrefix}-environment-${props.field.name}`;
-  const { variable } = props;
-  // A legacy 1Password source needs its account field, which only the
-  // Environment editor has, so the variable is edited there instead.
-  if (variable !== undefined && makeEnvironmentDraftRow(variable, 0).source === "1password") {
-    return (
-      <SettingsRow
-        title={<label htmlFor={inputId}>{props.field.label}</label>}
-        description={props.field.description}
-        control={
-          <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
-            <DraftInput
-              id={inputId}
-              size="sm"
-              className="min-w-0 flex-1"
-              value=""
-              onCommit={() => undefined}
-              placeholder="Read from a secret provider. Edit it under Environment."
-              disabled
-              spellCheck={false}
-            />
-          </div>
-        }
-      />
-    );
-  }
+  const value = props.variable?.valueRedacted ? "" : (props.variable?.value ?? "");
 
-  const value = variable?.value;
   return (
     <SettingsRow
       title={<label htmlFor={inputId}>{props.field.label}</label>}
@@ -452,9 +332,7 @@ function ProviderEnvironmentFieldRow(props: {
 }
 
 export function ProviderEnvironmentSection(props: {
-  readonly environmentId?: EnvironmentId | undefined;
   readonly environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>;
-  readonly secretProviders: SecretProviders;
   readonly onChange: (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => void;
   readonly secretSources?: ReadonlyArray<SecretSource>;
 }) {
@@ -472,9 +350,8 @@ export function ProviderEnvironmentSection(props: {
   const setRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) =>
     setDraft({ ...draft, rows: nextRows });
 
-  const commitRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
+  const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
-    const savedNames = new Map<string, string>();
     for (const row of nextRows) {
       const name = row.name.trim();
       if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
@@ -484,43 +361,14 @@ export function ProviderEnvironmentSection(props: {
           row.sensitive !== true ||
           row.valueRedacted !== undefined
         ) {
-          setRows(nextRows);
           return;
         }
         continue;
       }
-      if (row.source !== "plain") {
-        const source = secretSourceFromDraft(row, props.secretProviders);
-        if (Result.isSuccess(source)) {
-          published.push({ name, value: source.success, sensitive: false });
-          savedNames.set(row.id, name);
-          continue;
-        }
-        // Keep what is saved until the row is complete, so one unfinished row
-        // never holds back edits to the others.
-        const saved =
-          row.savedName === undefined
-            ? undefined
-            : readProviderEnvironmentVariable(props.environment, row.savedName);
-        if (saved !== undefined) published.push(saved);
-        continue;
-      }
-      published.push({
-        name,
-        value: row.value,
-        sensitive: row.sensitive,
-        ...(row.valueRedacted !== undefined ? { valueRedacted: row.valueRedacted } : {}),
-      });
-      savedNames.set(row.id, name);
+      const { id: _id, ...rest } = row;
+      published.push({ ...rest, name });
     }
-    setDraft({
-      rows: nextRows.map((row) => {
-        const savedName = savedNames.get(row.id);
-        return savedName === undefined ? row : { ...row, savedName };
-      }),
-      seen: draft.seen,
-      lastPublished: published,
-    });
+    setDraft({ rows: nextRows, seen: draft.seen, lastPublished: published });
     props.onChange(published);
   };
 
@@ -534,7 +382,8 @@ export function ProviderEnvironmentSection(props: {
           }
         : row,
     );
-    commitRows(nextRows);
+    setRows(nextRows);
+    publishRows(nextRows);
   };
 
   const setVariableSecret = (id: string, secret: SecretReference | undefined) => {
@@ -549,14 +398,9 @@ export function ProviderEnvironmentSection(props: {
 
   const removeVariable = (id: string) => {
     const nextRows = rows.filter((row) => row.id !== id);
-    commitRows(nextRows);
+    setRows(nextRows);
+    publishRows(nextRows);
   };
-
-  const hasSecretProviders = Object.keys(props.secretProviders).length > 0;
-
-  const secretChecks = useSecretSourceChecks(props.environmentId);
-  const canCheckSecrets = secretChecks.canCheck;
-  const secretCheckStates = secretChecks.checks;
 
   const addVariable = () =>
     setRows([
@@ -564,11 +408,7 @@ export function ProviderEnvironmentSection(props: {
       {
         id: nextEnvironmentVariableDraftId(),
         name: "",
-        source: "plain",
         value: "",
-        reference: "",
-        account: "",
-        provider: "",
         sensitive: true,
       },
     ]);
@@ -698,18 +538,8 @@ export function ProviderEnvironmentSection(props: {
             );
           })}
           <p className="text-xs text-muted-foreground">
-            Sensitive values are stored separately and never returned to the app. Values from a
-            secret provider are read on the server each time the provider starts.
+            Sensitive values are stored separately and never returned to the app.
           </p>
-          {hasSecretProviders ? null : (
-            <p className="text-xs text-muted-foreground">
-              Add a secret provider in{" "}
-              <Link to="/settings/secrets" className="underline underline-offset-2">
-                Settings → Secrets
-              </Link>{" "}
-              to read values from 1Password, OpenBao, or AWS Secrets Manager.
-            </p>
-          )}
         </div>
       ) : null}
     </SettingsRow>
@@ -832,7 +662,6 @@ interface ProviderInstanceCardProps {
         readonly workspaceRoot: string;
       }>
     | undefined;
-  readonly secretProviders?: SecretProviders | undefined;
 }
 
 const EMPTY_ACP_PROJECTS: NonNullable<ProviderInstanceCardProps["acpProjects"]> = [];
@@ -871,7 +700,6 @@ export function ProviderInstanceCard({
   acpProjects = EMPTY_ACP_PROJECTS,
   secretSources = NO_SECRET_SOURCES,
   projectOverride,
-  secretProviders = EMPTY_SECRET_PROVIDERS,
 }: ProviderInstanceCardProps) {
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
   const effectiveProvider = liveProvider && { ...liveProvider, enabled };
@@ -1010,22 +838,17 @@ export function ProviderInstanceCard({
   };
   const environmentFields = driverOption?.environmentFields ?? [];
   const environmentFieldNames = new Set(environmentFields.map((field) => field.name));
-  const { dedicated: dedicatedEnvironment, generic: genericEnvironment } =
-    splitDedicatedProviderEnvironment(instance.environment, environmentFieldNames);
+  const genericEnvironment = providerEnvironmentWithoutNames(
+    instance.environment,
+    environmentFieldNames,
+  );
   const updateGenericEnvironment = (
     environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
   ) => {
-    const genericNames = new Set(environment.map((variable) => variable.name));
-    updateEnvironment([
-      ...providerEnvironmentWithoutNames(dedicatedEnvironment, genericNames),
-      ...environment,
-    ]);
-  };
-  const updateEnvironmentFieldSource = (
-    field: ProviderEnvironmentField,
-    source: ProviderSecretSource,
-  ) => {
-    updateEnvironment(nextProviderEnvironmentWithFieldSource(instance.environment, field, source));
+    const dedicatedEnvironment = (instance.environment ?? []).filter((variable) =>
+      environmentFieldNames.has(variable.name),
+    );
+    updateEnvironment([...dedicatedEnvironment, ...environment]);
   };
   const updateEnvironmentField = (field: ProviderEnvironmentField, value: string) => {
     updateEnvironment(nextProviderEnvironmentWithFieldValue(instance.environment, field, value));
@@ -1436,8 +1259,6 @@ export function ProviderInstanceCard({
                   field={field}
                   variable={readProviderEnvironmentVariable(instance.environment, field.name)}
                   idPrefix={`provider-instance-${instanceId}`}
-                  environmentId={environmentId}
-                  secretProviders={secretProviders}
                   onCommit={updateEnvironmentField}
                   onSecretChange={updateEnvironmentFieldSecret}
                   onRemove={removeEnvironmentField}
@@ -1482,9 +1303,7 @@ export function ProviderInstanceCard({
         className={readOnly ? "opacity-50 select-none" : undefined}
       >
         <ProviderEnvironmentSection
-          environmentId={environmentId}
           environment={genericEnvironment}
-          secretProviders={secretProviders}
           onChange={updateGenericEnvironment}
           secretSources={secretSources}
         />

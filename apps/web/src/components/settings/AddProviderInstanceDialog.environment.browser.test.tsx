@@ -1,5 +1,4 @@
 import { EnvironmentId, ProviderDriverKind, type AcpRegistrySearchAgent } from "@t3tools/contracts";
-import type { ReactNode } from "react";
 import { userEvent } from "vite-plus/test/browser";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -11,7 +10,7 @@ const actions = vi.hoisted(() => ({
   canManageProviders: true,
 }));
 const settingsHooks = vi.hoisted(() => ({
-  read: vi.fn(() => ({ providerInstances: {}, secretProviders: {} })),
+  read: vi.fn(() => ({ providerInstances: {} })),
   mutate: vi.fn(),
   useMutation: vi.fn(),
 }));
@@ -32,12 +31,6 @@ const preparedAgent = vi.hoisted((): AcpRegistrySearchAgent => ({
 vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
   ...(await original()),
   squashAtomCommandFailure: () => new Error("The settings update failed."),
-}));
-vi.mock(import("@tanstack/react-router"), async (original) => ({
-  ...(await original()),
-  Link: (({ children }: { children: ReactNode }) => (
-    <a href="/settings/secrets">{children}</a>
-  )) as never,
 }));
 vi.mock(import("../../hooks/useSettings"), async (original) => ({
   ...(await original()),
@@ -150,7 +143,7 @@ function setup() {
   actions.canManageProviders = true;
   actions.toast.mockReset();
   actions.onOpenChange.mockReset();
-  settingsHooks.read.mockReset().mockReturnValue({ providerInstances: {}, secretProviders: {} });
+  settingsHooks.read.mockReset().mockReturnValue({ providerInstances: {} });
   settingsHooks.mutate.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
   settingsHooks.useMutation.mockReset().mockReturnValue(settingsHooks.mutate);
 }
@@ -160,7 +153,6 @@ describe("AddProviderInstanceDialog environment routing", () => {
     setup();
     settingsHooks.read.mockReturnValue({
       providerInstances: { codex_2: { driver: "codex", enabled: false } },
-      secretProviders: {},
     });
     await using _screen = await render(dialog());
     await click("Configure manually");

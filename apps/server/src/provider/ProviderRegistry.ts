@@ -3,8 +3,6 @@ import {
   isProviderWorkspaceSnapshotCurrent,
   ProviderDriverKind,
   type ProviderInstanceId,
-  type ProviderSecretSource,
-  type SecretSourceCheckResult,
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
@@ -93,14 +91,6 @@ export class ProviderRegistry extends Context.Service<
       readonly action: ProviderMaintenanceActionKind;
       readonly state: ServerProviderUpdateState | null;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
-
-    /**
-     * Settings "check" for one secret source. A readable source also rebuilds every instance
-     * that reads it, from the value the check just cached.
-     */
-    readonly checkSecretSource: (
-      source: ProviderSecretSource,
-    ) => Effect.Effect<SecretSourceCheckResult>;
 
     readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
   }
@@ -351,9 +341,6 @@ export const layer = Layer.effect(
       yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
     const manifestService = yield* ModelManifest.ModelManifest;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
-    // The layer's own scope. `syncLiveSources` forks per-instance
-    // subscription fibres into it; when a refresh drives that sync, the
-    // fibres have to land here rather than in the caller's request scope.
     const serviceScope = yield* Effect.scope;
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -662,7 +649,6 @@ export const layer = Layer.effect(
         return yield* refreshAll();
       }
       const defaultInstanceId = defaultInstanceIdForDriver(provider);
-      yield* reloadSecretBackedInstances([defaultInstanceId]);
       const sources = yield* getLiveSources;
       const providerSource = sources.find(
         (candidate) => candidate.instanceId === defaultInstanceId,
@@ -879,77 +865,6 @@ export const layer = Layer.effect(
         });
       }),
     );
-    const rebuildSecretBackedInstances = Effect.fn("rebuildSecretBackedInstances")(function* (
-      targets: ReadonlyArray<ProviderInstanceId>,
-    ) {
-      const rebuilt = yield* Effect.forEach(targets, (instanceId) =>
-        instanceRegistry.rebuildInstanceWhen(instanceId, (entry) =>
-          hasProviderSecretReference(entry.environment),
-        ),
-      );
-      if (rebuilt.some(Boolean)) {
-        // Adopt the replacement instances now rather than waiting on the
-        // registry's change tick, so the refresh that triggered the rebuild
-        // probes the new process instead of the one it just closed.
-        yield* syncLiveSources.pipe(Effect.provideService(Scope.Scope, serviceScope));
-      }
-    });
-
-    const checkSecretSource = Effect.fn("checkSecretSource")(function* (
-      source: ProviderSecretSource,
-    ) {
-      const result = yield* secretResolver.check(source);
-      const reference = providerSecretReference(source);
-      if (result._tag !== "Resolved" || reference === undefined) {
-        return result;
-      }
-      // Live instances are targets too: they read the secret at create time, so a
-      // rotated value only reaches them through a rebuild. The check left the
-      // value in the resolver's cache, so these rebuilds never reach the store again.
-      const environments = yield* instanceRegistry.listEnvironments;
-      const consumers = Array.from(environments)
-        .filter(([, environment]) =>
-          collectProviderSecretReferences([environment]).some((candidate) =>
-            Equal.equals(candidate, reference),
-          ),
-        )
-        .map(([instanceId]) => instanceId);
-      yield* rebuildSecretBackedInstances(consumers);
-      return result;
-    });
-
-    /**
-     * Re-read every external-store credential and rebuild the instances that consume one: drivers
-     * resolve their environment once at create time, so dropping the cache alone changes nothing.
-     * Literal-only instances and running threads are untouched.
-     */
-    const reloadSecretBackedInstances = Effect.fn("reloadSecretBackedInstances")(function* (
-      instanceIds?: ReadonlyArray<ProviderInstanceId>,
-    ) {
-      yield* secretResolver.invalidate();
-      // Unavailable instances are targets too. An instance whose last rebuild
-      // failed because the vault was locked is not live, so live subscriptions
-      // alone would never reach it again, and a refresh is exactly the moment
-      // the user is saying the vault is open now.
-      const targets =
-        instanceIds ??
-        Array.from(
-          new Set([
-            ...(yield* Ref.get(liveSubsRef)).keys(),
-            ...(yield* instanceRegistry.listUnavailable).map(snapshotInstanceKey),
-          ]),
-        );
-      // Resolve every reference the rebuilds are about to need, in one read.
-      // Each rebuild resolves its own environment, and the secret store
-      // charges an unlock per read rather than per secret, so without this a
-      // fleet of five instances is five authorizations for one refresh.
-      const environments = yield* instanceRegistry.listEnvironments;
-      yield* secretResolver.prime(
-        collectProviderSecretReferences(targets.map((instanceId) => environments.get(instanceId))),
-      );
-      yield* rebuildSecretBackedInstances(targets);
-    });
-
     const syncLiveSourcesAndContinue = syncLiveSources.pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1120,7 +1035,6 @@ export const layer = Layer.effect(
       refreshAfterUpdate,
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
-      checkSecretSource,
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },

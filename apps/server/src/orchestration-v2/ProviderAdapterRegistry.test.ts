@@ -2,42 +2,28 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
-  ProviderInstanceEnvironment,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
   ProviderSetupError,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ProviderAuthFlow from "@t3tools/provider-core/server/providerAuthFlow";
 import type { ProviderAuthController } from "../provider/ProviderAuthService.ts";
-import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
-import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
-import { hasProviderSecretReference } from "../provider/ProviderSecretReference.ts";
-import * as ProviderSecretResolver from "../provider/ProviderSecretResolver.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const driver = ProviderDriverKind.make("codex");
 const personalId = ProviderInstanceId.make("codex_personal");
 const workId = ProviderInstanceId.make("codex_work");
-
-const HOME_ACCOUNT = "my.1password.com";
-const decodeEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
-const onePasswordVariable = (name: string, reference: string) => ({
-  name,
-  value: { kind: "1password" as const, reference, account: HOME_ACCOUNT },
-});
 
 const makeAdapter = (
   instanceId: ProviderInstanceId,
@@ -78,10 +64,8 @@ const layerInstanceRegistry = Layer.succeed(ProviderInstanceRegistry.ProviderIns
     Effect.succeed(instances.find((instance) => instance.instanceId === instanceId)),
   listInstances: Effect.succeed(instances),
   listUnavailable: Effect.succeed([]),
-  listEnvironments: Effect.succeed(new Map()),
   streamChanges: Stream.empty,
   subscribeChanges: Effect.never,
-  rebuildInstanceWhen: () => Effect.succeed(false),
 });
 const layerTest = ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
   Layer.provide(layerInstanceRegistry),
@@ -210,122 +194,4 @@ it.effect("interrupts admitted session startup when a shared peer signs out", ()
     yield* Deferred.await(stopped);
     assert.isTrue(Exit.isFailure(yield* Fiber.await(startup)));
   }).pipe(Effect.provide(NodeServices.layer)),
-);
-
-it.effect("opens v2 sessions with resolved secrets and rebuilds them when a secret rotates", () =>
-  Effect.gen(function* () {
-    const secretInstanceId = ProviderInstanceId.make("codex_secret");
-    const apiKeyReference = "op://Vault/Codex/api-key";
-    const apiKey = yield* Ref.make("sk-first");
-    const sessionEnvironments = yield* Ref.make<ReadonlyArray<NodeJS.ProcessEnv>>([]);
-    const resolver: ProviderSecretResolver.ProviderSecretResolverShape = {
-      resolve: (environment) =>
-        Effect.gen(function* () {
-          const variables = [];
-          const unresolved = [];
-          for (const { name, value, sensitive } of environment ?? []) {
-            if (typeof value !== "string" && value.reference === apiKeyReference) {
-              variables.push({ name, value: yield* Ref.get(apiKey), sensitive: true });
-            } else if (typeof value !== "string") {
-              unresolved.push(name);
-            } else {
-              variables.push({ name, value, sensitive });
-            }
-          }
-          return { variables, unresolved };
-        }),
-      prime: () => Effect.void,
-      invalidate: () => Effect.void,
-      check: () => Effect.succeed({ _tag: "Resolved" }),
-      listOnePasswordAccounts: Effect.succeed([]),
-    };
-    const secretDriver: ProviderDriver<Record<string, never>> = {
-      driverKind: driver,
-      metadata: { displayName: "Codex" },
-      configSchema: Schema.Struct({}),
-      defaultConfig: () => ({}),
-      create: (input) =>
-        Effect.gen(function* () {
-          const environment = yield* mergeProviderInstanceEnvironment(
-            input.environment,
-            yield* HostProcess.Environment,
-          );
-          return {
-            ...makeInstance(input.instanceId, {
-              ...makeAdapter(input.instanceId),
-              openSession: () =>
-                Ref.update(sessionEnvironments, (previous) => [...previous, environment]).pipe(
-                  Effect.andThen(Effect.die("session environment recorded")),
-                ),
-            }),
-            snapshot: {
-              getSnapshot: Effect.succeed({}),
-            } as unknown as ProviderInstance["snapshot"],
-          };
-        }),
-    };
-    const openSession = (registry: ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]) =>
-      registry.get(secretInstanceId).pipe(
-        Effect.flatMap((adapter) =>
-          adapter.openSession({
-            threadId: ThreadId.make("secret-thread"),
-            providerSessionId: ProviderSessionId.make("secret-session"),
-            modelSelection: { instanceId: secretInstanceId, model: "test-model" },
-            runtimePolicy: {
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              cwd: "/workspace",
-            },
-          }),
-        ),
-        Effect.exit,
-      );
-
-    const { registry: instanceRegistry } =
-      yield* ProviderInstanceRegistry.makeProviderInstanceRegistry({
-        drivers: [secretDriver],
-        configMap: {
-          [secretInstanceId]: {
-            driver,
-            environment: decodeEnvironment([
-              onePasswordVariable("OPENAI_API_KEY", apiKeyReference),
-              { name: "CODEX_PROFILE", value: "work", sensitive: false },
-            ]),
-            config: {},
-          },
-        },
-      }).pipe(
-        Effect.provideService(ProviderSecretResolver.ProviderSecretResolver, resolver),
-        Effect.provideService(HostProcess.Environment, {
-          PATH: "/bin",
-        }),
-      );
-    const registry = yield* Effect.service(ProviderAdapterRegistry.ProviderAdapterRegistryV2).pipe(
-      Effect.provide(
-        ProviderAdapterRegistry.layerFromProviderInstanceRegistry.pipe(
-          Layer.provide(
-            Layer.succeed(ProviderInstanceRegistry.ProviderInstanceRegistry, instanceRegistry),
-          ),
-        ),
-      ),
-    );
-
-    yield* openSession(registry);
-    yield* Ref.set(apiKey, "sk-rotated");
-    assert.isTrue(
-      yield* instanceRegistry.rebuildInstanceWhen(secretInstanceId, (entry) =>
-        hasProviderSecretReference(entry.environment),
-      ),
-    );
-    yield* openSession(registry);
-
-    const [first, rotated] = yield* Ref.get(sessionEnvironments);
-    assert.deepEqual(first, {
-      PATH: "/bin",
-      OPENAI_API_KEY: "sk-first",
-      CODEX_PROFILE: "work",
-      OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
-    });
-    assert.strictEqual(rotated?.OPENAI_API_KEY, "sk-rotated");
-  }).pipe(Effect.scoped),
 );

@@ -9,7 +9,6 @@ import {
   type SecretReference,
   type ServerProvider,
 } from "@t3tools/contracts";
-import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -27,7 +26,6 @@ import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretReso
 
 import { buildUnavailableProviderSnapshot } from "./unavailableProviderSnapshot.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
-import * as ProviderSecretResolver from "./ProviderSecretResolver.ts";
 import type { AnyProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
 
 export class ProviderInstanceRegistry extends Context.Service<
@@ -38,19 +36,6 @@ export class ProviderInstanceRegistry extends Context.Service<
     ) => Effect.Effect<ProviderInstance | undefined>;
     readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
     readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
-    /** Every instance `rebuildInstanceWhen` can act on, so secrets resolve once per batch of rebuilds. */
-    readonly listEnvironments: Effect.Effect<
-      ReadonlyMap<ProviderInstanceId, ProviderInstanceEnvironment | undefined>
-    >;
-    /**
-     * Rebuilds an instance from its current config when `shouldRebuild` accepts it, for create-time
-     * inputs `reconcile` cannot see (an external secret). Unknown ids are a no-op; running sessions
-     * keep the old instance. Resolves to whether a rebuild happened.
-     */
-    readonly rebuildInstanceWhen: (
-      instanceId: ProviderInstanceId,
-      shouldRebuild: (entry: ProviderInstanceConfig) => boolean,
-    ) => Effect.Effect<boolean>;
     /** streamChanges subscribes on consumption; use subscribeChanges before forking to avoid missing the next publish. */
     readonly streamChanges: Stream.Stream<void>;
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
@@ -64,42 +49,9 @@ interface LiveEntry {
   readonly environment: ResolvedProviderInstanceEnvironment;
 }
 
-function withoutKey<V>(
-  map: ReadonlyMap<ProviderInstanceId, V>,
-  instanceId: ProviderInstanceId,
-): ReadonlyMap<ProviderInstanceId, V> {
-  if (!map.has(instanceId)) {
-    return map;
-  }
-  const next = new Map(map);
-  next.delete(instanceId);
-  return next;
-}
-
-/**
- * Reinstate a rebuilt instance at its old position: map order is settings-author order, so
- * appending would shuffle the UI on every refresh. An instance absent from `previousEntries`
- * goes last until the next settings change.
- */
-function withInstanceAt(
-  previousEntries: ReadonlyMap<ProviderInstanceId, LiveEntry>,
-  instanceId: ProviderInstanceId,
-  rebuilt: LiveEntry,
-): ReadonlyMap<ProviderInstanceId, LiveEntry> {
-  const next = new Map<ProviderInstanceId, LiveEntry>();
-  for (const [id, existing] of previousEntries) {
-    next.set(id, id === instanceId ? rebuilt : existing);
-  }
-  next.set(instanceId, rebuilt);
-  return next;
-}
-
 interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
-  // Configs parked on an unreadable secret. Settings saves leave them parked
-  // so a locked vault is not read, or prompted for, on every unrelated save.
-  readonly secretsUnreadable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ProviderInstanceConfig>>;
   readonly changes: PubSub.PubSub<void>;
 }
 
@@ -163,19 +115,13 @@ const isEntryEnabled = Effect.fn("ProviderInstanceRegistry.isEntryEnabled")(func
 const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
-  readonly secretResolver: ProviderSecretResolver.ProviderSecretResolverShape;
-  readonly hostEnvironment: NodeJS.ProcessEnv;
   readonly instanceId: ProviderInstanceId;
   readonly rawInstanceId: string;
   readonly entry: ProviderInstanceConfig;
   readonly deferSecrets: boolean;
 }): Effect.fn.Return<
   | { readonly kind: "live"; readonly live: LiveEntry }
-  | {
-      readonly kind: "unavailable";
-      readonly snapshot: ServerProvider;
-      readonly secretsUnreadable?: true;
-    },
+  | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
   never,
   R | SecretResolver.SecretResolver
 > {
@@ -260,11 +206,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       enabled,
       config: typedConfig,
     })
-    .pipe(
-      Effect.provideService(Scope.Scope, childScope),
-      Effect.provideService(HostProcess.Environment, hostEnvironment),
-      Effect.result,
-    );
+    .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
   if (createResult._tag === "Failure") {
     yield* Effect.logError("Failed to create provider instance", {
       instanceId: rawInstanceId,
@@ -309,7 +251,6 @@ const makeReconcile = <R>(input: {
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
-      const previousSecretsUnreadable = yield* Ref.get(state.secretsUnreadable);
       const nextRaw = Object.entries(configMap);
       const nextKeys = new Set<ProviderInstanceId>(
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
@@ -354,7 +295,6 @@ const makeReconcile = <R>(input: {
 
       const builtEntries = new Map<ProviderInstanceId, LiveEntry>();
       const builtUnavailable = new Map<ProviderInstanceId, ServerProvider>();
-      const builtSecretsUnreadable = new Map<ProviderInstanceId, ProviderInstanceConfig>();
       let orderChanged = false;
       const previousOrder = [...previousEntries.keys()];
       const nextOrder: Array<ProviderInstanceId> = [];
@@ -368,23 +308,10 @@ const makeReconcile = <R>(input: {
           builtEntries.set(instanceId, existing);
           continue;
         }
-        const parkedEntry = previousSecretsUnreadable.get(instanceId);
-        const parkedSnapshot = previousUnavailable.get(instanceId);
-        if (
-          parkedEntry !== undefined &&
-          parkedSnapshot !== undefined &&
-          entryEqual(parkedEntry, entry)
-        ) {
-          builtUnavailable.set(instanceId, parkedSnapshot);
-          builtSecretsUnreadable.set(instanceId, entry);
-          continue;
-        }
 
         const result = yield* buildEntry({
           driversById,
           parentScope,
-          secretResolver,
-          hostEnvironment,
           instanceId,
           rawInstanceId,
           entry,
@@ -394,9 +321,6 @@ const makeReconcile = <R>(input: {
           builtEntries.set(instanceId, result.live);
         } else {
           builtUnavailable.set(instanceId, result.snapshot);
-          if (result.secretsUnreadable) {
-            builtSecretsUnreadable.set(instanceId, entry);
-          }
         }
       }
 
@@ -426,7 +350,6 @@ const makeReconcile = <R>(input: {
 
       yield* Ref.set(state.entries, builtEntries);
       yield* Ref.set(state.unavailable, builtUnavailable);
-      yield* Ref.set(state.secretsUnreadable, builtSecretsUnreadable);
 
       if (entriesChanged || unavailableChanged) {
         yield* PubSub.publish(state.changes, undefined);
@@ -461,9 +384,6 @@ export const makeProviderInstanceRegistry = Effect.fn(
 
   const entries = yield* Ref.make<ReadonlyMap<ProviderInstanceId, LiveEntry>>(new Map());
   const unavailable = yield* Ref.make<ReadonlyMap<ProviderInstanceId, ServerProvider>>(new Map());
-  const secretsUnreadable = yield* Ref.make<
-    ReadonlyMap<ProviderInstanceId, ProviderInstanceConfig>
-  >(new Map());
   const changes = yield* PubSub.unbounded<void>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
@@ -540,80 +460,6 @@ export const makeProviderInstanceRegistry = Effect.fn(
     }).pipe(Effect.provideContext(driverContext), Effect.forkScoped);
   }
 
-  // Rebuild one instance from the config it already has. Unlike
-  // `reconcile`, which is driven by a settings diff, this is for inputs the
-  // envelope cannot show, see the shape docs. Order is preserved by
-  // rewriting the map in place rather than appending the replacement.
-  const rebuildInstanceWhen: ProviderInstanceRegistry["Service"]["rebuildInstanceWhen"] = (
-    instanceId,
-    shouldRebuild,
-  ) =>
-    mutations.withPermits(1)(
-      Effect.gen(function* () {
-        const previousEntries = yield* Ref.get(entries);
-        const live = previousEntries.get(instanceId);
-        // An instance a previous rebuild could not restore has no live entry
-        // to read the config from, so its envelope comes from `rebuildable`.
-        const entry = live?.entry ?? (yield* Ref.get(rebuildable)).get(instanceId);
-        if (entry === undefined || !shouldRebuild(entry)) {
-          return false;
-        }
-
-        // Only the build is interruptible (it can wait minutes on a secret store); the bookkeeping is
-        // uninterruptible so the instance is never half-moved. Remembering the envelope comes first so
-        // an interrupt leaves it retryable on the next refresh.
-        yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            yield* Ref.update(rebuildable, (previous) => new Map(previous).set(instanceId, entry));
-            if (live === undefined) {
-              return;
-            }
-            // Drop the instance before closing it so callers never get a bundle with a dead scope. Its last
-            // snapshot stands in meanwhile: an id in neither list is pruned, blanking the provider card.
-            const parked = yield* live.instance.snapshot.getSnapshot;
-            yield* Ref.set(entries, withoutKey(previousEntries, instanceId));
-            yield* Ref.update(unavailable, (previous) => new Map(previous).set(instanceId, parked));
-            yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
-          }),
-        );
-
-        const result = yield* buildEntry({
-          driversById,
-          parentScope,
-          secretResolver,
-          hostEnvironment,
-          instanceId,
-          rawInstanceId: instanceId,
-          entry,
-        });
-
-        // Uninterruptible as well: the replacement is already running by
-        // now, and an interrupt that dropped it on the floor would leave a
-        // provider process nothing can reach or stop.
-        yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            if (result.kind === "live") {
-              yield* Ref.set(entries, withInstanceAt(previousEntries, instanceId, result.live));
-              yield* Ref.update(unavailable, (previous) => withoutKey(previous, instanceId));
-              yield* Ref.update(rebuildable, (previous) => withoutKey(previous, instanceId));
-              yield* Ref.update(secretsUnreadable, (previous) => withoutKey(previous, instanceId));
-            } else {
-              yield* Ref.update(unavailable, (previous) =>
-                new Map(previous).set(instanceId, result.snapshot),
-              );
-              yield* Ref.update(secretsUnreadable, (previous) =>
-                result.secretsUnreadable
-                  ? new Map(previous).set(instanceId, entry)
-                  : withoutKey(previous, instanceId),
-              );
-            }
-            yield* PubSub.publish(changes, undefined);
-          }),
-        );
-        return true;
-      }).pipe(Effect.provideContext(driverContext)),
-    );
-
   const registry: ProviderInstanceRegistry["Service"] = {
     getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
     listInstances: Ref.get(entries).pipe(
@@ -625,19 +471,6 @@ export const makeProviderInstanceRegistry = Effect.fn(
     listUnavailable: Ref.get(unavailable).pipe(
       Effect.map((map) => Array.from(map.values()) as ReadonlyArray<ServerProvider>),
     ),
-    listEnvironments: Effect.gen(function* () {
-      const environments = new Map<ProviderInstanceId, ProviderInstanceEnvironment | undefined>();
-      for (const [instanceId, entry] of yield* Ref.get(rebuildable)) {
-        environments.set(instanceId, entry.environment);
-      }
-      // Live entries are written second so an instance that is both live and
-      // pending a retry reports the configuration it is actually running.
-      for (const [instanceId, live] of yield* Ref.get(entries)) {
-        environments.set(instanceId, live.entry.environment);
-      }
-      return environments;
-    }),
-    rebuildInstanceWhen,
     get streamChanges() {
       return Stream.fromPubSub(changes);
     },

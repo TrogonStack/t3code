@@ -10,3 +10,11 @@ it("runs a driver for every secret provider the server and clients read, in thei
     secretProviderDefinitions.definitions,
   );
 });
+
+it("registers the built-in kinds in a stable order", () => {
+  expect(secretProviderDefinitions.definitions.map((definition) => definition.kind)).toEqual([
+    "one_password",
+    "openbao",
+    "aws_secrets_manager",
+  ]);
+});
