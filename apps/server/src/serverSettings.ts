@@ -52,6 +52,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { migrateLegacySecretSettings } from "./secrets/legacySecretSettings.ts";
 import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
@@ -345,6 +346,21 @@ const LegacyProviderSettingsJson = fromLenientJson(
   }),
 );
 const decodeLegacyProviderSettingsJsonExit = Schema.decodeUnknownExit(LegacyProviderSettingsJson);
+const decodeRawSettingsJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+
+const migrateRawLegacySecrets = (
+  raw: string,
+): { readonly raw: string; readonly changed: boolean } => {
+  const parsed = decodeRawSettingsJsonExit(raw);
+  if (parsed._tag === "Failure" || parsed.value === null || typeof parsed.value !== "object") {
+    return { raw, changed: false };
+  }
+  if (Array.isArray(parsed.value)) return { raw, changed: false };
+  const migrated = migrateLegacySecretSettings(parsed.value as Record<string, unknown>);
+  return migrated.changed
+    ? { raw: JSON.stringify(migrated.settings), changed: true }
+    : { raw, changed: false };
+};
 
 const LEGACY_BITBUCKET_SECRET_NAMES: Readonly<Record<string, string>> = {
   accessToken: "bitbucket-access-token",
@@ -702,9 +718,12 @@ const make = Effect.gen(function* () {
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     let parseFailure = Option.none<unknown>();
+    let legacySecretsRewritten = false;
 
     if (yield* readConfigExists) {
-      const raw = yield* readRawConfig;
+      const migratedRaw = migrateRawLegacySecrets(yield* readRawConfig);
+      const raw = migratedRaw.raw;
+      legacySecretsRewritten = migratedRaw.changed;
       const decoded = decodeServerSettingsJsonExit(raw);
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
@@ -827,6 +846,7 @@ const make = Effect.gen(function* () {
     if (
       migrated !== loaded ||
       (settingsFileTrusted && legacyProviders !== undefined) ||
+      (settingsFileTrusted && legacySecretsRewritten) ||
       hasLegacySourceControl
     ) {
       yield* writeSettingsAtomically(migrated);

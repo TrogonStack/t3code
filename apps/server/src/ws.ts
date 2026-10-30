@@ -169,7 +169,9 @@ import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
-import { ProviderSecretResolver } from "./provider/ProviderSecretResolver.ts";
+import { ChildProcessSpawner } from "effect/process";
+import * as SecretCheck from "./secrets/SecretCheck.ts";
+import * as OnePasswordDriver from "@t3tools/secret-provider-onepassword/server/driver";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as AcpRegistryRuntimeCoordinator from "@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -1364,7 +1366,8 @@ export const layerWsRpc = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
-      const providerSecretResolver = yield* ProviderSecretResolver;
+      const secretCheck = yield* SecretCheck.SecretCheck;
+      const processSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
@@ -2527,9 +2530,10 @@ export const layerWsRpc = (
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
         [WS_METHODS.serverListOnePasswordAccounts]: (_input) =>
-          providerSecretResolver.listOnePasswordAccounts,
-        [WS_METHODS.serverCheckSecretSource]: (input) =>
-          providerRegistry.checkSecretSource(input.source),
+          OnePasswordDriver.listAccounts().pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, processSpawner),
+          ),
+        [WS_METHODS.serverCheckSecretSource]: (input) => secretCheck.check(input.source),
         [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
           TraceDiagnostics.readTraceDiagnostics({
             traceFilePath: config.serverTracePath,

@@ -21,6 +21,8 @@ import {
 } from "./baseSchemas.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
+import { SettingsSecretValue } from "./settingsSecretValue.ts";
+import { secretSetting } from "./settingsSecret.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -1329,7 +1331,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   /** Named secret stores that provider environment variables read from, keyed by a user-chosen id. */
-  secretProviders: Schema.Record(SecretProviderId, StoredSecretProviderConfig).pipe(
+  secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
@@ -1650,7 +1652,7 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   /** Per-entry like `usageLimitSources`; `null` removes a provider. */
   secretProviders: Schema.optionalKey(
-    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigPatch)),
+    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 

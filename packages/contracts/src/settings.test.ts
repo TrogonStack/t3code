@@ -148,37 +148,6 @@ describe("ServerSettings secret providers", () => {
     });
   });
 
-  it("decodes a fork flat entry beside an upstream envelope and keeps every flat field", () => {
-    const openbao = {
-      kind: "openbao",
-      label: "Homelab",
-      address: "https://bao.example:8200",
-      mount: "secret",
-      auth: "token",
-      token: "s.secret",
-    };
-    const aws = { kind: "aws-secrets-manager", label: "Prod", region: "us-east-1" };
-    const flatOnePassword = { kind: "1password", label: "Home", account: "my.1password.com" };
-    const settings = {
-      secretProviders: {
-        homelab: openbao,
-        prod: aws,
-        home: flatOnePassword,
-        personal: onePassword("my.1password.com"),
-      },
-    };
-    const decoded = decodeServerSettings(settings);
-    expect(decoded.secretProviders).toEqual(settings.secretProviders);
-    expect(encodeServerSettings(decoded).secretProviders).toEqual(settings.secretProviders);
-    expect(decodeServerSettingsPatch(settings).secretProviders).toEqual(settings.secretProviders);
-  });
-
-  it("never lets an invalid fork entry degrade into an envelope that drops its fields", () => {
-    const invalid = { kind: "openbao", label: "Homelab", address: "not a url" };
-    expect(() => decodeServerSettings({ secretProviders: { homelab: invalid } })).toThrow();
-    expect(() => decodeServerSettingsPatch({ secretProviders: { homelab: invalid } })).toThrow();
-  });
-
   it("accepts slug ids and null removals but no id that is not a slug", () => {
     expect(
       decodeServerSettingsPatch({

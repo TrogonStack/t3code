@@ -161,8 +161,6 @@ const layerRuntime = (dbPath: string) => {
         getInstance: () => Effect.succeed(undefined),
         listInstances: Effect.succeed([]),
         listUnavailable: Effect.succeed([]),
-        listEnvironments: Effect.succeed(new Map()),
-        rebuildInstanceWhen: () => Effect.succeed(false),
         streamChanges: Stream.empty,
         subscribeChanges: Effect.never,
       }),

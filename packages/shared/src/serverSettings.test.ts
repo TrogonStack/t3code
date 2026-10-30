@@ -596,9 +596,9 @@ describe("serverSettings helpers", () => {
       ...DEFAULT_SERVER_SETTINGS,
       secretProviders: {
         [personal]: {
-          kind: "1password" as const,
+          kind: SecretProviderKind.make("one_password"),
           label: "Personal",
-          account: OnePasswordAccount.make("my.1password.com"),
+          config: { account: "my.1password.com" },
         },
       },
     };
@@ -606,11 +606,9 @@ describe("serverSettings helpers", () => {
     const added = applyServerSettingsPatch(current, {
       secretProviders: {
         [homelab]: {
-          kind: "openbao",
+          kind: SecretProviderKind.make("openbao"),
           label: "Homelab",
-          address: "https://bao.example:8200",
-          mount: "secret",
-          auth: "token",
+          config: { address: "https://bao.example:8200", mount: "secret", auth: "token" },
         },
         [work]: onePassword("Work", "team.1password.com"),
       },

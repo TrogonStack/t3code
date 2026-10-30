@@ -169,8 +169,6 @@ const layerTestProviderInstanceRegistry = Layer.succeed(
       ),
     listInstances: Effect.succeed([providerInstance, alternateProviderInstance]),
     listUnavailable: Effect.succeed([]),
-    listEnvironments: Effect.succeed(new Map()),
-    rebuildInstanceWhen: () => Effect.succeed(false),
     streamChanges: Stream.empty,
     subscribeChanges: Effect.never,
   },

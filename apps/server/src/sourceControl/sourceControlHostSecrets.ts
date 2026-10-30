@@ -1,8 +1,4 @@
-import {
-  isSecretProviderSecretSource,
-  type SecretProviderSecretSource,
-  secretSettingsFields,
-} from "@t3tools/contracts";
+import { isSecretReference, type SecretReference, secretSettingsFields } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { sourceControlDefinitions } from "./sourceControlDefinitions.ts";
@@ -35,7 +31,7 @@ export function readSecretFieldValues(
   value: unknown,
 ): ReadonlyArray<readonly [serverHost: string | null, value: string]> {
   if (typeof value === "string") return [[null, value]];
-  if (isSecretProviderSecretSource(value)) return [];
+  if (isSecretReference(value)) return [];
   if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
   return Object.entries(value).flatMap(([serverHost, entry]) =>
     typeof entry === "string" ? [[serverHost.trim().toLowerCase(), entry] as const] : [],
@@ -47,13 +43,11 @@ export function writeSecretFieldValues(
   values: ReadonlyArray<readonly [serverHost: string | null, value: string]>,
 ): unknown {
   if (typeof original === "string") return values[0]?.[1] ?? "";
-  if (isSecretProviderSecretSource(original)) return original;
+  if (isSecretReference(original)) return original;
   const sources =
     original !== null && typeof original === "object" && !Array.isArray(original)
       ? Object.entries(original).flatMap(([serverHost, entry]) =>
-          isSecretProviderSecretSource(entry)
-            ? [[serverHost.trim().toLowerCase(), entry] as const]
-            : [],
+          isSecretReference(entry) ? [[serverHost.trim().toLowerCase(), entry] as const] : [],
         )
       : [];
   return Object.fromEntries([
@@ -67,15 +61,15 @@ type SourceControlHostsSettings = Readonly<Record<string, Readonly<Record<string
 /** Replaces each secret provider reference in a credential field with the secret it names. */
 export function resolveSourceControlHostSecrets<R>(
   hosts: SourceControlHostsSettings,
-  resolve: (source: SecretProviderSecretSource) => Effect.Effect<string, never, R>,
+  resolve: (source: SecretReference) => Effect.Effect<string, never, R>,
 ): Effect.Effect<SourceControlHostsSettings, never, R> {
   const resolveField = (value: unknown): Effect.Effect<unknown, never, R> | null => {
-    if (isSecretProviderSecretSource(value)) return resolve(value);
+    if (isSecretReference(value)) return resolve(value);
     if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
     const entries = Object.entries(value);
-    if (!entries.some(([, entry]) => isSecretProviderSecretSource(entry))) return null;
+    if (!entries.some(([, entry]) => isSecretReference(entry))) return null;
     return Effect.forEach(entries, ([serverHost, entry]) =>
-      isSecretProviderSecretSource(entry)
+      isSecretReference(entry)
         ? resolve(entry).pipe(Effect.map((secret) => [serverHost, secret] as const))
         : Effect.succeed([serverHost, entry] as const),
     ).pipe(Effect.map((resolved) => Object.fromEntries(resolved)));

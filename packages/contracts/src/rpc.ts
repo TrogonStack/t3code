@@ -38,7 +38,8 @@ import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { OnePasswordAccountSummary } from "./onePassword.ts";
+import { OnePasswordAccountSummary, SecretSourceCheckResult } from "./settingsSecretValue.ts";
+import { SecretReference } from "./secretReference.ts";
 import {
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
@@ -165,12 +166,7 @@ import {
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
 } from "./provider.ts";
-import {
-  ProviderInstanceId,
-  ProviderInstanceMutation,
-  ProviderSecretSource,
-} from "./providerInstance.ts";
-import { SecretSourceCheckResult } from "./secretProvider.ts";
+import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import {
   GuestShareCreateError,
   GuestShareCreateInput,
@@ -836,7 +832,7 @@ const WsServerListOnePasswordAccountsRpc = Rpc.make(WS_METHODS.serverListOnePass
 });
 
 const WsServerCheckSecretSourceRpc = Rpc.make(WS_METHODS.serverCheckSecretSource, {
-  payload: Schema.Struct({ source: ProviderSecretSource }),
+  payload: Schema.Struct({ source: SecretReference }),
   success: SecretSourceCheckResult,
   error: EnvironmentAuthorizationError,
 });

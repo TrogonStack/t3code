@@ -33,11 +33,8 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
-import {
-  ProviderSecretResolver,
-  type ProviderSecretResolverShape,
-  requireSettingsSecret,
-} from "../provider/ProviderSecretResolver.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import { requireSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { findEasProjectId } from "./easProjectId.ts";
 import { type ExpoApi, makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
@@ -150,7 +147,7 @@ const decodePathSegment = (segment: string): string | null => {
  * it, so a named secret that cannot be read fails rather than falling back to another login.
  */
 export const resolveSavedExpoCredential = (
-  secrets: ProviderSecretResolverShape,
+  secrets: SecretResolver.SecretResolver["Service"],
   saved: SettingsSecretValue,
 ) => requireSettingsSecret(secrets, saved).pipe(Effect.flatMap(resolveExpoCredential));
 
@@ -159,7 +156,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const server = yield* ServerConfig.ServerConfig;
-  const secrets = yield* ProviderSecretResolver;
+  const secrets = yield* SecretResolver.SecretResolver;
   const services = yield* Effect.context<
     FileSystem.FileSystem | Path.Path | Effect.Services<ReturnType<typeof findEasProjectId>>
   >();
@@ -894,7 +891,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
   // Each server signs in on its own, so one with no Expo credential answers for itself. Reading
   // the credential is local; whether Expo accepts it is only known once a session starts.
   const platformAvailability = (platform: DevicePlatform) =>
-    resolveExpoCredential(config.accessToken).pipe(
+    resolveSavedExpoCredential(secrets, config.accessToken).pipe(
       Effect.provide(services),
       Effect.as({ platform, available: true }),
       Effect.catch((error) =>

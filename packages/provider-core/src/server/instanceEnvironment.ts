@@ -1,23 +1,13 @@
 import type {
   ProviderInstanceEnvironment,
-  ProviderInstanceEnvironmentVariableName,
+  ResolvedProviderInstanceEnvironment,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
 import { expandHomePath } from "./pathExpansion.ts";
 
-/**
- * A variable ready for a child process. Only `ProviderSecretResolver` turns a secret source
- * into this shape, so a source cannot reach a process unresolved. Secret-store values are sensitive.
- */
-export interface ResolvedProviderEnvironmentVariable {
-  readonly name: ProviderInstanceEnvironmentVariableName;
-  readonly value: string;
-  readonly sensitive: boolean;
-}
-
-export type ResolvedProviderEnvironment = ReadonlyArray<ResolvedProviderEnvironmentVariable>;
+export type ResolvedProviderEnvironment = ResolvedProviderInstanceEnvironment;
 
 /**
  * The configured variables that hold literal values, for callers that build a
@@ -27,7 +17,7 @@ export type ResolvedProviderEnvironment = ReadonlyArray<ResolvedProviderEnvironm
 export function literalProviderInstanceEnvironment(
   environment: ProviderInstanceEnvironment | undefined,
 ): ResolvedProviderEnvironment {
-  const literals: Array<ResolvedProviderEnvironmentVariable> = [];
+  const literals: Array<ResolvedProviderInstanceEnvironment[number]> = [];
   for (const { name, value, sensitive } of environment ?? []) {
     if (typeof value === "string") {
       literals.push({ name, value, sensitive });
@@ -94,7 +84,7 @@ const withLaunchedByAttribute = (environment: NodeJS.ProcessEnv): NodeJS.Process
  * inherited value instead of extending it.
  */
 export const overlayProviderInstanceEnvironment = Effect.fn(function* (
-  environment: ResolvedProviderEnvironment | undefined,
+  environment: ProviderInstanceEnvironment | ResolvedProviderEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv,
 ) {
   if (!environment || environment.length === 0) {
@@ -115,7 +105,7 @@ export const overlayProviderInstanceEnvironment = Effect.fn(function* (
 });
 
 export const mergeProviderInstanceEnvironment = Effect.fn(function* (
-  environment: ResolvedProviderEnvironment | undefined,
+  environment: ProviderInstanceEnvironment | ResolvedProviderEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ) {
   return withLaunchedByAttribute(yield* overlayProviderInstanceEnvironment(environment, baseEnv));

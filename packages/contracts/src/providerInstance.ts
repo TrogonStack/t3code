@@ -39,9 +39,7 @@ const ProviderInstanceEnvironmentVariableValue = Schema.Struct({
 // A reference is encoded beside an empty value so older servers and clients still decode it.
 const StoredProviderInstanceEnvironmentVariable = Schema.Struct({
   name: ProviderInstanceEnvironmentVariableName,
-  value: Schema.Union([Schema.String, ProviderSecretSource]).pipe(
-    Schema.withDecodingDefault(Effect.succeed("")),
-  ),
+  value: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   sensitive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   valueRedacted: Schema.optionalKey(Schema.Boolean),
   secret: Schema.optionalKey(SecretReference),

@@ -17,6 +17,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
+import * as SecretResolverCore from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as SecretResolver from "../secrets/SecretResolver.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
@@ -146,7 +147,8 @@ const layerSettingsWatcher = (settingsChanges: Stream.Stream<ServerSettings>) =>
 
 export const layer: Layer.Layer<
   | ProviderInstanceRegistry.ProviderInstanceRegistry
-  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator
+  | SecretResolverCore.SecretResolver,
   never,
   ProviderInstanceRegistryHydrationEnv
 > = Layer.unwrap(
@@ -172,14 +174,15 @@ export const layer: Layer.Layer<
       Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
       Layer.provide(AcpRegistrySupport.layerFromHost),
       Layer.provide(ProviderHostLive.layer),
-      Layer.provide(SecretResolver.layer),
+      Layer.provideMerge(SecretResolver.layer),
     );
 
     return layerSettingsWatcher(settingsChanges).pipe(Layer.provideMerge(layerMutable));
   }),
 ) as Layer.Layer<
   | ProviderInstanceRegistry.ProviderInstanceRegistry
-  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator
+  | SecretResolverCore.SecretResolver,
   never,
   ProviderInstanceRegistryHydrationEnv
 >;

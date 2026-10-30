@@ -1,18 +1,13 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import {
-  SecretProviderId,
-  SecretProviderReference,
-  ServerConfigStreamEvent,
-  UsageLimitSourceId,
-} from "@t3tools/contracts";
+import { SecretProviderId, ServerConfigStreamEvent, UsageLimitSourceId } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import { ProviderSecretResolver } from "../provider/ProviderSecretResolver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as UsageLimitSources from "./UsageLimitSources.ts";
 
@@ -42,6 +37,10 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
     );
   }).pipe(
     Effect.provide([
+      Layer.succeed(SecretResolver.SecretResolver, {
+        read: (references) => Effect.succeed(references.map(() => undefined)),
+        invalidate: () => Effect.void,
+      }),
       ServerSettings.layerTest({
         usageLimitSources: {
           [UsageLimitSourceId.make("local-hub")]: {
@@ -93,9 +92,8 @@ it.effect("keeps malformed source URLs encodable for config subscribers", () =>
 it.effect("reads a management key from its secret provider", () => {
   const authorizations: Array<string | undefined> = [];
   const keySource = (reference: string) => ({
-    kind: "secret-provider" as const,
     provider: SecretProviderId.make("homelab"),
-    reference: SecretProviderReference.make(reference),
+    reference,
   });
   return Effect.gen(function* () {
     const sources = yield* UsageLimitSources.make;
@@ -130,16 +128,14 @@ it.effect("reads a management key from its secret provider", () => {
       Layer.mock(BackgroundPolicy.BackgroundPolicy)({
         shouldRunScopeWork: () => Effect.succeed(false),
       }),
-      Layer.mock(ProviderSecretResolver)({
-        resolve: (environment) =>
-          Effect.succeed({
-            variables: (environment ?? []).flatMap(({ name, value, sensitive }) =>
-              typeof value !== "string" && value.reference === "cliproxy#key"
-                ? [{ name, value: "resolved-key", sensitive }]
-                : [],
+      Layer.succeed(SecretResolver.SecretResolver, {
+        read: (references) =>
+          Effect.succeed(
+            references.map((reference) =>
+              reference.reference === "cliproxy#key" ? "resolved-key" : undefined,
             ),
-            unresolved: [],
-          }),
+          ),
+        invalidate: () => Effect.void,
       }),
       Layer.succeed(
         HttpClient.HttpClient,

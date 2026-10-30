@@ -3,9 +3,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   EasDeviceHostConfig,
-  FlatSecretProviderConfig,
-  isFlatSecretProviderConfig,
-  isSecretProviderSecretSource,
+  isSecretReference,
   type ServerSettings,
   SimlockDeviceHostConfig,
   UsageLimitSourceConfig,
@@ -36,11 +34,9 @@ const providerSecretFields = new Map([
   ),
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
-const secretProviderSecretFields = new Map(
-  FlatSecretProviderConfig.members.map(
-    (member) => [member.fields.kind.literal, secretSettingsFields(member)] as const,
-  ),
-);
+const SECRET_PROVIDER_CREDENTIAL_FIELDS = new Map<string, ReadonlyArray<string>>([
+  ["openbao", ["token"]],
+]);
 const easDeviceHostSecretFields = secretSettingsFields(EasDeviceHostConfig);
 const simlockDeviceHostSecretFields = secretSettingsFields(SimlockDeviceHostConfig);
 const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
@@ -68,7 +64,7 @@ export function mapSettingsSecrets(
   ) => {
     const next = { ...fields };
     for (const field of secretFields) {
-      if (!(field in next) || isSecretProviderSecretSource(next[field])) continue;
+      if (!(field in next) || isSecretReference(next[field])) continue;
       next[field] = writeSecretFieldValues(
         next[field],
         readSecretFieldValues(next[field]).map(([serverHost, value]) => {
@@ -158,18 +154,29 @@ export function mapSettingsSecrets(
   ) as ServerSettings["usageLimitSources"];
 
   const secretProviders = Object.fromEntries(
-    Object.entries(settings.secretProviders).map(([id, provider]) => [
-      id,
-      mapFields(
-        provider,
-        isFlatSecretProviderConfig(provider)
-          ? (secretProviderSecretFields.get(provider.kind) ?? [])
-          : [],
-        (field, serverHost) =>
-          `secret-provider-${encode(id)}-${encode(field)}` +
-          (serverHost === null ? "" : `-${encode(serverHost)}`),
-      ),
-    ]),
+    Object.entries(settings.secretProviders).map(([id, provider]) => {
+      const config = provider.config;
+      const fields = SECRET_PROVIDER_CREDENTIAL_FIELDS.get(provider.kind);
+      if (
+        fields === undefined ||
+        config === null ||
+        typeof config !== "object" ||
+        Array.isArray(config)
+      ) {
+        return [id, provider];
+      }
+      return [
+        id,
+        {
+          ...provider,
+          config: mapFields(
+            config as Record<string, unknown>,
+            fields,
+            (field) => `secret-provider-${encode(id)}-${encode(field)}`,
+          ),
+        },
+      ];
+    }),
   ) as ServerSettings["secretProviders"];
 
   const easDeviceHosts = settings.easDeviceHosts.map(
