@@ -1,20 +1,13 @@
 import {
-  AwsProfile,
-  AwsRegion,
-  OnePasswordAccount,
-  OnePasswordSecretReference,
-  OpenBaoAddress,
-  OpenBaoAuth,
-  OpenBaoMount,
-  OnePasswordSecretProviderConfig,
-  OpenBaoNamespace,
   SecretProviderId,
   SecretProviderLabel,
-  isFlatSecretProviderConfig,
-  type FlatSecretProviderConfig,
-  type FlatSecretProviderKind,
-  type StoredSecretProviderConfig,
+  type SecretProviderConfig,
 } from "@t3tools/contracts";
+import {
+  OnePasswordSecretProviderConfig,
+  type OnePasswordAccount,
+} from "@t3tools/secret-provider-onepassword/shared/definition";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 

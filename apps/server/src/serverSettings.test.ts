@@ -10,9 +10,8 @@ import {
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
   SecretProviderId,
-  SecretProviderReference,
   ServerSettings,
-  type UsageLimitSourceConfig,
+  ServerSettingsPatch,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -38,6 +37,7 @@ import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.t
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
+const decodeServerSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 
 const layerServerSettings = () =>
   ServerSettingsModule.layer.pipe(
@@ -217,6 +217,31 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("keeps an override key a newer server saved when a project setting is edited", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const projectId = ProjectId.make("project-a");
+      yield* fs.writeFileString(
+        config.settingsPath,
+        `{ "projectSettingsOverrides": { "project-a": { "defaultAutoPull": true, "addedByNewerServer": 3 } } }`,
+      );
+      const loaded = yield* service.getSettings;
+
+      yield* service.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: { ...loaded.projectSettingsOverrides[projectId], defaultAutoPull: false },
+        },
+      });
+
+      const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.deepEqual(persisted.projectSettingsOverrides, {
+        [projectId]: { defaultAutoPull: false, addedByNewerServer: 3 },
+      });
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("moves an idle compaction mode saved in the legacy switch to its own field", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
@@ -258,35 +283,23 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }),
   );
 
-  it.effect("keeps a fork flat entry's fields for clients but never its OpenBao token", () =>
+  it.effect("stores no secret provider of an unloaded kind or with a config its kind rejects", () =>
     Effect.gen(function* () {
-      const settings = yield* decodeServerSettings({
-        secretProviders: {
-          home: { kind: "1password", label: "Home", account: "my" },
-          homelab: {
-            kind: "openbao",
-            label: "Homelab",
-            address: "https://bao.example.test",
-            token: "bao-token",
-          },
-          personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
-        },
-      });
-      const client: Readonly<Record<string, unknown>> =
-        ServerSettingsModule.redactServerSettingsForClient(settings).secretProviders;
-      assert.notInclude(JSON.stringify(client), "bao-token");
-      assert.deepStrictEqual<unknown>(client.home, {
-        kind: "1password",
-        label: "Home",
-        account: "my",
-      });
-      assert.deepStrictEqual<unknown>(client.personal, {
-        kind: "one_password",
-        label: "Personal",
-        config: { account: "my" },
-      });
-      assert.include(JSON.stringify(client.homelab), "https://bao.example.test");
-    }),
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const write = (entry: unknown) =>
+        decodeServerSettingsPatch({ secretProviders: { personal: entry } }).pipe(
+          Effect.flatMap(service.updateSettings),
+          Effect.flip,
+        );
+      for (const entry of [
+        { kind: "one_password", label: "Personal", config: { account: "--help" } },
+        { kind: "one_password", label: "Personal" },
+        { kind: "openbao", label: "Vault", config: { address: "https://x" } },
+      ]) {
+        assert.deepInclude(yield* write(entry), { operation: "write-secret-provider" });
+      }
+      assert.deepStrictEqual((yield* service.getSettings).secretProviders, {});
+    }).pipe(Effect.provide(layerServerSettings())),
   );
 
   it.effect("saves through a symlinked settings file without replacing the link", () =>
@@ -1058,6 +1071,54 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("reads settings secrets once per settings change", () => {
+    let reads = 0;
+    const layerSecret = Layer.effect(
+      ServerSecretStore.ServerSecretStore,
+      Effect.map(ServerSecretStore.ServerSecretStore, (store) => ({
+        ...store,
+        get: (name: string) =>
+          Effect.suspend(() => {
+            reads++;
+            return store.get(name);
+          }),
+      })),
+    ).pipe(Layer.provide(ServerSecretStore.layer));
+    const layerSettings = ServerSettingsModule.layer.pipe(
+      Layer.provide(layerSecret),
+      Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+      Layer.provideMerge(
+        Layer.fresh(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3code-settings-secret-cache-test-" }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_cached");
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const save = (value: string) =>
+        service.updateSettings({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "API_TOKEN", value, sensitive: true }],
+              config: {},
+            },
+          },
+        });
+      const token = service.getSettings.pipe(
+        Effect.map((settings) => settings.providerInstances[instanceId]?.environment?.[0]?.value),
+      );
+      yield* save("sk-first");
+      reads = 0;
+      assert.equal(yield* token, "sk-first");
+      assert.equal(yield* token, "sk-first");
+      assert.equal(reads, 0);
+      yield* save("sk-second");
+      assert.equal(yield* token, "sk-second");
+    }).pipe(Effect.provide(layerSettings));
+  });
+
   it.effect("keeps the inline value on disk when secret migration fails", () => {
     const cause = new ServerSecretStore.SecretStorePersistError({
       resource: "provider environment secret",
@@ -1343,6 +1404,27 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         for (const name of secretNames) {
           assert.isTrue(Option.isSome(yield* store.get(name)), name);
         }
+        const secret = {
+          provider: SecretProviderId.make("personal"),
+          reference: "op://Private/Antigravity/token",
+        };
+        const referenced = yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance: {
+            ...client.providerInstances[instanceId]!,
+            environment: [
+              { name: "API_TOKEN", value: secret, sensitive: true, valueRedacted: true },
+            ],
+          },
+        });
+        assert.isTrue(Option.isNone(yield* store.get(secretNames[1]!)));
+        assert.deepEqual(
+          ServerSettingsModule.redactServerSettingsForClient(referenced).providerInstances[
+            instanceId
+          ]?.environment,
+          [{ name: "API_TOKEN", value: secret, sensitive: true }],
+        );
         yield* service.updateSettings({
           providerInstances: {},
           sourceControlHosts: {
@@ -1759,6 +1841,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
       let failRename = false;
       let settingsPathToFail: string | undefined;
+      let readDuringWrite: Effect.Effect<void> = Effect.void;
       const writeFailure = PlatformError.systemError({
         _tag: "PermissionDenied",
         module: "FileSystem",
@@ -1769,7 +1852,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         ...fileSystem,
         rename: (fromPath, toPath) =>
           failRename && toPath === settingsPathToFail
-            ? Effect.fail(writeFailure)
+            ? readDuringWrite.pipe(Effect.andThen(Effect.fail(writeFailure)))
             : fileSystem.rename(fromPath, toPath),
       });
       const instanceId = ProviderInstanceId.make("antigravity_write_failure");
@@ -1791,6 +1874,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         });
 
         failRename = true;
+        readDuringWrite = Effect.ignore(serverSettings.getSettings);
         const failedUpdate = yield* serverSettings
           .updateProviderInstance({
             operation: "upsert",

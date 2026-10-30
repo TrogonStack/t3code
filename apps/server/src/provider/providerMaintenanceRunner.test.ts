@@ -192,6 +192,7 @@ function makeRegistry(
       getProviders: Ref.get(providersRef),
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
+      reloadSecretsAndRefresh: () => Ref.get(providersRef),
       refreshAfterUpdate: () => Ref.get(providersRef),
       checkSecretSource: () => Effect.succeed({ _tag: "Resolved" }),
       refreshWorkspaceSnapshot: () => Ref.get(providersRef),
