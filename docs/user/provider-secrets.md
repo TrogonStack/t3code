@@ -41,9 +41,9 @@ Plain values are used exactly as typed, so mixing literal variables and referenc
 provider is fine. A plain value is never read from a secret manager, even one that starts with
 `op://`.
 
-Variables saved earlier with a 1Password account as their source keep working. A sensitive `op://`
-value is hidden from the app, so it cannot be recognized; add it again with a named provider as its
-source.
+Variables saved earlier with a 1Password account as their source are converted to a named provider
+when settings load, and keep working. A sensitive `op://` value is hidden from the app, so it cannot
+be recognized; add it again with a named provider as its source.
 
 ## What Does A Reference Look Like
 

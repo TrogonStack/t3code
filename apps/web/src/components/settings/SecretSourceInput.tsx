@@ -1,0 +1,284 @@
+import {
+  SecretReference,
+  type EnvironmentId,
+  type SecretProviderConfig,
+  type SecretProviderId,
+  type SecretProviderKind,
+} from "@t3tools/contracts";
+import { builtInSecretProviderDefinitions } from "@t3tools/secret-provider-definitions/registry";
+import { useAtomValue } from "@effect/atom-react";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { AlertTriangleIcon, CheckIcon, KeyRoundIcon, RefreshCwIcon, TypeIcon } from "lucide-react";
+import { useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
+
+import { isSecretsFeatureEnabled } from "../../env";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { Button } from "../ui/button";
+import { DraftInput } from "../ui/draft-input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SecretInput } from "./SecretInput";
+import { classifySecretProvider } from "./SecretProviderDialog.logic";
+import { secretProviderKindIcon } from "./SecretProviderKindIcon";
+
+export interface SecretSource {
+  readonly id: SecretProviderId;
+  readonly kind: SecretProviderKind;
+  readonly label: string;
+}
+
+const NO_SECRET_SOURCES: ReadonlyArray<SecretSource> = [];
+const STORED_VALUE = "__stored__";
+const decodeSecretReference = Schema.decodeUnknownOption(SecretReference);
+
+/** Secret providers a setting can point at; empty when the environment cannot read references. */
+export function useSecretSources(environmentId: EnvironmentId): ReadonlyArray<SecretSource> {
+  const providers = useEnvironmentSettings(environmentId, (settings) => settings.secretProviders);
+  const supported = useAtomValue(
+    serverEnvironment.configValueAtom(environmentId),
+    (config) => config?.secretReferences === true,
+  );
+  if (!isSecretsFeatureEnabled || !supported) return NO_SECRET_SOURCES;
+  return (Object.entries(providers) as Array<[SecretProviderId, SecretProviderConfig]>)
+    .filter(([, config]) => classifySecretProvider(config).kind !== "unsupported")
+    .map(([id, config]) => ({ id, kind: config.kind, label: config.label }));
+}
+
+function SourceLabel(props: {
+  readonly icon: ComponentType<{ readonly className?: string }>;
+  readonly label: string;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <props.icon className="size-3.5 shrink-0" />
+      <span className="truncate">{props.label}</span>
+    </span>
+  );
+}
+
+type SecretCheck =
+  | { readonly status: "checking" }
+  | { readonly status: "resolved" }
+  | { readonly status: "failed"; readonly detail: string };
+
+/** Asks the server to resolve the committed reference, so a typo shows here and not at provider start. */
+function SecretCheckButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly secret: SecretReference;
+  readonly label: string;
+}) {
+  const { environmentId, secret } = props;
+  const canCheck = useAtomValue(serverEnvironment.checkSecretSource.permissionAtom(environmentId));
+  const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
+  const secretKey = `${secret.provider}\u0000${secret.reference}`;
+  const [check, setCheck] = useState<{
+    readonly secretKey: string;
+    readonly state: SecretCheck;
+  } | null>(null);
+  const state = check?.secretKey === secretKey ? check.state : undefined;
+
+  const run = async () => {
+    setCheck({ secretKey, state: { status: "checking" } });
+    const response = await checkSecretSource({ environmentId, input: { source: secret } });
+    const next: SecretCheck =
+      response._tag !== "Success"
+        ? { status: "failed", detail: "Could not reach the server" }
+        : response.value._tag === "Resolved"
+          ? { status: "resolved" }
+          : { status: "failed", detail: response.value.detail };
+    setCheck((previous) =>
+      previous?.secretKey === secretKey ? { secretKey, state: next } : previous,
+    );
+  };
+
+  const description = !canCheck
+    ? "You cannot check secrets on this environment"
+    : state === undefined
+      ? "Check that the secret resolves"
+      : state.status === "checking"
+        ? "Checking the secret"
+        : state.status === "resolved"
+          ? "Secret resolved"
+          : state.detail;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="icon-micro"
+              variant="ghost-muted"
+              disabled={!canCheck || state?.status === "checking"}
+              onClick={() => void run()}
+              aria-label={
+                state?.status === "failed"
+                  ? `${props.label} failed: ${state.detail}`
+                  : state?.status === "resolved"
+                    ? `${props.label} resolved`
+                    : props.label
+              }
+            >
+              {state?.status === "checking" ? (
+                <Spinner />
+              ) : state?.status === "resolved" ? (
+                <CheckIcon className="size-3 text-success-foreground" />
+              ) : state?.status === "failed" ? (
+                <AlertTriangleIcon className="size-3 text-destructive" />
+              ) : (
+                <RefreshCwIcon className="size-3" />
+              )}
+            </Button>
+          </span>
+        }
+      />
+      <TooltipPopup side="top">{description}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
+type SecretSourceInputProps = Omit<ComponentProps<typeof SecretInput>, "value" | "children"> & {
+  readonly value: string | SecretReference;
+  /** Offers a check of the committed reference on this environment. */
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly sources: ReadonlyArray<SecretSource>;
+  readonly onSecretChange: (secret: SecretReference | undefined) => void;
+  /** Places the parts in the caller's layout; `source` is null when there is nothing to pick. */
+  readonly children?: (parts: {
+    readonly source: ReactNode;
+    readonly value: ReactNode;
+  }) => ReactNode;
+};
+
+/** A secret entered here, or read from a secret provider when one is configured. */
+export function SecretSourceInput({
+  value,
+  environmentId,
+  sources,
+  onSecretChange,
+  children,
+  ...rest
+}: SecretSourceInputProps) {
+  // A provider picked here applies once a reference for it is committed.
+  const [pendingProvider, setPendingProvider] = useState<SecretProviderId | null>(null);
+  const [rejectedReference, setRejectedReference] = useState<string | null>(null);
+  const secret = typeof value === "string" ? undefined : value;
+  const input = { ...rest, value: typeof value === "string" ? value : "" };
+  const provider = pendingProvider ?? secret?.provider ?? null;
+  const reference = secret !== undefined && secret.provider === provider ? secret.reference : "";
+  const providerSource = sources.find((source) => source.id === provider);
+  const definition = providerSource && builtInSecretProviderDefinitions.find(providerSource.kind);
+  const label = input["aria-label"] ?? "Secret";
+  const providerLabel = (id: SecretProviderId) =>
+    sources.find((source) => source.id === id)?.label ?? id;
+  const providerIcon = (id: SecretProviderId) => {
+    const kind = sources.find((source) => source.id === id)?.kind;
+    return kind === undefined ? KeyRoundIcon : secretProviderKindIcon(kind);
+  };
+
+  const source =
+    sources.length === 0 && provider === null ? null : (
+      <Select
+        value={provider ?? STORED_VALUE}
+        onValueChange={(value) => {
+          setRejectedReference(null);
+          if (value === STORED_VALUE || value === null) {
+            setPendingProvider(null);
+            if (secret !== undefined) onSecretChange(undefined);
+            return;
+          }
+          const next = value as SecretProviderId;
+          setPendingProvider(next === secret?.provider ? null : next);
+        }}
+      >
+        <SelectTrigger size="sm" className="w-full min-w-0" aria-label={`${label} source`}>
+          <SelectValue>
+            {provider === null ? (
+              <SourceLabel icon={TypeIcon} label="Value" />
+            ) : (
+              <SourceLabel icon={providerIcon(provider)} label={providerLabel(provider)} />
+            )}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectPopup align="start" alignItemWithTrigger={false}>
+          <SelectItem value={STORED_VALUE}>
+            <SourceLabel icon={TypeIcon} label="Value" />
+          </SelectItem>
+          {sources.map((source) => (
+            <SelectItem key={source.id} value={source.id}>
+              <SourceLabel icon={providerIcon(source.id)} label={source.label} />
+            </SelectItem>
+          ))}
+          {provider !== null && !sources.some((source) => source.id === provider) ? (
+            <SelectItem value={provider}>
+              <SourceLabel icon={KeyRoundIcon} label={provider} />
+            </SelectItem>
+          ) : null}
+        </SelectPopup>
+      </Select>
+    );
+
+  const valueField =
+    provider === null ? (
+      <SecretInput {...input} />
+    ) : (
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <DraftInput
+            {...(input.id !== undefined ? { id: input.id } : {})}
+            size="sm"
+            font="mono"
+            value={rejectedReference ?? reference}
+            onCommit={(next) => {
+              if (next.trim().length === 0) {
+                setRejectedReference(null);
+                if (pendingProvider === null && secret !== undefined) onSecretChange(undefined);
+                return;
+              }
+              const decoded = decodeSecretReference({ provider, reference: next });
+              if (
+                Option.isNone(decoded) ||
+                definition?.isReference(decoded.value.reference) === false
+              ) {
+                setRejectedReference(next);
+                return;
+              }
+              setRejectedReference(null);
+              setPendingProvider(null);
+              onSecretChange(decoded.value);
+            }}
+            autoComplete="off"
+            placeholder={definition?.referencePlaceholder}
+            spellCheck={false}
+            aria-label={`${label} reference`}
+            aria-invalid={rejectedReference !== null}
+          />
+          {environmentId !== undefined && secret !== undefined && pendingProvider === null ? (
+            <SecretCheckButton
+              environmentId={environmentId}
+              secret={secret}
+              label={`Check ${label}`}
+            />
+          ) : null}
+        </div>
+        {rejectedReference !== null ? (
+          <p className="text-2xs text-destructive">
+            {definition?.invalidReferenceMessage ?? "Enter a valid secret reference."}
+          </p>
+        ) : null}
+      </div>
+    );
+
+  if (children !== undefined) return children({ source, value: valueField });
+  if (source === null) return valueField;
+  return (
+    <div className="flex min-w-0 flex-1 items-start gap-1.5">
+      <div className="w-28 shrink-0">{source}</div>
+      {valueField}
+    </div>
+  );
+}

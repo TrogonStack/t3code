@@ -1,28 +1,11 @@
-import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  SecretProviderConfig,
-  SecretProviderId,
-  SecretProviderReference,
-  type OnePasswordAccount,
-  type OnePasswordSecretReference,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import { SecretProviderId, type ServerProviderModel } from "@t3tools/contracts";
 
 import {
   deriveProviderModelsForDisplay,
+  nextProviderEnvironmentWithFieldSecret,
   nextProviderEnvironmentWithFieldValue,
-  splitDedicatedProviderEnvironment,
 } from "./ProviderInstanceCard";
-import {
-  EMPTY_SECRET_FIELD_DRAFT,
-  secretFieldDraft,
-  secretFieldSubmission,
-  secretSourceFromDraft,
-} from "./SecretSourceControls";
-
-const decodeSecretProviderConfig = Schema.decodeUnknownSync(SecretProviderConfig);
 
 describe("deriveProviderModelsForDisplay", () => {
   it("uses current config custom models instead of stale live custom rows", () => {
@@ -93,6 +76,20 @@ describe("provider environment helpers", () => {
     ).toEqual([{ name: "CURSOR_API_KEY", value: "new-key", sensitive: true }]);
   });
 
+  it("points a stored provider secret at a secret provider and drops the stored value", () => {
+    const secret = {
+      provider: SecretProviderId.make("personal"),
+      reference: "op://Private/Cursor/credential",
+    };
+    const stored = [{ name: "CURSOR_API_KEY", value: "", sensitive: true, valueRedacted: true }];
+    const referenced = nextProviderEnvironmentWithFieldSecret(stored, cursorApiKeyField, secret);
+
+    expect(referenced).toEqual([{ name: "CURSOR_API_KEY", value: secret, sensitive: true }]);
+    expect(
+      nextProviderEnvironmentWithFieldSecret(referenced, cursorApiKeyField, undefined),
+    ).toEqual([]);
+  });
+
   it("applies the secure field default when replacing an existing non-sensitive value", () => {
     expect(
       nextProviderEnvironmentWithFieldValue(
@@ -104,203 +101,5 @@ describe("provider environment helpers", () => {
         "new-key",
       ),
     ).toEqual([{ name: "OPENAI_API_KEY", value: "new-key", sensitive: true }]);
-  });
-
-  it("keeps a dedicated variable read from 1Password in the generic editor", () => {
-    const source = {
-      kind: "1password" as const,
-      reference: "op://Private/cursor/credential" as OnePasswordSecretReference,
-      account: "my" as OnePasswordAccount,
-    };
-    const environment = [
-      { name: "CURSOR_API_KEY", value: source, sensitive: false },
-      { name: "EXTRA_FLAG", value: "1", sensitive: false },
-    ];
-
-    expect(splitDedicatedProviderEnvironment(environment, new Set(["CURSOR_API_KEY"]))).toEqual({
-      dedicated: [],
-      generic: environment,
-    });
-  });
-
-  it("keeps a dedicated variable read from a named secret provider in its field", () => {
-    const source = {
-      kind: "secret-provider" as const,
-      provider: SecretProviderId.make("homelab"),
-      reference: SecretProviderReference.make("apps/t3#api_key"),
-    };
-    const dedicated = { name: "CURSOR_API_KEY", value: source, sensitive: false };
-    const generic = { name: "EXTRA_FLAG", value: source, sensitive: false };
-
-    expect(
-      splitDedicatedProviderEnvironment([dedicated, generic], new Set(["CURSOR_API_KEY"])),
-    ).toEqual({ dedicated: [dedicated], generic: [generic] });
-  });
-
-  it("keeps a plain op:// value in the generic editor so its account can be picked", () => {
-    const legacy = {
-      name: "CURSOR_API_KEY",
-      value: "op://Private/cursor/credential",
-      sensitive: false,
-    };
-    const literal = { name: "OTHER_KEY", value: "cursor-key", sensitive: true };
-
-    expect(
-      splitDedicatedProviderEnvironment(
-        [legacy, literal],
-        new Set(["CURSOR_API_KEY", "OTHER_KEY"]),
-      ),
-    ).toEqual({ dedicated: [literal], generic: [legacy] });
-  });
-});
-
-describe("secretSourceFromDraft", () => {
-  const decodeConfig = Schema.decodeUnknownSync(SecretProviderConfig);
-  const secretProviders = {
-    [SecretProviderId.make("homelab")]: decodeConfig({
-      kind: "openbao",
-      label: "Homelab",
-      address: "https://bao.example.test",
-    }),
-    [SecretProviderId.make("work")]: decodeConfig({
-      kind: "1password",
-      label: "Work",
-      account: "work.1password.com",
-    }),
-  };
-  const row = (
-    fields: Partial<Parameters<typeof secretSourceFromDraft>[0]>,
-  ): Parameters<typeof secretSourceFromDraft>[0] => ({
-    source: "secret-provider",
-    provider: "",
-    reference: "",
-    account: "",
-    ...fields,
-  });
-
-  it("reads a named provider row as a secret-provider source", () => {
-    expect(
-      secretSourceFromDraft(
-        row({ provider: "homelab", reference: "apps/t3#api_key" }),
-        secretProviders,
-      ),
-    ).toEqual(
-      Result.succeed({
-        kind: "secret-provider",
-        provider: "homelab",
-        reference: "apps/t3#api_key",
-      }),
-    );
-  });
-
-  it("asks for a provider before saving", () => {
-    expect(secretSourceFromDraft(row({ reference: "apps/t3#api_key" }), secretProviders)).toEqual(
-      Result.fail("Choose a secret provider."),
-    );
-  });
-
-  it("checks the reference against the provider's kind", () => {
-    expect(
-      Result.isFailure(
-        secretSourceFromDraft(row({ provider: "homelab", reference: "apps/t3" }), secretProviders),
-      ),
-    ).toBe(true);
-    expect(
-      Result.isFailure(
-        secretSourceFromDraft(row({ provider: "work", reference: "apps/t3#key" }), secretProviders),
-      ),
-    ).toBe(true);
-    expect(
-      Result.isSuccess(
-        secretSourceFromDraft(
-          row({ provider: "work", reference: "op://vault/item/field" }),
-          secretProviders,
-        ),
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps a row whose provider was removed so it resolves once re-added", () => {
-    expect(
-      secretSourceFromDraft(row({ provider: "gone", reference: "anything" }), secretProviders),
-    ).toEqual(Result.succeed({ kind: "secret-provider", provider: "gone", reference: "anything" }));
-  });
-
-  it("still converts legacy 1Password rows with their own account", () => {
-    expect(
-      secretSourceFromDraft(
-        row({
-          source: "1password",
-          reference: "op://vault/item/field",
-          account: "my.1password.com",
-        }),
-        {},
-      ),
-    ).toEqual(
-      Result.succeed({
-        kind: "1password",
-        reference: "op://vault/item/field",
-        account: "my.1password.com",
-      }),
-    );
-  });
-});
-
-describe("secret field drafts", () => {
-  const vault = SecretProviderId.make("vault");
-  const secretProviders = {
-    [vault]: decodeSecretProviderConfig({
-      kind: "openbao",
-      label: "Vault",
-      address: "https://bao.example.test",
-    }),
-  };
-
-  it("edits a saved reference and starts a redacted literal empty", () => {
-    expect(
-      secretFieldDraft({
-        kind: "secret-provider",
-        provider: vault,
-        reference: SecretProviderReference.make("apps/t3#token"),
-      }),
-    ).toEqual({ kind: "reference", provider: "vault", reference: "apps/t3#token" });
-    expect(secretFieldDraft("<redacted>")).toEqual(EMPTY_SECRET_FIELD_DRAFT);
-    expect(secretFieldDraft(undefined)).toEqual(EMPTY_SECRET_FIELD_DRAFT);
-  });
-
-  it("submits a typed literal trimmed and nothing for an empty one", () => {
-    expect(secretFieldSubmission({ kind: "literal", text: "  ghp_abc " }, {})).toEqual(
-      Result.succeed("ghp_abc"),
-    );
-    expect(secretFieldSubmission({ kind: "literal", text: "   " }, {})).toEqual(
-      Result.succeed(undefined),
-    );
-  });
-
-  it("submits a reference only once it is valid for its provider", () => {
-    expect(
-      secretFieldSubmission(
-        { kind: "reference", provider: "vault", reference: " apps/t3#token " },
-        secretProviders,
-      ),
-    ).toEqual(
-      Result.succeed({ kind: "secret-provider", provider: "vault", reference: "apps/t3#token" }),
-    );
-    expect(
-      Result.isFailure(
-        secretFieldSubmission(
-          { kind: "reference", provider: "vault", reference: "apps/t3" },
-          secretProviders,
-        ),
-      ),
-    ).toBe(true);
-    expect(
-      Result.isFailure(
-        secretFieldSubmission(
-          { kind: "reference", provider: "vault", reference: "" },
-          secretProviders,
-        ),
-      ),
-    ).toBe(true);
   });
 });

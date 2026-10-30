@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
-import { SettingsSecretValue } from "./secretProvider.ts";
+import { SettingsSecretValue } from "./settingsSecretValue.ts";
 import { secretSetting } from "./settingsSecret.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);

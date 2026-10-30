@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
 import { type CommandId, ProjectId } from "./baseSchemas.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceEnvironment,
+  ProviderInstanceId,
+} from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
@@ -23,8 +27,17 @@ const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
+const encodeProviderInstanceEnvironment = Schema.encodeSync(ProviderInstanceEnvironment);
+const decodeProviderInstanceEnvironment = Schema.decodeSync(ProviderInstanceEnvironment);
+// The environment variable shape builds released before secret references decode.
+const decodeStringOnlyEnvironment = Schema.decodeUnknownSync(
+  Schema.Array(
+    Schema.Struct({ name: Schema.String, value: Schema.String, sensitive: Schema.Boolean }),
+  ),
+);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
+const encodeServerSettingsPatch = Schema.encodeSync(ServerSettingsPatch);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
 describe("storage cleanup settings", () => {
@@ -135,37 +148,6 @@ describe("ServerSettings secret providers", () => {
     });
   });
 
-  it("decodes a fork flat entry beside an upstream envelope and keeps every flat field", () => {
-    const openbao = {
-      kind: "openbao",
-      label: "Homelab",
-      address: "https://bao.example:8200",
-      mount: "secret",
-      auth: "token",
-      token: "s.secret",
-    };
-    const aws = { kind: "aws-secrets-manager", label: "Prod", region: "us-east-1" };
-    const flatOnePassword = { kind: "1password", label: "Home", account: "my.1password.com" };
-    const settings = {
-      secretProviders: {
-        homelab: openbao,
-        prod: aws,
-        home: flatOnePassword,
-        personal: onePassword("my.1password.com"),
-      },
-    };
-    const decoded = decodeServerSettings(settings);
-    expect(decoded.secretProviders).toEqual(settings.secretProviders);
-    expect(encodeServerSettings(decoded).secretProviders).toEqual(settings.secretProviders);
-    expect(decodeServerSettingsPatch(settings).secretProviders).toEqual(settings.secretProviders);
-  });
-
-  it("never lets an invalid fork entry degrade into an envelope that drops its fields", () => {
-    const invalid = { kind: "openbao", label: "Homelab", address: "not a url" };
-    expect(() => decodeServerSettings({ secretProviders: { homelab: invalid } })).toThrow();
-    expect(() => decodeServerSettingsPatch({ secretProviders: { homelab: invalid } })).toThrow();
-  });
-
   it("accepts slug ids and null removals but no id that is not a slug", () => {
     expect(
       decodeServerSettingsPatch({
@@ -184,14 +166,45 @@ describe("ServerSettings secret providers", () => {
     ).toThrow();
   });
 
-  it("rejects writes of an unknown kind or an account op could misread", () => {
-    const write = (entry: unknown) => () =>
-      decodeServerSettingsPatch({ secretProviders: { personal: entry } });
-    for (const account of ["", "my account", "--help"]) {
-      expect(write(onePassword(account))).toThrow();
+  it("stores a provider environment secret reference in a layout older builds still decode", () => {
+    const providerInstances = (secret: unknown) => ({
+      codex: {
+        driver: "codex",
+        environment: [
+          { name: "OPENAI_API_KEY", sensitive: true, value: "", secret },
+          { name: "BASE_URL", value: "https://example.test" },
+        ],
+      },
+    });
+    const secret = { provider: "personal", reference: "op://Private/OpenAI/credential" };
+    const environment = decodeServerSettings({ providerInstances: providerInstances(secret) })
+      .providerInstances[ProviderInstanceId.make("codex")]?.environment;
+    expect(environment).toEqual([
+      { name: "OPENAI_API_KEY", value: secret, sensitive: true },
+      { name: "BASE_URL", value: "https://example.test", sensitive: false },
+    ]);
+
+    const encoded = encodeProviderInstanceEnvironment(environment ?? []);
+    expect(encoded).toEqual([
+      { name: "OPENAI_API_KEY", value: "", sensitive: true, secret },
+      { name: "BASE_URL", value: "https://example.test", sensitive: false },
+    ]);
+    expect(decodeProviderInstanceEnvironment(encoded)).toEqual(environment);
+    expect(decodeStringOnlyEnvironment(encoded)).toEqual([
+      { name: "OPENAI_API_KEY", value: "", sensitive: true },
+      { name: "BASE_URL", value: "https://example.test", sensitive: false },
+    ]);
+
+    for (const invalid of [
+      { provider: "My Vault", reference: "op://a/b/c" },
+      { provider: "personal", reference: " " },
+      { provider: "personal", reference: "op://Private/OpenAI\n/credential" },
+      { provider: "personal", reference: "x".repeat(1025) },
+    ]) {
+      expect(() =>
+        decodeServerSettings({ providerInstances: providerInstances(invalid) }),
+      ).toThrow();
     }
-    expect(write({ kind: "one_password", label: "Personal" })).toThrow();
-    expect(write({ kind: "openbao", label: "Vault", config: { address: "https://x" } })).toThrow();
   });
 });
 
@@ -401,6 +414,27 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
     decodeDeviceHostSettings({ deviceHosts: [{ ...host, target: "-oProxyCommand=bad" }] }),
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
+});
+
+describe("ServerSettings project overrides across versions", () => {
+  it("sends back an override key from a newer server when an older client edits the entry", () => {
+    const projectId = ProjectId.make("project-a");
+    // As an older client reads a newer server's settings, with one key it does not know.
+    const entry = decodeServerSettings({
+      projectSettingsOverrides: {
+        [projectId]: { defaultAutoPull: true, addedByNewerServer: { mode: "kept" } },
+      },
+    }).projectSettingsOverrides[projectId];
+
+    const sent = encodeServerSettingsPatch({
+      projectSettingsOverrides: { [projectId]: { ...entry, defaultAutoPull: false } },
+    });
+
+    expect(decodeServerSettingsPatch(sent).projectSettingsOverrides?.[projectId]).toEqual({
+      defaultAutoPull: false,
+      addedByNewerServer: { mode: "kept" },
+    });
+  });
 });
 
 describe("resolveProjectProviderInstanceEnabled", () => {

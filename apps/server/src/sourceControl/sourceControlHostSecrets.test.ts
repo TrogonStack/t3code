@@ -1,22 +1,15 @@
 import { assert, it } from "@effect/vitest";
-import {
-  type ProviderInstanceEnvironment,
-  SecretProviderId,
-  SecretProviderReference,
-} from "@t3tools/contracts";
+import { SecretProviderId } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
-import {
-  type ProviderSecretResolverShape,
-  ProviderSecretResolver,
-  resolveSettingsSecret,
-} from "../provider/ProviderSecretResolver.ts";
+import { resolveSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import { resolveSourceControlHostSecrets } from "./sourceControlHostSecrets.ts";
 
 const source = (reference: string) => ({
-  kind: "secret-provider" as const,
   provider: SecretProviderId.make("homelab"),
-  reference: SecretProviderReference.make(reference),
+  reference,
 });
 
 const secretsByReference = new Map([
@@ -24,26 +17,13 @@ const secretsByReference = new Map([
   ["bitbucket#token", "bb_from_provider"],
 ]);
 
-const fakeResolver = Effect.gen(function* () {
-  const fallback = yield* ProviderSecretResolver;
-  const resolve: ProviderSecretResolverShape["resolve"] = (
-    environment: ProviderInstanceEnvironment | undefined,
-  ) =>
-    Effect.sync(() => {
-      const variables = [];
-      const unresolved = [];
-      for (const variable of environment ?? []) {
-        const secret =
-          typeof variable.value === "object" && variable.value.kind === "secret-provider"
-            ? secretsByReference.get(variable.value.reference)
-            : undefined;
-        if (secret === undefined) unresolved.push(variable.name);
-        else variables.push({ name: variable.name, value: secret, sensitive: true });
-      }
-      return { variables, unresolved };
-    });
-  return { ...fallback, resolve };
+const layerResolver = Layer.succeed(SecretResolver.SecretResolver, {
+  read: (references) =>
+    Effect.succeed(references.map((reference) => secretsByReference.get(reference.reference))),
+  invalidate: () => Effect.void,
 });
+
+const fakeResolver = SecretResolver.SecretResolver.use((resolver) => Effect.succeed(resolver));
 
 it.effect("replaces credential references with the secrets they name", () =>
   Effect.gen(function* () {
@@ -61,7 +41,7 @@ it.effect("replaces credential references with the secrets they name", () =>
       bitbucket: { email: "me@example.test", accessToken: "bb_from_provider" },
       gitcafe: { token: "" },
     });
-  }),
+  }).pipe(Effect.provide(layerResolver)),
 );
 
 it.effect("hands back the same settings when no credential names a secret", () =>
@@ -72,5 +52,5 @@ it.effect("hands back the same settings when no credential names a secret", () =
       resolveSettingsSecret(resolver, value),
     );
     assert.strictEqual(resolved, hosts);
-  }),
+  }).pipe(Effect.provide(layerResolver)),
 );

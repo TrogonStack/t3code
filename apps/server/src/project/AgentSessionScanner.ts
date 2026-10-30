@@ -32,7 +32,6 @@ import { repositoryPathFromRemoteUrl } from "@t3tools/source-control-core/server
 import * as ServerConfig from "../config.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { literalProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -1113,10 +1112,11 @@ export const make = Effect.gen(function* () {
       const seenHomes = new Set<string>();
       for (const { instanceId, config: instance } of instances) {
         const homeVariable = source === "claudeAgent" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+        const configuredHome = instance.environment?.findLast(
+          (variable) => variable.name === homeVariable,
+        )?.value;
         const environmentHome =
-          literalProviderInstanceEnvironment(instance.environment).findLast(
-            (variable) => variable.name === homeVariable,
-          )?.value ?? hostEnvironment[homeVariable];
+          typeof configuredHome === "string" ? configuredHome : hostEnvironment[homeVariable];
 
         let homePath: string;
         if (source === "claudeAgent") {

@@ -1,0 +1,20 @@
+{
+  "name": "@t3tools/secret-provider-definitions",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./registry": {
+      "types": "./src/registry.ts",
+      "import": "./src/registry.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@t3tools/secret-provider-aws": "workspace:*",
+    "@t3tools/secret-provider-core": "workspace:*",
+    "@t3tools/secret-provider-onepassword": "workspace:*",
+    "@t3tools/secret-provider-openbao": "workspace:*"
+  }
+}

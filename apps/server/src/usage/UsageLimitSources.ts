@@ -21,10 +21,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import {
-  ProviderSecretResolver,
-  resolveSettingsSecret,
-} from "../provider/ProviderSecretResolver.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import { resolveSettingsSecret } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -60,7 +58,7 @@ function missingManagementKey(config: UsageLimitSourceConfig): string {
 export const make = Effect.gen(function* () {
   const api = yield* makeCliproxyApi;
   const settingsService = yield* Settings.ServerSettingsService;
-  const secrets = yield* ProviderSecretResolver;
+  const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(

@@ -1,18 +1,36 @@
-import type { FlatSecretProviderKind } from "@t3tools/contracts";
-import type { SVGProps } from "react";
+import { KeyRoundIcon } from "lucide-react";
+import type { ComponentType } from "react";
 
 import { AwsIcon, OnePasswordIcon, OpenBaoIcon } from "../Icons";
 
+type KindIcon = ComponentType<{ readonly className?: string }>;
+
+const ICONS: Readonly<Record<string, KindIcon>> = {
+  one_password: OnePasswordIcon,
+  openbao: OpenBaoIcon,
+  aws_secrets_manager: AwsIcon,
+};
+
+/** Unknown kinds keep a generic key so a row never renders without one. */
+export function secretProviderKindIcon(kind: string): KindIcon {
+  return Object.hasOwn(ICONS, kind) ? ICONS[kind]! : KeyRoundIcon;
+}
+
 export function SecretProviderKindIcon({
   kind,
-  ...props
-}: SVGProps<SVGSVGElement> & { readonly kind: FlatSecretProviderKind }) {
+  className,
+}: {
+  readonly kind: string;
+  readonly className?: string;
+}) {
   switch (kind) {
-    case "1password":
-      return <OnePasswordIcon {...props} />;
+    case "one_password":
+      return <OnePasswordIcon className={className} aria-hidden />;
     case "openbao":
-      return <OpenBaoIcon {...props} />;
-    case "aws-secrets-manager":
-      return <AwsIcon {...props} />;
+      return <OpenBaoIcon className={className} aria-hidden />;
+    case "aws_secrets_manager":
+      return <AwsIcon className={className} aria-hidden />;
+    default:
+      return <KeyRoundIcon className={className} aria-hidden />;
   }
 }

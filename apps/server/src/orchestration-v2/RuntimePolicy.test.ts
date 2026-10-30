@@ -79,8 +79,6 @@ const layerTest = RuntimePolicy.layerFromProjectStore.pipe(
       getInstance: (instanceId) => Effect.succeed(providerInstanceFor(instanceId)),
       listInstances: Effect.succeed([]),
       listUnavailable: Effect.succeed([]),
-      listEnvironments: Effect.succeed(new Map()),
-      rebuildInstanceWhen: () => Effect.succeed(false),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.never,
     }),

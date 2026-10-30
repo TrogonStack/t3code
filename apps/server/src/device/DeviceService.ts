@@ -68,7 +68,7 @@ import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost
 
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { ProviderSecretResolver } from "../provider/ProviderSecretResolver.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as DeviceHost from "./DeviceHost.ts";
 import * as SshDeviceHost from "./SshDeviceHost.ts";
 import * as EasDeviceHost from "./EasDeviceHost.ts";
@@ -1163,7 +1163,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const runner = yield* ProcessRunner.ProcessRunner;
   const settings = yield* ServerSettings.ServerSettingsService;
-  const secrets = yield* ProviderSecretResolver;
+  const secrets = yield* SecretResolver.SecretResolver;
   const scope = yield* Scope.Scope;
   const hosts = new Map<DeviceHostId, DeviceHost.DeviceHost["Service"]>([
     [localHost.id, localHost],

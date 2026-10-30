@@ -9,10 +9,11 @@ import {
   ProviderInstanceEnvironment,
   ProviderInstanceId,
   resolveProviderInstanceEnabled,
+  type SettingsSecretValue,
   SecretProviderId,
-  SecretProviderReference,
+  SecretProviderKind,
   ServerSettings,
-  type UsageLimitSourceConfig,
+  ServerSettingsPatch,
   UsageLimitSourceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -34,10 +35,12 @@ import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { SECRET_REDACTED } from "./settingsSecrets.ts";
 import { resolveProviderInstanceTerminalEnvironment } from "./terminal/Manager.ts";
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
+const decodeServerSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 
 const layerServerSettings = () =>
   ServerSettingsModule.layer.pipe(
@@ -217,6 +220,31 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("keeps an override key a newer server saved when a project setting is edited", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const projectId = ProjectId.make("project-a");
+      yield* fs.writeFileString(
+        config.settingsPath,
+        `{ "projectSettingsOverrides": { "project-a": { "defaultAutoPull": true, "addedByNewerServer": 3 } } }`,
+      );
+      const loaded = yield* service.getSettings;
+
+      yield* service.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: { ...loaded.projectSettingsOverrides[projectId], defaultAutoPull: false },
+        },
+      });
+
+      const persisted = JSON.parse(yield* fs.readFileString(config.settingsPath));
+      assert.deepEqual(persisted.projectSettingsOverrides, {
+        [projectId]: { defaultAutoPull: false, addedByNewerServer: 3 },
+      });
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("moves an idle compaction mode saved in the legacy switch to its own field", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
@@ -246,47 +274,37 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         secretProviders: {
           personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
           vault: { kind: "openbao", label: "Vault", config: { token: "bao-token" } },
+          mystery: { kind: "mystery", label: "Mystery", config: { token: "mystery-token" } },
         },
       });
       assert.deepStrictEqual<unknown>(
         ServerSettingsModule.redactServerSettingsForClient(settings).secretProviders,
         {
           personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
-          vault: { kind: "openbao", label: "Vault" },
+          vault: { kind: "openbao", label: "Vault", config: { token: "••••••" } },
+          mystery: { kind: "mystery", label: "Mystery" },
         },
       );
     }),
   );
 
-  it.effect("keeps a fork flat entry's fields for clients but never its OpenBao token", () =>
+  it.effect("stores no secret provider of an unloaded kind or with a config its kind rejects", () =>
     Effect.gen(function* () {
-      const settings = yield* decodeServerSettings({
-        secretProviders: {
-          home: { kind: "1password", label: "Home", account: "my" },
-          homelab: {
-            kind: "openbao",
-            label: "Homelab",
-            address: "https://bao.example.test",
-            token: "bao-token",
-          },
-          personal: { kind: "one_password", label: "Personal", config: { account: "my" } },
-        },
-      });
-      const client: Readonly<Record<string, unknown>> =
-        ServerSettingsModule.redactServerSettingsForClient(settings).secretProviders;
-      assert.notInclude(JSON.stringify(client), "bao-token");
-      assert.deepStrictEqual<unknown>(client.home, {
-        kind: "1password",
-        label: "Home",
-        account: "my",
-      });
-      assert.deepStrictEqual<unknown>(client.personal, {
-        kind: "one_password",
-        label: "Personal",
-        config: { account: "my" },
-      });
-      assert.include(JSON.stringify(client.homelab), "https://bao.example.test");
-    }),
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const write = (entry: unknown) =>
+        decodeServerSettingsPatch({ secretProviders: { personal: entry } }).pipe(
+          Effect.flatMap(service.updateSettings),
+          Effect.flip,
+        );
+      for (const entry of [
+        { kind: "one_password", label: "Personal", config: { account: "--help" } },
+        { kind: "one_password", label: "Personal" },
+        { kind: "openbao", label: "Vault", config: { address: "https://x" } },
+      ]) {
+        assert.deepInclude(yield* write(entry), { operation: "write-secret-provider" });
+      }
+      assert.deepStrictEqual((yield* service.getSettings).secretProviders, {});
+    }).pipe(Effect.provide(layerServerSettings())),
   );
 
   it.effect("saves through a symlinked settings file without replacing the link", () =>
@@ -1058,6 +1076,54 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("reads settings secrets once per settings change", () => {
+    let reads = 0;
+    const layerSecret = Layer.effect(
+      ServerSecretStore.ServerSecretStore,
+      Effect.map(ServerSecretStore.ServerSecretStore, (store) => ({
+        ...store,
+        get: (name: string) =>
+          Effect.suspend(() => {
+            reads++;
+            return store.get(name);
+          }),
+      })),
+    ).pipe(Layer.provide(ServerSecretStore.layer));
+    const layerSettings = ServerSettingsModule.layer.pipe(
+      Layer.provide(layerSecret),
+      Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
+      Layer.provideMerge(
+        Layer.fresh(
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3code-settings-secret-cache-test-" }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_cached");
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const save = (value: string) =>
+        service.updateSettings({
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: "API_TOKEN", value, sensitive: true }],
+              config: {},
+            },
+          },
+        });
+      const token = service.getSettings.pipe(
+        Effect.map((settings) => settings.providerInstances[instanceId]?.environment?.[0]?.value),
+      );
+      yield* save("sk-first");
+      reads = 0;
+      assert.equal(yield* token, "sk-first");
+      assert.equal(yield* token, "sk-first");
+      assert.equal(reads, 0);
+      yield* save("sk-second");
+      assert.equal(yield* token, "sk-second");
+    }).pipe(Effect.provide(layerSettings));
+  });
+
   it.effect("keeps the inline value on disk when secret migration fails", () => {
     const cause = new ServerSecretStore.SecretStorePersistError({
       resource: "provider environment secret",
@@ -1243,12 +1309,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
           secretProviders: {
             [SecretProviderId.make("homelab")]: {
-              kind: "openbao",
+              kind: SecretProviderKind.make("openbao"),
               label: "Homelab",
-              address: "https://bao.example.test",
-              mount: "secret",
-              token: "openbao-secret",
-              auth: "token",
+              config: {
+                address: "https://bao.example.test",
+                mount: "secret",
+                token: "openbao-secret",
+                auth: "token",
+              },
             },
           },
           easDeviceHosts: [
@@ -1343,6 +1411,27 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         for (const name of secretNames) {
           assert.isTrue(Option.isSome(yield* store.get(name)), name);
         }
+        const secret = {
+          provider: SecretProviderId.make("personal"),
+          reference: "op://Private/Antigravity/token",
+        };
+        const referenced = yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance: {
+            ...client.providerInstances[instanceId]!,
+            environment: [
+              { name: "API_TOKEN", value: secret, sensitive: true, valueRedacted: true },
+            ],
+          },
+        });
+        assert.isTrue(Option.isNone(yield* store.get(secretNames[1]!)));
+        assert.deepEqual(
+          ServerSettingsModule.redactServerSettingsForClient(referenced).providerInstances[
+            instanceId
+          ]?.environment,
+          [{ name: "API_TOKEN", value: secret, sensitive: true }],
+        );
         yield* service.updateSettings({
           providerInstances: {},
           sourceControlHosts: {
@@ -1409,24 +1498,201 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
-  it.effect("stores 1Password secret sources as written and never as sensitive", () =>
+  it.effect(
+    "rewrites the fork's secret shapes into secret provider shapes when settings load",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const store = yield* ServerSecretStore.ServerSecretStore;
+        yield* store.set(
+          "secret-provider-aG9tZWxhYg-dG9rZW4",
+          new TextEncoder().encode("bao-secret"),
+        );
+        yield* fs.writeFileString(
+          config.settingsPath,
+          JSON.stringify({
+            secretProviders: {
+              personal: { kind: "1password", label: "Personal", account: "my.1password.com" },
+              homelab: {
+                kind: "openbao",
+                label: "Homelab",
+                address: "https://bao.example.test",
+                mount: "secret",
+                auth: "token",
+                token: SECRET_REDACTED,
+              },
+              aws: {
+                kind: "aws-secrets-manager",
+                label: "AWS",
+                region: "us-east-1",
+                profile: "dev",
+              },
+            },
+            providerInstances: {
+              codex_personal: {
+                driver: "codex",
+                environment: [
+                  {
+                    name: "FROM_PROVIDER",
+                    value: { kind: "secret-provider", provider: "homelab", reference: "codex#key" },
+                    sensitive: false,
+                  },
+                  {
+                    name: "FROM_ACCOUNT",
+                    value: {
+                      kind: "1password",
+                      reference: "op://Home/Codex/key",
+                      account: "other.1password.com",
+                    },
+                    sensitive: false,
+                  },
+                  { name: "PLAIN", value: "literal", sensitive: false },
+                ],
+              },
+            },
+            usageLimitSources: {
+              hub: {
+                kind: "cliproxy",
+                url: "https://hub.example.test",
+                managementKey: {
+                  kind: "1password",
+                  reference: "op://Home/Hub/key",
+                  account: "my.1password.com",
+                },
+                enabled: true,
+              },
+            },
+            easDeviceHosts: [
+              {
+                kind: "eas",
+                id: "eas",
+                label: "EAS Simulator",
+                accessToken: {
+                  kind: "secret-provider",
+                  provider: "homelab",
+                  reference: "expo#token",
+                },
+                maxSessionMinutes: 30,
+                idleMinutes: 10,
+                maxConcurrentSessions: 2,
+              },
+            ],
+            sourceControlHosts: {
+              gitcafe: {
+                token: { kind: "secret-provider", provider: "aws", reference: "gitcafe" },
+              },
+              github: {
+                tokens: {
+                  "github.com": {
+                    kind: "secret-provider",
+                    provider: "homelab",
+                    reference: "gh#token",
+                  },
+                  "ghe.acme.test": "ghp_literal",
+                },
+              },
+            },
+          }),
+        );
+
+        const settings = yield* service.getSettings;
+        const synthesized = SecretProviderId.make("one-password-other-1password-com");
+        assert.deepEqual<unknown>(settings.secretProviders[SecretProviderId.make("personal")], {
+          kind: "one_password",
+          label: "Personal",
+          config: { account: "my.1password.com" },
+        });
+        assert.deepEqual<unknown>(settings.secretProviders[SecretProviderId.make("aws")], {
+          kind: "aws_secrets_manager",
+          label: "AWS",
+          config: { region: "us-east-1", profile: "dev" },
+        });
+        assert.deepEqual<unknown>(settings.secretProviders[synthesized], {
+          kind: "one_password",
+          label: "1Password other.1password.com",
+          config: { account: "other.1password.com" },
+        });
+        assert.deepEqual<unknown>(
+          settings.providerInstances[ProviderInstanceId.make("codex_personal")]?.environment,
+          [
+            {
+              name: "FROM_PROVIDER",
+              value: { provider: "homelab", reference: "codex#key" },
+              sensitive: false,
+            },
+            {
+              name: "FROM_ACCOUNT",
+              value: { provider: synthesized, reference: "op://Home/Codex/key" },
+              sensitive: false,
+            },
+            { name: "PLAIN", value: "literal", sensitive: false },
+          ],
+        );
+        assert.deepEqual<unknown>(
+          settings.usageLimitSources[UsageLimitSourceId.make("hub")]?.managementKey,
+          {
+            provider: "personal",
+            reference: "op://Home/Hub/key",
+          },
+        );
+        assert.deepEqual<unknown>(settings.easDeviceHosts[0]?.accessToken, {
+          provider: "homelab",
+          reference: "expo#token",
+        });
+        assert.deepEqual<unknown>(settings.sourceControlHosts.gitcafe?.token, {
+          provider: "aws",
+          reference: "gitcafe",
+        });
+        assert.deepEqual<unknown>(
+          (settings.sourceControlHosts.github?.tokens as Record<string, unknown>)?.["github.com"],
+          {
+            provider: "homelab",
+            reference: "gh#token",
+          },
+        );
+
+        const homelab = settings.secretProviders[SecretProviderId.make("homelab")];
+        assert.deepEqual<unknown>(homelab, {
+          kind: "openbao",
+          label: "Homelab",
+          config: {
+            address: "https://bao.example.test",
+            mount: "secret",
+            auth: "token",
+            token: "bao-secret",
+          },
+        });
+        const disk = yield* fs.readFileString(config.settingsPath);
+        assert.notInclude(disk, "bao-secret");
+        assert.notInclude(disk, '"kind":"1password"');
+        assert.notInclude(disk, "secret-provider");
+        assert.notInclude(
+          JSON.stringify(ServerSettingsModule.redactServerSettingsForClient(settings)),
+          "bao-secret",
+        );
+      }).pipe(Effect.provide(layerServerSettingsWithSecrets())),
+  );
+
+  it.effect("keeps an environment secret reference as written and out of the secret store", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const instanceId = ProviderInstanceId.make("codex_personal");
       const source = {
-        kind: "1password",
+        provider: SecretProviderId.make("personal"),
         reference: "op://Home Lab/Codex/api key",
-        account: "my.1password.com",
-      } as const;
+      };
       const decodeEnvironment = Schema.decodeEffect(ProviderInstanceEnvironment);
       const environment = yield* decodeEnvironment([
-        { name: "OPENAI_API_KEY", value: source, sensitive: true, valueRedacted: true },
+        { name: "OPENAI_API_KEY", value: "", secret: source, sensitive: true, valueRedacted: true },
       ]);
-      const expected = yield* decodeEnvironment([
-        { name: "OPENAI_API_KEY", value: source, sensitive: false },
-      ]);
+      const expectedEncoded = [
+        { name: "OPENAI_API_KEY", value: "", secret: source, sensitive: true },
+      ];
+      const expected = yield* decodeEnvironment(expectedEncoded);
 
       const next = yield* serverSettings.updateSettings({
         providerInstances: {
@@ -1445,7 +1711,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         expected,
       );
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      assert.deepEqual(JSON.parse(raw).providerInstances.codex_personal.environment, expected);
+      assert.deepEqual(
+        JSON.parse(raw).providerInstances.codex_personal.environment,
+        expectedEncoded,
+      );
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
@@ -1520,9 +1789,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         const serverConfig = yield* ServerConfig.ServerConfig;
         const fileSystem = yield* FileSystem.FileSystem;
         const source = (reference: string) => ({
-          kind: "secret-provider" as const,
           provider: SecretProviderId.make("homelab"),
-          reference: SecretProviderReference.make(reference),
+          reference,
         });
         const stored = (kind: string, field: string, serverHost: string | null) =>
           secrets.get(sourceControlHostSecretName({ kind, field, serverHost }));
@@ -1597,11 +1865,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const secrets = yield* ServerSecretStore.ServerSecretStore;
       const id = UsageLimitSourceId.make("hub");
       const source = {
-        kind: "secret-provider" as const,
         provider: SecretProviderId.make("homelab"),
-        reference: SecretProviderReference.make("cliproxy#key"),
+        reference: "cliproxy#key",
       };
-      const hub = (managementKey: UsageLimitSourceConfig["managementKey"]) => ({
+      const hub = (managementKey: SettingsSecretValue) => ({
         [id]: {
           kind: "cliproxy" as const,
           url: "https://hub.example.test",
@@ -1759,6 +2026,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
       let failRename = false;
       let settingsPathToFail: string | undefined;
+      let readDuringWrite: Effect.Effect<void> = Effect.void;
       const writeFailure = PlatformError.systemError({
         _tag: "PermissionDenied",
         module: "FileSystem",
@@ -1769,7 +2037,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         ...fileSystem,
         rename: (fromPath, toPath) =>
           failRename && toPath === settingsPathToFail
-            ? Effect.fail(writeFailure)
+            ? readDuringWrite.pipe(Effect.andThen(Effect.fail(writeFailure)))
             : fileSystem.rename(fromPath, toPath),
       });
       const instanceId = ProviderInstanceId.make("antigravity_write_failure");
@@ -1791,6 +2059,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         });
 
         failRename = true;
+        readDuringWrite = Effect.ignore(serverSettings.getSettings);
         const failedUpdate = yield* serverSettings
           .updateProviderInstance({
             operation: "upsert",

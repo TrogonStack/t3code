@@ -1,15 +1,17 @@
 import {
   DEFAULT_SERVER_SETTINGS,
-  OnePasswordAccount,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   SecretProviderId,
   SecretProviderKind,
+  ServerSettings,
+  ServerSettingsPatch,
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Duration from "effect/Duration";
+import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import { resolveServerBackgroundActivitySettings } from "./backgroundActivitySettings.ts";
 import { createModelSelection } from "./model.ts";
@@ -23,6 +25,9 @@ import {
   parsePersistedServerObservabilitySettings,
   resolveSourceControlWriterModelSelection,
 } from "./serverSettings.ts";
+
+const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
+const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
 const FOLDED_SERVER_SETTINGS = { ...DEFAULT_SERVER_SETTINGS, projectSettingsFolded: true };
 
@@ -499,6 +504,37 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  // regression: #18334 a newer client must still see this server drop a key it does not know
+  it("drops an override key this server does not know from a patch and keeps one it stored", () => {
+    const projectId = ProjectId.make("project-a");
+    const current = decodeServerSettings({
+      projectSettingsFolded: true,
+      projectSettingsOverrides: {
+        [projectId]: { defaultAutoPull: true, addedByNewerServer: 3 },
+      },
+    });
+    const patch = decodeServerSettingsPatch({
+      projectSettingsOverrides: {
+        [projectId]: { defaultAutoPull: false, addedByNewerServer: 4, addedByNewerClient: "x" },
+      },
+    });
+
+    const updated = applyServerSettingsPatch(current, patch);
+    expect(updated.projectSettingsOverrides[projectId]).toEqual({
+      defaultAutoPull: false,
+      addedByNewerServer: 3,
+    });
+    const reset = applyServerSettingsPatch(updated, {
+      projectSettingsOverrides: { [projectId]: {} },
+    });
+    expect(reset.projectSettingsOverrides[projectId]).toEqual({ addedByNewerServer: 3 });
+    expect(
+      applyServerSettingsPatch(reset, {
+        projectSettingsOverrides: { [projectId]: null },
+      }).projectSettingsOverrides[projectId],
+    ).toBeUndefined();
+  });
+
   it("clears a project's providerInstances override when a patch entry sends an empty map", () => {
     const instanceId = ProviderInstanceId.make("codex_work");
     const projectId = ProjectId.make("project-a");
@@ -554,15 +590,15 @@ describe("serverSettings helpers", () => {
     const onePassword = (label: string, account: string) => ({
       kind: SecretProviderKind.make("one_password"),
       label,
-      config: { account: OnePasswordAccount.make(account) },
+      config: { account },
     });
     const current = {
       ...DEFAULT_SERVER_SETTINGS,
       secretProviders: {
         [personal]: {
-          kind: "1password" as const,
+          kind: SecretProviderKind.make("one_password"),
           label: "Personal",
-          account: OnePasswordAccount.make("my.1password.com"),
+          config: { account: "my.1password.com" },
         },
       },
     };
@@ -570,11 +606,9 @@ describe("serverSettings helpers", () => {
     const added = applyServerSettingsPatch(current, {
       secretProviders: {
         [homelab]: {
-          kind: "openbao",
+          kind: SecretProviderKind.make("openbao"),
           label: "Homelab",
-          address: "https://bao.example:8200",
-          mount: "secret",
-          auth: "token",
+          config: { address: "https://bao.example:8200", mount: "secret", auth: "token" },
         },
         [work]: onePassword("Work", "team.1password.com"),
       },

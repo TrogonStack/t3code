@@ -31,7 +31,6 @@ import { toastManager } from "../ui/toast";
 import { DeviceHostEditor } from "./DeviceHostEditor";
 import { updateDeviceHosts, groupDeviceHosts } from "./deviceHostsSettings.logic";
 import { EasDeviceHostEditor } from "./EasDeviceHostEditor";
-import { EMPTY_SECRET_PROVIDERS } from "./SecretSourceControls";
 import {
   easSessionLimits,
   newEasDeviceHost,
@@ -586,11 +585,6 @@ export function DeviceSourcesSettings(props: {
           environmentId={editing.environmentId}
           host={editing.host}
           isNew={editing.isNew}
-          secretProviders={
-            connectedEnvironments.find(
-              (candidate) => candidate.environmentId === editing.environmentId,
-            )?.serverConfig?.settings.secretProviders ?? EMPTY_SECRET_PROVIDERS
-          }
           busy={busy}
           onSave={(host) => void saveEas(host, false, editing.isNew ? undefined : editing.host)}
           onClose={() => setEditing(null)}

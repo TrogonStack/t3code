@@ -3,8 +3,6 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  OnePasswordAccount,
-  SecretProviderId,
   type ServerSettings,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -17,7 +15,6 @@ import * as ServerConfig from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
   DEV_REPLAY_INSTANCE_ID,
-  changedSecretProviderIds,
   deriveProviderInstanceConfigMap,
   seedDevReplayInstance,
 } from "./ProviderInstanceRegistryHydration.ts";
@@ -93,44 +90,6 @@ describe("deriveProviderInstanceConfigMap", () => {
     const merged = deriveProviderInstanceConfigMap(settings);
 
     expect(merged[instanceId]).toBe(settings.providerInstances[instanceId]);
-  });
-});
-
-describe("changedSecretProviderIds", () => {
-  const home = SecretProviderId.make("home");
-  const vault = SecretProviderId.make("vault");
-  const homeConfig = {
-    kind: "1password" as const,
-    label: "Home",
-    account: OnePasswordAccount.make("my.1password.com"),
-  };
-  const vaultConfig = {
-    kind: "openbao" as const,
-    label: "Vault",
-    address: "https://bao.example.com",
-    mount: "secret",
-    token: "s.old",
-    auth: "token" as const,
-  };
-
-  it("is empty when no provider changed", () => {
-    const providers = { [home]: homeConfig, [vault]: vaultConfig };
-    expect(changedSecretProviderIds(providers, { ...providers })).toEqual(new Set());
-  });
-
-  it("names providers that were added, edited, or removed", () => {
-    expect(
-      changedSecretProviderIds(
-        { [home]: homeConfig },
-        { [vault]: { ...vaultConfig, token: "s.new" } },
-      ),
-    ).toEqual(new Set([home, vault]));
-    expect(
-      changedSecretProviderIds(
-        { [vault]: vaultConfig },
-        { [vault]: { ...vaultConfig, token: "s.new" } },
-      ),
-    ).toEqual(new Set([vault]));
   });
 });
 

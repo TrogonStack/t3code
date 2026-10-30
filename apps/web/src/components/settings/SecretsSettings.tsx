@@ -1,8 +1,4 @@
-import type {
-  FlatSecretProviderKind,
-  SecretProviderId,
-  StoredSecretProviderConfig,
-} from "@t3tools/contracts";
+import type { SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
 import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -20,42 +16,16 @@ import {
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { SecretProviderDialog } from "./SecretProviderDialog";
-import {
-  classifySecretProvider,
-  secretProviderDisplayKind,
-  secretProviderSummary,
-} from "./SecretProviderDialog.logic";
+import { classifySecretProvider, secretProviderDescription } from "./SecretProviderDialog.logic";
+import { secretProviderKindIcon } from "./SecretProviderKindIcon";
 import {
   classifyProviderEnvironmentAccess,
   resolveRemoteOperateAccess,
 } from "./ProviderSettingsPanel.logic";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
-import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 import { searchableSetting } from "./settingsSearch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-
-function secretProviderDescription(provider: StoredSecretProviderConfig): string {
-  const classified = classifySecretProvider(provider);
-  if (classified.kind !== "flat") return secretProviderSummary(provider);
-  const config = classified.config;
-  switch (config.kind) {
-    case "1password":
-      return secretProviderSummary(config);
-    case "openbao":
-      return [
-        secretProviderSummary(config),
-        `mount ${config.mount}`,
-        ...(config.namespace === undefined ? [] : [`namespace ${config.namespace}`]),
-        ...(config.auth === "env" ? ["BAO_TOKEN"] : config.auth === "cli" ? ["bao CLI login"] : []),
-      ].join(" · ");
-    case "aws-secrets-manager":
-      return [
-        secretProviderSummary(config),
-        ...(config.profile === undefined ? [] : [`profile ${config.profile}`]),
-      ].join(" · ");
-  }
-}
 
 export function SecretsSettingsPanel() {
   const { scope, environment } = useSettingsScope();
@@ -112,9 +82,7 @@ function EnvironmentSecretProviders({
   const [dialog, setDialog] = useState<
     null | { readonly mode: "add" } | { readonly mode: "edit"; readonly id: SecretProviderId }
   >(null);
-  const entries = Object.entries(providers) as Array<
-    [SecretProviderId, StoredSecretProviderConfig]
-  >;
+  const entries = Object.entries(providers) as Array<[SecretProviderId, SecretProviderConfig]>;
   const editingConfig = dialog?.mode === "edit" ? providers[dialog.id] : undefined;
   const editing =
     dialog?.mode === "edit" && editingConfig !== undefined
@@ -145,12 +113,21 @@ function EnvironmentSecretProviders({
           />
         ) : (
           entries.map(([id, config]) => {
-            const kind = secretProviderDisplayKind(config);
             const classified = classifySecretProvider(config);
+            const KindIcon =
+              classified.kind === "unsupported" ? null : secretProviderKindIcon(config.kind);
+            const summary = secretProviderDescription(classified);
             return (
               <SettingsRow
                 key={id}
-                title={<SecretProviderTitle kind={kind} label={config.label} />}
+                title={
+                  <span className="flex min-w-0 items-center gap-2">
+                    {KindIcon ? (
+                      <KindIcon className="size-4.5 shrink-0 text-foreground/80" aria-hidden />
+                    ) : null}
+                    <span className="min-w-0 wrap-anywhere">{config.label}</span>
+                  </span>
+                }
                 description={
                   classified.kind === "one_password" ? (
                     <span className="flex min-w-0 items-center gap-1">
@@ -163,16 +140,16 @@ function EnvironmentSecretProviders({
                         className="max-w-full truncate"
                       />
                     </span>
-                  ) : classified.kind === "unsupported" ? (
-                    `Unsupported provider (${config.kind})`
+                  ) : summary !== null ? (
+                    <span className="break-all">{summary}</span>
                   ) : (
-                    <span className="break-all">{secretProviderDescription(config)}</span>
+                    `Unsupported provider (${config.kind})`
                   )
                 }
                 control={
                   !readOnly ? (
                     <div className="flex items-center gap-1">
-                      {kind !== undefined ? (
+                      {KindIcon ? (
                         <Button
                           size="xs"
                           variant="ghost"
@@ -195,10 +172,7 @@ function EnvironmentSecretProviders({
       </SettingsSection>
       {dialog !== null && !readOnly && (dialog.mode === "add" || editing !== undefined) ? (
         <SecretProviderDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setDialog(null);
-          }}
+          onClose={() => setDialog(null)}
           environmentId={environmentId}
           environmentLabel={environment.label}
           existingIds={new Set(Object.keys(providers))}
@@ -206,27 +180,6 @@ function EnvironmentSecretProviders({
         />
       ) : null}
     </>
-  );
-}
-
-function SecretProviderTitle({
-  kind,
-  label,
-}: {
-  readonly kind: FlatSecretProviderKind | undefined;
-  readonly label: string;
-}) {
-  return (
-    <span className="flex min-w-0 items-center gap-2">
-      {kind !== undefined ? (
-        <SecretProviderKindIcon
-          kind={kind}
-          className="size-4.5 shrink-0 text-foreground/80"
-          aria-hidden
-        />
-      ) : null}
-      <span className="min-w-0 wrap-anywhere">{label}</span>
-    </span>
   );
 }
 

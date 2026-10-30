@@ -1,5 +1,9 @@
-import type { EnvironmentId, SettingsSecretValue } from "@t3tools/contracts";
-import * as Result from "effect/Result";
+import {
+  isSecretReference,
+  type EnvironmentId,
+  type SecretReference,
+  type SettingsSecretValue,
+} from "@t3tools/contracts";
 import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -14,13 +18,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button, InlineButton } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
-import {
-  hasSavedCredential,
-  SecretField,
-  secretFieldDraft,
-  secretFieldSubmission,
-  type SecretFieldDraft,
-} from "./SecretSourceControls";
+import { SecretSourceInput, useSecretSources } from "./SecretSourceInput";
+
+const hasToken = (token: SettingsSecretValue | undefined) =>
+  typeof token === "string" ? token.length > 0 : token !== undefined;
 
 export function SourceControlTokenSettings({
   environmentId,
@@ -36,29 +37,27 @@ export function SourceControlTokenSettings({
   const { tokens } = useEnvironmentSettings(environmentId, (settings) =>
     readHostCredentialSettings(settings, definition.kind),
   );
-  const secretProviders = useEnvironmentSettings(
-    environmentId,
-    (settings) => settings.secretProviders,
-  );
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
     label: `save ${definition.label} token`,
   });
   const defaultHost = definition.publicHost ?? "";
   const [host, setHost] = useState(defaultHost);
+  const secretSources = useSecretSources(environmentId);
   const [pending, setPending] = useState<{
     readonly key: string;
-    readonly draft: SecretFieldDraft;
+    readonly draft: string | SecretReference;
   } | null>(null);
   const [saving, setSaving] = useState(false);
   const normalizedHost = host.trim().toLowerCase();
   const savedToken = tokens[normalizedHost];
-  const isSaved = hasSavedCredential(savedToken);
+  const isSaved = hasToken(savedToken);
   const savedHosts = Object.entries(tokens)
-    .filter(([, value]) => hasSavedCredential(value))
+    .filter(([, value]) => hasToken(value))
     .map(([saved]) => saved);
   const sourceKey = JSON.stringify([normalizedHost, savedToken ?? ""]);
-  const draft = pending?.key === sourceKey ? pending.draft : secretFieldDraft(savedToken);
-  const submission = Result.getOrUndefined(secretFieldSubmission(draft, secretProviders));
+  const draft =
+    pending?.key === sourceKey ? pending.draft : isSecretReference(savedToken) ? savedToken : "";
+  const submission = typeof draft === "string" ? draft.trim() : draft;
 
   const save = async (target: string, token: SettingsSecretValue) => {
     setSaving(true);
@@ -83,7 +82,7 @@ export function SourceControlTokenSettings({
       className="grid gap-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (normalizedHost && submission !== undefined) void save(normalizedHost, submission);
+        if (normalizedHost && submission !== "") void save(normalizedHost, submission);
       }}
     >
       {/* Locked while saving: a successful save clears the draft, which would drop edits made mid-request. */}
@@ -124,14 +123,16 @@ export function SourceControlTokenSettings({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor={`${definition.kind}-token-${environmentId}`}>Token</Label>
-            <SecretField
+            <SecretSourceInput
               id={`${definition.kind}-token-${environmentId}`}
-              label={`${definition.label} token`}
+              size="sm"
+              aria-label={`${definition.label} token`}
+              configured={isSaved && !isSecretReference(savedToken)}
+              value={draft}
+              sources={secretSources}
               environmentId={environmentId}
-              secretProviders={secretProviders}
-              value={savedToken}
-              draft={draft}
-              onDraftChange={(next) => setPending({ key: sourceKey, draft: next })}
+              onChange={(event) => setPending({ key: sourceKey, draft: event.target.value })}
+              onSecretChange={(secret) => setPending({ key: sourceKey, draft: secret ?? "" })}
             />
           </div>
         </div>
@@ -155,7 +156,7 @@ export function SourceControlTokenSettings({
             <Button
               type="submit"
               size="xs"
-              disabled={!normalizedHost || submission === undefined || saving}
+              disabled={!normalizedHost || submission === "" || saving}
             >
               Save
             </Button>

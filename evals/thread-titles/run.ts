@@ -20,6 +20,7 @@ import {
 import * as ThreadTitleLinks from "../../apps/server/src/textGeneration/ThreadTitleLinks.ts";
 import * as SourceControlProviderRegistry from "../../apps/server/src/sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlBuiltInDrivers from "../../apps/server/src/sourceControl/builtInDrivers.ts";
+import * as SecretResolver from "../../apps/server/src/secrets/SecretResolver.ts";
 import * as ServerSettings from "../../apps/server/src/serverSettings.ts";
 import * as VcsProcess from "../../apps/server/src/vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../../apps/server/src/vcs/VcsDriverRegistry.ts";
@@ -143,6 +144,7 @@ await Effect.runPromise(
         ProcessRunner.layer,
         SourceControlProviderRegistry.layer.pipe(
           Layer.provide(SourceControlBuiltInDrivers.layer),
+          Layer.provide(SecretResolver.layer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),
           Layer.provide(GitVcsDriver.layer),

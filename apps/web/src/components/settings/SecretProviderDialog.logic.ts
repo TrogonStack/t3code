@@ -1,196 +1,181 @@
 import {
+  SecretProviderId,
+  SecretProviderKind,
+  SecretProviderLabel,
+  type SecretProviderConfig,
+} from "@t3tools/contracts";
+import {
   AwsProfile,
   AwsRegion,
-  OnePasswordAccount,
-  OnePasswordSecretReference,
-  OpenBaoAddress,
-  OpenBaoAuth,
-  OpenBaoMount,
+  AwsSecretsManagerSecretProviderConfig,
+} from "@t3tools/secret-provider-aws/shared/definition";
+import {
   OnePasswordSecretProviderConfig,
+  type OnePasswordAccount,
+} from "@t3tools/secret-provider-onepassword/shared/definition";
+import {
+  OpenBaoAddress,
+  OpenBaoMount,
   OpenBaoNamespace,
-  SecretProviderId,
-  SecretProviderLabel,
-  isFlatSecretProviderConfig,
-  type FlatSecretProviderConfig,
-  type FlatSecretProviderKind,
-  type StoredSecretProviderConfig,
-} from "@t3tools/contracts";
+  OpenBaoSecretProviderConfig,
+  type OpenBaoAuth,
+} from "@t3tools/secret-provider-openbao/shared/definition";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
-const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<FlatSecretProviderKind, string>> = {
-  "1password": "1Password",
-  openbao: "OpenBao",
-  "aws-secrets-manager": "AWS Secrets Manager",
-};
+const decodeSecretProviderId = Schema.decodeOption(SecretProviderId);
+const decodeOnePasswordConfig = Schema.decodeUnknownOption(OnePasswordSecretProviderConfig);
+const decodeOpenBaoConfig = Schema.decodeUnknownOption(OpenBaoSecretProviderConfig);
+const decodeAwsConfig = Schema.decodeUnknownOption(AwsSecretsManagerSecretProviderConfig);
 
-export const SECRET_PROVIDER_REFERENCE_PLACEHOLDERS: Readonly<
-  Record<FlatSecretProviderKind, string>
-> = {
-  "1password": "op://Private/OpenAI/credential",
-  openbao: "apps/openai#api_key",
-  "aws-secrets-manager": "prod/openai#api_key",
+export const SECRET_PROVIDER_KINDS = ["one_password", "openbao", "aws_secrets_manager"] as const;
+export type SupportedSecretProviderKind = (typeof SECRET_PROVIDER_KINDS)[number];
+
+export const SECRET_PROVIDER_KIND_LABELS: Readonly<Record<SupportedSecretProviderKind, string>> = {
+  one_password: "1Password",
+  openbao: "OpenBao",
+  aws_secrets_manager: "AWS Secrets Manager",
 };
 
 export const DEFAULT_OPENBAO_MOUNT = "secret";
 
-const decodeOnePasswordConfig = Schema.decodeUnknownOption(OnePasswordSecretProviderConfig);
-
 export type ClassifiedSecretProvider =
-  | { readonly kind: "flat"; readonly config: FlatSecretProviderConfig }
-  | { readonly kind: "one_password"; readonly account: OnePasswordAccount }
+  | {
+      readonly kind: "one_password";
+      readonly account: OnePasswordAccount;
+    }
+  | {
+      readonly kind: "openbao";
+      readonly config: OpenBaoSecretProviderConfig;
+    }
+  | {
+      readonly kind: "aws_secrets_manager";
+      readonly config: AwsSecretsManagerSecretProviderConfig;
+    }
   | { readonly kind: "unsupported" };
 
 /** Unknown kinds and configs that no longer decode are shown read-only; removal stays available. */
-export function classifySecretProvider(
-  provider: StoredSecretProviderConfig,
-): ClassifiedSecretProvider {
-  if (isFlatSecretProviderConfig(provider)) return { kind: "flat", config: provider };
-  if (provider.kind !== "one_password") return { kind: "unsupported" };
-  const decoded = decodeOnePasswordConfig(provider.config);
-  return decoded._tag === "Some"
-    ? { kind: "one_password", account: decoded.value.account }
-    : { kind: "unsupported" };
-}
-
-/** The kind shown next to a provider: an upstream `one_password` envelope reads as 1Password. */
-export function secretProviderDisplayKind(
-  provider: StoredSecretProviderConfig | undefined,
-): FlatSecretProviderKind | undefined {
-  if (provider === undefined) return undefined;
-  const classified = classifySecretProvider(provider);
-  switch (classified.kind) {
-    case "flat":
-      return classified.config.kind;
-    case "one_password":
-      return "1password";
-    case "unsupported":
-      return undefined;
-  }
-}
-
-/** One line naming the kind and where it reads from, for rows and pickers. */
-export function secretProviderSummary(provider: StoredSecretProviderConfig): string {
-  const classified = classifySecretProvider(provider);
-  if (classified.kind === "one_password") {
-    return `${SECRET_PROVIDER_KIND_LABELS["1password"]} · ${classified.account}`;
-  }
-  if (classified.kind === "unsupported") return provider.kind;
-  const config = classified.config;
-  const kind = SECRET_PROVIDER_KIND_LABELS[config.kind];
-  switch (config.kind) {
-    case "1password":
-      return `${kind} · ${config.account}`;
-    case "openbao":
-      return `${kind} · ${config.address}`;
-    case "aws-secrets-manager":
-      return `${kind} · ${config.region}`;
-  }
-}
-
-const decodeOnePasswordSecretReference = Schema.decodeResult(OnePasswordSecretReference);
-
-/**
- * The format each kind resolves, checked in the client so a row explains the
- * mistake before the provider starts and silently gets no value.
- */
-export function secretProviderReferenceIssue(
-  kind: FlatSecretProviderKind,
-  reference: string,
-): string | undefined {
-  switch (kind) {
-    case "1password": {
-      const decoded = decodeOnePasswordSecretReference(reference);
-      return Result.isFailure(decoded) ? decoded.failure.message : undefined;
+export function classifySecretProvider(provider: SecretProviderConfig): ClassifiedSecretProvider {
+  switch (provider.kind) {
+    case "one_password": {
+      const decoded = decodeOnePasswordConfig(provider.config);
+      return Option.isSome(decoded)
+        ? { kind: "one_password", account: decoded.value.account }
+        : { kind: "unsupported" };
     }
     case "openbao": {
-      const separator = reference.indexOf("#");
-      const path = separator === -1 ? "" : reference.slice(0, separator);
-      const field = separator === -1 ? "" : reference.slice(separator + 1);
-      if (path.length === 0 || field.length === 0) {
-        return "OpenBao references look like path/to/secret#field.";
-      }
-      if (path.startsWith("-")) return "OpenBao secret path must not start with -.";
-      return undefined;
+      const decoded = decodeOpenBaoConfig(provider.config);
+      return Option.isSome(decoded)
+        ? { kind: "openbao", config: decoded.value }
+        : { kind: "unsupported" };
     }
-    case "aws-secrets-manager": {
-      const separator = reference.indexOf("#");
-      const secretId = separator === -1 ? reference : reference.slice(0, separator);
-      const key = separator === -1 ? undefined : reference.slice(separator + 1);
-      if (secretId.length === 0 || key === "") {
-        return "AWS Secrets Manager references look like name-or-arn or name-or-arn#key.";
-      }
-      if (secretId.startsWith("-")) return "AWS secret id must not start with -.";
-      return undefined;
+    case "aws_secrets_manager": {
+      const decoded = decodeAwsConfig(provider.config);
+      return Option.isSome(decoded)
+        ? { kind: "aws_secrets_manager", config: decoded.value }
+        : { kind: "unsupported" };
     }
+    default:
+      return { kind: "unsupported" };
+  }
+}
+
+/** One line naming where a provider reads from, for rows. */
+export function secretProviderDescription(classified: ClassifiedSecretProvider): string | null {
+  switch (classified.kind) {
+    case "one_password":
+      return null;
+    case "openbao":
+      return [
+        `OpenBao · ${classified.config.address}`,
+        `mount ${classified.config.mount}`,
+        ...(classified.config.namespace === undefined
+          ? []
+          : [`namespace ${classified.config.namespace}`]),
+        ...(classified.config.auth === "env"
+          ? ["BAO_TOKEN"]
+          : classified.config.auth === "cli"
+            ? ["bao CLI login"]
+            : []),
+      ].join(" · ");
+    case "aws_secrets_manager":
+      return [
+        `AWS Secrets Manager · ${classified.config.region}`,
+        ...(classified.config.profile === undefined
+          ? []
+          : [`profile ${classified.config.profile}`]),
+      ].join(" · ");
+    case "unsupported":
+      return null;
   }
 }
 
 /** Stable and readable in settings.json, so re-adding a provider under the same name restores its variables. */
-export function secretProviderIdFromName(name: string): SecretProviderId | null {
+function secretProviderIdFromName(name: string): SecretProviderId | null {
   const slug = name
-    .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug.length === 0 ? null : SecretProviderId.make(slug);
+    .replace(/^-|-$/g, "")
+    .slice(0, 64)
+    .replace(/-$/, "");
+  return Option.getOrNull(decodeSecretProviderId(slug));
 }
 
 export interface SecretProviderDraft {
-  readonly kind: FlatSecretProviderKind;
+  readonly kind: SupportedSecretProviderKind;
   readonly name: string;
   readonly account: string;
   readonly address: string;
   readonly mount: string;
   readonly namespace: string;
-  readonly token: string;
-  readonly storedToken: string;
   readonly auth: OpenBaoAuth;
+  readonly token: string;
+  /** The token already stored with the provider; kept when none is typed. */
+  readonly storedToken: string;
   readonly region: string;
   readonly profile: string;
 }
 
 export const EMPTY_SECRET_PROVIDER_DRAFT: SecretProviderDraft = {
-  kind: "1password",
+  kind: "one_password",
   name: "",
   account: "",
   address: "",
   mount: DEFAULT_OPENBAO_MOUNT,
   namespace: "",
+  auth: "token",
   token: "",
   storedToken: "",
-  auth: "token",
   region: "",
   profile: "",
 };
 
-export function secretProviderDraftFromConfig(
-  provider: StoredSecretProviderConfig,
-): SecretProviderDraft {
+export function draftFromSecretProvider(provider: SecretProviderConfig): SecretProviderDraft {
   const classified = classifySecretProvider(provider);
-  if (classified.kind !== "flat") {
-    return {
-      ...EMPTY_SECRET_PROVIDER_DRAFT,
-      name: provider.label,
-      account: classified.kind === "one_password" ? classified.account : "",
-    };
-  }
-  const config = classified.config;
-  const base = { ...EMPTY_SECRET_PROVIDER_DRAFT, kind: config.kind, name: config.label };
-  switch (config.kind) {
-    case "1password":
-      return { ...base, account: config.account };
+  const base = { ...EMPTY_SECRET_PROVIDER_DRAFT, name: provider.label };
+  switch (classified.kind) {
+    case "one_password":
+      return { ...base, account: classified.account };
     case "openbao":
       return {
         ...base,
-        address: config.address,
-        mount: config.mount,
-        namespace: config.namespace ?? "",
-        storedToken: config.token ?? "",
-        auth: config.auth,
+        kind: "openbao",
+        address: classified.config.address,
+        mount: classified.config.mount,
+        namespace: classified.config.namespace ?? "",
+        auth: classified.config.auth,
+        storedToken: classified.config.token ?? "",
       };
-    case "aws-secrets-manager":
-      return { ...base, region: config.region, profile: config.profile ?? "" };
+    case "aws_secrets_manager":
+      return {
+        ...base,
+        kind: "aws_secrets_manager",
+        region: classified.config.region,
+        profile: classified.config.profile ?? "",
+      };
+    case "unsupported":
+      return base;
   }
 }
 
@@ -198,151 +183,127 @@ export type SecretProviderTarget =
   | { readonly mode: "add" }
   | { readonly mode: "edit"; readonly id: SecretProviderId };
 
+export type SecretProviderDraftIssues = {
+  readonly [Field in Exclude<keyof SecretProviderDraft, "kind" | "auth" | "storedToken">]?: string;
+};
+
 function decodeField<S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
   value: string,
   emptyMessage: string,
 ): Result.Result<S["Type"], string> {
-  if (value.trim().length === 0) return Result.fail(emptyMessage);
-  const decoded = Schema.decodeResult(schema)(value.trim());
-  return Result.isFailure(decoded)
-    ? Result.fail(decoded.failure.message)
-    : Result.succeed(decoded.success);
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return Result.fail(emptyMessage);
+  return Result.mapError(Schema.decodeResult(schema)(trimmed), (error) => error.message);
 }
 
-export type SecretProviderDraftField =
-  | "name"
-  | "account"
-  | "address"
-  | "mount"
-  | "namespace"
-  | "token"
-  | "region"
-  | "profile";
+function optionalField<S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+  value: string,
+): Result.Result<S["Type"] | undefined, string> {
+  return value.trim().length === 0 ? Result.succeed(undefined) : decodeField(schema, value, "");
+}
 
-export type SecretProviderDraftIssues = Partial<Readonly<Record<SecretProviderDraftField, string>>>;
+const issuesOf = (
+  fields: Partial<Record<keyof SecretProviderDraftIssues, Result.Result<unknown, string>>>,
+): SecretProviderDraftIssues =>
+  Object.fromEntries(
+    Object.entries(fields).flatMap(([field, result]) =>
+      result !== undefined && Result.isFailure(result) ? [[field, result.failure]] : [],
+    ),
+  );
 
-/**
- * Fork follow-up: drafts still produce flat entries; emit upstream's `one_password` envelope once
- * upstream resolves it end to end and carries OpenBao and AWS kinds.
- *
- * The settings entry a draft adds or replaces, or every field that blocks it. Only the
- * fields of the draft's kind are checked, and each field reports one message.
- */
+/** The settings entry a draft adds or replaces, or every field that blocks it, one message each. */
 export function secretProviderFromDraft(
   draft: SecretProviderDraft,
   existingIds: ReadonlySet<string>,
   target: SecretProviderTarget,
 ): Result.Result<
-  { readonly id: SecretProviderId; readonly config: FlatSecretProviderConfig },
+  { readonly id: SecretProviderId; readonly config: SecretProviderConfig },
   SecretProviderDraftIssues
 > {
-  const issues: { -readonly [Field in SecretProviderDraftField]?: string } = {};
-
   const label = decodeField(SecretProviderLabel, draft.name, "Enter a name.");
-  const id =
-    target.mode === "edit"
-      ? target.id
-      : Result.isSuccess(label)
-        ? secretProviderIdFromName(label.success)
-        : null;
+
+  let id: SecretProviderId | null = null;
+  let nameIssue: string | undefined;
   if (Result.isFailure(label)) {
-    issues.name = label.failure;
-  } else if (id === null) {
-    issues.name = "The name needs at least one letter or digit.";
-  } else if (target.mode === "add" && existingIds.has(id)) {
-    issues.name = `A secret provider named ${label.success} exists.`;
+    nameIssue = label.failure;
+  } else {
+    id = target.mode === "edit" ? target.id : secretProviderIdFromName(label.success);
+    if (id === null) nameIssue = "The name needs at least one letter or digit.";
+    else if (target.mode === "add" && existingIds.has(id))
+      nameIssue = "A secret provider with this name exists.";
   }
 
+  const done = (config: unknown, issues: SecretProviderDraftIssues) =>
+    id === null || Result.isFailure(label) || Object.keys(issues).length > 0
+      ? Result.fail(issues)
+      : Result.succeed({
+          id,
+          config: {
+            kind: SecretProviderKind.make(draft.kind),
+            label: label.success,
+            config,
+          },
+        });
+  const withName = (issues: SecretProviderDraftIssues): SecretProviderDraftIssues => ({
+    ...(nameIssue === undefined ? {} : { name: nameIssue }),
+    ...issues,
+  });
+
   switch (draft.kind) {
-    case "1password": {
+    case "one_password": {
       const account = decodeField(
-        OnePasswordAccount,
+        OnePasswordSecretProviderConfig.fields.account,
         draft.account,
         "Enter the 1Password account.",
       );
-      if (Result.isFailure(account)) issues.account = account.failure;
-      if (
-        issues.name !== undefined ||
-        Result.isFailure(label) ||
-        id === null ||
-        Result.isFailure(account)
-      ) {
-        return Result.fail(issues);
-      }
-      return Result.succeed({
-        id,
-        config: { kind: "1password", label: label.success, account: account.success },
-      });
+      return done(
+        { account: Result.isSuccess(account) ? account.success : undefined },
+        withName(issuesOf({ account })),
+      );
     }
     case "openbao": {
       const address = decodeField(OpenBaoAddress, draft.address, "Enter the OpenBao address.");
-      if (Result.isFailure(address)) issues.address = address.failure;
       const mount = decodeField(
         OpenBaoMount,
         draft.mount.trim() || DEFAULT_OPENBAO_MOUNT,
         "Enter the mount.",
       );
-      if (Result.isFailure(mount)) issues.mount = mount.failure;
-      const namespaceText = draft.namespace.trim();
-      const namespace =
-        namespaceText.length === 0 ? undefined : decodeField(OpenBaoNamespace, namespaceText, "");
-      if (namespace !== undefined && Result.isFailure(namespace)) {
-        issues.namespace = namespace.failure;
-      }
+      const namespace = optionalField(OpenBaoNamespace, draft.namespace);
       const token = draft.token.trim() || draft.storedToken;
-      if (draft.auth === "token" && token.length === 0) {
-        issues.token = "Enter the OpenBao token.";
-      }
-      if (
-        issues.name !== undefined ||
-        issues.token !== undefined ||
-        Result.isFailure(label) ||
-        id === null ||
-        Result.isFailure(address) ||
-        Result.isFailure(mount) ||
-        (namespace !== undefined && Result.isFailure(namespace))
-      ) {
-        return Result.fail(issues);
-      }
-      return Result.succeed({
-        id,
-        config: {
-          kind: "openbao",
-          label: label.success,
-          address: address.success,
-          mount: mount.success,
-          ...(namespace === undefined ? {} : { namespace: namespace.success }),
+      const tokenIssue =
+        draft.auth === "token" && token.length === 0 ? "Enter the OpenBao token." : undefined;
+      const issues = withName({
+        ...issuesOf({ address, mount, namespace }),
+        ...(tokenIssue === undefined ? {} : { token: tokenIssue }),
+      });
+      return done(
+        {
+          address: Result.isSuccess(address) ? address.success : undefined,
+          mount: Result.isSuccess(mount) ? mount.success : undefined,
+          ...(Result.isSuccess(namespace) && namespace.success !== undefined
+            ? { namespace: namespace.success }
+            : {}),
           auth: draft.auth,
           ...(draft.auth === "token" ? { token } : {}),
         },
-      });
+        issues,
+      );
     }
-    case "aws-secrets-manager": {
+    case "aws_secrets_manager": {
       const region = decodeField(AwsRegion, draft.region, "Enter the AWS region.");
-      if (Result.isFailure(region)) issues.region = region.failure;
-      const profileText = draft.profile.trim();
-      const profile =
-        profileText.length === 0 ? undefined : decodeField(AwsProfile, profileText, "");
-      if (profile !== undefined && Result.isFailure(profile)) issues.profile = profile.failure;
-      if (
-        issues.name !== undefined ||
-        Result.isFailure(label) ||
-        id === null ||
-        Result.isFailure(region) ||
-        (profile !== undefined && Result.isFailure(profile))
-      ) {
-        return Result.fail(issues);
-      }
-      return Result.succeed({
-        id,
-        config: {
-          kind: "aws-secrets-manager",
-          label: label.success,
-          region: region.success,
-          ...(profile === undefined ? {} : { profile: profile.success }),
+      const profile = optionalField(AwsProfile, draft.profile);
+      const issues = withName(issuesOf({ region, profile }));
+      return done(
+        {
+          region: Result.isSuccess(region) ? region.success : undefined,
+          ...(Result.isSuccess(profile) && profile.success !== undefined
+            ? { profile: profile.success }
+            : {}),
         },
-      });
+        issues,
+      );
     }
   }
 }

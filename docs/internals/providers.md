@@ -145,100 +145,30 @@ current client support.
 
 ## Secret references in provider environments
 
-A provider instance's `environment` can hold secret references: a `ProviderSecretSource` value such
-as `{ kind: "secret-provider", provider, reference }`, or the older `{ kind: "1password", reference, account }`. A plain string is always a literal, including one
-that starts with `op://`.
-[`ProviderSecretResolver`](../../apps/server/src/provider/ProviderSecretResolver.ts) swaps
-each one for the value its secret store returns. This happens once per instance in
-[`ProviderInstanceRegistry`](../../apps/server/src/provider/ProviderInstanceRegistry.ts),
-before `driver.create`, so drivers and the orchestration v2 adapters built from them only ever see
-resolved values; `ResolvedProviderEnvironment` is the type that enforces it. The registry keeps the
-raw config, which is what makes a later rebuild possible. Paths that build a process environment
-without the resolver (terminals, usage, installation, session scanning) use
+A provider instance's environment variable is either a literal `value` or a `secret`, a
+`SecretReference` naming an entry under the `secretProviders` server setting. The registry resolves
+each reference through
+[`SecretResolver`](../../packages/secret-provider-core/src/server/SecretResolver.ts) once per
+instance, before `driver.create`, so drivers only ever see resolved values. Paths that build a
+process environment without the resolver (terminals, usage, installation, session scanning) use
 `literalProviderInstanceEnvironment`, which leaves references out rather than passing them through.
 
-The parsing half lives in
-[`ProviderSecretReference.ts`](../../apps/server/src/provider/ProviderSecretReference.ts) and knows
-nothing about how a secret is fetched, so the registry can ask "does this instance read from a secret
-store?" without depending on the resolver.
-[`ProviderSecretResolverLive`](../../apps/server/src/provider/ProviderSecretResolverLive.ts)
-is the half that fetches values. A `secret-provider` source names an entry under the `secretProviders`
-server setting, and the resolver dispatches on that entry's kind: the 1Password CLI for `op`, the
-OpenBao HTTP API with the token from one explicit source (the stored token, `BAO_TOKEN`, or the `bao` CLI login), or
-the `aws` CLI for AWS Secrets Manager, which owns its own credentials so none are stored. The older 1Password source resolves as if it named a 1Password provider for its
-account. The provider id or account is part of the cache key, because the same reference in two
-stores is two different secrets. A reference naming a provider that no longer exists is unresolved.
-Changing `secretProviders` drops only the cached secrets read through the providers that changed
-and rebuilds the instances that read from them, since their own config is unchanged. Editing an
-OpenBao provider must not cost a 1Password prompt.
+Each secret provider kind is a driver package: `secret-provider-onepassword`,
+`secret-provider-openbao` (KV v2 over HTTP, with the token from its stored config, `BAO_TOKEN`, or
+the `bao` login), and `secret-provider-aws` (the `aws` CLI, which owns its own credentials). The
+fork carries the last two. The resolver dispatches on the entry's kind and holds every read, failed
+ones included, until a refresh invalidates it, so a locked vault costs one prompt per refresh rather
+than one per thread start. An OpenBao `config.token` is moved into the secret store on write and
+redacted on read, like other secret settings.
 
-Three decisions are load-bearing:
+The Settings check button calls `SecretCheck`, which invalidates one reference, reads it again, and
+on success reloads the instances that read it. A failed read unsets the variable rather than
+substituting an empty string: an empty `ANTHROPIC_API_KEY` reads to the provider as a configured but
+broken credential, and a name left alone would keep whatever value the server inherited.
 
-- **A failed read unsets the variable.** It never substitutes an empty string, because an empty
-  `ANTHROPIC_API_KEY` reads to the provider as a configured-but-broken credential rather than an
-  absent one, and the status badge would go back to lying about it. Unsetting is stronger than
-  leaving the name out of the resolved list: the child environment starts from the server's own, so
-  a name left alone keeps whatever the server inherited under it, and the agent would quietly run
-  as a different account than the one the instance names. The registry therefore hands the driver a
-  `HostProcessEnvironment` with every unresolved name removed.
-- **Reads are batched across instances, and sequential within one.** The store charges an unlock per
-  `op` invocation, not per secret, and every instance resolves its own environment as it is built,
-  so a fleet would otherwise cost one prompt per provider. `prime` reads the whole set with one
-  `op inject` per account before the builds start, called from the settings watcher (which covers boot) and from
-  `reloadSecretBackedInstances` (which covers the refresh button). Whatever `prime` misses,
-  `resolve` still walks with a plain loop rather than `Effect.forEach` with concurrency, so it
-  produces one prompt rather than several simultaneous ones.
-- **Priming can only ever help.** It is best effort and never fails: `op inject` resolves the whole
-  template or fails it, so one bad reference would take the batch down with it. A batch that does
-  not come back leaves the cache exactly as cold as it found it and `resolve` falls back to reading
-  one reference at a time, which is both where the per-variable failure isolation lives and how the
-  user learns which reference is the broken one. A separator is generated per call because a secret
-  can contain anything, newlines included.
-- **Failures are cached alongside successes.** The `Cache` holds Exits, so a locked vault costs one
-  prompt per refresh cycle instead of one per thread start. Recovery is the refresh button, not a
-  timeout: the cache is built without a `timeToLive`.
-
-### Why a refresh has to rebuild the instance
-
-An instance's environment is resolved once, when the registry builds it, and
-`makeManagedServerProvider` re-probes using that captured `processEnv`. Dropping the cached secret
-therefore changes nothing on its own, because the running instance still holds the value it was
-built with. Sessions follow a rebuild without extra wiring, because the v2 adapter registry looks up
-the instance's adapter on every request.
-
-So `ProviderRegistry.reloadSecretBackedInstances` invalidates the cache and then calls
-[`rebuildInstanceWhen`](../../apps/server/src/provider/ProviderInstanceRegistry.ts) on each
-instance, passing `hasProviderSecretReference` as the predicate. The registry owns the child scopes
-and already stores each instance's config, so it can
-close and rebuild one entry in place; passing a predicate rather than exposing the entries keeps
-secret-store policy in `ProviderRegistry` and keeps the instance registry ignorant of 1Password.
-`reconcile` cannot do this job, because it diffs the config envelope and a rotated secret leaves
-that envelope byte-identical.
-
-A rebuild takes as long as the secret read does, and a locked vault can park it on a person at a
-biometric prompt. Three things follow from that window being long:
-
-- **The instance leaves the map before its scope closes.** Otherwise every lookup for the whole
-  window hands back a bundle whose scope is already gone. Its last snapshot stands in for it
-  meanwhile, because `ProviderRegistry` prunes ids it finds in neither list, and the card must not
-  blink out of Settings while 1Password waits on a fingerprint.
-- **Rebuilds and `reconcile` take turns.** Both read the instance map, do slow work, then write it
-  back, so a settings change landing mid-rebuild would be overwritten by the map the rebuild read
-  before it. Reads stay outside the lock: `getInstance` and `listInstances` never wait on a
-  1Password prompt.
-- **A rebuild that fails is retryable.** The registry keeps the config envelope of an instance it
-  could not bring back, so the next refresh retries it, and a refresh with no explicit target
-  covers the unavailable instances as well as the live ones. Without both halves, a vault that
-  happened to be locked would cost the user the instance until settings changed. The envelope is
-  recorded before the build starts and the map writes around the build are uninterruptible, so a
-  refresh whose caller walked away mid-read is retryable on the same terms as one that failed.
-
-This hangs off the three refresh entry points (`refreshAll`, the kind-scoped `refresh`, and
-`refreshInstance`), all of which are reached only by a user action: the Settings refresh button, and
-the post-update verification in `providerMaintenanceRunner`. The periodic provider health loop is
-not one of them. It lives inside `makeManagedServerProvider` and calls `refreshSnapshot` directly,
-which is what keeps a resolved secret alive between refreshes instead of re-reading it every few
-minutes.
+Settings saved by earlier fork builds (flat provider entries, variables whose `value` held a source
+object) are rewritten into this shape when settings load, in
+[`legacySecretSettings.ts`](../../apps/server/src/secrets/legacySecretSettings.ts).
 
 ## Claude credential liveness
 
