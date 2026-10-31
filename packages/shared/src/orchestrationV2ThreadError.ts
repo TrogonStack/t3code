@@ -1,7 +1,8 @@
-import type {
-  OrchestrationV2ProviderFailure,
-  OrchestrationV2Run,
-  OrchestrationV2TurnItem,
+import {
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  type OrchestrationV2ProviderFailure,
+  type OrchestrationV2Run,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -64,14 +65,20 @@ export function latestExecutedRun(
   return latest;
 }
 
-/** A failed run can resume on any model, so a provider-side failure is not a dead end. */
+/**
+ * A failed run can resume on any model, so a provider-side failure is not a dead end. Workspace
+ * failures retry through prepared-run.retry, or the agent would run outside its worktree.
+ */
 export function manuallyResumableRun(
   runs: ReadonlyArray<OrchestrationV2Run>,
   turnItems: ReadonlyArray<FailureScanTurnItem>,
 ): OrchestrationV2Run | null {
   const run = latestExecutedRun(runs);
   if (run?.status === "interrupted") return run;
-  return latestRootProviderFailure(run, turnItems) === null ? null : run;
+  const failure = latestRootProviderFailure(run, turnItems);
+  return failure === null || failure.code === ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
+    ? null
+    : run;
 }
 
 /** Held queues can execute out of ordinal order; unfinished runs count as latest. */
