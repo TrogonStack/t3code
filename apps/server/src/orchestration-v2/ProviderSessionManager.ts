@@ -250,6 +250,7 @@ interface IdleThreadUnloadAttempt {
   readonly providerSessionId: ProviderSessionId;
   readonly threadId: ThreadId;
   readonly generation: number;
+  readonly delegatedChild: boolean;
 }
 
 type IdleThreadUnloadOutcome = "unloaded" | "deferred" | "skipped" | "failed";
@@ -1568,7 +1569,14 @@ export const layerWithOptions = (
           const [threadId, pending] = tracked;
           const generation = pending.generation + 1;
           const fiber = yield* Effect.sleep(idleUnloadDelay(pending.delegatedChild)).pipe(
-            Effect.andThen(unloadIdleThread({ providerSessionId, threadId, generation })),
+            Effect.andThen(
+              unloadIdleThread({
+                providerSessionId,
+                threadId,
+                generation,
+                delegatedChild: pending.delegatedChild,
+              }),
+            ),
             Effect.forkIn(layerScope),
           );
           const previous = yield* updateIdleThreadUnload(providerSessionId, threadId, (current) =>
@@ -1594,7 +1602,7 @@ export const layerWithOptions = (
               const recorded = (outcome: IdleThreadUnloadOutcome) => ({
                 outcome,
                 provider: entry?.runtime.driver,
-                mode: pending?.delegatedChild === true ? ("eager" as const) : ("idle" as const),
+                mode: input.delegatedChild ? ("eager" as const) : ("idle" as const),
               });
               if (
                 entry === undefined ||
@@ -1677,7 +1685,7 @@ export const layerWithOptions = (
         unloadIdleThreadAttempt(input).pipe(
           Effect.flatMap((attempt) =>
             attempt.outcome === "deferred"
-              ? Effect.sleep(idleUnloadDelay(attempt.mode === "eager")).pipe(
+              ? Effect.sleep(idleUnloadDelay(input.delegatedChild)).pipe(
                   Effect.andThen(Effect.suspend(() => unloadIdleThread(input))),
                 )
               : Effect.void,
