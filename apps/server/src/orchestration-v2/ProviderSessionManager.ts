@@ -37,6 +37,7 @@ import { normalizeModelMetricLabel, outcomeFromExit } from "../observability/Att
 import {
   increment,
   providerSessionsTotal,
+  providerThreadUnloadsTotal,
   providerTurnDuration,
   providerTurnsTotal,
   withMetrics,
@@ -244,6 +245,14 @@ interface IdleThreadUnload {
   readonly fiber: Fiber.Fiber<void, never> | null;
   readonly delegatedChild: boolean;
 }
+
+interface IdleThreadUnloadAttempt {
+  readonly providerSessionId: ProviderSessionId;
+  readonly threadId: ThreadId;
+  readonly generation: number;
+}
+
+type IdleThreadUnloadOutcome = "unloaded" | "deferred" | "skipped" | "failed";
 
 type ProviderSessionEventSignal =
   | { readonly type: "event"; readonly event: ProviderAdapter.ProviderAdapterV2Event }
@@ -1571,19 +1580,20 @@ export const layerWithOptions = (
         },
       );
 
-      const unloadIdleThread = Effect.fn("ProviderSessionManager.unloadIdleThread")(
-        function* (input: {
-          readonly providerSessionId: ProviderSessionId;
-          readonly threadId: ThreadId;
-          readonly generation: number;
-        }): Effect.fn.Return<void> {
-          const outcome = yield* threadAttachment.withLock(
+      const unloadIdleThreadAttempt = Effect.fn("ProviderSessionManager.unloadIdleThread")(
+        function* (input: IdleThreadUnloadAttempt) {
+          const attempt = yield* threadAttachment.withLock(
             threadAttachmentKey(input),
             Effect.gen(function* () {
               const key = sessionKey(input.providerSessionId);
               const entry = (yield* Ref.get(sessions)).get(key);
               const pending = entry?.idleThreadUnloads.get(input.threadId);
               const unloadThread = entry?.exposedRuntime.unloadThread;
+              const recorded = (outcome: IdleThreadUnloadOutcome) => ({
+                outcome,
+                provider: entry?.runtime.driver,
+                mode: pending?.delegatedChild === true ? ("eager" as const) : ("idle" as const),
+              });
               if (
                 entry === undefined ||
                 pending === undefined ||
@@ -1592,7 +1602,7 @@ export const layerWithOptions = (
                 !entry.attachedThreadIds.has(input.threadId) ||
                 hasBusyTurn(entry, pending.providerThread.id)
               ) {
-                return "skipped" as const;
+                return recorded("skipped");
               }
               // Unloading kills background terminals; keep threads with pending work loaded.
               const hasPendingWork =
@@ -1601,7 +1611,7 @@ export const layerWithOptions = (
                   : yield* entry.runtime
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
-              if (hasPendingWork) return "deferred" as const;
+              if (hasPendingWork) return recorded("deferred");
               const unloading = yield* Ref.modify(sessions, (current) => {
                 const latest = current.get(key);
                 if (
@@ -1624,31 +1634,53 @@ export const layerWithOptions = (
                 });
                 return [true, updated] as const;
               });
-              if (!unloading) return "skipped" as const;
-              yield* unloadThread({
-                providerThread: pending.providerThread,
-                eager: pending.delegatedChild,
-              }).pipe(
-                Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
-                    providerSessionId: input.providerSessionId,
-                    threadId: input.threadId,
-                    providerThreadId: pending.providerThread.id,
-                    cause,
-                  }),
+              if (!unloading) return recorded("skipped");
+              return recorded(
+                yield* unloadThread({
+                  providerThread: pending.providerThread,
+                  eager: pending.delegatedChild,
+                }).pipe(
+                  Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
+                  Effect.as("unloaded" as const),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
+                      providerSessionId: input.providerSessionId,
+                      threadId: input.threadId,
+                      providerThreadId: pending.providerThread.id,
+                      cause,
+                    }).pipe(Effect.as("failed" as const)),
+                  ),
                 ),
               );
-              return "unloaded" as const;
             }),
           );
-          // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred") {
-            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
-            return yield* unloadIdleThread(input);
-          }
+          yield* Effect.annotateCurrentSpan({
+            "orchestration_v2.thread_id": input.threadId,
+            "orchestration_v2.provider_session_id": input.providerSessionId,
+            "orchestration_v2.provider": attempt.provider ?? null,
+            "orchestration_v2.unload_mode": attempt.mode,
+            "orchestration_v2.unload_outcome": attempt.outcome,
+          });
+          yield* increment(providerThreadUnloadsTotal, {
+            provider: attempt.provider,
+            mode: attempt.mode,
+            outcome: attempt.outcome,
+          });
+          return attempt.outcome;
         },
       );
+
+      // Each attempt is its own span; the wait sits outside the lock so the next attach is not blocked.
+      const unloadIdleThread = (input: IdleThreadUnloadAttempt): Effect.Effect<void> =>
+        unloadIdleThreadAttempt(input).pipe(
+          Effect.flatMap((outcome) =>
+            outcome === "deferred"
+              ? Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+                  Effect.andThen(Effect.suspend(() => unloadIdleThread(input))),
+                )
+              : Effect.void,
+          ),
+        );
 
       const observeActivity = (
         providerSessionId: ProviderSessionId,

@@ -64,6 +64,10 @@ export const providerTurnDuration = Metric.timer("t3_provider_turn_duration", {
   description: "Time for the provider adapter to start a turn, not how long the turn runs.",
 });
 
+export const providerThreadUnloadsTotal = Metric.counter("t3_provider_thread_unloads_total", {
+  description: "Total idle provider thread unload attempts, by mode and outcome.",
+});
+
 export const providerRuntimeEventsTotal = Metric.counter("t3_provider_runtime_events_total", {
   description: "Total canonical provider runtime events processed.",
 });
