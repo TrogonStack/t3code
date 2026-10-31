@@ -21,6 +21,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -177,6 +178,7 @@ interface TestProviderRuntimeState {
   readonly interruptCount: number;
   readonly resumeCount: number;
   readonly unloadedNativeThreadIds: ReadonlyArray<string>;
+  readonly eagerUnloadedNativeThreadIds: ReadonlyArray<string>;
   readonly eventQueues: ReadonlyMap<
     string,
     Queue.Queue<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>
@@ -189,6 +191,7 @@ const emptyState: TestProviderRuntimeState = {
   interruptCount: 0,
   resumeCount: 0,
   unloadedNativeThreadIds: [],
+  eagerUnloadedNativeThreadIds: [],
   eventQueues: new Map(),
 };
 
@@ -446,7 +449,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               ...current,
               interruptCount: current.interruptCount + 1,
             })).pipe(Effect.andThen(options.interruptTurn ?? Effect.void)),
-          unloadThread: ({ providerThread }) =>
+          unloadThread: ({ providerThread, eager }) =>
             (options.beforeUnload ?? Effect.void).pipe(
               Effect.andThen(
                 Ref.update(state, (current) => ({
@@ -455,6 +458,13 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
                     ...current.unloadedNativeThreadIds,
                     providerThread.nativeThreadRef?.nativeId ?? "",
                   ],
+                  eagerUnloadedNativeThreadIds:
+                    eager === true
+                      ? [
+                          ...current.eagerUnloadedNativeThreadIds,
+                          providerThread.nativeThreadRef?.nativeId ?? "",
+                        ]
+                      : current.eagerUnloadedNativeThreadIds,
                 })),
               ),
             ),
@@ -3433,6 +3443,267 @@ it.effect(
       });
 
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+const threadUnloadCount = (mode: "eager" | "idle", outcome: string) =>
+  Metric.snapshot.pipe(
+    Effect.map((snapshots) => {
+      const snapshot = snapshots.find(
+        (candidate) =>
+          candidate.id === "t3_provider_thread_unloads_total" &&
+          candidate.attributes?.provider === CODEX_DRIVER &&
+          candidate.attributes?.mode === mode &&
+          candidate.attributes?.outcome === outcome,
+      );
+      return snapshot !== undefined && "count" in snapshot.state ? Number(snapshot.state.count) : 0;
+    }),
+  );
+
+it.effect(
+  "ProviderSessionManagerV2 unloads a delegated child's thread eagerly and well before other threads",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("thread-provider-session-manager-eager-parent");
+        const normalThreadId = ThreadId.make("thread-provider-session-manager-eager-normal");
+        const childThreadId = ThreadId.make("thread-provider-session-manager-eager-child");
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: normalThreadId, now }),
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId: childThreadId,
+              now,
+              delegatedBy: parentThreadId,
+            }),
+          ],
+        });
+        const runtime = yield* manager.open({
+          threadId: normalThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* manager.open({
+          threadId: childThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        const runTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
+          const providerThread = makeProviderThread({
+            idAllocator,
+            threadId,
+            providerSessionId,
+            now,
+            nativeThreadId: String(threadId),
+          });
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          yield* runtime.startTurn({
+            appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
+            threadId,
+            runId,
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+            rootNodeId: idAllocator.derive.rootNode({ runId }),
+            providerThread,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+              text: "work",
+              attachments: [],
+            },
+            modelSelection,
+            runtimePolicy,
+          });
+          return Queue.offer(queue!, {
+            type: "turn.terminal",
+            driver: CODEX_DRIVER,
+            providerThreadId: providerThread.id,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: CODEX_DRIVER,
+              nativeTurnId: `native-turn-${threadId}`,
+            }),
+            runOrdinal: 1,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+        });
+        const finishNormal = yield* runTurn(normalThreadId);
+        const finishChild = yield* runTurn(childThreadId);
+        const unloads = Effect.map(Ref.get(state), (current) => ({
+          all: current.unloadedNativeThreadIds,
+          eager: current.eagerUnloadedNativeThreadIds,
+        }));
+        const eagerBefore = yield* threadUnloadCount("eager", "unloaded");
+        const idleBefore = yield* threadUnloadCount("idle", "unloaded");
+
+        yield* finishNormal;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("1 minute");
+        yield* finishChild;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS - 1),
+        );
+        assert.deepEqual(yield* unloads, { all: [], eager: [] });
+        yield* TestClock.adjust("1 millis");
+        assert.deepEqual(yield* unloads, { all: [childThreadId], eager: [childThreadId] });
+        yield* TestClock.adjust("7 minutes");
+        assert.deepEqual(yield* unloads, {
+          all: [childThreadId, normalThreadId],
+          eager: [childThreadId],
+        });
+        assert.equal((yield* threadUnloadCount("eager", "unloaded")) - eagerBefore, 1);
+        assert.equal((yield* threadUnloadCount("idle", "unloaded")) - idleBefore, 1);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(layerTest({ state, idleTimeoutMs: 10 * 60_000 })),
+        Effect.scoped,
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 retries a delegated child's deferred unload on its short delay and records a failed unload",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const pendingWork = yield* Ref.make(true);
+      const failUnload = yield* Ref.make(false);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-deferred-unload");
+        const otherThreadId = ThreadId.make("thread-provider-session-manager-deferred-other");
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId,
+              now,
+              delegatedBy: ThreadId.make("thread-provider-session-manager-deferred-parent"),
+            }),
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: otherThreadId, now }),
+          ],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* manager.open({
+          threadId: otherThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+          nativeThreadId: String(threadId),
+        });
+        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+        yield* runtime.startTurn({
+          appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
+          threadId,
+          runId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
+          providerThread,
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+            text: "work",
+            attachments: [],
+          },
+          modelSelection,
+          runtimePolicy,
+        });
+        const deferredBefore = yield* threadUnloadCount("eager", "deferred");
+        const failedBefore = yield* threadUnloadCount("eager", "failed");
+        const counts = Effect.all({
+          deferred: Effect.map(threadUnloadCount("eager", "deferred"), (n) => n - deferredBefore),
+          failed: Effect.map(threadUnloadCount("eager", "failed"), (n) => n - failedBefore),
+        });
+
+        yield* Queue.offer(queue!, {
+          type: "turn.terminal",
+          driver: CODEX_DRIVER,
+          providerThreadId: providerThread.id,
+          providerTurnId: idAllocator.derive.providerTurn({
+            driver: CODEX_DRIVER,
+            nativeTurnId: "native-turn-deferred-unload",
+          }),
+          runOrdinal: 1,
+          status: "completed",
+          failure: null,
+          threadDisposition: "reusable",
+        });
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
+        assert.deepEqual(yield* counts, { deferred: 1, failed: 0 });
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
+        assert.deepEqual(yield* counts, { deferred: 2, failed: 0 });
+        yield* Ref.set(pendingWork, false);
+        yield* Ref.set(failUnload, true);
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
+        assert.deepEqual(yield* counts, { deferred: 2, failed: 1 });
+        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, []);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 10 * 60_000,
+            hasPendingBackgroundWork: Effect.succeed(true),
+            hasPendingBackgroundWorkForThread: Ref.get(pendingWork),
+            beforeUnload: Ref.get(failUnload).pipe(
+              Effect.flatMap((fail) => (fail ? Effect.die("unload failed") : Effect.void)),
+            ),
+          }),
+        ),
+        Effect.scoped,
+      );
     }),
 );
 

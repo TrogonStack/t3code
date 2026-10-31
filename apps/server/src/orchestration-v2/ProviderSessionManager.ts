@@ -37,6 +37,7 @@ import { normalizeModelMetricLabel, outcomeFromExit } from "../observability/Att
 import {
   increment,
   providerSessionsTotal,
+  providerThreadUnloadsTotal,
   providerTurnDuration,
   providerTurnsTotal,
   withMetrics,
@@ -56,6 +57,8 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+/** Delegated children are rarely resumed, so their native threads are freed early. */
+export const DELEGATED_CHILD_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 /** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
@@ -240,7 +243,17 @@ interface IdleThreadUnload {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
+  readonly delegatedChild: boolean;
 }
+
+interface IdleThreadUnloadAttempt {
+  readonly providerSessionId: ProviderSessionId;
+  readonly threadId: ThreadId;
+  readonly generation: number;
+  readonly delegatedChild: boolean;
+}
+
+type IdleThreadUnloadOutcome = "unloaded" | "deferred" | "skipped" | "failed";
 
 type ProviderSessionEventSignal =
   | { readonly type: "event"; readonly event: ProviderAdapter.ProviderAdapterV2Event }
@@ -1515,6 +1528,7 @@ export const layerWithOptions = (
           readonly providerSessionId: ProviderSessionId;
           readonly threadId: ThreadId;
           readonly providerThread: OrchestrationV2ProviderThread;
+          readonly delegatedChild?: boolean;
         }) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(input.providerSessionId));
           if (
@@ -1532,11 +1546,17 @@ export const layerWithOptions = (
               providerThread: input.providerThread,
               generation: (current?.generation ?? 0) + 1,
               fiber: null,
+              delegatedChild: input.delegatedChild ?? current?.delegatedChild ?? false,
             }),
           );
           yield* cancelIdleFiber(previous?.fiber ?? null);
         },
       );
+
+      const idleUnloadDelay = (delegatedChild: boolean) =>
+        Duration.millis(
+          delegatedChild ? Math.min(DELEGATED_CHILD_IDLE_TIMEOUT_MS, idleTimeoutMs) : idleTimeoutMs,
+        );
 
       const scheduleThreadUnload = Effect.fn("ProviderSessionManager.scheduleThreadUnload")(
         function* (providerSessionId: ProviderSessionId, providerThreadId: ProviderThreadId) {
@@ -1548,8 +1568,15 @@ export const layerWithOptions = (
           if (tracked === undefined) return;
           const [threadId, pending] = tracked;
           const generation = pending.generation + 1;
-          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
-            Effect.andThen(unloadIdleThread({ providerSessionId, threadId, generation })),
+          const fiber = yield* Effect.sleep(idleUnloadDelay(pending.delegatedChild)).pipe(
+            Effect.andThen(
+              unloadIdleThread({
+                providerSessionId,
+                threadId,
+                generation,
+                delegatedChild: pending.delegatedChild,
+              }),
+            ),
             Effect.forkIn(layerScope),
           );
           const previous = yield* updateIdleThreadUnload(providerSessionId, threadId, (current) =>
@@ -1563,19 +1590,20 @@ export const layerWithOptions = (
         },
       );
 
-      const unloadIdleThread = Effect.fn("ProviderSessionManager.unloadIdleThread")(
-        function* (input: {
-          readonly providerSessionId: ProviderSessionId;
-          readonly threadId: ThreadId;
-          readonly generation: number;
-        }): Effect.fn.Return<void> {
-          const outcome = yield* threadAttachment.withLock(
+      const unloadIdleThreadAttempt = Effect.fn("ProviderSessionManager.unloadIdleThread")(
+        function* (input: IdleThreadUnloadAttempt) {
+          const attempt = yield* threadAttachment.withLock(
             threadAttachmentKey(input),
             Effect.gen(function* () {
               const key = sessionKey(input.providerSessionId);
               const entry = (yield* Ref.get(sessions)).get(key);
               const pending = entry?.idleThreadUnloads.get(input.threadId);
               const unloadThread = entry?.exposedRuntime.unloadThread;
+              const recorded = (outcome: IdleThreadUnloadOutcome) => ({
+                outcome,
+                provider: entry?.runtime.driver,
+                mode: input.delegatedChild ? ("eager" as const) : ("idle" as const),
+              });
               if (
                 entry === undefined ||
                 pending === undefined ||
@@ -1584,7 +1612,7 @@ export const layerWithOptions = (
                 !entry.attachedThreadIds.has(input.threadId) ||
                 hasBusyTurn(entry, pending.providerThread.id)
               ) {
-                return "skipped" as const;
+                return recorded("skipped");
               }
               // Unloading kills background terminals; keep threads with pending work loaded.
               const hasPendingWork =
@@ -1593,7 +1621,7 @@ export const layerWithOptions = (
                   : yield* entry.runtime
                       .hasPendingBackgroundWorkForThread(pending.providerThread)
                       .pipe(Effect.catchCause(() => Effect.succeed(false)));
-              if (hasPendingWork) return "deferred" as const;
+              if (hasPendingWork) return recorded("deferred");
               const unloading = yield* Ref.modify(sessions, (current) => {
                 const latest = current.get(key);
                 if (
@@ -1616,28 +1644,53 @@ export const layerWithOptions = (
                 });
                 return [true, updated] as const;
               });
-              if (!unloading) return "skipped" as const;
-              yield* unloadThread({ providerThread: pending.providerThread }).pipe(
-                Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
-                    providerSessionId: input.providerSessionId,
-                    threadId: input.threadId,
-                    providerThreadId: pending.providerThread.id,
-                    cause,
-                  }),
+              if (!unloading) return recorded("skipped");
+              return recorded(
+                yield* unloadThread({
+                  providerThread: pending.providerThread,
+                  eager: pending.delegatedChild,
+                }).pipe(
+                  Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
+                  Effect.as("unloaded" as const),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
+                      providerSessionId: input.providerSessionId,
+                      threadId: input.threadId,
+                      providerThreadId: pending.providerThread.id,
+                      cause,
+                    }).pipe(Effect.as("failed" as const)),
+                  ),
                 ),
               );
-              return "unloaded" as const;
             }),
           );
-          // Wait outside the lock so the next attach is not blocked.
-          if (outcome === "deferred") {
-            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
-            return yield* unloadIdleThread(input);
-          }
+          yield* Effect.annotateCurrentSpan({
+            "orchestration_v2.thread_id": input.threadId,
+            "orchestration_v2.provider_session_id": input.providerSessionId,
+            "orchestration_v2.provider": attempt.provider ?? null,
+            "orchestration_v2.unload_mode": attempt.mode,
+            "orchestration_v2.unload_outcome": attempt.outcome,
+          });
+          yield* increment(providerThreadUnloadsTotal, {
+            provider: attempt.provider,
+            mode: attempt.mode,
+            outcome: attempt.outcome,
+          });
+          return attempt;
         },
       );
+
+      // Each attempt is its own span; the wait sits outside the lock so the next attach is not blocked.
+      const unloadIdleThread = (input: IdleThreadUnloadAttempt): Effect.Effect<void> =>
+        unloadIdleThreadAttempt(input).pipe(
+          Effect.flatMap((attempt) =>
+            attempt.outcome === "deferred"
+              ? Effect.sleep(idleUnloadDelay(input.delegatedChild)).pipe(
+                  Effect.andThen(Effect.suspend(() => unloadIdleThread(input))),
+                )
+              : Effect.void,
+          ),
+        );
 
       const observeActivity = (
         providerSessionId: ProviderSessionId,
@@ -1828,6 +1881,7 @@ export const layerWithOptions = (
                   providerSessionId,
                   threadId: input.threadId,
                   providerThread: input.providerThread,
+                  delegatedChild: input.appThread.lineage.relationshipToParent === "subagent",
                 }),
               ),
               Effect.andThen(
