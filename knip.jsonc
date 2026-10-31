@@ -4,6 +4,8 @@
   "rules": { "types": "off", "nsTypes": "off" },
   // These executables are supplied by the OS or installed separately from npm.
   "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
+  // `vp validate` declares vitest beside vite-plus, while tests import it through vite-plus/test.
+  "ignoreDependencies": ["vitest"],
   "workspaces": {
     ".": {
       // Keep vendored reference repositories outside the root project.

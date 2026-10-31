@@ -38,6 +38,7 @@
     "drizzle-kit": "1.0.0-rc.5-ab785fc",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   }
 }

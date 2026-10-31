@@ -94,7 +94,8 @@
     "effect-acp": "workspace:*",
     "effect-codex-app-server": "workspace:*",
     "graphql": "16.14.1",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.16 || ^23.11 || >=24.10"

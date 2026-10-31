@@ -83,7 +83,7 @@ jobs:
       # trusted workflows with other secrets would restore what PR code wrote.
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
-        uses: voidzero-dev/setup-vp@v1
+        uses: voidzero-dev/setup-vp@v1.21.2
         with:
           node-version-file: package.json
           cache: false
