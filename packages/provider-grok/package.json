@@ -41,6 +41,7 @@
     "@t3tools/provider-testing": "workspace:*",
     "@types/node": "catalog:",
     "effect-acp": "workspace:*",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   }
 }

@@ -62,6 +62,7 @@
     "@effect/vitest": "catalog:",
     "@t3tools/provider-testing": "workspace:*",
     "@types/node": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   }
 }

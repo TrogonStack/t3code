@@ -39,7 +39,8 @@
     "cross-env": "^10.1.0",
     "electron-builder": "26.16.1",
     "tailwindcss": "^4.0.0",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
   },
   "productName": "T3 Code (Beta)"
 }

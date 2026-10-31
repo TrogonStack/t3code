@@ -96,6 +96,8 @@ catalog:
   remark-parse: 11.0.0
   remark-rehype: 11.1.2
   unified: 11.0.5
+  vitest: 5.0.5
+  "@vitest/browser-playwright": 5.0.5
 
 minimumReleaseAgeExclude:
   - alchemy@2.0.0-beta.84
@@ -337,9 +339,10 @@ overrides:
   "@types/ws@^8": "catalog:"
   "undici@^8": "catalog:"
   "ws@^8": "catalog:"
-  vite: "catalog:"
   vite-plus: "catalog:"
   yaml: "catalog:"
+  vite@*: "catalog:"
+  vitest@*: "catalog:"
 
 packageExtensions:
   "@clerk/expo@*":
@@ -403,8 +406,10 @@ peerDependencyRules:
   allowAny:
     - typescript
     - vite
+    - vitest
   allowedVersions:
     vite: "*"
+    vitest: "*"
 
 # pnpm 12 links agent skills that dependencies ship into .claude/skills once
 # approved. We curate our own skills, so deny these to keep installs quiet.
