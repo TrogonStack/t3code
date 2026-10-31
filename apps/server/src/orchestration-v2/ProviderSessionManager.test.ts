@@ -21,6 +21,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -177,6 +178,7 @@ interface TestProviderRuntimeState {
   readonly interruptCount: number;
   readonly resumeCount: number;
   readonly unloadedNativeThreadIds: ReadonlyArray<string>;
+  readonly eagerUnloadedNativeThreadIds: ReadonlyArray<string>;
   readonly eventQueues: ReadonlyMap<
     string,
     Queue.Queue<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>
@@ -189,6 +191,7 @@ const emptyState: TestProviderRuntimeState = {
   interruptCount: 0,
   resumeCount: 0,
   unloadedNativeThreadIds: [],
+  eagerUnloadedNativeThreadIds: [],
   eventQueues: new Map(),
 };
 
@@ -446,7 +449,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               ...current,
               interruptCount: current.interruptCount + 1,
             })).pipe(Effect.andThen(options.interruptTurn ?? Effect.void)),
-          unloadThread: ({ providerThread }) =>
+          unloadThread: ({ providerThread, eager }) =>
             (options.beforeUnload ?? Effect.void).pipe(
               Effect.andThen(
                 Ref.update(state, (current) => ({
@@ -455,6 +458,13 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
                     ...current.unloadedNativeThreadIds,
                     providerThread.nativeThreadRef?.nativeId ?? "",
                   ],
+                  eagerUnloadedNativeThreadIds:
+                    eager === true
+                      ? [
+                          ...current.eagerUnloadedNativeThreadIds,
+                          providerThread.nativeThreadRef?.nativeId ?? "",
+                        ]
+                      : current.eagerUnloadedNativeThreadIds,
                 })),
               ),
             ),
@@ -3433,6 +3443,123 @@ it.effect(
       });
 
       yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 unloads a delegated child's thread eagerly and well before other threads",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("thread-provider-session-manager-eager-parent");
+        const normalThreadId = ThreadId.make("thread-provider-session-manager-eager-normal");
+        const childThreadId = ThreadId.make("thread-provider-session-manager-eager-child");
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* eventSink.write({
+          events: [
+            yield* makeThreadCreatedEvent({ idAllocator, threadId: normalThreadId, now }),
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId: childThreadId,
+              now,
+              delegatedBy: parentThreadId,
+            }),
+          ],
+        });
+        const runtime = yield* manager.open({
+          threadId: normalThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* manager.open({
+          threadId: childThreadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+        assert.isDefined(queue);
+        const runTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
+          const providerThread = makeProviderThread({
+            idAllocator,
+            threadId,
+            providerSessionId,
+            now,
+            nativeThreadId: String(threadId),
+          });
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          yield* runtime.startTurn({
+            appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
+            threadId,
+            runId,
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+            rootNodeId: idAllocator.derive.rootNode({ runId }),
+            providerThread,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+              text: "work",
+              attachments: [],
+            },
+            modelSelection,
+            runtimePolicy,
+          });
+          return Queue.offer(queue!, {
+            type: "turn.terminal",
+            driver: CODEX_DRIVER,
+            providerThreadId: providerThread.id,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: CODEX_DRIVER,
+              nativeTurnId: `native-turn-${threadId}`,
+            }),
+            runOrdinal: 1,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+        });
+        const finishNormal = yield* runTurn(normalThreadId);
+        const finishChild = yield* runTurn(childThreadId);
+        const unloads = Effect.map(Ref.get(state), (current) => ({
+          all: current.unloadedNativeThreadIds,
+          eager: current.eagerUnloadedNativeThreadIds,
+        }));
+
+        yield* finishNormal;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust("1 minute");
+        yield* finishChild;
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS - 1),
+        );
+        assert.deepEqual(yield* unloads, { all: [], eager: [] });
+        yield* TestClock.adjust("1 millis");
+        assert.deepEqual(yield* unloads, { all: [childThreadId], eager: [childThreadId] });
+        yield* TestClock.adjust("7 minutes");
+        assert.deepEqual(yield* unloads, {
+          all: [childThreadId, normalThreadId],
+          eager: [childThreadId],
+        });
+      });
+
+      yield* effect.pipe(
+        Effect.provide(layerTest({ state, idleTimeoutMs: 10 * 60_000 })),
+        Effect.scoped,
+      );
     }),
 );
 

@@ -56,6 +56,8 @@ import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+/** Delegated children are rarely resumed, so their native threads are freed early. */
+export const DELEGATED_CHILD_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
 const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
 /** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
@@ -240,6 +242,7 @@ interface IdleThreadUnload {
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly generation: number;
   readonly fiber: Fiber.Fiber<void, never> | null;
+  readonly delegatedChild: boolean;
 }
 
 type ProviderSessionEventSignal =
@@ -1515,6 +1518,7 @@ export const layerWithOptions = (
           readonly providerSessionId: ProviderSessionId;
           readonly threadId: ThreadId;
           readonly providerThread: OrchestrationV2ProviderThread;
+          readonly delegatedChild?: boolean;
         }) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(input.providerSessionId));
           if (
@@ -1532,6 +1536,7 @@ export const layerWithOptions = (
               providerThread: input.providerThread,
               generation: (current?.generation ?? 0) + 1,
               fiber: null,
+              delegatedChild: input.delegatedChild ?? current?.delegatedChild ?? false,
             }),
           );
           yield* cancelIdleFiber(previous?.fiber ?? null);
@@ -1548,7 +1553,10 @@ export const layerWithOptions = (
           if (tracked === undefined) return;
           const [threadId, pending] = tracked;
           const generation = pending.generation + 1;
-          const fiber = yield* Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+          const delay = pending.delegatedChild
+            ? Math.min(DELEGATED_CHILD_IDLE_TIMEOUT_MS, idleTimeoutMs)
+            : idleTimeoutMs;
+          const fiber = yield* Effect.sleep(Duration.millis(delay)).pipe(
             Effect.andThen(unloadIdleThread({ providerSessionId, threadId, generation })),
             Effect.forkIn(layerScope),
           );
@@ -1617,7 +1625,10 @@ export const layerWithOptions = (
                 return [true, updated] as const;
               });
               if (!unloading) return "skipped" as const;
-              yield* unloadThread({ providerThread: pending.providerThread }).pipe(
+              yield* unloadThread({
+                providerThread: pending.providerThread,
+                eager: pending.delegatedChild,
+              }).pipe(
                 Effect.timeout(UNLOAD_THREAD_TIMEOUT_MS),
                 Effect.catchCause((cause) =>
                   Effect.logWarning("orchestration-v2.driver-session.idle-unload-failed", {
@@ -1828,6 +1839,7 @@ export const layerWithOptions = (
                   providerSessionId,
                   threadId: input.threadId,
                   providerThread: input.providerThread,
+                  delegatedChild: input.appThread.lineage.relationshipToParent === "subagent",
                 }),
               ),
               Effect.andThen(

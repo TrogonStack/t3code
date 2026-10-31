@@ -3882,6 +3882,65 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect("archives an eagerly unloaded thread and interrupts its leftover commands", () =>
+    Effect.gen(function* () {
+      const exchange = (id: number, method: string, result: unknown, notified: string[]) => [
+        {
+          type: "expect_outbound" as const,
+          label: method,
+          frame: { id, method, params: { threadId: BG_NATIVE_THREAD } },
+        },
+        ...notified.map((notifiedMethod) => ({
+          type: "emit_inbound" as const,
+          label: notifiedMethod,
+          frame: { method: notifiedMethod, params: { threadId: BG_NATIVE_THREAD } },
+        })),
+        {
+          type: "emit_inbound" as const,
+          label: `${method}-result`,
+          frame: { id, result },
+        },
+      ];
+      const transcript = makeCodexReplayTranscript({
+        scenario: "codex-background-thread-archived",
+        entries: [
+          ...backgroundExecTranscript.entries.slice(0, -1),
+          ...exchange(4, "thread/archive", {}, ["thread/archived"]),
+          ...exchange(5, "thread/unarchive", { thread: { id: BG_NATIVE_THREAD } }, [
+            "thread/unarchived",
+          ]),
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-codex-thread-archived"),
+          text: BG_PROMPT,
+        }),
+      );
+      yield* harness.firstTerminal;
+      yield* harness.runtime.unloadThread!({ providerThread: harness.providerThread, eager: true });
+      assert.deepEqual(
+        harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === BG_COMMAND_ITEM
+            ? [event.turnItem.status]
+            : [],
+        ),
+        ["running", "interrupted"],
+      );
+      assert.isFalse(yield* harness.hasPendingBackgroundWork);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   const backgroundStopCases = [true, false, "still_running", "thread_unloaded"] as const;
   const makeBackgroundStopTranscript = (terminated: (typeof backgroundStopCases)[number]) => {
     const stillRunning = terminated === "still_running";

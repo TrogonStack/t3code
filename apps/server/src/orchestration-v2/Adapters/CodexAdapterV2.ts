@@ -4691,11 +4691,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         // Unloading an idle thread kills its terminals without completing
         // their command items, while the shared provider session stays alive.
-        yield* client.handleServerNotification("thread/closed", (payload) =>
-          Effect.gen(function* () {
+        const interruptClosedThreadCommands = Effect.fn(
+          "CodexAdapterV2.interruptClosedThreadCommands",
+        )(
+          function* (nativeThreadId: string) {
             const completedAt = yield* DateTime.now;
             for (const context of (yield* Ref.get(settledTurns)).values()) {
-              if (context.providerThread.nativeThreadRef?.nativeId !== payload.threadId) continue;
+              if (context.providerThread.nativeThreadRef?.nativeId !== nativeThreadId) continue;
               const commands = (yield* Ref.get(runningCommandItemsByTurn)).get(
                 context.nativeTurnId,
               );
@@ -4715,7 +4717,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               yield* releaseSettledTurnIfIdle(context.nativeTurnId);
             }
-          }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
+          },
+          Effect.orDie,
+          turnTerminalizationPermit.withPermits(1),
+        );
+        yield* client.handleServerNotification("thread/closed", (payload) =>
+          interruptClosedThreadCommands(payload.threadId),
         );
 
         yield* client.handleServerNotification("item/started", (payload) =>
@@ -7163,13 +7170,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               ),
           ),
-          // Dropping this connection's subscription lets the shared app-server
-          // shut the native thread (and its MCP servers) down once it is idle.
           unloadThread: Effect.fn("CodexAdapterV2.unloadThread")(
             function* (unloadInput) {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
               sessionApprovals.delete(nativeThreadId);
-              yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              if (unloadInput.eager !== true) {
+                yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+                return;
+              }
+              // Codex closes an unsubscribed thread (and its MCP servers) only after a fixed
+              // 1800 s; archive is the only immediate unload, and it never sends thread/closed.
+              yield* client.request("thread/archive", { threadId: nativeThreadId });
+              yield* interruptClosedThreadCommands(nativeThreadId);
+              yield* client.raw.request("thread/unarchive", { threadId: nativeThreadId });
             },
             (effect, unloadInput) =>
               effect.pipe(
