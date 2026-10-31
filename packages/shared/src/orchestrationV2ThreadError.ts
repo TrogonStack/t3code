@@ -64,6 +64,16 @@ export function latestExecutedRun(
   return latest;
 }
 
+/** A failed run can resume on any model, so a provider-side failure is not a dead end. */
+export function manuallyResumableRun(
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  turnItems: ReadonlyArray<FailureScanTurnItem>,
+): OrchestrationV2Run | null {
+  const run = latestExecutedRun(runs);
+  if (run?.status === "interrupted") return run;
+  return latestRootProviderFailure(run, turnItems) === null ? null : run;
+}
+
 /** Held queues can execute out of ordinal order; unfinished runs count as latest. */
 export function runRanAfter(
   run: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,

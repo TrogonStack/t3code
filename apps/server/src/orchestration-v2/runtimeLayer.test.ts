@@ -7841,7 +7841,7 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
 });
 
 it.layer(layerTest)("usage-limit recovery", (it) => {
-  it.effect.each(["interrupted", "usage_limit"] as const)(
+  it.effect.each(["interrupted", "usage_limit", "provider_error"] as const)(
     "manually resumes an %s run ahead of its queued message only once",
     (reason) =>
       Effect.gen(function* () {
@@ -7922,8 +7922,8 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
           ],
         });
         let scheduledResume: ReturnType<typeof limitRecoveryCommand> = null;
-        if (reason === "usage_limit") {
-          const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+        const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+        if (reason !== "interrupted") {
           yield* events.write({
             events: [
               {
@@ -7943,21 +7943,31 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
                   parentItemId: null,
                   ordinal: 2,
                   status: "failed",
-                  title: "Usage limit reached",
+                  title: "Provider error",
                   startedAt: now,
                   completedAt: now,
                   updatedAt: now,
-                  failure: {
-                    class: "usage_limit",
-                    message: "Plan limit reached.",
-                    code: "usageLimitExceeded",
-                    retryable: null,
-                    resetAt,
-                  },
+                  failure:
+                    reason === "usage_limit"
+                      ? {
+                          class: "usage_limit",
+                          message: "Plan limit reached.",
+                          code: "usageLimitExceeded",
+                          retryable: null,
+                          resetAt,
+                        }
+                      : {
+                          class: "provider_error",
+                          message: "Usage balance exhausted.",
+                          code: null,
+                          retryable: null,
+                        },
                 },
               },
             ],
           });
+        }
+        if (reason === "usage_limit") {
           const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
             (thread) => thread.id === threadId,
           )!;
