@@ -32,6 +32,7 @@ import {
   RunId,
   ScheduledTaskId,
   ThreadId,
+  ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -7841,162 +7842,185 @@ it.layer(layerSharedApplicationDataPlaneTest)("shared application data plane", (
 });
 
 it.layer(layerTest)("usage-limit recovery", (it) => {
-  it.effect.each(["interrupted", "usage_limit"] as const)(
-    "manually resumes an %s run ahead of its queued message only once",
-    (reason) =>
-      Effect.gen(function* () {
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const events = yield* EventSink.EventSinkV2;
-        const threadId = ThreadId.make(`manual-resume:${reason}`);
-        const projectId = ProjectId.make(`manual-resume:project:${reason}`);
-        const now = yield* DateTime.now;
-        const createdAt = DateTime.formatIso(now);
-        yield* seedProject({
-          projectId,
-          title: "Resume project",
-          workspaceRoot: process.cwd(),
-          defaultModelSelection: modelSelection,
-          createdAt,
-        });
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`manual-resume:create:${reason}`),
-          threadId,
-          projectId,
-          title: "Interrupted thread",
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          createdBy: "user",
-          creationSource: "web",
-        });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make(`manual-resume:start:${reason}`),
-          threadId,
-          messageId: MessageId.make(`manual-resume:start:${reason}`),
-          text: "Start work.",
-          attachments: [],
-          dispatchMode: { type: "defer_start" },
-          createdBy: "user",
-          creationSource: "web",
-        });
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make(`manual-resume:queue:${reason}`),
-          threadId,
-          messageId: MessageId.make(`manual-resume:queue:${reason}`),
-          text: "Follow up.",
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "user",
-          creationSource: "web",
-        });
-        const [source, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs as [
-          OrchestrationV2Run,
-          OrchestrationV2Run,
-        ];
-        // Hold the queue like user Stop so the terminal worker cannot start it before explicit resume.
+  it.effect.each([
+    "interrupted",
+    "usage_limit",
+    "provider_error",
+    "workspace_preparation",
+  ] as const)("guards a manual resume of an %s run ahead of its queued message", (reason) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const events = yield* EventSink.EventSinkV2;
+      const threadId = ThreadId.make(`manual-resume:${reason}`);
+      const projectId = ProjectId.make(`manual-resume:project:${reason}`);
+      const now = yield* DateTime.now;
+      const createdAt = DateTime.formatIso(now);
+      yield* seedProject({
+        projectId,
+        title: "Resume project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        createdAt,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`manual-resume:create:${reason}`),
+        threadId,
+        projectId,
+        title: "Interrupted thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`manual-resume:start:${reason}`),
+        threadId,
+        messageId: MessageId.make(`manual-resume:start:${reason}`),
+        text: "Start work.",
+        attachments: [],
+        dispatchMode: { type: "defer_start" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make(`manual-resume:queue:${reason}`),
+        threadId,
+        messageId: MessageId.make(`manual-resume:queue:${reason}`),
+        text: "Follow up.",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const [source, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs as [
+        OrchestrationV2Run,
+        OrchestrationV2Run,
+      ];
+      // Hold the queue like user Stop so the terminal worker cannot start it before explicit resume.
+      yield* events.write({
+        events: [
+          {
+            id: EventId.make(`manual-resume:hold:${reason}`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...queued, queueHeld: true },
+          },
+          {
+            id: EventId.make(`manual-resume:stop:${reason}`),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              ...source,
+              status: reason === "interrupted" ? "interrupted" : "failed",
+              completedAt: now,
+            },
+          },
+        ],
+      });
+      let scheduledResume: ReturnType<typeof limitRecoveryCommand> = null;
+      const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
+      if (reason !== "interrupted") {
         yield* events.write({
           events: [
             {
-              id: EventId.make(`manual-resume:hold:${reason}`),
-              type: "run.updated",
-              threadId,
-              occurredAt: now,
-              payload: { ...queued, queueHeld: true },
-            },
-            {
-              id: EventId.make(`manual-resume:stop:${reason}`),
-              type: "run.updated",
+              id: EventId.make(`manual-resume:error:${reason}`),
+              type: "turn-item.updated",
               threadId,
               occurredAt: now,
               payload: {
-                ...source,
-                status: reason === "interrupted" ? "interrupted" : "failed",
+                id: TurnItemId.make(`manual-resume:error:${reason}`),
+                type: "error",
+                threadId,
+                runId: source.id,
+                nodeId: source.rootNodeId,
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: 2,
+                status: "failed",
+                title: "Provider error",
+                startedAt: now,
                 completedAt: now,
+                updatedAt: now,
+                failure:
+                  reason === "usage_limit"
+                    ? {
+                        class: "usage_limit",
+                        message: "Plan limit reached.",
+                        code: "usageLimitExceeded",
+                        retryable: null,
+                        resetAt,
+                      }
+                    : {
+                        class: "provider_error",
+                        message: "Usage balance exhausted.",
+                        code:
+                          reason === "workspace_preparation"
+                            ? ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE
+                            : null,
+                        retryable: null,
+                      },
               },
             },
           ],
         });
-        let scheduledResume: ReturnType<typeof limitRecoveryCommand> = null;
-        if (reason === "usage_limit") {
-          const resetAt = DateTime.formatIso(DateTime.add(now, { minutes: 1 }));
-          yield* events.write({
-            events: [
-              {
-                id: EventId.make(`manual-resume:error:${reason}`),
-                type: "turn-item.updated",
-                threadId,
-                occurredAt: now,
-                payload: {
-                  id: TurnItemId.make(`manual-resume:error:${reason}`),
-                  type: "error",
-                  threadId,
-                  runId: source.id,
-                  nodeId: source.rootNodeId,
-                  providerThreadId: null,
-                  providerTurnId: null,
-                  nativeItemRef: null,
-                  parentItemId: null,
-                  ordinal: 2,
-                  status: "failed",
-                  title: "Usage limit reached",
-                  startedAt: now,
-                  completedAt: now,
-                  updatedAt: now,
-                  failure: {
-                    class: "usage_limit",
-                    message: "Plan limit reached.",
-                    code: "usageLimitExceeded",
-                    retryable: null,
-                    resetAt,
-                  },
-                },
-              },
-            ],
-          });
-          const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
-            (thread) => thread.id === threadId,
-          )!;
-          yield* orchestrator.dispatch(
-            limitRecoveryCommand(shell, true, DateTime.toEpochMillis(now))!,
-          );
-          const armed = (yield* orchestrator.getShellSnapshot()).threads.find(
-            (thread) => thread.id === threadId,
-          )!;
-          scheduledResume = limitRecoveryCommand(armed, true, Date.parse(resetAt));
-          assert.isNotNull(scheduledResume);
-        }
-        const resume = (suffix: string) => ({
-          type: "message.dispatch" as const,
-          commandId: CommandId.make(`manual-resume:${suffix}:${reason}`),
-          threadId,
-          messageId: MessageId.make(`manual-resume:${suffix}:${reason}`),
-          manualContinuationOfRunId: source.id,
-          text: "Continue where you left off.",
-          attachments: [],
-          dispatchMode: { type: "start_immediately" as const },
-          createdBy: "user" as const,
-          creationSource: "web" as const,
-        });
-        yield* orchestrator.dispatch(resume("first"));
-        const after = yield* orchestrator.getThreadProjection(threadId);
-        assert.lengthOf(after.runs, 3);
-        assert.equal(after.runs[1]?.status, "queued");
-        assert.equal(after.runs[2]?.status, "starting");
+      }
+      if (reason === "usage_limit") {
+        const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        yield* orchestrator.dispatch(
+          limitRecoveryCommand(shell, true, DateTime.toEpochMillis(now))!,
+        );
+        const armed = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        scheduledResume = limitRecoveryCommand(armed, true, Date.parse(resetAt));
+        assert.isNotNull(scheduledResume);
+      }
+      const resume = (suffix: string) => ({
+        type: "message.dispatch" as const,
+        commandId: CommandId.make(`manual-resume:${suffix}:${reason}`),
+        threadId,
+        messageId: MessageId.make(`manual-resume:${suffix}:${reason}`),
+        manualContinuationOfRunId: source.id,
+        text: "Continue where you left off.",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" as const },
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+      });
+      if (reason === "workspace_preparation") {
         assert.equal(
-          (yield* orchestrator.dispatch(resume("second")).pipe(Effect.exit))._tag,
+          (yield* orchestrator.dispatch(resume("first")).pipe(Effect.exit))._tag,
           "Failure",
         );
-        if (scheduledResume !== null) {
-          yield* TestClock.adjust("1 minute");
-          yield* orchestrator.dispatch(scheduledResume);
-        }
-        assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 3);
-      }),
+        return;
+      }
+      yield* orchestrator.dispatch(resume("first"));
+      const after = yield* orchestrator.getThreadProjection(threadId);
+      assert.lengthOf(after.runs, 3);
+      assert.equal(after.runs[1]?.status, "queued");
+      assert.equal(after.runs[2]?.status, "starting");
+      assert.equal(
+        (yield* orchestrator.dispatch(resume("second")).pipe(Effect.exit))._tag,
+        "Failure",
+      );
+      if (scheduledResume !== null) {
+        yield* TestClock.adjust("1 minute");
+        yield* orchestrator.dispatch(scheduledResume);
+      }
+      assert.lengthOf((yield* orchestrator.getThreadProjection(threadId)).runs, 3);
+    }),
   );
 
   it.effect.each([
