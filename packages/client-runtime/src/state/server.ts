@@ -1269,6 +1269,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:one-password-accounts",
       tag: WS_METHODS.serverListOnePasswordAccounts,
     }),
+    npmRelease: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:npm-release",
+      tag: WS_METHODS.serverGetNpmRelease,
+      staleTimeMs: 60_000,
+      refreshIntervalMs: 5 * 60_000,
+    }),
     processDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
