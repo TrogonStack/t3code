@@ -3582,7 +3582,7 @@ it.effect(
 );
 
 it.effect(
-  "ProviderSessionManagerV2 keeps retrying an idle unload while work is pending and records a failed unload",
+  "ProviderSessionManagerV2 retries a delegated child's deferred unload on its short delay and records a failed unload",
   () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
@@ -3601,7 +3601,12 @@ it.effect(
         });
         yield* eventSink.write({
           events: [
-            yield* makeThreadCreatedEvent({ idAllocator, threadId, now }),
+            yield* makeThreadCreatedEvent({
+              idAllocator,
+              threadId,
+              now,
+              delegatedBy: ThreadId.make("thread-provider-session-manager-deferred-parent"),
+            }),
             yield* makeThreadCreatedEvent({ idAllocator, threadId: otherThreadId, now }),
           ],
         });
@@ -3647,11 +3652,11 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-        const deferredBefore = yield* threadUnloadCount("idle", "deferred");
-        const failedBefore = yield* threadUnloadCount("idle", "failed");
+        const deferredBefore = yield* threadUnloadCount("eager", "deferred");
+        const failedBefore = yield* threadUnloadCount("eager", "failed");
         const counts = Effect.all({
-          deferred: Effect.map(threadUnloadCount("idle", "deferred"), (n) => n - deferredBefore),
-          failed: Effect.map(threadUnloadCount("idle", "failed"), (n) => n - failedBefore),
+          deferred: Effect.map(threadUnloadCount("eager", "deferred"), (n) => n - deferredBefore),
+          failed: Effect.map(threadUnloadCount("eager", "failed"), (n) => n - failedBefore),
         });
 
         yield* Queue.offer(queue!, {
@@ -3668,13 +3673,19 @@ it.effect(
           threadDisposition: "reusable",
         });
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
         assert.deepEqual(yield* counts, { deferred: 1, failed: 0 });
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
         assert.deepEqual(yield* counts, { deferred: 2, failed: 0 });
         yield* Ref.set(pendingWork, false);
         yield* Ref.set(failUnload, true);
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust(
+          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
+        );
         assert.deepEqual(yield* counts, { deferred: 2, failed: 1 });
         assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, []);
       });
@@ -3683,7 +3694,7 @@ it.effect(
         Effect.provide(
           layerTest({
             state,
-            idleTimeoutMs: 1000,
+            idleTimeoutMs: 10 * 60_000,
             hasPendingBackgroundWork: Effect.succeed(true),
             hasPendingBackgroundWorkForThread: Ref.get(pendingWork),
             beforeUnload: Ref.get(failUnload).pipe(

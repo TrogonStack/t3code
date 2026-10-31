@@ -1552,6 +1552,11 @@ export const layerWithOptions = (
         },
       );
 
+      const idleUnloadDelay = (delegatedChild: boolean) =>
+        Duration.millis(
+          delegatedChild ? Math.min(DELEGATED_CHILD_IDLE_TIMEOUT_MS, idleTimeoutMs) : idleTimeoutMs,
+        );
+
       const scheduleThreadUnload = Effect.fn("ProviderSessionManager.scheduleThreadUnload")(
         function* (providerSessionId: ProviderSessionId, providerThreadId: ProviderThreadId) {
           const entry = (yield* Ref.get(sessions)).get(sessionKey(providerSessionId));
@@ -1562,10 +1567,7 @@ export const layerWithOptions = (
           if (tracked === undefined) return;
           const [threadId, pending] = tracked;
           const generation = pending.generation + 1;
-          const delay = pending.delegatedChild
-            ? Math.min(DELEGATED_CHILD_IDLE_TIMEOUT_MS, idleTimeoutMs)
-            : idleTimeoutMs;
-          const fiber = yield* Effect.sleep(Duration.millis(delay)).pipe(
+          const fiber = yield* Effect.sleep(idleUnloadDelay(pending.delegatedChild)).pipe(
             Effect.andThen(unloadIdleThread({ providerSessionId, threadId, generation })),
             Effect.forkIn(layerScope),
           );
@@ -1666,16 +1668,16 @@ export const layerWithOptions = (
             mode: attempt.mode,
             outcome: attempt.outcome,
           });
-          return attempt.outcome;
+          return attempt;
         },
       );
 
       // Each attempt is its own span; the wait sits outside the lock so the next attach is not blocked.
       const unloadIdleThread = (input: IdleThreadUnloadAttempt): Effect.Effect<void> =>
         unloadIdleThreadAttempt(input).pipe(
-          Effect.flatMap((outcome) =>
-            outcome === "deferred"
-              ? Effect.sleep(Duration.millis(idleTimeoutMs)).pipe(
+          Effect.flatMap((attempt) =>
+            attempt.outcome === "deferred"
+              ? Effect.sleep(idleUnloadDelay(attempt.mode === "eager")).pipe(
                   Effect.andThen(Effect.suspend(() => unloadIdleThread(input))),
                 )
               : Effect.void,

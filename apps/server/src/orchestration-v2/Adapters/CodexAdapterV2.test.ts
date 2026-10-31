@@ -1262,6 +1262,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         terminalEvents,
         subagentUpdates,
         hasPendingBackgroundWork,
+        replayState: driver.state,
         firstTerminal: Deferred.await(firstTerminal),
         until: changes.until,
         awaitTerminal: (count: number) => changes.until(() => terminalEvents().length >= count),
@@ -3933,6 +3934,62 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         ["running", "interrupted"],
       );
       assert.isFalse(yield* harness.hasPendingBackgroundWork);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("falls back to unsubscribing when an eager archive fails", () =>
+    Effect.gen(function* () {
+      const transcript = makeCodexReplayTranscript({
+        scenario: "codex-background-thread-archive-failed",
+        entries: [
+          ...backgroundExecTranscript.entries.slice(0, -1),
+          {
+            type: "expect_outbound",
+            label: "thread/archive",
+            frame: { id: 4, method: "thread/archive", params: { threadId: BG_NATIVE_THREAD } },
+          },
+          {
+            type: "emit_inbound",
+            label: "thread/archive-error",
+            frame: { id: 4, error: { code: -32603, message: "archive failed" } },
+          },
+          {
+            type: "expect_outbound",
+            label: "thread/unsubscribe",
+            frame: {
+              id: 5,
+              method: "thread/unsubscribe",
+              params: { threadId: BG_NATIVE_THREAD },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "thread/unsubscribe-result",
+            frame: { id: 5, result: { status: "unsubscribed" } },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-codex-thread-archive-failed"),
+          text: BG_PROMPT,
+        }),
+      );
+      yield* harness.firstTerminal;
+      yield* harness.runtime.unloadThread!({
+        providerThread: harness.providerThread,
+        eager: true,
+      }).pipe(Effect.flip);
+      assert.strictEqual((yield* Ref.get(harness.replayState)).cursor, transcript.entries.length);
     }).pipe(
       Effect.scoped,
       Effect.provide(

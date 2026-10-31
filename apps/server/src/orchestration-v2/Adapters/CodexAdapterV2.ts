@@ -7180,7 +7180,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               // Codex closes an unsubscribed thread (and its MCP servers) only after a fixed
               // 1800 s; archive is the only immediate unload, and it never sends thread/closed.
-              yield* client.request("thread/archive", { threadId: nativeThreadId });
+              yield* client.request("thread/archive", { threadId: nativeThreadId }).pipe(
+                // A failed archive keeps the thread subscribed, so Codex would never close it.
+                Effect.tapError(() =>
+                  client
+                    .request("thread/unsubscribe", { threadId: nativeThreadId })
+                    .pipe(Effect.ignore),
+                ),
+              );
               yield* interruptClosedThreadCommands(nativeThreadId);
               yield* client.raw.request("thread/unarchive", { threadId: nativeThreadId });
             },
