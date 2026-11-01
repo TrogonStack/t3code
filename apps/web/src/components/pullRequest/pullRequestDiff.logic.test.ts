@@ -4,8 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   getFileViewedRange,
   isFileDiffCollapsed,
+  isFileDiffFoldedByDefault,
   isLineInFileDiff,
-  toggleFileDiffFoldForViewed,
+  setFileDiffCollapsed,
 } from "./pullRequestDiff.logic";
 
 function fileWithHunks(
@@ -44,15 +45,28 @@ describe("isFileDiffCollapsed", () => {
   // regression: #9174 diffs now expand by default; a reader's fold must survive new slices
   it("keeps a file the reader folded closed as the next slice arrives", () => {
     const toggled = new Set(["b.ts"]);
-    expect(isFileDiffCollapsed("b.ts", null, toggled)).toBe(true);
-    expect(isFileDiffCollapsed("c.ts", null, toggled)).toBe(false);
+    expect(isFileDiffCollapsed("b.ts", false, toggled)).toBe(true);
+    expect(isFileDiffCollapsed("c.ts", false, toggled)).toBe(false);
   });
 });
 
-describe("toggleFileDiffFoldForViewed", () => {
-  it("moves against whatever the toolbar last asked for", () => {
-    expect([...toggleFileDiffFoldForViewed("a.ts", true, "expanded", new Set())]).toEqual(["a.ts"]);
-    expect(toggleFileDiffFoldForViewed("a.ts", false, "expanded", new Set()).size).toBe(0);
+describe("isFileDiffFoldedByDefault", () => {
+  it("folds viewed files even when diffs expand by default", () => {
+    expect(isFileDiffFoldedByDefault(null, false, true)).toBe(true);
+    expect(isFileDiffFoldedByDefault(null, false, false)).toBe(false);
+    expect(isFileDiffFoldedByDefault(null, true, false)).toBe(true);
+  });
+
+  it("lets the toolbar override viewed files", () => {
+    expect(isFileDiffFoldedByDefault("expanded", true, true)).toBe(false);
+    expect(isFileDiffFoldedByDefault("folded", false, false)).toBe(true);
+  });
+});
+
+describe("setFileDiffCollapsed", () => {
+  it("moves against the file's default", () => {
+    expect([...setFileDiffCollapsed("a.ts", true, false, new Set())]).toEqual(["a.ts"]);
+    expect(setFileDiffCollapsed("a.ts", false, false, new Set()).size).toBe(0);
   });
 });
 

@@ -16,23 +16,32 @@ export function isLineInFileDiff(
 
 export type DiffFoldOverride = "expanded" | "folded" | null;
 
-/** Keep fold choices relative to the toolbar so later pages inherit Fold all. */
+/** The toolbar's choice wins; until then viewed files fold whatever the default. */
+export function isFileDiffFoldedByDefault(
+  foldOverride: DiffFoldOverride,
+  defaultCollapsed: boolean,
+  viewed: boolean,
+): boolean {
+  if (foldOverride !== null) return foldOverride === "folded";
+  return defaultCollapsed || viewed;
+}
+
+/** Keep fold choices relative to the default so later pages inherit Fold all. */
 export function isFileDiffCollapsed(
   fileKey: string,
-  foldOverride: DiffFoldOverride,
+  foldedByDefault: boolean,
   toggledFileKeys: ReadonlySet<string>,
 ): boolean {
-  const foldedByDefault = foldOverride === "folded";
   return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
 }
 
-export function toggleFileDiffFoldForViewed(
+export function setFileDiffCollapsed(
   fileKey: string,
-  viewed: boolean,
-  foldOverride: DiffFoldOverride,
+  collapsed: boolean,
+  foldedByDefault: boolean,
   toggledFileKeys: ReadonlySet<string>,
 ): ReadonlySet<string> {
-  if (isFileDiffCollapsed(fileKey, foldOverride, toggledFileKeys) === viewed)
+  if (isFileDiffCollapsed(fileKey, foldedByDefault, toggledFileKeys) === collapsed)
     return toggledFileKeys;
   const next = new Set(toggledFileKeys);
   if (next.has(fileKey)) next.delete(fileKey);

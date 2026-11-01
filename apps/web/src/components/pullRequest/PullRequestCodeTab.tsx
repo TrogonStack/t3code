@@ -111,8 +111,9 @@ import {
 import {
   getFileViewedRange,
   isFileDiffCollapsed,
+  isFileDiffFoldedByDefault,
   isLineInFileDiff,
-  toggleFileDiffFoldForViewed,
+  setFileDiffCollapsed,
   type DiffFoldOverride,
 } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
@@ -300,8 +301,6 @@ function PullRequestCodeTab({
   const [lastViewedFileKey, setLastViewedFileKey] = useState<string | null>(null);
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
-  const effectiveFoldOverride =
-    foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded");
   const diffLayout = settings.diffLayout;
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(settings.diffIgnoreWhitespace);
@@ -664,9 +663,11 @@ function PullRequestCodeTab({
       </div>
     );
 
+  const isFoldedByDefault = (path: string, viewed = isFileViewed(path)) =>
+    isFileDiffFoldedByDefault(foldOverride, settings.diffFilesCollapsed, viewed);
   const items: CodeViewDiffItem<ReviewAnnotationGroup>[] = annotatedFiles.map(
     ({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
-      const collapsed = isFileDiffCollapsed(fileKey, effectiveFoldOverride, toggledFiles);
+      const collapsed = isFileDiffCollapsed(fileKey, isFoldedByDefault(path), toggledFiles);
       const viewedMark = filesViewedEnabled
         ? `e${isFileViewed(path) ? "v" : ""}${isFileViewedStale(path) ? "s" : ""}`
         : "";
@@ -726,7 +727,7 @@ function PullRequestCodeTab({
     setToggledFiles((current) =>
       range.reduce(
         (next, file) =>
-          toggleFileDiffFoldForViewed(file.fileKey, viewed, effectiveFoldOverride, next),
+          setFileDiffCollapsed(file.fileKey, viewed, isFoldedByDefault(file.path, viewed), next),
         current,
       ),
     );
@@ -744,7 +745,7 @@ function PullRequestCodeTab({
     // Unfold only: a second reveal before the unfold renders must not fold the file again.
     if (item.collapsed === true) {
       setToggledFiles((current) =>
-        toggleFileDiffFoldForViewed(item.id, false, effectiveFoldOverride, current),
+        setFileDiffCollapsed(item.id, false, isFoldedByDefault(path), current),
       );
     }
     codeViewReveal.request(item.id);
@@ -1505,11 +1506,13 @@ function PullRequestCodeTab({
               renderHeaderMetadata={renderHeaderMetadata}
               renderAnnotation={renderAnnotation}
               // Find may repeat requests before render; only unfold, never toggle.
-              onRevealSearchMatch={(item) =>
+              onRevealSearchMatch={(item) => {
+                if (item.type !== "diff") return;
+                const foldedByDefault = isFoldedByDefault(resolveFileDiffPath(item.fileDiff));
                 setToggledFiles((current) =>
-                  toggleFileDiffFoldForViewed(item.id, false, effectiveFoldOverride, current),
-                )
-              }
+                  setFileDiffCollapsed(item.id, false, foldedByDefault, current),
+                );
+              }}
               unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
             />
           </FileViewedToggleContext>
