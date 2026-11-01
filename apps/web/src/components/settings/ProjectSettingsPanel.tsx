@@ -70,6 +70,9 @@ interface ProjectSelection {
   readonly memberKeys: ReadonlyArray<string>;
 }
 
+const projectMemberRef = (member: SidebarProjectGroupMember) =>
+  `${member.environmentId}:${member.id}`;
+
 function sameProjectSelection(a: ProjectSelection | null, b: ProjectSelection): boolean {
   return (
     a !== null &&
@@ -103,37 +106,35 @@ export function ProjectSettingsPanel({
         (checkoutKey === null || member.physicalProjectKey === checkoutKey),
     ) ?? [];
 
-  // Retain group members so grouping-rule changes can follow the project to its new group.
+  // Retain group members by id so grouping-rule changes and moves can follow the project.
   const [lastSelection, setLastSelection] = useState<ProjectSelection | null>(null);
   if (selected && members.length > 0) {
     const current: ProjectSelection = {
       key: selected.projectKey,
       environmentId,
       checkoutKey,
-      memberKeys: members.map((member) => member.physicalProjectKey),
+      memberKeys: members.map(projectMemberRef),
     };
     if (!sameProjectSelection(lastSelection, current)) setLastSelection(current);
   }
 
-  const successor =
+  const successorMember =
     members.length === 0 &&
     lastSelection?.key === projectKey &&
     lastSelection.environmentId === environmentId &&
     lastSelection.checkoutKey === checkoutKey
-      ? groups.find((group) =>
-          group.memberProjects.some((member) =>
-            lastSelection.memberKeys.includes(member.physicalProjectKey),
-          ),
-        )
+      ? groups
+          .flatMap((group) => group.memberProjects.map((member) => ({ group, member })))
+          .find(({ member }) => lastSelection.memberKeys.includes(projectMemberRef(member)))
       : undefined;
-  if (successor) {
+  if (successorMember) {
     return (
       <Navigate
         to={pathname}
         search={{
-          project: successor.projectKey,
+          project: successorMember.group.projectKey,
           machine: environmentId ?? undefined,
-          checkout: checkoutKey ?? undefined,
+          checkout: checkoutKey === null ? undefined : successorMember.member.physicalProjectKey,
         }}
         replace
         hashScrollIntoView={false}
@@ -215,6 +216,12 @@ function ProjectDetail({
     )
       ? window.desktopBridge?.pickProjectFavicon
       : undefined;
+  const pickProjectLocation =
+    typeof window !== "undefined" &&
+    representative.environmentId === primaryEnvironmentId &&
+    canPickExternalProjectFavicon(representative.workspaceRoot, navigator.platform)
+      ? window.desktopBridge?.pickFolder
+      : undefined;
 
   const { updateProjectGroup, canOrganizeProjectGroup } = useProjectGroupUpdate();
   const updateAllMembers = (
@@ -260,6 +267,26 @@ function ProjectDetail({
     await updateAllMembers(input, "Failed to update project icon");
     savingFaviconRef.current = false;
     setIsSavingFavicon(false);
+  };
+
+  const [isChangingLocation, setIsChangingLocation] = useState(false);
+  const changeLocation = async () => {
+    if (!pickProjectLocation) return;
+    setIsChangingLocation(true);
+    const picked = await pickProjectLocation({
+      initialPath: representative.workspaceRoot,
+    }).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Failed to change project location",
+        description: error instanceof Error ? error.message : undefined,
+      });
+      return null;
+    });
+    if (picked && picked !== representative.workspaceRoot) {
+      await updateAllMembers({ workspaceRoot: picked }, "Failed to change project location");
+    }
+    setIsChangingLocation(false);
   };
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
@@ -474,6 +501,19 @@ function ProjectDetail({
               title="Location"
               description={
                 <span className="select-text break-all">{representative.workspaceRoot}</span>
+              }
+              control={
+                pickProjectLocation ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={isChangingLocation || !canEditGroup}
+                    onClick={() => void changeLocation()}
+                  >
+                    Change…
+                  </Button>
+                ) : undefined
               }
             />
           )}
