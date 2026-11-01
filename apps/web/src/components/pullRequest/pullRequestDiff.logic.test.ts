@@ -2,10 +2,10 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  foldFileDiffForViewed,
   getFileViewedRange,
   isFileDiffCollapsed,
   isLineInFileDiff,
-  toggleFileDiffFoldForViewed,
 } from "./pullRequestDiff.logic";
 
 function fileWithHunks(
@@ -45,30 +45,42 @@ describe("isFileDiffCollapsed", () => {
 
   // regression: #9174 diffs now expand by default; a reader's fold must survive new slices
   it("keeps a file the reader folded closed as the next slice arrives", () => {
-    const toggled = new Set(["b.ts"]);
-    expect(isFileDiffCollapsed("b.ts", null, toggled, expandedUnviewed)).toBe(true);
-    expect(isFileDiffCollapsed("c.ts", null, toggled, expandedUnviewed)).toBe(false);
+    const choices = new Map([["b.ts", true]]);
+    expect(isFileDiffCollapsed("b.ts", null, choices, expandedUnviewed)).toBe(true);
+    expect(isFileDiffCollapsed("c.ts", null, choices, expandedUnviewed)).toBe(false);
   });
 
   it("folds a file viewed in an earlier visit even when diffs expand by default", () => {
     const viewed = { defaultCollapsed: false, viewed: true };
-    expect(isFileDiffCollapsed("a.ts", null, new Set(), viewed)).toBe(true);
-    expect(isFileDiffCollapsed("a.ts", null, new Set(["a.ts"]), viewed)).toBe(false);
+    expect(isFileDiffCollapsed("a.ts", null, new Map(), viewed)).toBe(true);
+  });
+
+  it("keeps the reader's fold when viewed state changes underneath it", () => {
+    const viewed = { defaultCollapsed: false, viewed: true };
+    expect(isFileDiffCollapsed("a.ts", null, new Map([["a.ts", false]]), viewed)).toBe(false);
+    expect(isFileDiffCollapsed("a.ts", null, new Map([["a.ts", true]]), expandedUnviewed)).toBe(
+      true,
+    );
   });
 
   it("lets Expand all open viewed files", () => {
     const viewed = { defaultCollapsed: true, viewed: true };
-    expect(isFileDiffCollapsed("a.ts", "expanded", new Set(), viewed)).toBe(false);
+    expect(isFileDiffCollapsed("a.ts", "expanded", new Map(), viewed)).toBe(false);
   });
 });
 
-describe("toggleFileDiffFoldForViewed", () => {
-  it("moves against whatever the toolbar last asked for", () => {
-    const viewed = { defaultCollapsed: false, viewed: true };
-    expect([...toggleFileDiffFoldForViewed("a.ts", true, "expanded", new Set(), viewed)]).toEqual([
-      "a.ts",
+describe("foldFileDiffForViewed", () => {
+  it("records a choice only against the toolbar", () => {
+    expect(foldFileDiffForViewed(new Map(), "a.ts", true, null, false).size).toBe(0);
+    expect([...foldFileDiffForViewed(new Map(), "a.ts", true, "expanded", false)]).toEqual([
+      ["a.ts", true],
     ]);
-    expect(toggleFileDiffFoldForViewed("a.ts", false, "expanded", new Set(), viewed).size).toBe(0);
+  });
+
+  it("drops an earlier unfold so the viewed file folds and unfolds again once pushed to", () => {
+    expect(foldFileDiffForViewed(new Map([["a.ts", false]]), "a.ts", true, null, false).size).toBe(
+      0,
+    );
   });
 });
 
