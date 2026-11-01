@@ -215,6 +215,12 @@ function ProjectDetail({
     )
       ? window.desktopBridge?.pickProjectFavicon
       : undefined;
+  const pickProjectLocation =
+    typeof window !== "undefined" &&
+    representative.environmentId === primaryEnvironmentId &&
+    canPickExternalProjectFavicon(representative.workspaceRoot, navigator.platform)
+      ? window.desktopBridge?.pickFolder
+      : undefined;
 
   const { updateProjectGroup, canOrganizeProjectGroup } = useProjectGroupUpdate();
   const updateAllMembers = (
@@ -260,6 +266,19 @@ function ProjectDetail({
     await updateAllMembers(input, "Failed to update project icon");
     savingFaviconRef.current = false;
     setIsSavingFavicon(false);
+  };
+
+  const [isChangingLocation, setIsChangingLocation] = useState(false);
+  const changeLocation = async () => {
+    if (!pickProjectLocation) return;
+    setIsChangingLocation(true);
+    const picked = await pickProjectLocation({
+      initialPath: representative.workspaceRoot,
+    }).catch(() => null);
+    if (picked && picked !== representative.workspaceRoot) {
+      await updateAllMembers({ workspaceRoot: picked }, "Failed to change project location");
+    }
+    setIsChangingLocation(false);
   };
 
   const hasMultipleCheckouts = group.memberProjects.length > 1;
@@ -474,6 +493,19 @@ function ProjectDetail({
               title="Location"
               description={
                 <span className="select-text break-all">{representative.workspaceRoot}</span>
+              }
+              control={
+                pickProjectLocation ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    disabled={isChangingLocation || !canEditGroup}
+                    onClick={() => void changeLocation()}
+                  >
+                    Change…
+                  </Button>
+                ) : undefined
               }
             />
           )}
