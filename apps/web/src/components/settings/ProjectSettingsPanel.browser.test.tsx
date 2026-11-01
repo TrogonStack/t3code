@@ -24,16 +24,18 @@ import {
 } from "@tanstack/react-router";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/reactivity";
+import { useSyncExternalStore } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { act, render, type Screen } from "../../../test/render";
+import { act, render, stubGlobal, type Screen } from "../../../test/render";
 import type { Project } from "../../types";
 
 type SessionResult = AsyncResult.AsyncResult<AuthSessionState, Error>;
 const state = vi.hoisted(() => ({
   sessions: new Map<EnvironmentId, Atom.Writable<SessionResult>>(),
   projects: [] as Project[],
+  projectListeners: new Set<() => void>(),
   update:
     vi.fn<
       (request: {
@@ -76,7 +78,14 @@ vi.mock(import("~/state/environments"), async (original) => ({
 }));
 vi.mock(import("~/state/entities"), async (original) => ({
   ...(await original()),
-  useProjects: (() => state.projects) as never,
+  useProjects: (() =>
+    useSyncExternalStore(
+      (listener) => {
+        state.projectListeners.add(listener);
+        return () => state.projectListeners.delete(listener);
+      },
+      () => state.projects,
+    )) as never,
   useThreadShells: () => [],
   useServerConfigs: (() =>
     new Map(
@@ -208,6 +217,7 @@ function setup() {
         ? { ...project, ...patch }
         : project,
     );
+    for (const listener of state.projectListeners) listener();
     return AsyncResult.success(undefined);
   });
   state.delete.mockResolvedValue(AsyncResult.success(undefined));
@@ -236,13 +246,16 @@ async function mountPanel(search: Omit<SettingsScopeSearch, "project"> = {}) {
   const projectsRoute = createRoute({
     getParentRoute: () => settingsRoute,
     path: "projects",
-    component: () => (
-      <ProjectSettingsPanel
-        projectKey={key}
-        environmentId={search.machine ? EnvironmentId.make(search.machine) : null}
-        checkoutKey={search.checkout ?? null}
-      />
-    ),
+    component: function ProjectsRoute() {
+      const current: SettingsScopeSearch = settingsRoute.useSearch();
+      return (
+        <ProjectSettingsPanel
+          projectKey={current.project ?? key}
+          environmentId={current.machine ? EnvironmentId.make(current.machine) : null}
+          checkoutKey={current.checkout ?? null}
+        />
+      );
+    },
   });
   const query = new URLSearchParams({ project: key });
   for (const [name, value] of Object.entries(search)) {
@@ -610,6 +623,59 @@ describe("project settings scope", () => {
     await expect
       .element(page.getByRole("button", { name: "Remove project", exact: true }))
       .toBeEnabled();
+  });
+});
+
+describe("project location", () => {
+  const changeLocation = () => page.getByRole("button", { name: "Change…" });
+  // Background connection code also reads the bridge once it exists.
+  const stubPicker = (pickFolder: () => Promise<string | null>) =>
+    stubGlobal("desktopBridge", {
+      pickFolder,
+      getLocalEnvironmentEnabled: () => true,
+      getLocalEnvironmentBootstraps: () => [],
+    });
+
+  it("follows the checkout to its new location", async () => {
+    setup();
+    using _bridge = stubPicker(async () => "/work/moved");
+    await using screen = await mountPanel({
+      machine: primaryId,
+      checkout: "primary:/work/primary",
+    });
+
+    await userEvent.click(changeLocation());
+
+    expect(state.update).toHaveBeenCalledWith({
+      environmentId: primaryId,
+      input: { projectId: ProjectId.make("project-primary"), workspaceRoot: "/work/moved" },
+    });
+    await vi.waitFor(() =>
+      expect(screen.router.state.location.search).toMatchObject({
+        checkout: "primary:/work/moved",
+      }),
+    );
+    await expect.element(page.getByText("/work/moved", { exact: true })).toBeVisible();
+  });
+
+  it("reports a picker failure instead of treating it as a cancel", async () => {
+    setup();
+    using _bridge = stubPicker(async () => {
+      throw new Error("dialog unavailable");
+    });
+    await using _screen = await mountPanel({
+      machine: primaryId,
+      checkout: "primary:/work/primary",
+    });
+
+    await userEvent.click(changeLocation());
+
+    await vi.waitFor(() =>
+      expect(state.toast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "error", title: "Failed to change project location" }),
+      ),
+    );
+    expect(state.update).not.toHaveBeenCalled();
   });
 });
 
