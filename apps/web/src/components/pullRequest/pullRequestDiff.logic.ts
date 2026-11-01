@@ -16,32 +16,32 @@ export function isLineInFileDiff(
 
 export type DiffFoldOverride = "expanded" | "folded" | null;
 
-/** The toolbar's choice wins; until then viewed files fold whatever the default. */
-export function isFileDiffFoldedByDefault(
-  foldOverride: DiffFoldOverride,
-  defaultCollapsed: boolean,
-  viewed: boolean,
-): boolean {
-  if (foldOverride !== null) return foldOverride === "folded";
-  return defaultCollapsed || viewed;
+export interface FileDiffFoldDefaults {
+  readonly defaultCollapsed: boolean;
+  readonly viewed: boolean;
 }
 
-/** Keep fold choices relative to the default so later pages inherit Fold all. */
+/** Keep fold choices relative to the toolbar so later pages inherit Fold all. */
 export function isFileDiffCollapsed(
   fileKey: string,
-  foldedByDefault: boolean,
+  foldOverride: DiffFoldOverride,
   toggledFileKeys: ReadonlySet<string>,
+  { defaultCollapsed, viewed }: FileDiffFoldDefaults,
 ): boolean {
+  // Viewed files fold until the toolbar asks for every file one way.
+  const foldedByDefault =
+    foldOverride === null ? defaultCollapsed || viewed : foldOverride === "folded";
   return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
 }
 
-export function setFileDiffCollapsed(
+export function toggleFileDiffFoldForViewed(
   fileKey: string,
-  collapsed: boolean,
-  foldedByDefault: boolean,
+  viewed: boolean,
+  foldOverride: DiffFoldOverride,
   toggledFileKeys: ReadonlySet<string>,
+  defaults: FileDiffFoldDefaults,
 ): ReadonlySet<string> {
-  if (isFileDiffCollapsed(fileKey, foldedByDefault, toggledFileKeys) === collapsed)
+  if (isFileDiffCollapsed(fileKey, foldOverride, toggledFileKeys, defaults) === viewed)
     return toggledFileKeys;
   const next = new Set(toggledFileKeys);
   if (next.has(fileKey)) next.delete(fileKey);
