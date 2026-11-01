@@ -16,27 +16,52 @@ export function isLineInFileDiff(
 
 export type DiffFoldOverride = "expanded" | "folded" | null;
 
-/** Keep fold choices relative to the toolbar so later pages inherit Fold all. */
+export interface FileDiffFoldDefaults {
+  readonly defaultCollapsed: boolean;
+  readonly viewed: boolean;
+}
+
+function isFileDiffFoldedByDefault(
+  foldOverride: DiffFoldOverride,
+  { defaultCollapsed, viewed }: FileDiffFoldDefaults,
+): boolean {
+  // Viewed files fold until the toolbar asks for every file one way.
+  return foldOverride === null ? defaultCollapsed || viewed : foldOverride === "folded";
+}
+
+/** Reader choices are absolute so a later viewed refresh cannot flip them. */
 export function isFileDiffCollapsed(
   fileKey: string,
   foldOverride: DiffFoldOverride,
-  toggledFileKeys: ReadonlySet<string>,
+  foldChoices: ReadonlyMap<string, boolean>,
+  defaults: FileDiffFoldDefaults,
 ): boolean {
-  const foldedByDefault = foldOverride === "folded";
-  return toggledFileKeys.has(fileKey) ? !foldedByDefault : foldedByDefault;
+  return foldChoices.get(fileKey) ?? isFileDiffFoldedByDefault(foldOverride, defaults);
 }
 
-export function toggleFileDiffFoldForViewed(
+export function setFileDiffFold(
+  foldChoices: ReadonlyMap<string, boolean>,
+  fileKey: string,
+  collapsed: boolean,
+): ReadonlyMap<string, boolean> {
+  if (foldChoices.get(fileKey) === collapsed) return foldChoices;
+  return new Map(foldChoices).set(fileKey, collapsed);
+}
+
+/** Lean on the default where it agrees, so a file pushed to after viewing unfolds again. */
+export function foldFileDiffForViewed(
+  foldChoices: ReadonlyMap<string, boolean>,
   fileKey: string,
   viewed: boolean,
   foldOverride: DiffFoldOverride,
-  toggledFileKeys: ReadonlySet<string>,
-): ReadonlySet<string> {
-  if (isFileDiffCollapsed(fileKey, foldOverride, toggledFileKeys) === viewed)
-    return toggledFileKeys;
-  const next = new Set(toggledFileKeys);
-  if (next.has(fileKey)) next.delete(fileKey);
-  else next.add(fileKey);
+  defaultCollapsed: boolean,
+): ReadonlyMap<string, boolean> {
+  if (isFileDiffFoldedByDefault(foldOverride, { defaultCollapsed, viewed }) !== viewed) {
+    return setFileDiffFold(foldChoices, fileKey, viewed);
+  }
+  if (!foldChoices.has(fileKey)) return foldChoices;
+  const next = new Map(foldChoices);
+  next.delete(fileKey);
   return next;
 }
 
