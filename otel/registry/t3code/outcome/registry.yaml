@@ -1,0 +1,19 @@
+file_format: definition/2
+attributes:
+  - key: t3code.outcome
+    type:
+      members:
+        - id: success
+          value: success
+          brief: The operation succeeded.
+          stability: development
+        - id: failure
+          value: failure
+          brief: The operation failed.
+          stability: development
+        - id: interrupt
+          value: interrupt
+          brief: The operation was interrupted before it finished.
+          stability: development
+    brief: How an operation ended.
+    stability: development
