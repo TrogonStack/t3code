@@ -9,25 +9,33 @@ import * as Layer from "effect/Layer";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import { resolveRelayClientTracingConfig } from "./publicConfig.ts";
 
 const relayClientTracingConfig = resolveRelayClientTracingConfig();
 
-const relayLayer = (
+/** Relay traces leave the machine for T3 Connect, so a policy with `telemetry: false` stops them. */
+export const relayLayer = (
   resource: Omit<RelayTracing.RelayClientTracingResource, "serviceInstanceId" | "serviceVersion">,
+  tracingConfig = relayClientTracingConfig,
 ) =>
   Layer.unwrap(
-    Effect.map(ServerConfig.ServerConfig, (config) => {
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const policy = yield* ManagedPolicy.ManagedPolicy;
       const operatorAttributes = config.otelEnvironment.resourceAttributes;
-      return RelayTracing.layer(relayClientTracingConfig, {
-        ...resource,
-        serviceVersion: packageJson.version,
-        serviceInstanceId: processServiceInstanceId(operatorAttributes),
-        attributes: {
-          ...resource.attributes,
-          ...releaseResourceAttributes(ServerConfig.telemetryChannel, operatorAttributes),
+      return RelayTracing.layer(
+        ManagedPolicy.deniedBy(policy, "telemetry") === undefined ? tracingConfig : null,
+        {
+          ...resource,
+          serviceVersion: packageJson.version,
+          serviceInstanceId: processServiceInstanceId(operatorAttributes),
+          attributes: {
+            ...resource.attributes,
+            ...releaseResourceAttributes(ServerConfig.telemetryChannel, operatorAttributes),
+          },
         },
-      });
+      );
     }),
   );
 
