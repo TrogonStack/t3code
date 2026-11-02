@@ -2572,6 +2572,85 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
+  const stackedRefusal = {
+    data: null,
+    errors: [
+      {
+        message:
+          "This pull request is part of a stack and must be merged using the asynchronous merge REST API.",
+      },
+    ],
+  };
+  const mergeStacked = (restReplies: ReadonlyArray<unknown>) => {
+    const replies = [...restReplies];
+    mockedExecute.mockImplementation((call) =>
+      call.kind === "graphql" && call.query.includes("mergePullRequest(")
+        ? Effect.succeed(output(encodeJson(stackedRefusal)))
+        : call.kind === "rest"
+          ? Effect.succeed(output(encodeJson(replies.shift()), false, false, {}, 202))
+          : Effect.succeed(output(encodeJson(actionState()))),
+    );
+    return GitHubPullRequestApi.GitHubPullRequestApi.use((cli) =>
+      cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "merge",
+        mergeMethod: "squash",
+      }),
+    );
+  };
+
+  it.effect("merges a stacked pull request through the async REST route GitHub names", () =>
+    Effect.gen(function* () {
+      yield* mergeStacked([{ status: "merged", details: { message: "Merged", sha: "def456" } }]);
+      expect(restCallsTo("/pulls/7/merge-async")).toMatchObject([
+        {
+          method: "PUT",
+          body: { sha: "abc123", merge_method: "squash", merge_action: "default" },
+        },
+      ]);
+    }),
+  );
+
+  it.effect.each([
+    [
+      "a failure reported at once",
+      [{ status: "failed", details: { message: "Merge not allowed" } }],
+      "Merge not allowed",
+    ],
+    [
+      "a failure found while polling",
+      [
+        { status: "pending", details: { message: "Queued", uuid: "u-1" } },
+        { status: "failed", details: { message: "Required status check is failing" } },
+      ],
+      "Required status check is failing",
+    ],
+    [
+      "a merge still pending after the last poll",
+      Array.from({ length: 11 }, () => ({
+        status: "pending",
+        details: { message: "Queued", uuid: "u-1" },
+      })),
+      "still running on GitHub",
+    ],
+    [
+      "an unreadable poll response",
+      [{ status: "pending", details: { message: "Queued", uuid: "u-1" } }, "nope"],
+      "unreadable merge response",
+    ],
+  ] as const)("reports a stacked merge with %s", ([, replies, message]) =>
+    Effect.gen(function* () {
+      const merge = Effect.flip(mergeStacked(replies));
+      const fiber = yield* Effect.forkChild(merge);
+      yield* TestClock.adjust("10 seconds");
+      const error = yield* Fiber.join(fiber);
+      expect(error.message).toContain(message);
+    }),
+  );
+
   it.effect("says an already merged pull request was merged without asking GitHub again", () =>
     Effect.gen(function* () {
       route(["query PullRequestActionState", actionState({ merged: true })]);
