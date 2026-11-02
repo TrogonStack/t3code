@@ -2700,51 +2700,52 @@ export const make = Effect.gen(function* () {
         // below it. It has no auto-merge, so `enable-auto-merge` keeps GitHub's own refusal.
         const mergeAsync = Effect.gen(function* () {
           const path = `repos/${owner}/${name}/pulls/${input.number}/merge-async`;
-          const request = yield* api
-            .rest({
+          const unfinished = (message: string) =>
+            new GitHubRequestPolicy.GitHubApiResponseError({
               host: input.host,
               operation: "runPullRequestAction",
-              method: "PUT",
-              path,
-              body: {
-                sha: expectedHead ?? state.headRefOid,
-                merge_method: input.mergeMethod ?? "merge",
-                merge_action: bypass ? "direct_merge" : "default",
-                ...(bypass ? { bypass_rules: true } : {}),
-                ...(body === undefined ? {} : { commit_message: body }),
-              },
-            })
-            .pipe(
-              // A request already pending for this pull request is the one that was just asked for.
-              Effect.catchTags({
-                GitHubApiResponseError: (error) =>
-                  error.status === 409 ? Effect.void : Effect.fail(error),
-              }),
+              status: 200,
+              githubErrors: [message],
+            });
+          // Only a merged or enqueued result is success; anything else is reported, never assumed.
+          const settled = (raw: string) =>
+            Option.match(decodeAsyncMerge(raw), {
+              onNone: () =>
+                Effect.fail(unfinished("GitHub returned an unreadable merge response.")),
+              onSome: (result) =>
+                result.status === "failed"
+                  ? Effect.fail(unfinished(result.details?.message ?? "The merge failed."))
+                  : Effect.succeed(result),
+            });
+          const request = yield* api.rest({
+            host: input.host,
+            operation: "runPullRequestAction",
+            method: "PUT",
+            path,
+            body: {
+              sha: expectedHead ?? state.headRefOid,
+              merge_method: input.mergeMethod ?? "merge",
+              merge_action: bypass ? "direct_merge" : "default",
+              ...(bypass ? { bypass_rules: true } : {}),
+              ...(body === undefined ? {} : { commit_message: body }),
+            },
+          });
+          let result = yield* settled(request.body);
+          for (let poll = 0; result.status === "pending" && poll < ASYNC_MERGE_POLLS; poll++) {
+            const uuid = result.details?.uuid;
+            if (uuid === undefined) break;
+            yield* Effect.sleep(ASYNC_MERGE_POLL_INTERVAL);
+            const response = yield* api.rest({
+              host: input.host,
+              operation: "runPullRequestAction",
+              path: `${path}/${encodeURIComponent(uuid)}`,
+            });
+            result = yield* settled(response.body);
+          }
+          if (result.status === "pending") {
+            return yield* unfinished(
+              "The merge is still running on GitHub. Check its status there before submitting another request.",
             );
-          const first = request === undefined ? Option.none() : decodeAsyncMerge(request.body);
-          const uuid = Option.flatMapNullishOr(first, (result) => result.details?.uuid);
-          if (Option.isNone(uuid)) return;
-          // The merge runs in the background; watch it long enough to report a failure.
-          for (let poll = 0; poll < ASYNC_MERGE_POLLS; poll++) {
-            if (poll > 0) yield* Effect.sleep(ASYNC_MERGE_POLL_INTERVAL);
-            const result = yield* api
-              .rest({
-                host: input.host,
-                operation: "runPullRequestAction",
-                path: `${path}/${uuid.value}`,
-              })
-              .pipe(Effect.map((response) => decodeAsyncMerge(response.body)));
-            if (Option.isNone(result) || result.value.status !== "pending") {
-              if (Option.isSome(result) && result.value.status === "failed") {
-                return yield* new GitHubRequestPolicy.GitHubApiResponseError({
-                  host: input.host,
-                  operation: "runPullRequestAction",
-                  status: 200,
-                  githubErrors: [result.value.details?.message ?? "The merge failed."],
-                });
-              }
-              return;
-            }
           }
         });
         yield* (

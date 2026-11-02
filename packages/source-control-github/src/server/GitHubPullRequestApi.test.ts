@@ -2614,16 +2614,40 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
-  it.effect("reports a stacked pull request merge that GitHub then fails", () =>
+  it.effect.each([
+    [
+      "a failure reported at once",
+      [{ status: "failed", details: { message: "Merge not allowed" } }],
+      "Merge not allowed",
+    ],
+    [
+      "a failure found while polling",
+      [
+        { status: "pending", details: { message: "Queued", uuid: "u-1" } },
+        { status: "failed", details: { message: "Required status check is failing" } },
+      ],
+      "Required status check is failing",
+    ],
+    [
+      "a merge still pending after the last poll",
+      Array.from({ length: 11 }, () => ({
+        status: "pending",
+        details: { message: "Queued", uuid: "u-1" },
+      })),
+      "still running on GitHub",
+    ],
+    [
+      "an unreadable poll response",
+      [{ status: "pending", details: { message: "Queued", uuid: "u-1" } }, "nope"],
+      "unreadable merge response",
+    ],
+  ] as const)("reports a stacked merge with %s", ([, replies, message]) =>
     Effect.gen(function* () {
-      const error = yield* Effect.flip(
-        mergeStacked([
-          { status: "pending", details: { message: "Queued", uuid: "u-1" } },
-          { status: "failed", details: { message: "Required status check is failing" } },
-        ]),
-      );
-      expect(error.message).toContain("Required status check is failing");
-      expect(restCallsTo("/pulls/7/merge-async/u-1")).toHaveLength(1);
+      const merge = Effect.flip(mergeStacked(replies));
+      const fiber = yield* Effect.forkChild(merge);
+      yield* TestClock.adjust("10 seconds");
+      const error = yield* Fiber.join(fiber);
+      expect(error.message).toContain(message);
     }),
   );
 
