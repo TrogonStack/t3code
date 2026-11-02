@@ -234,7 +234,13 @@ export function PullRequestWatchDogButton({
           <span className="inline-flex shrink-0">
             <Button
               size="xs"
-              variant={clear ? "secondary" : "outline"}
+              variant={
+                clear
+                  ? "secondary"
+                  : status.kind === "attention"
+                    ? "destructive-outline"
+                    : "outline"
+              }
               disabled={handoff !== null || unavailable}
               onClick={onWatch}
               aria-label={label}
