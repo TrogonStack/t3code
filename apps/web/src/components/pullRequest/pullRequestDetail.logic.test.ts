@@ -1001,13 +1001,25 @@ describe("the watch dog", () => {
       "failed, cancelled, and action-required checks",
       ["failure", "cancelled", "action-required", "pending"],
       [],
-      { kind: "attention", failedChecks: 3, unresolvedThreads: 0, changeRequests: 0 },
+      {
+        kind: "attention",
+        failedChecks: 3,
+        unresolvedThreads: 0,
+        changeRequests: 0,
+        conflicting: false,
+      },
     ],
     [
       "an unresolved outdated thread",
       ["success"],
       [thread(false, true), thread(true)],
-      { kind: "attention", failedChecks: 0, unresolvedThreads: 1, changeRequests: 0 },
+      {
+        kind: "attention",
+        failedChecks: 0,
+        unresolvedThreads: 1,
+        changeRequests: 0,
+        conflicting: false,
+      },
     ],
   ] as const)("reports %s", (_name, statuses, threads, expected) => {
     expect(
@@ -1037,7 +1049,29 @@ describe("the watch dog", () => {
           review("c", "octocat", "APPROVED", 2),
         ],
       }),
-    ).toEqual({ kind: "attention", failedChecks: 0, unresolvedThreads: 0, changeRequests: 1 });
+    ).toEqual({
+      kind: "attention",
+      failedChecks: 0,
+      unresolvedThreads: 0,
+      changeRequests: 1,
+      conflicting: false,
+    });
+  });
+
+  it("asks for attention when the branch conflicts with its base", () => {
+    expect(
+      resolveWatchDogStatus({
+        checks: [check("success")],
+        reviewThreads: [],
+        mergeability: "conflicting",
+      }),
+    ).toEqual({
+      kind: "attention",
+      failedChecks: 0,
+      unresolvedThreads: 0,
+      changeRequests: 0,
+      conflicting: true,
+    });
   });
 
   it.each([
