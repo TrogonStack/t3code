@@ -207,6 +207,7 @@ function watchDogTooltip(status: WatchDogStatus): string {
         status.changeRequests > 0
           ? `${status.changeRequests} ${status.changeRequests === 1 ? "review requests" : "reviews request"} changes`
           : null,
+        status.conflicting ? "merge conflicts" : null,
       ].filter((part) => part !== null);
       return `${parts.join(", ")}. Hand this to an agent to fix.`;
     }

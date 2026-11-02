@@ -1302,6 +1302,7 @@ export function PullRequestDetailPanel({
         unavailable={attachTarget === null && (checkoutRoot === null || !canPrepareWorktree)}
         status={resolveWatchDogStatus({
           checks: checksStale ? [] : detail.checks,
+          mergeability: detail.mergeability,
           reviewThreads: activity?.reviewThreads ?? [],
           reviewThreadsTruncated:
             activity === null ||
