@@ -52,6 +52,7 @@ import {
   hasCursorSkillMention,
   rewriteCursorSkillMentions,
 } from "./skills.ts";
+import { cursorUserInstructions, prependCursorUserInstructions } from "./userInstructions.ts";
 import { t3OrchestrationPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
@@ -949,6 +950,8 @@ interface CursorLiveAgent {
 export interface CursorAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
+  readonly cliConfigPath?: string;
+  readonly instructionsPath?: string;
   readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
 }
 
@@ -2292,20 +2295,35 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 .map((skill) => skill.name),
             );
           }
-          const userText = t3OrchestrationPrompt({
-            prompt: yield* providerMessageTextWithAttachmentPaths({
-              text:
-                cursorSkillNames === undefined
-                  ? rawText
-                  : rewriteCursorSkillMentions(rawText, cursorSkillNames),
-              attachments: turnInput.message.attachments,
-              resolveAttachmentPath: host.resolveAttachmentPath,
-              resolveExtractedTextPath: host.resolveExtractedTextPath,
+          const instructions =
+            turnInput.runOrdinal === 1
+              ? yield* cursorUserInstructions({
+                  cliConfigPath: adapterOptions.cliConfigPath,
+                  instructionsPath: adapterOptions.instructionsPath,
+                  environment: adapterOptions.environment,
+                }).pipe(
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                )
+              : undefined;
+          const userText = prependCursorUserInstructions({
+            instructions,
+            runOrdinal: turnInput.runOrdinal,
+            prompt: t3OrchestrationPrompt({
+              prompt: yield* providerMessageTextWithAttachmentPaths({
+                text:
+                  cursorSkillNames === undefined
+                    ? rawText
+                    : rewriteCursorSkillMentions(rawText, cursorSkillNames),
+                attachments: turnInput.message.attachments,
+                resolveAttachmentPath: host.resolveAttachmentPath,
+                resolveExtractedTextPath: host.resolveExtractedTextPath,
+              }),
+              hasT3Mcp: mcpServers !== undefined,
+              hasDeviceTools,
+              orchestrationDelivered: delivered.orchestration,
+              deviceInstructionsDelivered: delivered.device,
             }),
-            hasT3Mcp: mcpServers !== undefined,
-            hasDeviceTools,
-            orchestrationDelivered: delivered.orchestration,
-            deviceInstructionsDelivered: delivered.device,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
