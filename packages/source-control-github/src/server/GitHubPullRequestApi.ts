@@ -882,6 +882,27 @@ function searchQuery(input: {
   ].join(" ");
 }
 
+const decodeAsyncMerge = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      status: Schema.String,
+      details: Schema.optional(
+        Schema.Struct({
+          message: Schema.optional(Schema.String),
+          uuid: Schema.optional(Schema.String),
+        }),
+      ),
+    }),
+  ),
+);
+
+/** GitHub's GraphQL merge refuses a stacked pull request and names the REST route that takes it. */
+const isStackedMergeRefusal = (error: GitHubRequestPolicy.GitHubApiResponseError) =>
+  error.githubErrors?.some((message) => message.includes("asynchronous merge REST API")) === true;
+
+const ASYNC_MERGE_POLLS = 10;
+const ASYNC_MERGE_POLL_INTERVAL = Duration.seconds(1);
+
 const decodeRevisionRefs = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
@@ -2675,6 +2696,57 @@ export const make = Effect.gen(function* () {
           ...(expectedHead === undefined ? {} : { expectedHeadOid: expectedHead }),
           ...(body === undefined ? {} : { commitBody: body }),
         };
+        // Only the async REST route takes a stacked pull request, and it merges every open one
+        // below it. It has no auto-merge, so `enable-auto-merge` keeps GitHub's own refusal.
+        const mergeAsync = Effect.gen(function* () {
+          const path = `repos/${owner}/${name}/pulls/${input.number}/merge-async`;
+          const request = yield* api
+            .rest({
+              host: input.host,
+              operation: "runPullRequestAction",
+              method: "PUT",
+              path,
+              body: {
+                sha: expectedHead ?? state.headRefOid,
+                merge_method: input.mergeMethod ?? "merge",
+                merge_action: bypass ? "direct_merge" : "default",
+                ...(bypass ? { bypass_rules: true } : {}),
+                ...(body === undefined ? {} : { commit_message: body }),
+              },
+            })
+            .pipe(
+              // A request already pending for this pull request is the one that was just asked for.
+              Effect.catchTags({
+                GitHubApiResponseError: (error) =>
+                  error.status === 409 ? Effect.void : Effect.fail(error),
+              }),
+            );
+          const first = request === undefined ? Option.none() : decodeAsyncMerge(request.body);
+          const uuid = Option.flatMapNullishOr(first, (result) => result.details?.uuid);
+          if (Option.isNone(uuid)) return;
+          // The merge runs in the background; watch it long enough to report a failure.
+          for (let poll = 0; poll < ASYNC_MERGE_POLLS; poll++) {
+            if (poll > 0) yield* Effect.sleep(ASYNC_MERGE_POLL_INTERVAL);
+            const result = yield* api
+              .rest({
+                host: input.host,
+                operation: "runPullRequestAction",
+                path: `${path}/${uuid.value}`,
+              })
+              .pipe(Effect.map((response) => decodeAsyncMerge(response.body)));
+            if (Option.isNone(result) || result.value.status !== "pending") {
+              if (Option.isSome(result) && result.value.status === "failed") {
+                return yield* new GitHubRequestPolicy.GitHubApiResponseError({
+                  host: input.host,
+                  operation: "runPullRequestAction",
+                  status: 200,
+                  githubErrors: [result.value.details?.message ?? "The merge failed."],
+                });
+              }
+              return;
+            }
+          }
+        });
         yield* (
           auto
             ? client.EnablePullRequestAutoMerge({ input: merge }).pipe(Effect.asVoid)
@@ -2682,7 +2754,10 @@ export const make = Effect.gen(function* () {
         ).pipe(
           graphql(target),
           Effect.catchTags({
-            GitHubApiResponseError: (error) => Effect.fail(refusedAs ?? error),
+            GitHubApiResponseError: (error) =>
+              action === "merge" && isStackedMergeRefusal(error)
+                ? mergeAsync
+                : Effect.fail(refusedAs ?? error),
           }),
         );
       });
