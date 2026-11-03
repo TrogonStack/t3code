@@ -1,5 +1,5 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { assert, describe, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import * as Orchestrator from "./Orchestrator.ts";
@@ -8,11 +8,6 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
 
 const STARTED = "2026-10-02T12:00:00.000Z";
-
-const testCrypto = Crypto.make({
-  randomBytes: (size) => new Uint8Array(size).fill(1),
-  digest: (_algorithm, data) => Effect.succeed(data),
-});
 
 describe("PullRequestWatchReactor", () => {
   it.effect("asks the host again before reading when there is no fingerprint to compare", () =>
@@ -69,7 +64,7 @@ describe("PullRequestWatchReactor", () => {
           activity: () =>
             Effect.succeed({ comments: [], reviewThreads: [], commentsTruncated: false }),
         } as never),
-        Effect.provideService(Crypto.Crypto, testCrypto),
+        Effect.provide(NodeCrypto.layer),
       );
       yield* reactor.sweep;
       assert.deepEqual(calls, ["invalidate", "detail"]);

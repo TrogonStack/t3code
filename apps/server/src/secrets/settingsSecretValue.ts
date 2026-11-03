@@ -2,6 +2,7 @@ import {
   isSecretReference,
   secretReferencesInSettings,
   type SettingsSecretValue,
+  withSettingsSecrets,
 } from "@t3tools/contracts";
 import type * as SecretResolverCore from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
@@ -49,7 +50,7 @@ export const resolveSettingsSecret = (
   );
 
 /**
- * Replaces each reference in the fields `schema` declares as `SettingsSecretValue` with the secret
+ * Replaces each reference in the slots `schema` declares as `SettingsSecretValue` with the secret
  * it names, read in one batch. An unreadable secret comes back as `""`, so it behaves as unset.
  */
 export const resolveSettingsSecrets = Effect.fn("SettingsSecrets.resolve")(function* <
@@ -58,8 +59,8 @@ export const resolveSettingsSecrets = Effect.fn("SettingsSecrets.resolve")(funct
   const pending = secretReferencesInSettings(schema, settings);
   if (pending.length === 0) return settings;
   const values = yield* resolver.read(pending.map(({ reference }) => reference));
-  const resolved = Object.fromEntries(
-    pending.map(({ field }, index) => [field, values[index] ?? ""] as const),
+  return withSettingsSecrets(
+    settings,
+    pending.map((slot, index) => ({ ...slot, value: values[index] ?? "" })),
   );
-  return { ...settings, ...resolved };
 });
