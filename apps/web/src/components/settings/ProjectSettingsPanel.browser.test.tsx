@@ -698,7 +698,7 @@ describe("project location", () => {
         checkout: "primary:/work/moved",
       }),
     );
-    await expect.element(page.getByText("/work/moved", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("/work/moved", { exact: true }).first()).toBeVisible();
   });
 
   it("reports a picker failure instead of treating it as a cancel", async () => {

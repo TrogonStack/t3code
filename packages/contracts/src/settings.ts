@@ -23,7 +23,6 @@ import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
 import { UsageModelFilter } from "./usage.ts";
 import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
-import { secretSetting } from "./settingsSecret.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -52,8 +51,6 @@ import {
   ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
-
-export { isSecretSetting, secretSetting, secretSettingsFields } from "./settingsSecret.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -574,6 +571,14 @@ export interface ProviderSettingsFormAnnotation {
   readonly options?: ReadonlyArray<ProviderSettingsFormOption> | undefined;
 }
 
+export function secretSettingsFields(schema: {
+  readonly fields: Readonly<Record<string, Schema.Top>>;
+}): ReadonlyArray<string> {
+  return Object.entries(schema.fields).flatMap(([field, fieldSchema]) => {
+    return isSecretSetting(fieldSchema) ? [field] : [];
+  });
+}
+
 export interface ProviderSettingsFormSchemaAnnotation {
   readonly order?: readonly string[] | undefined;
 }
@@ -581,10 +586,27 @@ export interface ProviderSettingsFormSchemaAnnotation {
 declare module "effect/Schema" {
   namespace Annotations {
     interface Annotations {
+      /** Store this credential separately and expose only whether it is configured to clients. */
+      readonly settingsSecret?: boolean | undefined;
+      /** Set by `SettingsSecretValue`: the credential may name a secret provider reference. */
+      readonly settingsSecretReference?: boolean | undefined;
       readonly providerSettingsForm?: ProviderSettingsFormAnnotation | undefined;
       readonly providerSettingsFormSchema?: ProviderSettingsFormSchemaAnnotation | undefined;
     }
   }
+}
+
+export function secretSetting<S extends Schema.Top>(schema: S): S["Rebuild"] {
+  return schema.annotateKey({ settingsSecret: true });
+}
+
+/** A masked form field is a credential too, so none is saved or sent to clients as plain text. */
+export function isSecretSetting(schema: Schema.Top): boolean {
+  const annotations = Schema.resolveAnnotationsKey(schema) ?? Schema.resolveAnnotations(schema);
+  return (
+    annotations?.settingsSecret === true ||
+    annotations?.providerSettingsForm?.control === "password"
+  );
 }
 
 export type ProviderSettingsOrder<Fields extends Schema.Struct.Fields> = readonly Extract<
@@ -837,7 +859,6 @@ export const UsageLimitSourceConfig = Schema.Struct({
   kind: Schema.Literal("cliproxy"),
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
-  /** Kept in the secret store, or the secret provider to read it from. */
   managementKey: SettingsSecretValue.pipe(
     Schema.withDecodingDefault(Effect.succeed("")),
     secretSetting,
@@ -1343,7 +1364,6 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
-  /** Named secret stores that provider environment variables read from, keyed by a user-chosen id. */
   secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1680,7 +1700,7 @@ export const ServerSettingsPatch = Schema.Struct({
       otlpLogsUrl: Schema.optionalKey(TrimmedString),
     }),
   ),
-  /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty or omitted secrets remove them. */
+  /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty secrets remove them. A non-empty token map keeps the saved tokens of hosts it omits; an empty map clears them all. */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
   // Replace whole maps to avoid half-merged driver configs.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
@@ -1688,7 +1708,6 @@ export const ServerSettingsPatch = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
-  /** Per-entry like `usageLimitSources`; `null` removes a provider. */
   secretProviders: Schema.optionalKey(
     Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
   ),

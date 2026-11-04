@@ -69,6 +69,7 @@ import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost
 import { readDeviceDetail, runDeviceAction } from "./DeviceActions.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import * as SshDeviceHost from "./SshDeviceHost.ts";
 import * as EasDeviceHost from "./EasDeviceHost.ts";
@@ -1623,7 +1624,10 @@ export const make = Effect.gen(function* () {
   };
 });
 
-export const layer = Layer.effect(DeviceService, make).pipe(Layer.provide(LocalDeviceHost.layer));
+export const layer = Layer.effect(DeviceService, make).pipe(
+  Layer.provide(LocalDeviceHost.layer),
+  Layer.provide(SecretResolverLayer.layer),
+);
 
 export const stateStream = (service: DeviceService["Service"]): Stream.Stream<DeviceServiceState> =>
   Stream.unwrap(

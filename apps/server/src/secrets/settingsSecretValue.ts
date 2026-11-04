@@ -4,11 +4,25 @@ import {
   type SettingsSecretValue,
   withSettingsSecrets,
 } from "@t3tools/contracts";
-import type * as SecretResolverCore from "@t3tools/secret-provider-core/server/SecretResolver";
+import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-type SecretResolverShape = SecretResolverCore.SecretResolver["Service"];
+/**
+ * Replaces each reference in the slots `schema` declares as `SettingsSecretValue` with the secret
+ * it names, read in one batch. An unreadable secret comes back as `""`, so it behaves as unset.
+ */
+export const resolveSettingsSecrets = Effect.fn("SettingsSecrets.resolve")(function* <
+  Settings extends Readonly<Record<string, unknown>>,
+>(resolver: SecretResolver.SecretResolver["Service"], schema: Schema.Top, settings: Settings) {
+  const pending = secretReferencesInSettings(schema, settings);
+  if (pending.length === 0) return settings;
+  const values = yield* resolver.read(pending.map(({ reference }) => reference));
+  return withSettingsSecrets(
+    settings,
+    pending.map((slot, index) => ({ ...slot, value: values[index] ?? "" })),
+  );
+});
 
 export class SettingsSecretUnresolvedError extends Schema.TaggedError<SettingsSecretUnresolvedError>()(
   "SettingsSecretUnresolvedError",
@@ -24,43 +38,14 @@ export class SettingsSecretUnresolvedError extends Schema.TaggedError<SettingsSe
  * empty, fails instead of passing for a missing token, so callers that would fall back to another
  * credential cannot silently switch accounts.
  */
-export const requireSettingsSecret = (
-  resolver: SecretResolverShape,
+export const requireSettingsSecret = Effect.fn("SettingsSecrets.require")(function* (
+  resolver: SecretResolver.SecretResolver["Service"],
   value: SettingsSecretValue,
-): Effect.Effect<string, SettingsSecretUnresolvedError> =>
-  !isSecretReference(value)
-    ? Effect.succeed(value)
-    : resolver
-        .read([value])
-        .pipe(
-          Effect.flatMap(([secret]) =>
-            secret === undefined || secret.trim() === ""
-              ? Effect.fail(new SettingsSecretUnresolvedError({ provider: value.provider }))
-              : Effect.succeed(secret),
-          ),
-        );
-
-/** An unreadable secret comes back as `""`, for credentials whose documented fallback is acceptable. */
-export const resolveSettingsSecret = (
-  resolver: SecretResolverShape,
-  value: SettingsSecretValue,
-): Effect.Effect<string> =>
-  requireSettingsSecret(resolver, value).pipe(
-    Effect.catchTags({ SettingsSecretUnresolvedError: () => Effect.succeed("") }),
-  );
-
-/**
- * Replaces each reference in the slots `schema` declares as `SettingsSecretValue` with the secret
- * it names, read in one batch. An unreadable secret comes back as `""`, so it behaves as unset.
- */
-export const resolveSettingsSecrets = Effect.fn("SettingsSecrets.resolve")(function* <
-  Settings extends Readonly<Record<string, unknown>>,
->(resolver: SecretResolverShape, schema: Schema.Top, settings: Settings) {
-  const pending = secretReferencesInSettings(schema, settings);
-  if (pending.length === 0) return settings;
-  const values = yield* resolver.read(pending.map(({ reference }) => reference));
-  return withSettingsSecrets(
-    settings,
-    pending.map((slot, index) => ({ ...slot, value: values[index] ?? "" })),
-  );
+) {
+  if (!isSecretReference(value)) return value;
+  const [secret] = yield* resolver.read([value]);
+  if (secret === undefined || secret.trim() === "") {
+    return yield* new SettingsSecretUnresolvedError({ provider: value.provider });
+  }
+  return secret;
 });
