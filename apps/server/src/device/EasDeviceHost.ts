@@ -211,13 +211,23 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       ...(cause === undefined ? {} : { cause }),
     });
 
+  let lastApi: ExpoApi | undefined;
   const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveSavedExpoCredential(
     secrets,
     config.accessToken,
   ).pipe(
     Effect.map((credential) => makeExpoApi(http, credential)),
+    Effect.tap((expo) =>
+      Effect.sync(() => {
+        lastApi = expo;
+      }),
+    ),
     Effect.provide(services),
     Effect.mapError((error) => unavailable(error.message, error)),
+  );
+  /** Stopping a billed session must not depend on the secret still being readable; starting one must. */
+  const apiForStop = api.pipe(
+    Effect.catch((error) => (lastApi === undefined ? Effect.fail(error) : Effect.succeed(lastApi))),
   );
 
   /** A missing ledger is empty; an unreadable one is an error, never an empty list. */
@@ -640,7 +650,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
     if (stale.length === 0 && unresolved.size === 0 && uncertain.size === 0 && !reapDue) return;
     const reap = reapDue || uncertain.size > 0;
     if (reap) reapedAt = now;
-    const expo = yield* api.pipe(
+    const expo = yield* apiForStop.pipe(
       // Without a credential no sweep can look; a record Expo would have
       // listed by now still stops counting, so the limit is not held forever.
       Effect.tapError(() =>
@@ -737,7 +747,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       Option.match(sessionFor(device.id), {
         onNone: () => Effect.void,
         onSome: (session) =>
-          api.pipe(
+          apiForStop.pipe(
             Effect.flatMap((expo) => stopTracked(expo, session)),
             Effect.asVoid,
             Effect.mapError(
@@ -867,7 +877,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
     // Interrupted starts stop the sessions they created before this returns.
     yield* FiberSet.clear(starts);
     yield* FiberSet.clear(background);
-    const expo = yield* api;
+    const expo = yield* apiForStop;
     yield* Effect.forEach(
       [...sessions.values()],
       (session) => stopTracked(expo, session).pipe(Effect.ignore),

@@ -344,6 +344,35 @@ describe("EAS Simulator host", () => {
     }).pipe(Effect.scoped, Effect.provide(layer)),
   );
 
+  it.effect("still stops its sessions when the secret becomes unreadable after they start", () => {
+    const readable = { value: true };
+    return Effect.gen(function* () {
+      const expo = fakeExpo();
+      const source = { provider: SecretProviderId.make("homelab"), reference: "expo#token" };
+      const scope = yield* Scope.make();
+      const host = yield* makeHost(expo, config({ accessToken: source }), scope);
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [catalogDevice] = (yield* ready.devices.list).devices;
+      expect(yield* ready.devices.boot(catalogDevice!)).toBe("session-1");
+
+      readable.value = false;
+      yield* ready.devices.shutdown({ ...catalogDevice!, id: "session-1" });
+      expect(expo.stopped()).toEqual(["session-1"]);
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerWith(
+          Layer.succeed(SecretResolver.SecretResolver, {
+            read: (references) =>
+              Effect.succeed(references.map(() => (readable.value ? "expo-token" : undefined))),
+            invalidate: () => Effect.void,
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("runs an Android session through serve-emu beside an iOS one", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();

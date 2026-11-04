@@ -4,7 +4,8 @@ import {
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
   type ServerSettings,
-  type UsageLimitSourceConfig,
+  UsageLimitSourceConfig,
+  settingsSecretLiteral,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
@@ -22,7 +23,8 @@ import * as Stream from "effect/Stream";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
-import { resolveSettingsSecret } from "../secrets/settingsSecretValue.ts";
+import * as SecretResolverLayer from "../secrets/SecretResolver.ts";
+import { resolveSettingsSecrets } from "../secrets/settingsSecretValue.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 
@@ -60,6 +62,12 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* Settings.ServerSettingsService;
   const secrets = yield* SecretResolver.SecretResolver;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const readManagementKey = Effect.fn("UsageLimitSources.readManagementKey")(function* (
+    config: UsageLimitSourceConfig,
+  ) {
+    const resolved = yield* resolveSettingsSecrets(secrets, UsageLimitSourceConfig, config);
+    return settingsSecretLiteral(resolved.managementKey);
+  });
   const stateRef = yield* Ref.make<ReadonlyArray<UsageLimitSourceSnapshot>>([]);
   const changes = yield* Effect.acquireRelease(
     PubSub.unbounded<ReadonlyArray<UsageLimitSourceSnapshot>>(),
@@ -72,7 +80,7 @@ export const make = Effect.gen(function* () {
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    const managementKey = yield* resolveSettingsSecret(secrets, config.managementKey);
+    const managementKey = yield* readManagementKey(config);
     if (managementKey.length === 0) {
       return { ...base, accounts: [], error: missingManagementKey(config) };
     }
@@ -125,7 +133,7 @@ export const make = Effect.gen(function* () {
         detail: "The usage limit source is missing or disabled.",
       });
     }
-    const managementKey = yield* resolveSettingsSecret(secrets, config.managementKey);
+    const managementKey = yield* readManagementKey(config);
     if (managementKey.length === 0) {
       return yield* new UsageLimitSourceError({ detail: missingManagementKey(config) });
     }
@@ -187,4 +195,6 @@ export const make = Effect.gen(function* () {
   } satisfies UsageLimitSources["Service"];
 });
 
-export const layer = Layer.effect(UsageLimitSources, make);
+export const layer = Layer.effect(UsageLimitSources, make).pipe(
+  Layer.provide(SecretResolverLayer.layer),
+);
