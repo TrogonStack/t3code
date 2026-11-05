@@ -12,6 +12,8 @@ export interface ThreadNowItem {
   readonly title: ReactNode;
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
+  /** Replaces the generic overflow popover with a button that opens these details. */
+  readonly details?: ReactNode;
 }
 
 /** Matches ThreadStatusLine, so every line at the end of the timeline reads as one family. */
@@ -33,6 +35,19 @@ function ThreadNowLine({
   /** Announces the line when it appears; only for something that needs the user. */
   readonly announce?: boolean;
 }) {
+  const lineText = (
+    <>
+      {item.title}
+      {item.description ? (
+        <>
+          {" "}
+          <span className="ms-0.5 text-muted-foreground/60 light:text-muted-foreground/80">
+            {item.description}
+          </span>
+        </>
+      ) : null}
+    </>
+  );
   return (
     <div
       role={announce ? "alert" : undefined}
@@ -44,22 +59,21 @@ function ThreadNowLine({
       </span>
       {/* Title and detail read as one line that gives way before the actions, so Stop stays
           reachable; when it is cut, its details button shows all of it. */}
-      <NoticeText
-        detailsLabel={
-          typeof item.title === "string" ? `Show details: ${item.title}` : "Show details"
-        }
-        className="min-w-0 truncate"
-      >
-        {item.title}
-        {item.description ? (
-          <>
-            {" "}
-            <span className="ms-0.5 text-muted-foreground/60 light:text-muted-foreground/80">
-              {item.description}
-            </span>
-          </>
-        ) : null}
-      </NoticeText>
+      {item.details ? (
+        <>
+          <span className="min-w-0 truncate">{lineText}</span>
+          {item.details}
+        </>
+      ) : (
+        <NoticeText
+          detailsLabel={
+            typeof item.title === "string" ? `Show details: ${item.title}` : "Show details"
+          }
+          className="min-w-0 truncate"
+        >
+          {lineText}
+        </NoticeText>
+      )}
       {item.actions ? (
         <span className="ms-1.5 flex shrink-0 items-baseline gap-2.5">{item.actions}</span>
       ) : null}

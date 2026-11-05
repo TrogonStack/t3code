@@ -31,6 +31,8 @@ import {
   formatModelSelectionEffort,
   isBackgroundWorkStopPending,
   presentPendingBackgroundWork,
+  resolveBackgroundTaskItem,
+  backgroundTaskCommandText,
   presentProviderGoal,
   presentRunStop,
   threadRuntimeHasInterruptibleRun,
@@ -644,5 +646,37 @@ describe("presentPendingBackgroundWork", () => {
       },
     ]);
     expect(presentation?.items[0]?.label).toBe("mv a.ts b.ts\ncat > b.ts <<'EOF'\nexport {};\nEOF");
+  });
+});
+
+describe("resolveBackgroundTaskItem", () => {
+  const item = (id: string, nativeId: string | null) => ({
+    id,
+    nativeItemRef: nativeId === null ? null : { nativeId },
+  });
+  const items = [item("item-a", "call_a"), item("item-b", "call_b"), item("task_c", null)];
+
+  it("prefers the launching native id, then the task id as native id, then the item id", () => {
+    expect(
+      resolveBackgroundTaskItem({ taskId: "call_a", launchNativeItemId: "call_b" }, items)?.id,
+    ).toBe("item-b");
+    const [presented] =
+      presentPendingBackgroundWork([
+        { taskId: "bg_1", kind: "command", launchNativeItemId: "call_b" },
+      ])?.items ?? [];
+    expect(presented && resolveBackgroundTaskItem(presented, items)?.id).toBe("item-b");
+    expect(resolveBackgroundTaskItem({ taskId: "call_a" }, items)?.id).toBe("item-a");
+    expect(resolveBackgroundTaskItem({ taskId: "task_c" }, items)?.id).toBe("task_c");
+    expect(resolveBackgroundTaskItem({ taskId: "missing" }, items)).toBeUndefined();
+  });
+
+  it("reads the command from command items and monitor tool input", () => {
+    expect(backgroundTaskCommandText({ type: "command_execution", input: "sleep 5" })).toBe(
+      "sleep 5",
+    );
+    expect(
+      backgroundTaskCommandText({ type: "dynamic_tool", input: { command: "tail -f log" } }),
+    ).toBe("tail -f log");
+    expect(backgroundTaskCommandText({ type: "dynamic_tool", input: { other: 1 } })).toBeNull();
   });
 });

@@ -3208,6 +3208,7 @@ function claudePendingBackgroundTask(input: {
   readonly description: string | undefined;
   // Undeclared SDK field: the subagent whose own background work this is.
   readonly parentTaskId: unknown;
+  readonly launchNativeItemId?: string | undefined;
 }): OrchestrationV2PendingBackgroundTask {
   return {
     taskId: input.taskId,
@@ -3221,6 +3222,9 @@ function claudePendingBackgroundTask(input: {
       : {}),
     ...(typeof input.parentTaskId === "string" && input.parentTaskId.trim().length > 0
       ? { parentTaskId: input.parentTaskId }
+      : {}),
+    ...(input.launchNativeItemId !== undefined && input.launchNativeItemId !== input.taskId
+      ? { launchNativeItemId: input.launchNativeItemId }
       : {}),
   };
 }
@@ -3265,6 +3269,7 @@ function claudePendingBackgroundTasksFromRoster(
 function parseClaudeBackgroundTaskEntry(
   entry: unknown,
   monitorTasks: ReadonlyMap<string, unknown>,
+  launchToolUseIds: ReadonlyMap<string, string>,
 ): OrchestrationV2PendingBackgroundTask | null {
   if (entry === null || typeof entry !== "object") {
     return null;
@@ -3285,6 +3290,7 @@ function parseClaudeBackgroundTaskEntry(
     startedByMonitor: monitorTasks.has(taskId),
     description: typeof description === "string" ? description : undefined,
     parentTaskId: Reflect.get(entry, "parent_task_id"),
+    launchNativeItemId: launchToolUseIds.get(taskId),
   });
 }
 
@@ -5141,6 +5147,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               Effect.asVoid,
             );
           });
+        // background_tasks_changed omits tool_use_id; remember the link from task_started.
+        const launchToolUseIdByTaskId = new Map<string, string>();
         const sdkMessageLock = yield* Semaphore.make(1);
         // Members can finish after the launching turn; retain state to emit each transition once.
         const workflowMemberStates = yield* Ref.make(
@@ -8790,7 +8798,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 task.nativeThreadId === input.nativeThreadId && !listedTaskIds.has(taskId),
             );
             for (const entry of roster) {
-              const task = parseClaudeBackgroundTaskEntry(entry, monitorTasks);
+              const task = parseClaudeBackgroundTaskEntry(
+                entry,
+                monitorTasks,
+                launchToolUseIdByTaskId,
+              );
               if (task !== null) {
                 nextTasks.push(task);
               }
@@ -8798,7 +8810,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             yield* replacePendingBackgroundTasks(input.nativeThreadId, nextTasks);
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_started") {
-            if (!isClaudeNonSubagentTask(message) || message.is_backgrounded === false) {
+            if (!isClaudeNonSubagentTask(message)) {
+              return false;
+            }
+            // A foreground task can be backgrounded later and then appear in the roster.
+            if (message.tool_use_id !== undefined) {
+              launchToolUseIdByTaskId.delete(message.task_id);
+              launchToolUseIdByTaskId.set(message.task_id, message.tool_use_id);
+              for (const oldest of launchToolUseIdByTaskId.keys()) {
+                if (launchToolUseIdByTaskId.size <= 64) break;
+                launchToolUseIdByTaskId.delete(oldest);
+              }
+            }
+            if (message.is_backgrounded === false) {
               return false;
             }
             yield* upsertPendingBackgroundTask(
@@ -8814,11 +8838,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 description:
                   typeof message.description === "string" ? message.description : undefined,
                 parentTaskId: Reflect.get(message, "parent_task_id"),
+                launchNativeItemId: message.tool_use_id,
               }),
             );
             rosterChanged = true;
           } else if (message.type === "system" && message.subtype === "task_notification") {
             yield* endClaudeMonitorTasks((taskId) => taskId === message.task_id);
+            launchToolUseIdByTaskId.delete(message.task_id);
             const removed = yield* clearPendingBackgroundTask(
               input.nativeThreadId,
               message.task_id,
