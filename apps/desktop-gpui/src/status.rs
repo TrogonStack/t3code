@@ -1,3 +1,4 @@
+use crate::wire::generated::ThreadsEntryStatus;
 use std::fmt;
 
 /// What the window shows about the managed server and its socket.
@@ -6,18 +7,31 @@ pub enum Status {
     NotConnected,
     Starting,
     Connecting,
-    /// Socket is up. Counts stay `None` until the first shell snapshot lands.
+    /// Socket is up. `shell` stays `None` until the first shell snapshot lands.
     Connected {
         label: String,
-        counts: Option<Counts>,
+        shell: Option<ShellView>,
     },
     Failed(String),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Counts {
+/// What the window needs from the shell state, newest thread first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ShellView {
     pub projects: usize,
     pub threads: usize,
+    pub first_project: Option<String>,
+    pub rows: Vec<ThreadRow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThreadRow {
+    pub id: String,
+    pub project: String,
+    pub title: String,
+    pub branch: Option<String>,
+    pub status: ThreadsEntryStatus,
+    pub updated_at: String,
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -34,13 +48,12 @@ impl fmt::Display for Status {
             Self::NotConnected => f.write_str("Not connected"),
             Self::Starting => f.write_str("Starting server..."),
             Self::Connecting => f.write_str("Connecting..."),
+            Self::Connected { label, shell: None } => write!(f, "Connected to {label}"),
             Self::Connected {
                 label,
-                counts: None,
-            } => write!(f, "Connected to {label}"),
-            Self::Connected {
-                label,
-                counts: Some(Counts { projects, threads }),
+                shell: Some(ShellView {
+                    projects, threads, ..
+                }),
             } => write!(
                 f,
                 "Connected to {label} \u{b7} {projects} {} \u{b7} {threads} {}",
@@ -68,14 +81,15 @@ mod tests {
         let label = "Local".to_owned();
         let waiting = Status::Connected {
             label: label.clone(),
-            counts: None,
+            shell: None,
         };
         assert_eq!(waiting.to_string(), "Connected to Local");
         let known = Status::Connected {
             label: label.clone(),
-            counts: Some(Counts {
+            shell: Some(ShellView {
                 projects: 2,
                 threads: 14,
+                ..Default::default()
             }),
         };
         assert_eq!(
@@ -84,9 +98,10 @@ mod tests {
         );
         let single = Status::Connected {
             label,
-            counts: Some(Counts {
+            shell: Some(ShellView {
                 projects: 1,
                 threads: 1,
+                ..Default::default()
             }),
         };
         assert_eq!(

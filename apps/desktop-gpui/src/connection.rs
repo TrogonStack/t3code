@@ -3,7 +3,7 @@
 use crate::auth::{self, AuthError, Credential};
 use crate::rpc::{Event, PING_FRAME, Session, SubscribeShell};
 use crate::shell::ShellState;
-use crate::status::{Counts, Status, StatusSender, publish};
+use crate::status::{Status, StatusSender, publish};
 use crate::wire::{ShellItem, SubscribeShellPayload};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
@@ -79,7 +79,7 @@ pub async fn run(http_base: &str, credential: &Credential, label: &str, status: 
                     status,
                     Status::Connected {
                         label: label.to_owned(),
-                        counts: None,
+                        shell: None,
                     },
                 );
                 backoff.reset();
@@ -196,10 +196,7 @@ fn handle(
                         status,
                         Status::Connected {
                             label: label.to_owned(),
-                            counts: Some(Counts {
-                                projects: shell.project_count(),
-                                threads: shell.thread_count(),
-                            }),
+                            shell: Some(shell.view()),
                         },
                     );
                 }

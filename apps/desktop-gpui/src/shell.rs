@@ -1,6 +1,7 @@
 //! The shell read model built from `orchestration.subscribeShell`, mirroring
 //! `packages/client-runtime/src/state/shellReducer.ts` for what this client shows.
 
+use crate::status::{ShellView, ThreadRow};
 use crate::wire::generated::{
     OrchestrationSubscribeShellSuccess as Item,
     OrchestrationSubscribeShellSuccessVariant4Location as Location,
@@ -30,6 +31,46 @@ impl ShellState {
     /// Active threads only: the archive has its own query.
     pub fn thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Threads newest first (ties by id); the first project is the oldest by creation.
+    pub fn view(&self) -> ShellView {
+        let mut rows: Vec<ThreadRow> = self
+            .threads
+            .values()
+            .map(|thread| ThreadRow {
+                id: thread.id.clone(),
+                project: self
+                    .projects
+                    .get(&thread.project_id)
+                    .map(|project| project.title.clone())
+                    .unwrap_or_default(),
+                title: thread.title.clone(),
+                branch: thread.branch.clone(),
+                status: thread.status,
+                updated_at: thread.updated_at.clone(),
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        let first_project = self
+            .projects
+            .values()
+            .min_by(|a, b| {
+                a.created_at
+                    .cmp(&b.created_at)
+                    .then_with(|| a.id.cmp(&b.id))
+            })
+            .map(|project| project.title.clone());
+        ShellView {
+            projects: self.project_count(),
+            threads: self.thread_count(),
+            first_project,
+            rows,
+        }
     }
 
     /// Applies one stream item. Returns whether the counts or sync marker may have changed.
@@ -174,6 +215,21 @@ mod tests {
         });
         assert!(state.apply(serde_json::from_value(removed_project).unwrap()));
         assert_eq!(state.project_count(), 0);
+    }
+
+    #[test]
+    fn view_lists_newest_threads_first_with_project_names() {
+        let mut state = seeded();
+        state.apply(with(THREAD_UPDATED, |value| {
+            value["thread"]["id"] = "thread-new".into();
+            value["thread"]["updatedAt"] = "2026-07-01T00:00:00.000Z".into();
+        }));
+        let view = state.view();
+        assert_eq!((view.projects, view.threads), (1, 2));
+        assert_eq!(view.first_project.as_deref(), Some("Project"));
+        let ids: Vec<_> = view.rows.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, ["thread-new", "thread-v2"]);
+        assert!(view.rows.iter().all(|row| row.project == "Project"));
     }
 
     #[test]

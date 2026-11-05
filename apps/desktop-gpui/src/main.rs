@@ -5,35 +5,18 @@ mod rpc;
 mod server;
 mod shell;
 mod status;
+mod ui;
 mod wire;
 
 use config::{Attach, Config};
-use gpui::{
-    App, Bounds, Context, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
-};
+use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui_component::{Root, Theme, ThemeMode, TitleBar};
+use gpui_kit_assets::Assets;
 use gpui_platform::application;
 use server::Supervisor;
 use status::Status;
 use std::rc::Rc;
-
-struct StatusView {
-    status: SharedString,
-}
-
-impl Render for StatusView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex()
-            .size_full()
-            .justify_center()
-            .items_center()
-            .bg(rgb(0x1a1a1a))
-            .text_color(rgb(0xe6e6e6))
-            .text_xl()
-            .child(self.status.clone())
-    }
-}
+use ui::MainView;
 
 fn main() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -72,7 +55,9 @@ fn main() {
         Status::NotConnected
     };
 
-    application().run(move |cx: &mut App| {
+    application().with_assets(Assets).run(move |cx: &mut App| {
+        gpui_component::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
         if let Some(supervisor) = supervisor {
             // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
             cx.on_app_quit(move |_| {
@@ -85,30 +70,23 @@ fn main() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("T3 Code".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                ..TitleBar::window_options()
             },
-            |_, cx| {
-                cx.new(|cx| {
+            |window, cx| {
+                let view = cx.new(|cx| {
                     cx.spawn(async move |this, cx| {
                         while let Ok(status) = status_rx.recv().await {
-                            let updated = this.update(cx, |view: &mut StatusView, cx| {
-                                view.status = status.to_string().into();
-                                cx.notify();
-                            });
+                            let updated = this
+                                .update(cx, |view: &mut MainView, cx| view.set_status(status, cx));
                             if updated.is_err() {
                                 break;
                             }
                         }
                     })
                     .detach();
-                    StatusView {
-                        status: initial.to_string().into(),
-                    }
-                })
+                    MainView::new(initial, window, cx)
+                });
+                cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .expect("failed to open the main window");

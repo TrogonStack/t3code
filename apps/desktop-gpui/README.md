@@ -2,7 +2,7 @@
 
 Native desktop client written in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). It is meant to replace `apps/desktop` (Electron) over time and never embeds Node or Chromium. It starts the T3 server as a child process, authenticates without pairing, and opens the RPC WebSocket.
 
-Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. There are no screens yet.
+Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. Once connected, it draws a static skeleton of the main screen with [gpui-component](https://github.com/longbridge/gpui-component): a thread list (newest first) and an empty composer. Nothing is interactive yet.
 
 ## Run
 
@@ -63,7 +63,7 @@ Known gaps: typify cannot flatten the `projectIcon` union (an `anyOf` with a `{k
 
 ## Notes
 
-- `gpui` and `gpui_platform` are pinned to one `zed-industries/zed` commit in `Cargo.toml`. Bump both together.
+- `gpui` and `gpui_platform` are the crates.io packages `gpui-pre` and `gpui-pre-platform`, pinned to the exact version `gpui-component` requires. Bump them together with `gpui-component` and `gpui-kit-assets`.
 - macOS needs the Xcode Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`) and the `font-kit` feature, which is enabled.
 - Server spawning uses a unix pipe for fd 3, so it is macOS and Linux only for now.
 - CI does not build this crate yet. GPUI needs a macOS runner or Linux system libraries (wayland, x11, xkbcommon, vulkan).
