@@ -2,11 +2,14 @@ import { useAtomValue } from "@effect/atom-react";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  backgroundTaskCommandText,
   presentPendingBackgroundWork,
+  resolveBackgroundTaskItem,
   type PendingBackgroundWorkItem,
 } from "@t3tools/client-runtime/state/thread-execution";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ThreadId, TurnItemId } from "@t3tools/contracts";
 import * as Haptics from "expo-haptics";
+import { useState } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { ScreenStack } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,7 +21,10 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
 import { environmentThreadShells } from "../../state/threads";
+import { useQuietThreadStructure } from "../../state/use-thread-detail";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { ThreadCommandOutput, useCommandOutputStreaming } from "./thread-command-output";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 const KIND_LABELS = {
@@ -39,6 +45,8 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
     environmentThreadShells.threadShellAtom(scopeThreadRef(target.environmentId, target.threadId)),
   );
   const presentation = presentPendingBackgroundWork(thread?.pendingBackgroundTasks ?? []);
+  const turnItems = useQuietThreadStructure(scopeThreadRef(target.environmentId, target.threadId))
+    ?.projection.turnItems;
   const openThread = (threadId: ThreadId) => {
     void Haptics.selectionAsync();
     // A thread replaces the leaf sheet so workspace back navigation still works.
@@ -59,9 +67,21 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
           Nothing running in the background.
         </Text>
       ) : (
-        presentation.items.map((item) => (
-          <BackgroundWorkRow key={item.taskId} item={item} onOpen={openThread} />
-        ))
+        presentation.items.map((item) => {
+          const launching =
+            turnItems === undefined ? undefined : resolveBackgroundTaskItem(item, turnItems);
+          return (
+            <BackgroundWorkRow
+              key={item.taskId}
+              item={item}
+              command={launching ? backgroundTaskCommandText(launching) : null}
+              outputItemId={launching?.type === "command_execution" ? launching.id : null}
+              environmentId={target.environmentId}
+              threadId={target.threadId}
+              onOpen={openThread}
+            />
+          );
+        })
       )}
     </ScrollView>
   );
@@ -105,10 +125,18 @@ export function ThreadBackgroundWorkSheet({ route }: StaticScreenProps<Backgroun
 
 function BackgroundWorkRow(props: {
   readonly item: PendingBackgroundWorkItem;
+  readonly command: string | null;
+  readonly outputItemId: TurnItemId | null;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
-  const { item } = props;
+  const { item, command } = props;
   const childThreadId = item.childThreadId;
+  const [expanded, setExpanded] = useState(false);
+  const { themeAppearance } = useAppearancePreferences();
+  const streamsOutput = useCommandOutputStreaming(props.environmentId);
+  const canExpand = props.outputItemId !== null && streamsOutput;
   const row = (
     <View className="flex-row items-center gap-3 border-b border-border py-3.5">
       <SymbolView
@@ -120,24 +148,59 @@ function BackgroundWorkRow(props: {
         type="monochrome"
       />
       <View className="min-w-0 flex-1">
-        <Text className="font-t3-medium text-sm text-foreground">{item.label}</Text>
+        <Text
+          selectable={command !== null}
+          className={
+            command === null
+              ? "font-t3-medium text-sm text-foreground"
+              : "font-mono text-xs text-foreground"
+          }
+        >
+          {command ?? item.label}
+        </Text>
         <Text className="text-xs text-foreground-muted">{KIND_LABELS[item.kind]}</Text>
       </View>
-      {childThreadId === undefined ? null : (
-        <SymbolView name="chevron.right" size={12} tintColorClassName="accent-icon-subtle" />
-      )}
+      {childThreadId !== undefined || canExpand ? (
+        <SymbolView
+          name={childThreadId === undefined && expanded ? "chevron.down" : "chevron.right"}
+          size={12}
+          tintColorClassName="accent-icon-subtle"
+        />
+      ) : null}
     </View>
   );
-  return childThreadId === undefined ? (
-    <View accessible>{row}</View>
-  ) : (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityLabel={`Open subagent ${item.label}`}
-      onPress={() => props.onOpen(childThreadId)}
-      className="active:opacity-70"
-    >
-      {row}
-    </Pressable>
+  if (childThreadId !== undefined) {
+    return (
+      <Pressable
+        accessibilityRole="link"
+        accessibilityLabel={`Open subagent ${item.label}`}
+        onPress={() => props.onOpen(childThreadId)}
+        className="active:opacity-70"
+      >
+        {row}
+      </Pressable>
+    );
+  }
+  if (!canExpand || props.outputItemId === null) return <View accessible>{row}</View>;
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={{ expanded }}
+        accessibilityLabel={`${expanded ? "Hide" : "Show"} output of ${item.label}`}
+        onPress={() => setExpanded((value) => !value)}
+        className="active:opacity-70"
+      >
+        {row}
+      </Pressable>
+      {expanded ? (
+        <ThreadCommandOutput
+          environmentId={props.environmentId}
+          threadId={props.threadId}
+          itemId={props.outputItemId}
+          themeAppearance={themeAppearance}
+        />
+      ) : null}
+    </View>
   );
 }
