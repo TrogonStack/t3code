@@ -110,9 +110,9 @@ impl ProjectEntry {
         active_id.filter(|id| self.contains(id)).unwrap_or(&self.id)
     }
 
-    /// The badge text color for the theme; the badge background is this at 14% alpha.
+    /// The badge text color for the theme (gray for the scratch project, whose server-set icon is gray); the badge background is this at 14% alpha.
     pub fn color_hex(&self, dark: bool) -> u32 {
-        let (_, light, night) = COLORS[self.color];
+        let (_, light, night) = COLORS[if self.scratch { 0 } else { self.color }];
         if dark { night } else { light }
     }
 }

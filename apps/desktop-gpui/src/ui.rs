@@ -1,3 +1,4 @@
+use crate::assets::MESSAGE_SQUARE_DASHED;
 use crate::connection::{Action, ActionSender};
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::status::{Section, ShellView, Status, ThreadRow};
@@ -9,7 +10,6 @@ use gpui::{
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
@@ -22,6 +22,8 @@ use gpui_component::{
 
 const SIDEBAR_WIDTH: f32 = 300.;
 const ROW_HEIGHT: f32 = 68.;
+const NO_PROJECT: &str = "No project";
+const HEADLINE_SCRATCH: &str = "What should we work on?";
 
 pub struct MainView {
     status: Status,
@@ -179,6 +181,7 @@ impl MainView {
                 .into_any_element();
         };
         let active = active_project(self.selected_project.as_deref(), shell);
+        let scratch = active.is_some_and(|entry| entry.scratch);
         let project = active.map_or_else(|| "your project".to_owned(), |entry| entry.title.clone());
         v_flex()
             .flex_1()
@@ -192,17 +195,14 @@ impl MainView {
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        Breadcrumb::new()
-                            .child(BreadcrumbItem::new(project.clone()))
-                            .child(BreadcrumbItem::new("New thread")),
-                    ),
+                    .child(self.breadcrumb(active, cx)),
             )
             .child(
                 centered(cx)
                     .gap_6()
                     .child(self.hero(
                         &project,
+                        scratch,
                         selected_id(self, active).map(str::to_owned),
                         projects::with_remote_members(&shell.project_entries, &self.environments),
                         cx,
@@ -212,16 +212,82 @@ impl MainView {
             .into_any_element()
     }
 
+    fn breadcrumb(
+        &self,
+        active: Option<&ProjectEntry>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let (foreground, muted, dark) = (theme.foreground, theme.muted_foreground, theme.is_dark());
+        let mono = theme.mono_font_family.clone();
+        let project = active.map(|entry| {
+            let color: Hsla = rgb(entry.color_hex(dark)).into();
+            let icon = if entry.scratch {
+                Icon::empty()
+                    .path(MESSAGE_SQUARE_DASHED)
+                    .size(px(14.))
+                    .text_color(color)
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .size(px(14.))
+                    .rounded(px(3.5))
+                    .bg(color.opacity(0.14))
+                    .text_color(color)
+                    .text_size(px(7.21875))
+                    .font_weight(FontWeight::BOLD)
+                    .font_family(mono)
+                    .child(entry.initials.clone())
+                    .into_any_element()
+            };
+            h_flex()
+                .gap_3()
+                .child(
+                    h_flex()
+                        .id("breadcrumb-project")
+                        .gap(px(6.))
+                        .min_w_0()
+                        .text_color(muted)
+                        .hover(move |style| style.text_color(foreground))
+                        .child(icon)
+                        .child(
+                            div()
+                                .max_w(px(160.))
+                                .truncate()
+                                .child(project_label(Some(entry))),
+                        ),
+                )
+                .child(div().flex_shrink_0().text_color(muted).child("/"))
+        });
+        h_flex()
+            .gap_3()
+            .items_center()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .children(project)
+            .child(div().text_color(foreground).child("New thread"))
+    }
+
     fn hero(
         &self,
         project: &str,
+        scratch: bool,
         active_id: Option<String>,
         entries: Vec<ProjectEntry>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
+        let link_view = view.clone();
         let foreground = cx.theme().foreground;
         let (actions, can_pin) = (self.actions.clone(), self.can_pin());
+        let scratch_id = self
+            .shell()
+            .and_then(|shell| scratch_entry(&shell.project_entries))
+            .map(|entry| entry.id.clone());
         let order = self.picker_order.clone();
         let search = self.project_search.clone();
         let picker = Popover::new("project-picker")
@@ -240,9 +306,10 @@ impl MainView {
                     });
                 }
             })
-            .trigger(ProjectTrigger::new(project))
-            .content(move |_, _, cx| {
+            .trigger(ProjectTrigger::new(project, scratch))
+            .content(move |_, window, cx| {
                 let query = search.read(cx).value();
+                let searching = search.focus_handle(cx).is_focused(window);
                 let mut listed = projects::picker_entries(&entries, active_id.as_deref(), &query);
                 if let Some(order) = &order {
                     listed = projects::order_while_open(listed, order);
@@ -251,7 +318,7 @@ impl MainView {
                 let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
                 let (hover, selected) = (theme.list_hover, theme.list_active);
                 let mono = theme.mono_font_family.clone();
-                let border = theme.border;
+                let (border, ring) = (theme.border, theme.ring);
                 let rows = listed.iter().enumerate().map(|(index, entry)| {
                     let (view, id) = (view.clone(), entry.target(active_id.as_deref()).to_owned());
                     let (actions, pin_ids) = (actions.clone(), entry.member_ids.clone());
@@ -311,19 +378,34 @@ impl MainView {
                             });
                         })
                 });
+                // The web's `ComboboxPopup` (`w-72`, at most 23rem tall) and `ComboboxSearchInput`.
                 v_flex()
-                    .w(px(400.))
+                    .w(px(288.))
+                    .rounded_lg()
+                    .overflow_hidden()
                     .child(
-                        h_flex().px_3().border_b_1().border_color(border).child(
-                            Input::new(&search)
-                                .appearance(false)
-                                .prefix(Icon::new(IconName::Search)),
+                        div().px_3().pt(px(10.)).child(
+                            h_flex()
+                                .pb(px(6.))
+                                .border_b_1()
+                                .border_color(if searching { ring } else { border.opacity(0.7) })
+                                .child(
+                                    Input::new(&search)
+                                        .appearance(false)
+                                        .h(px(26.))
+                                        .px_0()
+                                        .prefix(
+                                            Icon::new(IconName::Search)
+                                                .size_4()
+                                                .text_color(muted.opacity(0.55)),
+                                        ),
+                                ),
                         ),
                     )
                     .child(
                         v_flex()
                             .id("project-list")
-                            .max_h(px(320.))
+                            .max_h(px(325.))
                             .overflow_y_scroll()
                             .p_1()
                             .children(rows)
@@ -338,30 +420,52 @@ impl MainView {
                             }),
                     )
             });
-        v_flex()
-            .items_center()
-            .gap_1()
-            .child(
-                h_flex()
-                    .items_center()
-                    .text_2xl()
-                    .child("What should we build in")
-                    .child(picker)
-                    .child("?"),
-            )
-            .child(
-                div()
-                    .id("start-without-project")
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().muted_foreground)
-                    .cursor_pointer()
-                    .hover(|style| style.underline().text_color(foreground))
-                    .tooltip(tooltip(Kbd::format(
-                        &Keystroke::parse("alt-cmd-n").expect("valid keystroke"),
-                    )))
-                    .child("or start without a project"),
-            )
+        let (heading, below) = if scratch {
+            let heading = h_flex()
+                .items_center()
+                .text_3xl()
+                .text_color(foreground)
+                .child(HEADLINE_SCRATCH)
+                .into_any_element();
+            (heading, picker.into_any_element())
+        } else {
+            let heading = h_flex()
+                .items_center()
+                .text_2xl()
+                .child("What should we build in")
+                .child(picker)
+                .child("?")
+                .into_any_element();
+            let link = div()
+                .id("start-without-project")
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(cx.theme().muted_foreground)
+                .cursor_pointer()
+                .hover(|style| style.underline().text_color(foreground))
+                .tooltip(tooltip(Kbd::format(
+                    &Keystroke::parse("alt-cmd-n").expect("valid keystroke"),
+                )))
+                .on_click(move |_, _, cx| {
+                    let Some(id) = scratch_id.clone() else { return };
+                    link_view.update(cx, |this, cx| {
+                        this.selected_project = Some(id);
+                        this.picker_open = false;
+                        cx.notify();
+                    });
+                })
+                .child("or start without a project")
+                .into_any_element();
+            (heading, link)
+        };
+        v_flex().items_center().child(heading).child(
+            h_flex()
+                .mt_2()
+                .h_6()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .child(below),
+        )
     }
 
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -406,16 +510,19 @@ impl MainView {
 }
 
 /// The project name as plain heading text that underlines on hover and while its picker is open.
+/// Under a scratch draft it is the `InlineButton` `picker` tone at `text-sm`, `font-medium`.
 #[derive(IntoElement)]
 struct ProjectTrigger {
     name: String,
+    scratch: bool,
     open: bool,
 }
 
 impl ProjectTrigger {
-    fn new(name: &str) -> Self {
+    fn new(name: &str, scratch: bool) -> Self {
         Self {
-            name: name.to_owned(),
+            name: if scratch { NO_PROJECT } else { name }.to_owned(),
+            scratch,
             open: false,
         }
     }
@@ -443,19 +550,36 @@ impl Selectable for ProjectTrigger {
 impl RenderOnce for ProjectTrigger {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let name = self.name.clone();
-        div()
+        let trigger = div()
             .id("project")
-            .ml_2()
             .min_w_0()
             .max_w_full()
             .truncate()
-            .text_2xl()
             .cursor_pointer()
             .when(self.open, |name| name.underline())
-            .hover(|style| style.underline())
-            .tooltip(tooltip(name))
-            .child(self.name)
+            .hover(|style| style.underline());
+        if self.scratch {
+            trigger.font_weight(FontWeight::MEDIUM).child(self.name)
+        } else {
+            trigger
+                .ml_2()
+                .text_2xl()
+                .tooltip(tooltip(name))
+                .child(self.name)
+        }
     }
+}
+
+fn project_label(entry: Option<&ProjectEntry>) -> String {
+    match entry {
+        Some(entry) if entry.scratch => NO_PROJECT.to_owned(),
+        Some(entry) => entry.title.clone(),
+        None => String::new(),
+    }
+}
+
+fn scratch_entry(entries: &[ProjectEntry]) -> Option<&ProjectEntry> {
+    entries.iter().find(|entry| entry.scratch)
 }
 
 /// The web's `TooltipPopup` sizing: `text-xs`, `px-2 py-1`, `rounded-md`.
@@ -823,6 +947,20 @@ mod tests {
             ]
         );
         assert!(sidebar_items(&[], [true; 3]).is_empty());
+    }
+
+    #[test]
+    fn scratch_reads_as_no_project_and_is_found_in_the_entries() {
+        let mut none = entry("none", true);
+        none.title = "Whatever the server titled it".to_owned();
+        assert_eq!(project_label(Some(&none)), "No project");
+        assert_eq!(project_label(Some(&entry("alpha", false))), "alpha");
+        assert_eq!(project_label(None), "");
+        let entries = [entry("alpha", false), none];
+        assert_eq!(scratch_entry(&entries).map(|e| e.id.as_str()), Some("none"));
+        assert!(scratch_entry(&entries[..1]).is_none());
+        assert_eq!(ProjectTrigger::new("alpha", true).name, "No project");
+        assert_eq!(ProjectTrigger::new("alpha", false).name, "alpha");
     }
 
     #[test]
