@@ -11,4 +11,15 @@ describe("ProviderInstanceEnvironmentVariable literals", () => {
       decodeEnvironmentVariable({ name: "API_KEY", value: "op://Private/item/field" }).value,
     ).toBe("op://Private/item/field");
   });
+
+  it("treats a stored reference as sensitive even when the flag is missing or false", () => {
+    const secret = { provider: "onepassword", reference: "op://Private/item/field" };
+    expect(decodeEnvironmentVariable({ name: "API_KEY", secret })).toMatchObject({
+      value: secret,
+      sensitive: true,
+    });
+    expect(decodeEnvironmentVariable({ name: "API_KEY", sensitive: false, secret }).sensitive).toBe(
+      true,
+    );
+  });
 });
