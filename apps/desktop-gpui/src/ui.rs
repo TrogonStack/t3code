@@ -220,6 +220,7 @@ impl MainView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
+        let foreground = cx.theme().foreground;
         let (actions, can_pin) = (self.actions.clone(), self.can_pin());
         let order = self.picker_order.clone();
         let search = self.project_search.clone();
@@ -352,15 +353,13 @@ impl MainView {
                 div()
                     .id("start-without-project")
                     .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(cx.theme().muted_foreground)
                     .cursor_pointer()
-                    .hover(|style| style.underline())
-                    .tooltip(|window, cx| {
-                        Tooltip::element(|_, _| {
-                            Kbd::new(Keystroke::parse("alt-cmd-n").expect("valid keystroke"))
-                        })
-                        .build(window, cx)
-                    })
+                    .hover(|style| style.underline().text_color(foreground))
+                    .tooltip(tooltip(Kbd::format(
+                        &Keystroke::parse("alt-cmd-n").expect("valid keystroke"),
+                    )))
                     .child("or start without a project"),
             )
     }
@@ -384,12 +383,16 @@ impl MainView {
                 h_flex()
                     .justify_between()
                     .child(
-                        Button::new("attach")
-                            .ghost()
-                            .small()
-                            .icon(gpui_kit_assets::IconName::Paperclip)
-                            .tooltip("Attach files")
-                            .on_click(|_, _, _| {}),
+                        div()
+                            .id("attach-tooltip")
+                            .tooltip(tooltip("Attach files"))
+                            .child(
+                                Button::new("attach")
+                                    .ghost()
+                                    .small()
+                                    .icon(gpui_kit_assets::IconName::Paperclip)
+                                    .on_click(|_, _, _| {}),
+                            ),
                     )
                     .child(
                         Button::new("send")
@@ -439,7 +442,7 @@ impl Selectable for ProjectTrigger {
 
 impl RenderOnce for ProjectTrigger {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let tooltip = self.name.clone();
+        let name = self.name.clone();
         div()
             .id("project")
             .ml_2()
@@ -450,8 +453,22 @@ impl RenderOnce for ProjectTrigger {
             .cursor_pointer()
             .when(self.open, |name| name.underline())
             .hover(|style| style.underline())
-            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .tooltip(tooltip(name))
             .child(self.name)
+    }
+}
+
+/// The web's `TooltipPopup` sizing: `text-xs`, `px-2 py-1`, `rounded-md`.
+fn tooltip(
+    text: impl Into<gpui::SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    let text = text.into();
+    move |window, cx| {
+        Tooltip::new(text.clone())
+            .text_xs()
+            .py_1()
+            .rounded(px(6.))
+            .build(window, cx)
     }
 }
 
@@ -480,7 +497,7 @@ fn environment_badge(
         div()
             .id(("environment", index))
             .flex_shrink_0()
-            .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+            .tooltip(tooltip(text))
             .child(Icon::new(machine_icon(machine)).small().text_color(muted)),
     )
 }
@@ -497,10 +514,10 @@ fn pin_button(
 ) -> impl IntoElement + use<> {
     let pinned = entry.pinned;
     let icon = |name| Icon::new(name).small();
-    Button::new(("pin", index))
+    let hint = tooltip(projects::pin_tooltip(&entry.title, pinned));
+    let button = Button::new(("pin", index))
         .ghost()
         .xsmall()
-        .tooltip(projects::pin_tooltip(&entry.title, pinned))
         .when(!pinned, |button| {
             button
                 .invisible()
@@ -535,7 +552,8 @@ fn pin_button(
                     eprintln!("[ui] could not queue the pin request");
                 }
             }
-        })
+        });
+    div().id(("pin-tooltip", index)).tooltip(hint).child(button)
 }
 
 /// The picked project id while its row still exists, else the active row's target.
