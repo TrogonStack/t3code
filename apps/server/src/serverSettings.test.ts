@@ -1665,12 +1665,12 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
             {
               name: "FROM_PROVIDER",
               value: { provider: "homelab", reference: "codex#key" },
-              sensitive: false,
+              sensitive: true,
             },
             {
               name: "FROM_ACCOUNT",
               value: { provider: synthesized, reference: "op://Home/Codex/key" },
-              sensitive: false,
+              sensitive: true,
             },
             { name: "PLAIN", value: "literal", sensitive: false },
           ],
