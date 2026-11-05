@@ -15,7 +15,7 @@ use gpui_component::{
 };
 
 const SIDEBAR_WIDTH: f32 = 300.;
-const ROW_HEIGHT: f32 = 60.;
+const ROW_HEIGHT: f32 = 68.;
 
 pub struct MainView {
     status: Status,
@@ -104,8 +104,10 @@ impl MainView {
         v_flex()
             .flex_1()
             .min_w_0()
+            .h_full()
             .child(
                 h_flex()
+                    .flex_shrink_0()
                     .h(px(40.))
                     .px_4()
                     .items_center()
@@ -160,7 +162,9 @@ impl MainView {
 fn centered(cx: &Context<MainView>) -> gpui::Div {
     v_flex()
         .flex_1()
-        .size_full()
+        .min_h_0()
+        .w_full()
+        .px_6()
         .items_center()
         .justify_center()
         .text_color(cx.theme().foreground)
@@ -181,8 +185,10 @@ fn thread_row(row: &ThreadRow, muted: Hsla, hover: Hsla) -> impl IntoElement + u
     v_flex()
         .id(row.id.clone())
         .h(px(ROW_HEIGHT))
+        .w_full()
+        .overflow_hidden()
         .px_2()
-        .gap_0p5()
+        .py_1()
         .justify_center()
         .rounded_md()
         .hover(|style| style.bg(hover))
@@ -196,9 +202,15 @@ fn thread_row(row: &ThreadRow, muted: Hsla, hover: Hsla) -> impl IntoElement + u
         .child(
             h_flex()
                 .gap_2()
-                .justify_between()
-                .child(div().text_sm().truncate().child(row.title.clone()))
-                .children(status_tag(row.status)),
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .child(row.title.clone()),
+                )
+                .children(status_tag(row.status).map(|tag| div().flex_shrink_0().child(tag))),
         )
         .children(row.branch.as_ref().map(|branch| {
             div()
