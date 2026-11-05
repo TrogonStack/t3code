@@ -4,9 +4,9 @@ use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::status::{Section, ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, Focusable as _, FontWeight, Hsla, IntoElement,
-    Keystroke, ParentElement, Render, RenderOnce, Styled, UniformListScrollHandle, Window, div,
-    prelude::*, px, rgb, uniform_list,
+    Anchor, AnyElement, App, Bounds, Context, Entity, Focusable as _, FontWeight, Hsla,
+    IntoElement, Keystroke, ParentElement, Pixels, Render, RenderOnce, Styled,
+    UniformListScrollHandle, Window, canvas, div, prelude::*, px, rgb, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -19,11 +19,18 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use std::{cell::Cell, rc::Rc};
 
 const SIDEBAR_WIDTH: f32 = 300.;
 const ROW_HEIGHT: f32 = 68.;
 const NO_PROJECT: &str = "No project";
 const HEADLINE_SCRATCH: &str = "What should we work on?";
+/// The web's `ComboboxPopup` cap, `max-h-[min(var(--available-height),23rem)]`.
+const PICKER_MAX_HEIGHT: f32 = 368.;
+/// `ComboboxSearchInput`: `pt-2.5`, a 26px input, `pb-1.5` and its 1px border.
+const PICKER_SEARCH_HEIGHT: f32 = 43.;
+/// The popover's 4px offset from the trigger plus the positioner's 4px viewport margin.
+const PICKER_GAP: f32 = 8.;
 
 pub struct MainView {
     status: Status,
@@ -35,6 +42,8 @@ pub struct MainView {
     shelves: [bool; 3],
     selected_project: Option<String>,
     picker_open: bool,
+    /// Last painted trigger bounds, so the popup can shrink to fit below it as on the web.
+    picker_trigger: Rc<Cell<Bounds<Pixels>>>,
     picker_order: Option<Vec<String>>,
     /// The other saved environments, by id.
     environments: Vec<EnvironmentProjects>,
@@ -69,6 +78,7 @@ impl MainView {
             shelves: [false; 3],
             selected_project: None,
             picker_open: false,
+            picker_trigger: Rc::default(),
             picker_order: None,
             environments: Vec::new(),
             actions,
@@ -290,6 +300,7 @@ impl MainView {
             .map(|entry| entry.id.clone());
         let order = self.picker_order.clone();
         let search = self.project_search.clone();
+        let trigger_bounds = self.picker_trigger.clone();
         let picker = Popover::new("project-picker")
             .anchor(Anchor::TopCenter)
             .open(self.picker_open)
@@ -306,10 +317,18 @@ impl MainView {
                     });
                 }
             })
-            .trigger(ProjectTrigger::new(project, scratch))
+            .trigger(ProjectTrigger::new(
+                project,
+                scratch,
+                trigger_bounds.clone(),
+            ))
             .content(move |_, window, cx| {
                 let query = search.read(cx).value();
                 let searching = search.focus_handle(cx).is_focused(window);
+                // Shrinking keeps the positioner from flipping the popup over the headline.
+                let below = window.viewport_size().height - trigger_bounds.get().bottom();
+                let list_height =
+                    (below - px(PICKER_GAP)).min(px(PICKER_MAX_HEIGHT)) - px(PICKER_SEARCH_HEIGHT);
                 let mut listed = projects::picker_entries(&entries, active_id.as_deref(), &query);
                 if let Some(order) = &order {
                     listed = projects::order_while_open(listed, order);
@@ -405,7 +424,7 @@ impl MainView {
                     .child(
                         v_flex()
                             .id("project-list")
-                            .max_h(px(325.))
+                            .max_h(list_height.max(px(0.)))
                             .overflow_y_scroll()
                             .p_1()
                             .children(rows)
@@ -516,14 +535,16 @@ struct ProjectTrigger {
     name: String,
     scratch: bool,
     open: bool,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 impl ProjectTrigger {
-    fn new(name: &str, scratch: bool) -> Self {
+    fn new(name: &str, scratch: bool, bounds: Rc<Cell<Bounds<Pixels>>>) -> Self {
         Self {
             name: if scratch { NO_PROJECT } else { name }.to_owned(),
             scratch,
             open: false,
+            bounds,
         }
     }
 }
@@ -550,8 +571,15 @@ impl Selectable for ProjectTrigger {
 impl RenderOnce for ProjectTrigger {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let name = self.name.clone();
+        let bounds = self.bounds;
         let trigger = div()
             .id("project")
+            .relative()
+            .child(
+                canvas(move |rect, _, _| bounds.set(rect), |_, _, _, _| {})
+                    .absolute()
+                    .inset_0(),
+            )
             .min_w_0()
             .max_w_full()
             .truncate()
@@ -959,8 +987,14 @@ mod tests {
         let entries = [entry("alpha", false), none];
         assert_eq!(scratch_entry(&entries).map(|e| e.id.as_str()), Some("none"));
         assert!(scratch_entry(&entries[..1]).is_none());
-        assert_eq!(ProjectTrigger::new("alpha", true).name, "No project");
-        assert_eq!(ProjectTrigger::new("alpha", false).name, "alpha");
+        assert_eq!(
+            ProjectTrigger::new("alpha", true, Rc::default()).name,
+            "No project"
+        );
+        assert_eq!(
+            ProjectTrigger::new("alpha", false, Rc::default()).name,
+            "alpha"
+        );
     }
 
     #[test]
