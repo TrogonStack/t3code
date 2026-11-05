@@ -9719,6 +9719,30 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (afterStart.at(-1)?.providerThread.pendingBackgroundTasks ?? [])[0]?.taskId,
             WAKE_TASK_ID,
           );
+          assert.equal(
+            (afterStart.at(-1)?.providerThread.pendingBackgroundTasks ?? [])[0]?.launchNativeItemId,
+            WAKE_TOOL_USE_ID,
+          );
+
+          // The roster entry omits tool_use_id; the link from task_started must survive.
+          yield* Queue.offer(
+            harness.sdkMessages,
+            claudeSdkFrame({
+              type: "system",
+              subtype: "background_tasks_changed",
+              tasks: [{ task_id: WAKE_TASK_ID, task_type: "local_bash", description: "replaced" }],
+              uuid: "00000000-0000-4000-8000-000000000204",
+              session_id: WAKE_NATIVE_SESSION,
+            }),
+          );
+          yield* harness.until(() =>
+            providerThreadRosterEvents(harness.events).some(
+              (event) =>
+                event.providerThread.pendingBackgroundTasks?.[0]?.description === "replaced" &&
+                event.providerThread.pendingBackgroundTasks[0].launchNativeItemId ===
+                  WAKE_TOOL_USE_ID,
+            ),
+          );
 
           yield* Queue.offer(
             harness.sdkMessages,
@@ -10023,7 +10047,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         const roster = providerThreadRosterEvents(harness.events).at(-1)?.providerThread
           .pendingBackgroundTasks;
         assert.deepEqual(roster, [
-          { taskId: longRunning.taskId, kind: "monitor", description: "Monitor 0" },
+          {
+            taskId: longRunning.taskId,
+            kind: "monitor",
+            description: "Monitor 0",
+            launchNativeItemId: "toolu_monitor_0",
+          },
         ]);
       }).pipe(
         Effect.provide(
@@ -10711,7 +10740,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             (event) => event.providerThread.id === providerThreadA.id,
           )?.providerThread.pendingBackgroundTasks;
           assert.deepEqual(rosterAAfterSettle ?? [], [
-            { taskId: taskA, description: "work on A", kind: "command" },
+            {
+              taskId: taskA,
+              description: "work on A",
+              kind: "command",
+              launchNativeItemId: "toolu-roster-a",
+            },
           ]);
           assert.isTrue(yield* hasPendingBackgroundWork);
           assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThreadA));

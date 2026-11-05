@@ -365,6 +365,7 @@ export interface PendingBackgroundWorkItem {
   readonly kind: BackgroundWorkKind;
   readonly label: string;
   readonly childThreadId: ThreadId | undefined;
+  readonly launchNativeItemId: string | undefined;
 }
 
 export interface PendingBackgroundWorkPresentation {
@@ -398,6 +399,41 @@ export function isBackgroundWorkStopPending(
   return request.retryAt === null || tasks.some((task) => request.taskIds.includes(task.taskId));
 }
 
+/**
+ * The turn item that launched a pending task. The launching tool call's native id can differ
+ * from the task id; the item id is the fallback for items without a native ref.
+ */
+export function resolveBackgroundTaskItem<
+  Item extends {
+    readonly id: string;
+    readonly nativeItemRef?: { readonly nativeId: string | null } | null;
+  },
+>(
+  task: { readonly taskId: string; readonly launchNativeItemId?: string | undefined },
+  items: ReadonlyArray<Item>,
+): Item | undefined {
+  const nativeId = task.launchNativeItemId ?? task.taskId;
+  return (
+    items.findLast((item) => item.nativeItemRef?.nativeId === nativeId) ??
+    items.findLast((item) => String(item.id) === task.taskId)
+  );
+}
+
+/** The full command of a launching command item, or a monitor tool call's `command` input. */
+export function backgroundTaskCommandText(item: {
+  readonly type: string;
+  readonly input?: unknown;
+}): string | null {
+  if (item.type === "command_execution") {
+    return typeof item.input === "string" && item.input.trim().length > 0 ? item.input : null;
+  }
+  if (item.type === "dynamic_tool" && typeof item.input === "object" && item.input !== null) {
+    const command = (item.input as { readonly command?: unknown }).command;
+    return typeof command === "string" && command.trim().length > 0 ? command : null;
+  }
+  return null;
+}
+
 export function presentPendingBackgroundWork(
   tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
 ): PendingBackgroundWorkPresentation | null {
@@ -422,6 +458,7 @@ export function presentPendingBackgroundWork(
             ? BACKGROUND_WORK_KINDS[task.kind].singular
             : label,
         childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+        launchNativeItemId: task.launchNativeItemId,
       };
     })
     // `map` returned a new array; Hermes has no `toSorted`.
