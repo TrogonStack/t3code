@@ -30,6 +30,15 @@ To see real data, attach to a server that is already running (for example your `
 | `T3CODE_GPUI_SERVER_URL`    | HTTP origin of the running server. Takes precedence.      |
 | `T3CODE_GPUI_PAIRING_TOKEN` | The `Token:` value printed by `pair`. It works only once. |
 
+When attached, the project picker also shows the Electron app's environment badge ("Also on <environment>") for projects that exist on your other saved environments. It reads the Electron app's `connection-catalog.json`, decrypting it with the safeStorage key from the macOS Keychain (the OS may ask for access once). Only direct `http` environments with a saved bearer token are used; relay, T3 Connect, SSH and `https` entries are skipped with a log line.
+
+| Variable                         | Meaning                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `T3CODE_GPUI_CONNECTION_CATALOG` | Catalog path. Defaults to `connection-catalog.json` in `T3CODE_GPUI_HOME`.           |
+| `T3CODE_GPUI_ELECTRON_IDB`       | Electron IndexedDB LevelDB directory (DPoP key). Defaults to the `t3code-dev` app's. |
+
+TODO(gpui-credentials): HACK. Saved T3 Connect tokens (`remoteDpopTokens`) are used by reading the Electron app's private IndexedDB for its non-extractable DPoP key (`src/electron_dpop.rs`). Replace with GPUI's own pairing + Keychain before shipping.
+
 Other scripts:
 
 ```sh

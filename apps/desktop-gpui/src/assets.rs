@@ -2,7 +2,12 @@ use gpui::{AssetSource, Result, SharedString};
 use std::borrow::Cow;
 
 // `Assets` carries only gpui-component's default icons; anything else from the catalog renders blank.
-gpui_kit_assets::icon_assets!(ExtraIcons, [Paperclip, Pin, PinOff]);
+gpui_kit_assets::icon_assets!(
+    ExtraIcons,
+    [
+        Paperclip, Pin, PinOff, Server, Cloud, Terminal, Monitor, Laptop, HardDrive, Computer
+    ]
+);
 
 pub struct AppAssets;
 
@@ -33,6 +38,13 @@ mod tests {
             IconName::Pin,
             IconName::PinOff,
             IconName::Search,
+            IconName::Server,
+            IconName::Cloud,
+            IconName::Terminal,
+            IconName::Monitor,
+            IconName::Laptop,
+            IconName::HardDrive,
+            IconName::Computer,
         ] {
             let loaded = AppAssets.load(&icon.path()).ok().flatten();
             assert!(loaded.is_some(), "{} is not embedded", icon.path());

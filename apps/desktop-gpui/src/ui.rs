@@ -1,5 +1,5 @@
 use crate::connection::{Action, ActionSender};
-use crate::projects::{self, ProjectEntry};
+use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::status::{ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
@@ -32,6 +32,8 @@ pub struct MainView {
     selected_project: Option<String>,
     picker_open: bool,
     picker_order: Option<Vec<String>>,
+    /// The other saved environments, by id.
+    environments: Vec<EnvironmentProjects>,
     actions: ActionSender,
 }
 
@@ -63,11 +65,19 @@ impl MainView {
             selected_project: None,
             picker_open: false,
             picker_order: None,
+            environments: Vec::new(),
             actions,
         }
     }
 
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
+        if let Status::Environment(other) = status {
+            match self.environments.iter_mut().find(|e| e.id == other.id) {
+                Some(known) => *known = other,
+                None => self.environments.push(other),
+            }
+            return cx.notify();
+        }
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
         if self.selected_project.is_none() {
@@ -94,8 +104,8 @@ impl MainView {
         let shell = self.shell()?;
         let active = active_project(self.selected_project.as_deref(), shell);
         let entries = &shell.project_entries;
-        let listed = projects::picker_entries(entries, active.map(|e| e.id.as_str()), "");
-        Some(listed.into_iter().map(|entry| entry.id.clone()).collect())
+        let listed = projects::picker_entries(entries, selected_id(self, active), "");
+        Some(listed.into_iter().map(|entry| entry.key.clone()).collect())
     }
 
     fn environment(&self) -> String {
@@ -170,8 +180,8 @@ impl MainView {
                     .gap_6()
                     .child(self.hero(
                         &project,
-                        active.map(|entry| entry.id.clone()),
-                        shell.project_entries.clone(),
+                        selected_id(self, active).map(str::to_owned),
+                        projects::with_remote_members(&shell.project_entries, &self.environments),
                         cx,
                     ))
                     .child(self.composer_box(cx)),
@@ -219,11 +229,11 @@ impl MainView {
                 let mono = theme.mono_font_family.clone();
                 let border = theme.border;
                 let rows = listed.iter().enumerate().map(|(index, entry)| {
-                    let (view, id) = (view.clone(), entry.id.clone());
-                    let (actions, pin_id) = (actions.clone(), entry.id.clone());
+                    let (view, id) = (view.clone(), entry.target(active_id.as_deref()).to_owned());
+                    let (actions, pin_ids) = (actions.clone(), entry.member_ids.clone());
                     let pinned = entry.pinned;
                     let color: Hsla = rgb(entry.color_hex(dark)).into();
-                    let active = active_id.as_deref() == Some(entry.id.as_str());
+                    let active = active_id.as_deref().is_some_and(|id| entry.contains(id));
                     h_flex()
                         .id(("project", index))
                         .group(PICKER_ROW_GROUP)
@@ -259,7 +269,7 @@ impl MainView {
                                 .child(entry.title.clone()),
                         )
                         .when(can_pin, |row| {
-                            row.child(pin_button(index, entry, actions, pin_id))
+                            row.child(pin_button(index, entry, actions, pin_ids))
                         })
                         .when(!can_pin && pinned, |row| {
                             row.child(
@@ -268,6 +278,7 @@ impl MainView {
                                     .text_color(muted),
                             )
                         })
+                        .children(environment_badge(index, entry, muted))
                         .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
                                 this.selected_project = Some(id.clone());
@@ -421,6 +432,36 @@ impl RenderOnce for ProjectTrigger {
     }
 }
 
+fn machine_icon(kind: MachineKind) -> gpui_kit_assets::IconName {
+    use gpui_kit_assets::IconName as Icons;
+    match kind {
+        MachineKind::Server => Icons::Server,
+        MachineKind::Cloud => Icons::Cloud,
+        MachineKind::Linux => Icons::Terminal,
+        MachineKind::Desktop => Icons::Monitor,
+        MachineKind::Laptop => Icons::Laptop,
+        MachineKind::MacMini => Icons::HardDrive,
+        MachineKind::MacStudio => Icons::Computer,
+    }
+}
+
+/// The web's `ProjectEnvironmentBadge`: a machine icon with "Also on <labels>", right of the pin.
+fn environment_badge(
+    index: usize,
+    entry: &ProjectEntry,
+    muted: Hsla,
+) -> Option<impl IntoElement + use<>> {
+    let text = projects::badge_text(&entry.remote)?;
+    let machine = projects::badge_machine(&entry.remote)?;
+    Some(
+        div()
+            .id(("environment", index))
+            .flex_shrink_0()
+            .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+            .child(Icon::new(machine_icon(machine)).small().text_color(muted)),
+    )
+}
+
 const PICKER_ROW_GROUP: &str = "project-row";
 
 /// Shown on row hover, and always for a pinned project. A click toggles the pin and, because
@@ -429,7 +470,7 @@ fn pin_button(
     index: usize,
     entry: &ProjectEntry,
     actions: ActionSender,
-    project_id: String,
+    project_ids: Vec<String>,
 ) -> impl IntoElement + use<> {
     let pinned = entry.pinned;
     let icon = |name| Icon::new(name).small();
@@ -461,19 +502,35 @@ fn pin_button(
             div().child(icon(gpui_kit_assets::IconName::Pin))
         })
         .on_click(move |_, _, _| {
-            let action = Action::SetProjectPinned {
-                project_id: project_id.clone(),
-                pinned: !pinned,
-            };
-            if actions.try_send(action).is_err() {
-                eprintln!("[ui] could not queue the pin request");
+            // Clients write every member of the group together.
+            for project_id in &project_ids {
+                let action = Action::SetProjectPinned {
+                    project_id: project_id.clone(),
+                    pinned: !pinned,
+                };
+                if actions.try_send(action).is_err() {
+                    eprintln!("[ui] could not queue the pin request");
+                }
             }
         })
 }
 
+/// The picked project id while its row still exists, else the active row's target.
+fn selected_id<'a>(view: &'a MainView, active: Option<&'a ProjectEntry>) -> Option<&'a str> {
+    view.selected_project
+        .as_deref()
+        .filter(|id| active.is_some_and(|entry| entry.contains(id)))
+        .or(active.map(|entry| entry.id.as_str()))
+}
+
 /// The picked project while it still exists, else the newest thread's project, else the first listed.
 fn active_project<'a>(selected: Option<&str>, shell: &'a ShellView) -> Option<&'a ProjectEntry> {
-    let by_id = |id: &str| shell.project_entries.iter().find(|entry| entry.id == id);
+    let by_id = |id: &str| {
+        shell
+            .project_entries
+            .iter()
+            .find(|entry| entry.contains(id))
+    };
     selected
         .and_then(by_id)
         .or_else(|| {
@@ -579,12 +636,16 @@ mod tests {
 
     fn entry(id: &str, scratch: bool) -> ProjectEntry {
         ProjectEntry {
+            key: id.to_owned(),
             id: id.to_owned(),
+            member_ids: vec![id.to_owned()],
             title: id.to_owned(),
             initials: "XX".to_owned(),
             color: 0,
             pinned: false,
             scratch,
+            logical_key: None,
+            remote: Vec::new(),
         }
     }
 

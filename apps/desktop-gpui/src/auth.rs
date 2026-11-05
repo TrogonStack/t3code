@@ -2,10 +2,13 @@
 //! Mirrors packages/shared/src/desktopBootstrapToken.ts and
 //! packages/client-runtime/src/authorization/remote.ts.
 
+use crate::electron_dpop;
 use hmac::{Hmac, KeyInit, Mac};
+use p256::ecdsa::SigningKey;
 use serde::Deserialize;
 use sha2::Sha256;
 use std::fmt::Write;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TOKEN_WINDOW_MS: u64 = 12 * 60 * 60 * 1000;
@@ -80,17 +83,25 @@ struct TicketResult {
 }
 
 /// What the app proves itself with: the secret it handed a server it spawned,
-/// or a pairing token minted by `t3 pair` for a server it attaches to.
+/// a pairing token minted by `t3 pair` for a server it attaches to, or a bearer
+/// session another client already saved for it (the Electron app's catalog).
 pub enum Credential {
     DesktopSecret(String),
     Pairing(String),
+    Bearer(String),
+    // TODO(gpui-credentials): HACK. Reads Electron's private IndexedDB and non-extractable DPoP key. Replace with GPUI's own pairing + Keychain before shipping.
+    /// A DPoP-bound access token and the proof key it is bound to (`Authorization: DPoP`).
+    Dpop {
+        token: String,
+        key: Arc<SigningKey>,
+    },
 }
 
 impl Credential {
     fn subject_token(&self) -> String {
         match self {
             Self::DesktopSecret(secret) => bootstrap_token(secret, now_ms()),
-            Self::Pairing(token) => token.clone(),
+            Self::Pairing(token) | Self::Bearer(token) | Self::Dpop { token, .. } => token.clone(),
         }
     }
 }
@@ -101,6 +112,10 @@ pub async fn exchange_bearer(
     http_base: &str,
     credential: &Credential,
 ) -> Result<String, AuthError> {
+    // A saved bearer or DPoP access token is already the session; there is nothing to exchange.
+    if let Credential::Bearer(token) | Credential::Dpop { token, .. } = credential {
+        return Ok(token.clone());
+    }
     let credential = credential.subject_token();
     let response = client
         .post(format!("{http_base}/oauth/token"))
@@ -123,18 +138,28 @@ pub async fn exchange_bearer(
 }
 
 /// Mints an RPC WebSocket ticket. A server without audience routes answers 404
-/// for `/:use`, and its bare-path tickets are valid for RPC.
+/// for `/:use`, and its bare-path tickets are valid for RPC. A DPoP credential signs a proof for
+/// each path it tries (packages/client-runtime/src/authorization/remote.ts).
 pub async fn issue_ws_ticket(
     client: &reqwest::Client,
     http_base: &str,
+    credential: &Credential,
     bearer: &str,
 ) -> Result<String, AuthError> {
     let mint = |path: &'static str| async move {
-        client
-            .post(format!("{http_base}{path}"))
-            .bearer_auth(bearer)
-            .send()
-            .await
+        let url = format!("{http_base}{path}");
+        let request = client.post(&url);
+        let request = match credential {
+            Credential::Dpop { key, .. } => {
+                let proof = electron_dpop::create_proof(key, "POST", &url, Some(bearer), now_ms())
+                    .map_err(AuthError::Failed)?;
+                request
+                    .header("authorization", format!("DPoP {bearer}"))
+                    .header("dpop", proof)
+            }
+            _ => request.bearer_auth(bearer),
+        };
+        request.send().await.map_err(AuthError::from)
     };
     let mut response = mint("/api/auth/websocket-ticket/rpc").await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {

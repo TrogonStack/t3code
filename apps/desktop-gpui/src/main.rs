@@ -1,7 +1,10 @@
 mod assets;
 mod auth;
+mod catalog;
 mod config;
 mod connection;
+mod electron_dpop;
+mod environments;
 mod projects;
 mod rpc;
 mod server;
@@ -46,6 +49,14 @@ fn main() {
             let client = auth::http_client();
             match server::wait_until_ready(&client, &attach.http_base).await {
                 Ok(environment) => {
+                    // Only an attached server shares the Electron app's home, hence its catalog.
+                    if let Some(path) = config::connection_catalog_path() {
+                        tokio::spawn(environments::run(
+                            environment.id.clone(),
+                            path,
+                            status_tx.clone(),
+                        ));
+                    }
                     let credential = auth::Credential::Pairing(attach.pairing_token);
                     connection::run(
                         &attach.http_base,

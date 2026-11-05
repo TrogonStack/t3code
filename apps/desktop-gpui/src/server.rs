@@ -6,6 +6,7 @@
 use crate::auth;
 use crate::config::{Config, ServerCommand};
 use crate::connection::{self, ActionReceiver, Backoff, Environment};
+use crate::projects::MachineKind;
 use crate::status::{Status, StatusSender, publish};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -161,9 +162,18 @@ fn forward_output(stream: impl AsyncRead + Unpin + Send + 'static) {
 
 #[derive(Deserialize)]
 struct Descriptor {
+    #[serde(rename = "environmentId", default)]
+    environment_id: String,
     label: String,
     #[serde(default)]
+    platform: Platform,
+    #[serde(default)]
     capabilities: Capabilities,
+}
+
+#[derive(Default, Deserialize)]
+struct Platform {
+    machine: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -172,27 +182,45 @@ struct Capabilities {
     project_organization: bool,
 }
 
+/// One attempt at the environment descriptor.
+pub async fn fetch_environment(
+    client: &reqwest::Client,
+    http_base: &str,
+) -> Result<Environment, String> {
+    let response = client
+        .get(format!("{http_base}{READINESS_PATH}"))
+        .timeout(READINESS_REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| error.without_url().to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+    let descriptor: Descriptor = response
+        .json()
+        .await
+        .map_err(|error| error.without_url().to_string())?;
+    Ok(Environment {
+        id: descriptor.environment_id,
+        label: descriptor.label,
+        machine: descriptor
+            .platform
+            .machine
+            .as_deref()
+            .map_or(MachineKind::Server, MachineKind::parse),
+        project_organization: descriptor.capabilities.project_organization,
+    })
+}
+
 /// Polls until the descriptor answers, returning what the connection needs from it.
 pub async fn wait_until_ready(
     client: &reqwest::Client,
     http_base: &str,
 ) -> Result<Environment, String> {
-    let url = format!("{http_base}{READINESS_PATH}");
     let deadline = Instant::now() + READINESS_TIMEOUT;
     loop {
-        let attempt = client
-            .get(&url)
-            .timeout(READINESS_REQUEST_TIMEOUT)
-            .send()
-            .await;
-        if let Ok(response) = attempt
-            && response.status().is_success()
-            && let Ok(descriptor) = response.json::<Descriptor>().await
-        {
-            return Ok(Environment {
-                label: descriptor.label,
-                project_organization: descriptor.capabilities.project_organization,
-            });
+        if let Ok(environment) = fetch_environment(client, http_base).await {
+            return Ok(environment);
         }
         if Instant::now() >= deadline {
             return Err(format!(

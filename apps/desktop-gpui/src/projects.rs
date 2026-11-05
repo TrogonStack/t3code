@@ -1,7 +1,9 @@
-//! The project picker's rows, mirroring the web picker: `sortLogicalProjectsForSidebar`
-//! (Sidebar.logic.ts), `pickableProjectGroups` (projectGrouping.ts), `deriveProjectIdentity`
-//! (projectIdentity.ts) and `buildSidebarProjectPickerEntries` (sidebarProjectGrouping.ts).
+//! The project picker's rows, mirroring the web picker in its default `repository` grouping mode:
+//! `buildProjectGroups` and `pickableProjectGroups` (projectGrouping.ts),
+//! `sortLogicalProjectsForSidebar` (Sidebar.logic.ts) and `buildSidebarProjectPickerEntries`
+//! (sidebarProjectGrouping.ts). Each row is a group of projects that share a repository.
 
+use crate::wire::generated::RepositoryIdentity;
 use crate::wire::{Project, Thread};
 use std::collections::HashMap;
 
@@ -31,18 +33,83 @@ const COLORS: [(&str, u32, u32); 18] = [
 const SCRATCH_TITLE: &str = "No project";
 const SCRATCH_FOLDER: &str = "scratch";
 
+/// `EnvironmentMachineKind` (packages/contracts/src/environment.ts); unknown values read as a server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MachineKind {
+    Server,
+    Cloud,
+    Linux,
+    Desktop,
+    Laptop,
+    MacMini,
+    MacStudio,
+}
+
+impl MachineKind {
+    pub fn parse(kind: &str) -> Self {
+        match kind {
+            "cloud" => Self::Cloud,
+            "linux" => Self::Linux,
+            "desktop" => Self::Desktop,
+            "laptop" => Self::Laptop,
+            "mac-mini" => Self::MacMini,
+            "mac-studio" => Self::MacStudio,
+            _ => Self::Server,
+        }
+    }
+}
+
+/// Another environment that also has this project.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteMember {
+    pub label: String,
+    pub machine: MachineKind,
+}
+
+/// A saved environment other than the one this window attaches to, with its projects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvironmentProjects {
+    pub id: String,
+    pub label: String,
+    pub machine: MachineKind,
+    pub projects: Vec<ProjectEntry>,
+}
+
+/// One picker row: a `ProjectGroup` of the web, seen from the attached environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectEntry {
+    /// The group key: the repository's canonical key, else the project's physical path.
+    pub key: String,
+    /// The target project (the representative): what picking the row selects.
     pub id: String,
+    /// Every project of the group on the attached environment, the pin writes all of them.
+    pub member_ids: Vec<String>,
+    /// The group label (`deriveProjectGroupLabel`).
     pub title: String,
+    /// From the representative: its monogram override, else its title.
     pub initials: String,
     /// Index into the shared palette.
     pub color: usize,
+    /// Any member is pinned.
     pub pinned: bool,
     pub scratch: bool,
+    /// The repository key shared across environments, when the group has a repository.
+    pub logical_key: Option<String>,
+    /// Other environments that have the same logical project.
+    pub remote: Vec<RemoteMember>,
 }
 
 impl ProjectEntry {
+    pub fn contains(&self, project_id: &str) -> bool {
+        self.member_ids.iter().any(|id| id == project_id)
+    }
+
+    /// The project picking the row selects: the active one when it belongs to the group, as the
+    /// web's `targetProject`, else the representative.
+    pub fn target<'a>(&'a self, active_id: Option<&'a str>) -> &'a str {
+        active_id.filter(|id| self.contains(id)).unwrap_or(&self.id)
+    }
+
     /// The badge text color for the theme; the badge background is this at 14% alpha.
     pub fn color_hex(&self, dark: bool) -> u32 {
         let (_, light, night) = COLORS[self.color];
@@ -100,6 +167,18 @@ fn color_index(name: &str) -> usize {
     })
 }
 
+/// The cross-environment identity of `projectGrouping.ts` in the default `repository` mode: the
+/// repository's canonical key. Without one the web falls back to a per-environment path key, which
+/// never matches another environment, so there is nothing to join on.
+fn logical_key(project: &Project) -> Option<String> {
+    let identity = project.repository_identity.as_ref()?;
+    let key = identity
+        .origin
+        .as_ref()
+        .map_or(&identity.canonical_key, |origin| &origin.canonical_key);
+    (!key.is_empty() && !key.contains('\0')).then(|| key.clone())
+}
+
 /// A monogram icon override wins, as in `ProjectFavicon`; other icon kinds fall back to the derived one.
 fn monogram_override(project: &Project) -> Option<(String, usize)> {
     let icon = project.project_icon.as_ref()?;
@@ -131,8 +210,159 @@ fn thread_activity(thread: &Thread) -> &str {
         .unwrap_or(&thread.updated_at)
 }
 
-/// Unarchived projects, pinned first, then most recent thread activity (the project's own
-/// `updatedAt` when it has no threads), then title.
+/// `normalizeProjectPathForComparison`: trimmed, no trailing separators, Windows paths folded.
+fn normalize_path(path: &str) -> String {
+    let trimmed = path.trim();
+    let stripped = trimmed.trim_end_matches(['/', '\\']);
+    let normalized = if stripped.is_empty() && !trimmed.is_empty() {
+        &trimmed[..1]
+    } else {
+        stripped
+    };
+    let bytes = normalized.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    if drive || normalized.starts_with("\\\\") {
+        normalized.replace('/', "\\").to_lowercase()
+    } else {
+        normalized.to_owned()
+    }
+}
+
+/// `shouldReplacePhysicalProjectWinner`: the fresher project wins, then the greater id. Server
+/// timestamps are fixed-width UTC, so text order is time order.
+fn fresher(candidate: &Project, existing: &Project) -> bool {
+    let key = |project: &Project| (project.updated_at.clone(), project.id.clone());
+    key(candidate) > key(existing)
+}
+
+fn unique_non_empty<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Vec<&'a str> {
+    let mut unique: Vec<&str> = Vec::new();
+    for value in values.into_iter().flatten().map(str::trim) {
+        if !value.is_empty() && !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    unique
+}
+
+/// `repositoryGroupingDisplayNameOf`.
+fn grouping_display_name(identity: &RepositoryIdentity) -> Option<&str> {
+    match &identity.origin {
+        Some(origin) => Some(
+            origin
+                .display_name
+                .as_deref()
+                .unwrap_or(&origin.canonical_key),
+        ),
+        None => identity.display_name.as_deref(),
+    }
+}
+
+/// `deriveProjectGroupLabel`, for groups of more than one member.
+fn group_label(representative: &Project, members: &[&Project]) -> String {
+    let titles = unique_non_empty(members.iter().map(|m| Some(m.title.as_str())));
+    let display_names = unique_non_empty(members.iter().map(|m| {
+        m.repository_identity
+            .as_ref()
+            .and_then(grouping_display_name)
+    }));
+    let names = unique_non_empty(members.iter().map(|m| {
+        m.repository_identity
+            .as_ref()
+            .and_then(|i| i.name.as_deref())
+    }));
+    if let [title] = titles[..]
+        && !display_names.contains(&title)
+        && !names.contains(&title)
+    {
+        return title.to_owned();
+    }
+    if let [name] = display_names[..] {
+        return name.to_owned();
+    }
+    if let [name] = names[..] {
+        return name.to_owned();
+    }
+    representative.title.clone()
+}
+
+/// Group keys without a repository; the NUL keeps them out of the repository key space.
+const PATH_KEY_PREFIX: &str = "\0path:";
+
+/// A group under construction: the physical winners, plus every project they stand for.
+struct Group<'a> {
+    key: String,
+    winners: Vec<&'a Project>,
+    all: Vec<&'a Project>,
+}
+
+/// `buildProjectGroups` in `repository` mode: projects with the same normalized workspace root
+/// collapse to the freshest, then groups form on the repository key (the project's own path when
+/// it has none). The web's `projects` input lists a server's projects in snapshot order, which is
+/// creation order, so members are ordered by `createdAt` here (the shell state is a map) and the
+/// first one is the representative. Every project here is on the attached environment.
+fn build_groups<'a>(projects: impl IntoIterator<Item = &'a Project>) -> Vec<Group<'a>> {
+    let mut ordered: Vec<&Project> = projects.into_iter().collect();
+    ordered.sort_by(|a, b| (&a.created_at, &a.id).cmp(&(&b.created_at, &b.id)));
+
+    let mut physical: Vec<(String, Vec<&Project>)> = Vec::new();
+    for project in ordered {
+        let key = normalize_path(&project.workspace_root);
+        match physical.iter_mut().find(|(existing, _)| *existing == key) {
+            Some((_, members)) => members.push(project),
+            None => physical.push((key, vec![project])),
+        }
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+    for (path, projects) in physical {
+        let winner = projects
+            .iter()
+            .copied()
+            .reduce(|current, candidate| {
+                if fresher(candidate, current) {
+                    candidate
+                } else {
+                    current
+                }
+            })
+            .expect("a physical key has a project");
+        // `selectProjectIdentitySource`: a winner without a repository borrows the freshest identity.
+        let source = if winner.repository_identity.is_some() {
+            winner
+        } else {
+            projects
+                .iter()
+                .copied()
+                .filter(|project| project.repository_identity.is_some())
+                .reduce(|current, candidate| {
+                    if fresher(candidate, current) {
+                        candidate
+                    } else {
+                        current
+                    }
+                })
+                .unwrap_or(winner)
+        };
+        let key = logical_key(source).unwrap_or_else(|| format!("{PATH_KEY_PREFIX}{path}"));
+        match groups.iter_mut().find(|group| group.key == key) {
+            Some(group) => {
+                group.winners.push(winner);
+                group.all.extend(projects);
+            }
+            None => groups.push(Group {
+                key,
+                winners: vec![winner],
+                all: projects,
+            }),
+        }
+    }
+    groups
+}
+
+/// The picker's groups: pinned first, then most recent thread activity across the group (the
+/// representative's `updatedAt` when it has no threads), then label. Groups whose members are all
+/// archived are left out.
 pub fn build_entries<'a>(
     projects: impl IntoIterator<Item = &'a Project>,
     threads: impl IntoIterator<Item = &'a Thread>,
@@ -143,40 +373,109 @@ pub fn build_entries<'a>(
         let slot = latest.entry(thread.project_id.as_str()).or_insert(activity);
         *slot = (*slot).max(activity);
     }
-    let mut ranked: Vec<(&Project, &str)> = projects
+    let mut ranked: Vec<(ProjectEntry, String)> = build_groups(projects)
         .into_iter()
-        .filter(|project| project.archived_at.is_none())
-        .map(|project| {
-            let activity = latest
-                .get(project.id.as_str())
-                .copied()
-                .unwrap_or(&project.updated_at);
-            (project, activity)
+        .filter(|group| group.winners.iter().any(|p| p.archived_at.is_none()))
+        .map(|group| {
+            let representative = group.winners[0];
+            let label = if group.winners.len() > 1 {
+                group_label(representative, &group.winners)
+            } else {
+                representative.title.clone()
+            };
+            let (initials, color) = monogram_override(representative).unwrap_or_else(|| {
+                (
+                    initials(&representative.title),
+                    color_index(&representative.title),
+                )
+            });
+            let activity = group
+                .all
+                .iter()
+                .filter_map(|p| latest.get(p.id.as_str()).copied())
+                .max()
+                .unwrap_or(&representative.updated_at)
+                .to_owned();
+            let entry = ProjectEntry {
+                logical_key: (!group.key.starts_with(PATH_KEY_PREFIX)).then(|| group.key.clone()),
+                key: group.key,
+                id: representative.id.clone(),
+                member_ids: group.all.iter().map(|p| p.id.clone()).collect(),
+                title: label,
+                initials,
+                color,
+                pinned: group.winners.iter().any(|p| p.pinned_at.is_some()),
+                scratch: is_scratch(representative),
+                remote: Vec::new(),
+            };
+            (entry, activity)
         })
         .collect();
     ranked.sort_by(|(a, a_at), (b, b_at)| {
-        b.pinned_at
-            .is_some()
-            .cmp(&a.pinned_at.is_some())
+        b.pinned
+            .cmp(&a.pinned)
             .then_with(|| b_at.cmp(a_at))
             .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-            .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.key.cmp(&b.key))
     });
-    ranked
-        .into_iter()
-        .map(|(project, _)| {
-            let (initials, color) = monogram_override(project)
-                .unwrap_or_else(|| (initials(&project.title), color_index(&project.title)));
-            ProjectEntry {
-                id: project.id.clone(),
-                title: project.title.clone(),
-                initials,
-                color,
-                pinned: project.pinned_at.is_some(),
-                scratch: is_scratch(project),
+    ranked.into_iter().map(|(entry, _)| entry).collect()
+}
+
+/// Adds to each entry the other environments that have the same logical project.
+pub fn with_remote_members(
+    entries: &[ProjectEntry],
+    others: &[EnvironmentProjects],
+) -> Vec<ProjectEntry> {
+    entries
+        .iter()
+        .map(|entry| {
+            let mut entry = entry.clone();
+            if let Some(key) = &entry.logical_key {
+                entry.remote = others
+                    .iter()
+                    .filter(|other| {
+                        other
+                            .projects
+                            .iter()
+                            .any(|project| project.logical_key.as_ref() == Some(key))
+                    })
+                    .map(|other| RemoteMember {
+                        label: if other.label.trim().is_empty() {
+                            "Remote".to_owned()
+                        } else {
+                            other.label.clone()
+                        },
+                        machine: other.machine,
+                    })
+                    .collect();
             }
+            entry
         })
         .collect()
+}
+
+/// Members ordered by label, as `ProjectEnvironmentBadge` sorts them.
+fn sorted_members(members: &[RemoteMember]) -> Vec<&RemoteMember> {
+    let mut sorted: Vec<&RemoteMember> = members.iter().collect();
+    sorted.sort_by_cached_key(|member| (member.label.to_lowercase(), member.label.clone()));
+    sorted
+}
+
+/// The environment badge's tooltip. Picker rows are always on the attached environment, so this is
+/// the web's "Also on" case; "On" only applies to groups the attached environment lacks.
+pub fn badge_text(members: &[RemoteMember]) -> Option<String> {
+    let mut labels: Vec<&str> = Vec::new();
+    for member in sorted_members(members) {
+        if !labels.contains(&member.label.as_str()) {
+            labels.push(&member.label);
+        }
+    }
+    (!labels.is_empty()).then(|| format!("Also on {}", labels.join(", ")))
+}
+
+/// The badge icon follows the first member by label.
+pub fn badge_machine(members: &[RemoteMember]) -> Option<MachineKind> {
+    sorted_members(members).first().map(|member| member.machine)
 }
 
 /// What the picker lists: no scratch project, the active project leading the unpinned ones
@@ -189,7 +488,7 @@ pub fn picker_entries<'a>(
     let mut listed: Vec<&ProjectEntry> = entries.iter().filter(|entry| !entry.scratch).collect();
     if let Some(at) = listed
         .iter()
-        .position(|entry| Some(entry.id.as_str()) == active_id && !entry.pinned)
+        .position(|entry| active_id.is_some_and(|id| entry.contains(id)) && !entry.pinned)
     {
         let active = listed.remove(at);
         let pinned = listed.iter().filter(|entry| entry.pinned).count();
@@ -200,8 +499,8 @@ pub fn picker_entries<'a>(
     listed
 }
 
-/// Rows in the order they had when the picker opened (`useOrderWhileOpen`): ids that left drop
-/// out, ids that arrived follow in their current order.
+/// Rows in the order they had when the picker opened (`useOrderWhileOpen`): keys that left drop
+/// out, keys that arrived follow in their current order.
 pub fn order_while_open<'a>(
     listed: Vec<&'a ProjectEntry>,
     opened_with: &[String],
@@ -209,7 +508,7 @@ pub fn order_while_open<'a>(
     let position = |entry: &ProjectEntry| {
         opened_with
             .iter()
-            .position(|id| *id == entry.id)
+            .position(|key| *key == entry.key)
             .unwrap_or(opened_with.len())
     };
     let mut ordered = listed;
@@ -227,12 +526,16 @@ mod tests {
     #[test]
     fn order_while_open_keeps_the_opening_order_and_appends_new_rows() {
         let entry = |id: &str, pinned: bool| ProjectEntry {
+            key: id.to_owned(),
             id: id.to_owned(),
+            member_ids: vec![id.to_owned()],
             title: id.to_owned(),
             initials: String::new(),
             color: 0,
             pinned,
             scratch: false,
+            logical_key: None,
+            remote: Vec::new(),
         };
         let opened = ["a", "b", "c"].map(str::to_owned);
         let now = [entry("d", false), entry("c", true), entry("a", false)];
@@ -269,6 +572,9 @@ mod tests {
         project["archivedAt"] = Value::Null;
         project["pinnedAt"] = Value::Null;
         project["updatedAt"] = "2026-01-01T00:00:00.000Z".into();
+        project["createdAt"] = "2026-01-01T00:00:00.000Z".into();
+        project["workspaceRoot"] = format!("/work/{id}").into();
+        project["repositoryIdentity"] = Value::Null;
         edit(&mut project);
         serde_json::from_value(project).expect("project decodes")
     }
@@ -415,5 +721,231 @@ mod tests {
             ["Beta"]
         );
         assert!(picker_entries(&entries, None, "zzz").is_empty());
+    }
+
+    fn repo(key: &str) -> serde_json::Value {
+        json!({
+            "canonicalKey": key,
+            "locator": {"remoteName": "origin", "remoteUrl": "git@example.invalid:o/r.git", "source": "git-remote"},
+        })
+    }
+
+    #[test]
+    fn logical_key_prefers_the_origin_key_and_needs_a_repository() {
+        let plain = project("a", "a", |p| p["repositoryIdentity"] = repo("host/o/r"));
+        let forked = project("b", "b", |p| {
+            let mut identity = repo("host/fork/r");
+            identity["origin"] = json!({"canonicalKey": "host/o/r"});
+            p["repositoryIdentity"] = identity;
+        });
+        let bare = project("c", "c", |p| p["repositoryIdentity"] = Value::Null);
+        let keys: Vec<_> = [&plain, &forked, &bare]
+            .iter()
+            .map(|p| logical_key(p))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                Some("host/o/r".to_owned()),
+                Some("host/o/r".to_owned()),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_members_join_on_the_logical_key() {
+        let entries = build_entries(
+            &[
+                project("a", "atlas", |p| {
+                    p["repositoryIdentity"] = repo("host/o/atlas")
+                }),
+                project("b", "solo", |p| p["repositoryIdentity"] = Value::Null),
+            ],
+            [],
+        );
+        let other = |label: &str, machine, key: &str| EnvironmentProjects {
+            id: label.to_owned(),
+            label: label.to_owned(),
+            machine,
+            projects: build_entries(
+                &[project("r", "atlas", |p| {
+                    p["repositoryIdentity"] = repo(key)
+                })],
+                [],
+            ),
+        };
+        let others = [
+            other("devbox1", MachineKind::Linux, "host/o/atlas"),
+            other("elsewhere", MachineKind::Cloud, "host/o/other"),
+        ];
+        let joined = with_remote_members(&entries, &others);
+        let by_title = |t: &str| joined.iter().find(|e| e.title == t).unwrap();
+        assert_eq!(
+            by_title("atlas").remote,
+            [RemoteMember {
+                label: "devbox1".to_owned(),
+                machine: MachineKind::Linux
+            }]
+        );
+        assert!(by_title("solo").remote.is_empty());
+
+        // A group on the other environment joins the same way, through its repository key.
+        let grouped = EnvironmentProjects {
+            projects: build_entries(
+                &[
+                    project("r1", "atlas", |p| {
+                        p["repositoryIdentity"] = repo("host/o/atlas")
+                    }),
+                    project("r2", "api", |p| {
+                        p["repositoryIdentity"] = repo("host/o/atlas")
+                    }),
+                ],
+                [],
+            ),
+            ..other("devbox2", MachineKind::Server, "x")
+        };
+        let joined = with_remote_members(&entries, &[grouped]);
+        assert_eq!(by_title("atlas").remote.len(), 1);
+        assert_eq!(
+            joined.iter().find(|e| e.title == "atlas").unwrap().remote[0].label,
+            "devbox2"
+        );
+    }
+
+    #[test]
+    fn badge_lists_unique_labels_and_takes_the_first_machine() {
+        let member = |label: &str, machine| RemoteMember {
+            label: label.to_owned(),
+            machine,
+        };
+        assert_eq!(badge_text(&[]), None);
+        assert_eq!(badge_machine(&[]), None);
+        let members = [
+            member("devbox1", MachineKind::Linux),
+            member("Air", MachineKind::Laptop),
+            member("devbox1", MachineKind::Linux),
+        ];
+        assert_eq!(
+            badge_text(&members).as_deref(),
+            Some("Also on Air, devbox1")
+        );
+        assert_eq!(badge_machine(&members), Some(MachineKind::Laptop));
+        assert_eq!(MachineKind::parse("mac-studio"), MachineKind::MacStudio);
+        assert_eq!(MachineKind::parse("quantum"), MachineKind::Server);
+    }
+
+    fn named_repo(key: &str, display: &str, name: &str) -> Value {
+        let mut identity = repo(key);
+        identity["displayName"] = display.into();
+        identity["name"] = name.into();
+        identity
+    }
+
+    #[test]
+    fn same_repository_projects_form_one_group_like_the_web() {
+        let identity = || named_repo("host/trogon/t3code", "TrogonStack/t3code", "t3code");
+        let projects = [
+            project("root", "t3code", |p| {
+                p["workspaceRoot"] = "/work/t3code/".into();
+                p["repositoryIdentity"] = identity();
+                p["createdAt"] = "2026-01-01T00:00:00.000Z".into();
+                p["projectIcon"] = json!({"kind": "monogram", "text": "ZZ", "color": "rose"});
+            }),
+            project("server", "server", |p| {
+                p["workspaceRoot"] = "/work/t3code/apps/server".into();
+                p["repositoryIdentity"] = identity();
+                p["createdAt"] = "2026-02-01T00:00:00.000Z".into();
+                p["pinnedAt"] = "2026-03-01T00:00:00.000Z".into();
+            }),
+            // Same physical path as "root": the fresher one wins, the loser still counts as a member.
+            project("root-dup", "t3code", |p| {
+                p["workspaceRoot"] = "/work/t3code".into();
+                p["updatedAt"] = "2026-01-02T00:00:00.000Z".into();
+                p["createdAt"] = "2026-03-01T00:00:00.000Z".into();
+            }),
+            project("lone", "lone", |_| {}),
+        ];
+        let entries = build_entries(&projects, []);
+        assert_eq!(
+            titles(&entries.iter().collect::<Vec<_>>()),
+            ["TrogonStack/t3code", "lone"]
+        );
+        let group = &entries[0];
+        assert_eq!(group.key, "host/trogon/t3code");
+        assert_eq!(group.logical_key.as_deref(), Some("host/trogon/t3code"));
+        // The duplicate path takes its identity from the freshest identified project, and the
+        // oldest winner (root-dup replaced root as winner) leads.
+        assert_eq!(group.member_ids, ["root", "root-dup", "server"]);
+        assert_eq!(group.id, "root-dup");
+        assert!(group.pinned, "any member pinned");
+        assert!(group.contains("server") && !group.contains("lone"));
+        assert_eq!(group.target(Some("server")), "server");
+        assert_eq!(group.target(Some("lone")), "root-dup");
+        assert_eq!(entries[1].key, "\0path:/work/lone");
+        assert_eq!(entries[1].logical_key, None);
+        // The icon comes from the representative: root-dup has none, so its title is used.
+        assert_eq!(group.initials, "T3");
+
+        let mixed = [
+            project("a", "a", |p| {
+                p["repositoryIdentity"] = repo("k");
+                p["archivedAt"] = "2026-01-01T00:00:00.000Z".into();
+            }),
+            project("b", "b", |p| p["repositoryIdentity"] = repo("k")),
+        ];
+        assert_eq!(
+            build_entries(&mixed, []).len(),
+            1,
+            "archived only when every member is"
+        );
+        let all_archived = [
+            project("a", "a", |p| {
+                p["repositoryIdentity"] = repo("k");
+                p["archivedAt"] = "2026-01-01T00:00:00.000Z".into();
+            }),
+            project("b", "b", |p| {
+                p["repositoryIdentity"] = repo("k");
+                p["archivedAt"] = "2026-01-01T00:00:00.000Z".into();
+            }),
+        ];
+        assert!(build_entries(&all_archived, []).is_empty());
+    }
+
+    #[test]
+    fn group_label_follows_derive_project_group_label() {
+        let label = |rows: &[(&str, Value)]| {
+            let projects: Vec<Project> = rows
+                .iter()
+                .enumerate()
+                .map(|(index, (title, identity))| {
+                    project(&format!("p{index}"), title, |p| {
+                        p["repositoryIdentity"] = identity.clone();
+                        p["createdAt"] = format!("2026-01-0{}T00:00:00.000Z", index + 1).into();
+                    })
+                })
+                .collect();
+            build_entries(&projects, [])[0].title.clone()
+        };
+        let named = || named_repo("k", "Org/app", "app");
+        let nameless = || {
+            let mut identity = repo("k");
+            identity["name"] = "app".into();
+            identity
+        };
+        // A shared title wins unless it is the display or repository name.
+        assert_eq!(label(&[("mono", named()), ("mono", named())]), "mono");
+        assert_eq!(
+            label(&[("Org/app", named()), ("Org/app", named())]),
+            "Org/app"
+        );
+        assert_eq!(label(&[("app", named()), ("app", named())]), "Org/app");
+        // Different titles: the single display name, else the single repository name.
+        assert_eq!(label(&[("app", named()), ("server", named())]), "Org/app");
+        assert_eq!(label(&[("web", nameless()), ("server", nameless())]), "app");
+        // Nothing shared: the representative's title.
+        assert_eq!(label(&[("web", repo("k")), ("server", repo("k"))]), "web");
+        // A lone project keeps its own title.
+        assert_eq!(label(&[("app", named())]), "app");
     }
 }

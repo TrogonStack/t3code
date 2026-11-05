@@ -1,6 +1,8 @@
 //! The authenticated RPC WebSocket: connect, keep alive, reconnect.
 
 use crate::auth::{self, AuthError, Credential};
+use crate::electron_dpop;
+use crate::projects::MachineKind;
 use crate::rpc::{Event, PING_FRAME, ProjectsMutate, Session, SubscribeShell};
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
@@ -19,7 +21,10 @@ const ORCHESTRATION_PROTOCOL_VERSION: &str = "2";
 
 /// What the connection needs to know about the server it dialed.
 pub struct Environment {
+    pub id: String,
     pub label: String,
+    /// The machine icon the server's descriptor reports (`platform.machine`).
+    pub machine: MachineKind,
     /// The server keeps `pinned` from `project.update` (`capabilities.projectOrganization`).
     pub project_organization: bool,
 }
@@ -112,6 +117,24 @@ fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
     .map_err(|error| error.to_string())
 }
 
+/// The HTTP request a WebSocket upgrade is, for the proof's `htu`: scheme swapped, no query.
+fn upgrade_htu(url: &reqwest::Url) -> String {
+    let scheme = if url.scheme() == "wss" {
+        "https"
+    } else {
+        "http"
+    };
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    format!(
+        "{scheme}://{}{port}{}",
+        url.host_str().unwrap_or_default(),
+        url.path()
+    )
+}
+
 /// Connects and stays connected until cancelled, reporting through `status`.
 pub async fn run(
     http_base: &str,
@@ -164,7 +187,7 @@ async fn connect(
             token
         }
     };
-    let ticket = match auth::issue_ws_ticket(client, http_base, &token).await {
+    let ticket = match auth::issue_ws_ticket(client, http_base, credential, &token).await {
         Ok(ticket) => ticket,
         Err(error) => {
             if matches!(error, AuthError::Rejected(_)) {
@@ -173,7 +196,20 @@ async fn connect(
             return Err(error.to_string());
         }
     };
-    let url = socket_url(http_base, &ticket)?;
+    let mut url = socket_url(http_base, &ticket)?;
+    // TODO(gpui-credentials): HACK. Reads Electron's private IndexedDB and non-extractable DPoP key. Replace with GPUI's own pairing + Keychain before shipping.
+    if let Credential::Dpop { key, .. } = credential {
+        // A DPoP ticket is key-bound: the upgrade carries a proof for the socket URL in `dpop`,
+        // with the ticket as the token it hashes (remote.ts resolveRemoteDpopWebSocketConnectionUrl).
+        let proof = electron_dpop::create_proof(
+            key,
+            "GET",
+            &upgrade_htu(&url),
+            Some(&ticket),
+            auth::now_ms(),
+        )?;
+        url.query_pairs_mut().append_pair("dpop", &proof);
+    }
     let (socket, _) = tokio_tungstenite::connect_async(url.as_str())
         .await
         .map_err(|error| error.to_string())?;

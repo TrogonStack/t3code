@@ -1,4 +1,4 @@
-use crate::projects::ProjectEntry;
+use crate::projects::{EnvironmentProjects, ProjectEntry};
 use crate::wire::generated::ThreadsEntryStatus;
 use std::fmt;
 
@@ -16,6 +16,8 @@ pub enum Status {
         shell: Option<ShellView>,
     },
     Failed(String),
+    /// Another saved environment's projects; says nothing about the primary connection.
+    Environment(EnvironmentProjects),
 }
 
 /// What the window needs from the shell state, newest thread first.
@@ -69,6 +71,7 @@ impl fmt::Display for Status {
                 plural(*threads, "thread"),
             ),
             Self::Failed(message) => f.write_str(message),
+            Self::Environment(other) => write!(f, "Environment {}", other.label),
         }
     }
 }
