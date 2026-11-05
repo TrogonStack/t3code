@@ -1,0 +1,10 @@
+{
+  "name": "@t3tools/desktop-gpui",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "cargo run --locked",
+    "build": "cargo build --locked --release",
+    "test": "cargo test --locked"
+  }
+}

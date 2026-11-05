@@ -93,6 +93,41 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(desktop.T3CODE_DEV_AUTH_TOKEN, undefined);
       }),
     );
+    it.effect("hands the gpui app its server port, home and entry without web URLs", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const input = {
+          mode: "dev:desktop-gpui",
+          baseEnv: {
+            VITE_HTTP_URL: "http://localhost:1",
+            VITE_WS_URL: "ws://localhost:1",
+            T3CODE_PORT: "1",
+            T3CODE_HOME: "/ambient/home",
+          },
+          serverOffset: 3,
+          webOffset: 3,
+          t3Home: "/tmp/worktree/.t3",
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        } as const;
+        const env = yield* createDevRunnerEnv(input);
+        const fallback = yield* createDevRunnerEnv({ ...input, t3Home: undefined });
+
+        assert.equal(env.T3CODE_GPUI_SERVER_PORT, String(13_773 + 3));
+        assert.equal(env.T3CODE_GPUI_HOME, path.resolve("/tmp/worktree/.t3"));
+        assert.isTrue(path.isAbsolute(env.T3CODE_GPUI_SERVER_ENTRY ?? ""));
+        assert.isTrue(env.T3CODE_GPUI_SERVER_ENTRY?.endsWith(path.join("apps/server/src/bin.ts")));
+        assert.equal(env.VITE_HTTP_URL, undefined);
+        assert.equal(env.VITE_WS_URL, undefined);
+        assert.equal(env.T3CODE_PORT, undefined);
+        assert.notEqual(fallback.T3CODE_GPUI_HOME, path.join(NodeOS.homedir(), ".t3"));
+      }),
+    );
+
     it.effect("keeps the desktop profile inside an isolated home only", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -361,6 +396,21 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const taken = new Set([13773]);
         const offsets = yield* resolveModePortOffsets({
           mode: "dev:server",
+          startOffset: 0,
+          hasExplicitServerPort: false,
+          hasExplicitDevUrl: false,
+          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
+        });
+
+        assert.deepStrictEqual(offsets, { serverOffset: 1, webOffset: 1 });
+      }),
+    );
+
+    it.effect("shifts only server offset for dev:desktop-gpui", () =>
+      Effect.gen(function* () {
+        const taken = new Set([13773]);
+        const offsets = yield* resolveModePortOffsets({
+          mode: "dev:desktop-gpui",
           startOffset: 0,
           hasExplicitServerPort: false,
           hasExplicitDevUrl: false,
@@ -658,6 +708,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       { mode: "dev", share: false },
       { mode: "dev:web", share: true },
       { mode: "dev:desktop", share: true },
+      { mode: "dev:desktop-gpui", share: true },
     ] as const)("rejects --built for $mode with share=$share", ({ mode, share }) => {
       const spawnerLayer = Layer.succeed(
         ChildProcessSpawner.ChildProcessSpawner,
