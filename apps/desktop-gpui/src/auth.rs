@@ -79,13 +79,29 @@ struct TicketResult {
     ticket: String,
 }
 
-/// RFC 8693 exchange of the desktop bootstrap token for a bearer session.
+/// What the app proves itself with: the secret it handed a server it spawned,
+/// or a pairing token minted by `t3 pair` for a server it attaches to.
+pub enum Credential {
+    DesktopSecret(String),
+    Pairing(String),
+}
+
+impl Credential {
+    fn subject_token(&self) -> String {
+        match self {
+            Self::DesktopSecret(secret) => bootstrap_token(secret, now_ms()),
+            Self::Pairing(token) => token.clone(),
+        }
+    }
+}
+
+/// RFC 8693 exchange of a bootstrap credential for a bearer session.
 pub async fn exchange_bearer(
     client: &reqwest::Client,
     http_base: &str,
-    secret: &str,
+    credential: &Credential,
 ) -> Result<String, AuthError> {
-    let credential = bootstrap_token(secret, now_ms());
+    let credential = credential.subject_token();
     let response = client
         .post(format!("{http_base}/oauth/token"))
         .form(&[

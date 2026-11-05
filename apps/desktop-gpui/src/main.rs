@@ -7,7 +7,7 @@ mod shell;
 mod status;
 mod wire;
 
-use config::Config;
+use config::{Attach, Config};
 use gpui::{
     App, Bounds, Context, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions, div,
     prelude::*, px, rgb, size,
@@ -42,9 +42,31 @@ fn main() {
         .build()
         .expect("failed to start the async runtime");
     let (status_tx, status_rx) = async_channel::unbounded();
-    let supervisor = Config::from_env()
-        .map(|config| Rc::new(Supervisor::start(runtime.handle(), config, status_tx)));
-    let initial = if supervisor.is_some() {
+    let attach = Attach::from_env();
+    let supervisor = if attach.is_some() {
+        None
+    } else {
+        Config::from_env().map(|config| {
+            Rc::new(Supervisor::start(
+                runtime.handle(),
+                config,
+                status_tx.clone(),
+            ))
+        })
+    };
+    let initial = if let Some(attach) = attach {
+        runtime.spawn(async move {
+            let client = auth::http_client();
+            match server::wait_until_ready(&client, &attach.http_base).await {
+                Ok(label) => {
+                    let credential = auth::Credential::Pairing(attach.pairing_token);
+                    connection::run(&attach.http_base, &credential, &label, &status_tx).await;
+                }
+                Err(message) => status::publish(&status_tx, Status::Failed(message)),
+            }
+        });
+        Status::Connecting
+    } else if supervisor.is_some() {
         Status::Starting
     } else {
         Status::NotConnected

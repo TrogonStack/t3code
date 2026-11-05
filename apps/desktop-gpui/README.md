@@ -23,6 +23,13 @@ The app reads these variables, which the dev runner sets. Without them it shows 
 | `T3CODE_GPUI_SERVER_COMMAND` | Program that starts the server (`node` in dev, `t3` once packaged). |
 | `T3CODE_GPUI_SERVER_ENTRY`   | Optional first argument, the server entry script in dev.            |
 
+To see real data, attach to a server that is already running (for example your `vp run dev:desktop`) instead of starting one. That server keeps sole ownership of its database. Mint a one-time pairing token with `node apps/server/src/bin.ts pair --base-dir <its T3 home>`, then run the app with:
+
+| Variable                    | Meaning                                                   |
+| --------------------------- | --------------------------------------------------------- |
+| `T3CODE_GPUI_SERVER_URL`    | HTTP origin of the running server. Takes precedence.      |
+| `T3CODE_GPUI_PAIRING_TOKEN` | The `Token:` value printed by `pair`. It works only once. |
+
 Other scripts:
 
 ```sh

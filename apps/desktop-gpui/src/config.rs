@@ -4,6 +4,34 @@ pub const ENV_PORT: &str = "T3CODE_GPUI_SERVER_PORT";
 pub const ENV_HOME: &str = "T3CODE_GPUI_HOME";
 pub const ENV_COMMAND: &str = "T3CODE_GPUI_SERVER_COMMAND";
 pub const ENV_ENTRY: &str = "T3CODE_GPUI_SERVER_ENTRY";
+pub const ENV_ATTACH_URL: &str = "T3CODE_GPUI_SERVER_URL";
+pub const ENV_PAIRING_TOKEN: &str = "T3CODE_GPUI_PAIRING_TOKEN";
+
+/// A server someone else runs (a dev server, `npx t3`, a remote host), reached
+/// with a pairing token instead of being spawned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attach {
+    pub http_base: String,
+    pub pairing_token: String,
+}
+
+impl Attach {
+    pub fn from_env() -> Option<Self> {
+        Self::from_lookup(|name| std::env::var(name).ok())
+    }
+
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Option<Self> {
+        let non_empty = |name| {
+            get(name)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        Some(Self {
+            http_base: non_empty(ENV_ATTACH_URL)?.trim_end_matches('/').to_owned(),
+            pairing_token: non_empty(ENV_PAIRING_TOKEN)?,
+        })
+    }
+}
 
 /// How to start the server. The command is data: dev runs `node <entry>`, a
 /// packaged build runs `t3` from PATH with no entry.
@@ -82,5 +110,19 @@ mod tests {
         assert!(config.command.args.is_empty());
         assert_eq!(Config::from_lookup(lookup(&[(ENV_PORT, "1")])), None);
         assert_eq!(Config::from_lookup(lookup(&[])), None);
+    }
+
+    #[test]
+    fn attach_needs_url_and_token() {
+        let attach = Attach::from_lookup(lookup(&[
+            (ENV_ATTACH_URL, "http://127.0.0.1:13773/"),
+            (ENV_PAIRING_TOKEN, "tok"),
+        ]))
+        .expect("attach");
+        assert_eq!(attach.http_base, "http://127.0.0.1:13773");
+        assert_eq!(
+            Attach::from_lookup(lookup(&[(ENV_ATTACH_URL, "http://h")])),
+            None
+        );
     }
 }

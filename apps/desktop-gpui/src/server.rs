@@ -165,7 +165,7 @@ struct Descriptor {
 }
 
 /// Polls until the descriptor answers, returning the environment label.
-async fn wait_until_ready(client: &reqwest::Client, http_base: &str) -> Result<String, String> {
+pub async fn wait_until_ready(client: &reqwest::Client, http_base: &str) -> Result<String, String> {
     let url = format!("{http_base}{READINESS_PATH}");
     let deadline = Instant::now() + READINESS_TIMEOUT;
     loop {
@@ -218,7 +218,8 @@ async fn session(config: &Config, secret: &str, status: &StatusSender) -> String
     let client = auth::http_client();
     match wait_until_ready(&client, &config.http_base()).await {
         Ok(label) => {
-            connection::run(config, secret, &label, status).await;
+            let credential = auth::Credential::DesktopSecret(secret.to_owned());
+            connection::run(&config.http_base(), &credential, &label, status).await;
             unreachable_session()
         }
         Err(message) => message,

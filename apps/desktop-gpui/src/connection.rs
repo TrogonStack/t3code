@@ -1,7 +1,6 @@
 //! The authenticated RPC WebSocket: connect, keep alive, reconnect.
 
-use crate::auth::{self, AuthError};
-use crate::config::Config;
+use crate::auth::{self, AuthError, Credential};
 use crate::rpc::{Event, PING_FRAME, Session, SubscribeShell};
 use crate::shell::ShellState;
 use crate::status::{Counts, Status, StatusSender, publish};
@@ -43,9 +42,18 @@ impl Backoff {
     }
 }
 
-fn socket_url(port: u16, ticket: &str) -> Result<reqwest::Url, String> {
+fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
+    let ws_base = http_base
+        .strip_prefix("https://")
+        .map(|rest| format!("wss://{rest}"))
+        .or_else(|| {
+            http_base
+                .strip_prefix("http://")
+                .map(|rest| format!("ws://{rest}"))
+        })
+        .ok_or_else(|| format!("unsupported server URL: {http_base}"))?;
     reqwest::Url::parse_with_params(
-        &format!("ws://127.0.0.1:{port}/ws"),
+        &format!("{}/ws", ws_base.trim_end_matches('/')),
         [
             ("orchestrationProtocol", ORCHESTRATION_PROTOCOL_VERSION),
             ("wsTicket", ticket),
@@ -59,14 +67,13 @@ fn socket_url(port: u16, ticket: &str) -> Result<reqwest::Url, String> {
 }
 
 /// Connects and stays connected until cancelled, reporting through `status`.
-pub async fn run(config: &Config, secret: &str, label: &str, status: &StatusSender) {
+pub async fn run(http_base: &str, credential: &Credential, label: &str, status: &StatusSender) {
     let client = auth::http_client();
-    let http_base = config.http_base();
     let mut bearer: Option<String> = None;
     let mut backoff = Backoff::new();
     loop {
         publish(status, Status::Connecting);
-        let failure = match connect(&client, config, &http_base, secret, &mut bearer).await {
+        let failure = match connect(&client, http_base, credential, &mut bearer).await {
             Ok(socket) => {
                 publish(
                     status,
@@ -90,15 +97,14 @@ type Socket =
 
 async fn connect(
     client: &reqwest::Client,
-    config: &Config,
     http_base: &str,
-    secret: &str,
+    credential: &Credential,
     bearer: &mut Option<String>,
 ) -> Result<Socket, String> {
     let token = match bearer {
         Some(token) => token.clone(),
         None => {
-            let token = auth::exchange_bearer(client, http_base, secret)
+            let token = auth::exchange_bearer(client, http_base, credential)
                 .await
                 .map_err(|error| error.to_string())?;
             *bearer = Some(token.clone());
@@ -114,7 +120,7 @@ async fn connect(
             return Err(error.to_string());
         }
     };
-    let url = socket_url(config.port, &ticket)?;
+    let url = socket_url(http_base, &ticket)?;
     let (socket, _) = tokio_tungstenite::connect_async(url.as_str())
         .await
         .map_err(|error| error.to_string())?;
@@ -223,9 +229,12 @@ mod tests {
 
     #[test]
     fn socket_url_carries_protocol_and_escaped_ticket() {
-        let url = socket_url(13773, "a b&c").expect("url");
+        let url = socket_url("http://127.0.0.1:13773", "a b&c").expect("url");
         assert_eq!(url.scheme(), "ws");
         assert_eq!(url.path(), "/ws");
+        let remote = socket_url("https://host.example/", "t").expect("url");
+        assert_eq!(remote.scheme(), "wss");
+        assert_eq!(remote.path(), "/ws");
         let pairs: Vec<_> = url.query_pairs().into_owned().collect();
         assert!(pairs.contains(&("orchestrationProtocol".into(), "2".into())));
         assert!(pairs.contains(&("wsTicket".into(), "a b&c".into())));
