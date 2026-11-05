@@ -1,8 +1,11 @@
 mod auth;
 mod config;
 mod connection;
+mod rpc;
 mod server;
+mod shell;
 mod status;
+mod wire;
 
 use config::Config;
 use gpui::{

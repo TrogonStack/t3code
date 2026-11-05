@@ -109,6 +109,9 @@ jobs:
       - name: Check generated Expo GraphQL operations
         run: vp run --filter t3 generate --check
 
+      - name: Check generated RPC JSON Schema
+        run: vp run --filter @t3tools/contracts generate --check
+
       - name: Check
         run: vp check
 

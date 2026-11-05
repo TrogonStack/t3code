@@ -34,3 +34,9 @@ tokio-tungstenite = "0.30.0"
 codegen-units = 1
 lto = "thin"
 strip = true
+
+[dev-dependencies]
+prettyplease = "0.3.0"
+schemars = "0.8"
+syn = "3.0.9"
+typify = "0.10.0-alpha.3"

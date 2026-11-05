@@ -2,7 +2,7 @@
 
 Native desktop client written in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). It is meant to replace `apps/desktop` (Electron) over time and never embeds Node or Chromium. It starts the T3 server as a child process, authenticates without pairing, and opens the RPC WebSocket.
 
-Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment>", or the error). There are no RPC methods or screens yet.
+Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. There are no screens yet.
 
 ## Run
 
@@ -35,9 +35,24 @@ vp run --filter @t3tools/desktop-gpui test   # cargo test
 1. Spawns `<command> [entry] --bootstrap-fd 3` and writes one JSON bootstrap line (`packages/contracts/src/desktopBootstrap.ts`) to a pipe dup'd onto fd 3, as Electron does. The secret is random per launch.
 2. Polls `GET /.well-known/t3/environment` until the server is ready.
 3. Exchanges the HMAC bootstrap token for a bearer session, mints a WebSocket ticket, and opens `/ws`.
-4. Sends an RPC `Ping` every 5 seconds and reconnects with backoff after 15 seconds of silence.
+4. Subscribes to `orchestration.subscribeShell`, acks each stream chunk, and reduces snapshot and delta items into project and thread counts (`src/rpc.rs`, `src/shell.rs`).
+5. Sends an RPC `Ping` every 5 seconds and reconnects with backoff after 15 seconds of silence or when the stream ends.
 
 On quit the app sends SIGTERM to the server it spawned and SIGKILL after 5 seconds. If the app is killed, the server notices its parent changed within about 2 seconds and shuts itself down.
+
+## Wire types
+
+`packages/contracts/schema/rpc.schema.json` is generated from the Effect schemas (`vp run --filter @t3tools/contracts generate`, or `generate --check` to verify). It holds the encoded side of every `WsRpcGroup` method as shared `$defs` plus a `methods` index (payload, success, error refs, stream flag).
+
+`src/wire/generated.rs` is generated from the methods this client calls (`METHODS` in `tests/wire_types.rs`) with [typify](https://github.com/oxidecomputer/typify) and committed, so normal builds need no codegen and diffs stay reviewable. To add a method, add its tag to `METHODS`, then regenerate:
+
+```sh
+T3_UPDATE_GENERATED=1 cargo test --test wire_types
+```
+
+Without the variable the same test fails when the committed file is stale. Drift in the schema itself is caught by `generate --check` in CI and `vp run check:changed`.
+
+Known gaps: typify cannot flatten the `projectIcon` union (an `anyOf` with a `{kind: string}` catch-all), so `ProjectsEntry.projectIcon` is kept opaque (`serde_json::Value`) through the `OPAQUE` list. Unions without a discriminator generate as `#[serde(untagged)]` enums.
 
 ## Notes
 

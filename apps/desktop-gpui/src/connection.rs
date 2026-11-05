@@ -2,14 +2,15 @@
 
 use crate::auth::{self, AuthError};
 use crate::config::Config;
-use crate::status::{Status, StatusSender, publish};
+use crate::rpc::{Event, PING_FRAME, Session, SubscribeShell};
+use crate::shell::ShellState;
+use crate::status::{Counts, Status, StatusSender, publish};
+use crate::wire::{ShellItem, SubscribeShellPayload};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until};
 use tokio_tungstenite::tungstenite::Message;
 
-/// Effect RPC ping envelope (RpcMessage.constPing) in the JSON serialization.
-const PING_FRAME: &str = r#"{"_tag":"Ping"}"#;
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 // Pings go out every 5 s and a busy server stops answering them, so allow 15 s
 // without any frame (packages/client-runtime/src/rpc/protocol.ts PING_TIMEOUT).
@@ -67,9 +68,15 @@ pub async fn run(config: &Config, secret: &str, label: &str, status: &StatusSend
         publish(status, Status::Connecting);
         let failure = match connect(&client, config, &http_base, secret, &mut bearer).await {
             Ok(socket) => {
-                publish(status, Status::Connected(label.to_owned()));
+                publish(
+                    status,
+                    Status::Connected {
+                        label: label.to_owned(),
+                        counts: None,
+                    },
+                );
                 backoff.reset();
-                serve(socket).await
+                serve(socket, label, status).await
             }
             Err(message) => message,
         };
@@ -114,9 +121,18 @@ async fn connect(
     Ok(socket)
 }
 
-/// Pings until the socket closes or goes quiet; returns why it ended.
-async fn serve(socket: Socket) -> String {
+/// Subscribes to the shell stream and keeps the socket alive; returns why it ended.
+async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
     let (mut sink, mut stream) = socket.split();
+    let mut session = Session::new();
+    let mut shell = ShellState::default();
+    let request = match session.request::<SubscribeShell>(&SubscribeShellPayload::default()) {
+        Ok((_, frame)) => frame,
+        Err(error) => return error,
+    };
+    if let Err(error) = sink.send(Message::text(request)).await {
+        return error.to_string();
+    }
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -138,10 +154,57 @@ async fn serve(socket: Socket) -> String {
                         .map(|frame| format!("connection closed: {}", frame.reason))
                         .unwrap_or_else(|| "connection closed".to_owned());
                 }
-                // No RPC methods yet: any frame, Pong included, proves the server is alive.
+                Some(Ok(Message::Text(text))) => {
+                    // Any frame, Pong included, proves the server is alive.
+                    deadline = Instant::now() + PING_TIMEOUT;
+                    let reaction = session.react(text.as_str());
+                    for reply in reaction.send {
+                        if let Err(error) = sink.send(Message::text(reply)).await {
+                            return error.to_string();
+                        }
+                    }
+                    for event in reaction.events {
+                        if let Some(reason) = handle(event, &mut shell, label, status) {
+                            return reason;
+                        }
+                    }
+                }
                 Some(Ok(_)) => deadline = Instant::now() + PING_TIMEOUT,
             }
         }
+    }
+}
+
+/// Applies one event; `Some(reason)` means the subscription is over and the socket should reopen.
+fn handle(
+    event: Event,
+    shell: &mut ShellState,
+    label: &str,
+    status: &StatusSender,
+) -> Option<String> {
+    match event {
+        Event::Item { value, .. } => match serde_json::from_value::<ShellItem>(value) {
+            Ok(item) => {
+                if shell.apply(item) && shell.is_seeded() {
+                    publish(
+                        status,
+                        Status::Connected {
+                            label: label.to_owned(),
+                            counts: Some(Counts {
+                                projects: shell.project_count(),
+                                threads: shell.thread_count(),
+                            }),
+                        },
+                    );
+                }
+                None
+            }
+            Err(error) => Some(format!("unreadable shell item: {error}")),
+        },
+        Event::Done { .. } => Some("shell stream ended".to_owned()),
+        Event::Failed { message, .. } => Some(format!("shell stream failed: {message}")),
+        Event::Defect(message) => Some(format!("server defect: {message}")),
+        Event::Pong | Event::Ignored => None,
     }
 }
 
