@@ -20,7 +20,8 @@ pub enum Status {
 pub struct ShellView {
     pub projects: usize,
     pub threads: usize,
-    pub first_project: Option<String>,
+    /// Project titles in picker order.
+    pub project_titles: Vec<String>,
     pub rows: Vec<ThreadRow>,
 }
 

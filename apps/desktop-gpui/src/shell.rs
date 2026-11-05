@@ -56,19 +56,16 @@ impl ShellState {
                 .cmp(&a.updated_at)
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let first_project = self
+        let mut project_titles: Vec<String> = self
             .projects
             .values()
-            .min_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.cmp(&b.id))
-            })
-            .map(|project| project.title.clone());
+            .map(|project| project.title.clone())
+            .collect();
+        project_titles.sort_by_key(|title| title.to_lowercase());
         ShellView {
             projects: self.project_count(),
             threads: self.thread_count(),
-            first_project,
+            project_titles,
             rows,
         }
     }
@@ -226,7 +223,7 @@ mod tests {
         }));
         let view = state.view();
         assert_eq!((view.projects, view.threads), (1, 2));
-        assert_eq!(view.first_project.as_deref(), Some("Project"));
+        assert_eq!(view.project_titles, ["Project"]);
         let ids: Vec<_> = view.rows.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(ids, ["thread-new", "thread-v2"]);
         assert!(view.rows.iter().all(|row| row.project == "Project"));

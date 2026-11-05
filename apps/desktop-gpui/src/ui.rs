@@ -1,8 +1,8 @@
 use crate::status::{ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
-    AnyElement, Context, Entity, Hsla, IntoElement, ParentElement, Render, Styled,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    Anchor, AnyElement, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement, Render,
+    Styled, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, TitleBar,
@@ -10,7 +10,10 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
+    kbd::Kbd,
+    popover::Popover,
     tag::Tag,
+    tooltip::Tooltip,
     v_flex,
 };
 
@@ -22,6 +25,8 @@ pub struct MainView {
     search: Entity<InputState>,
     composer: Entity<TextareaState>,
     list: UniformListScrollHandle,
+    selected_project: Option<String>,
+    picker_open: bool,
 }
 
 impl MainView {
@@ -35,6 +40,8 @@ impl MainView {
                     .auto_grow(3, 10)
             }),
             list: UniformListScrollHandle::new(),
+            selected_project: None,
+            picker_open: false,
         }
     }
 
@@ -97,9 +104,7 @@ impl MainView {
                 .child(self.status.to_string())
                 .into_any_element();
         };
-        let project = shell
-            .first_project
-            .clone()
+        let project = active_project(self.selected_project.as_deref(), shell)
             .unwrap_or_else(|| "your project".to_owned());
         v_flex()
             .flex_1()
@@ -122,14 +127,86 @@ impl MainView {
             .child(
                 centered(cx)
                     .gap_6()
-                    .child(
-                        div()
-                            .text_2xl()
-                            .child(format!("What should we build in {project}?")),
-                    )
+                    .child(self.hero(&project, shell.project_titles.clone(), cx))
                     .child(self.composer_box(cx)),
             )
             .into_any_element()
+    }
+
+    fn hero(&self, project: &str, titles: Vec<String>, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let picker = Popover::new("project-picker")
+            .anchor(Anchor::TopCenter)
+            .open(self.picker_open)
+            .on_open_change({
+                let view = view.clone();
+                move |open, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.picker_open = *open;
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(
+                Button::new("project")
+                    .ghost()
+                    .tooltip(project.to_owned())
+                    .child(div().text_2xl().child(project.to_owned())),
+            )
+            .content(move |_, _, cx| {
+                let hover = cx.theme().list_hover;
+                v_flex()
+                    .id("project-list")
+                    .w(px(240.))
+                    .max_h(px(320.))
+                    .overflow_y_scroll()
+                    .children(titles.iter().enumerate().map(|(index, title)| {
+                        let (view, title) = (view.clone(), title.clone());
+                        div()
+                            .id(("project", index))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_sm()
+                            .truncate()
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(hover))
+                            .child(title.clone())
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.selected_project = Some(title.clone());
+                                    this.picker_open = false;
+                                    cx.notify();
+                                });
+                            })
+                    }))
+            });
+        v_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                h_flex()
+                    .items_center()
+                    .text_2xl()
+                    .child("What should we build in")
+                    .child(picker)
+                    .child("?"),
+            )
+            .child(
+                div()
+                    .id("start-without-project")
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .cursor_pointer()
+                    .hover(|style| style.underline())
+                    .tooltip(|window, cx| {
+                        Tooltip::element(|_, _| {
+                            Kbd::new(Keystroke::parse("alt-cmd-n").expect("valid keystroke"))
+                        })
+                        .build(window, cx)
+                    })
+                    .child("or start without a project"),
+            )
     }
 
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -157,6 +234,22 @@ impl MainView {
                 ),
             )
     }
+}
+
+/// The picked project while it still exists, else the newest thread's project.
+fn active_project(selected: Option<&str>, shell: &ShellView) -> Option<String> {
+    selected
+        .filter(|title| shell.project_titles.iter().any(|known| known == title))
+        .map(str::to_owned)
+        .or_else(|| {
+            shell
+                .rows
+                .iter()
+                .map(|row| &row.project)
+                .find(|project| !project.is_empty())
+                .cloned()
+        })
+        .or_else(|| shell.project_titles.first().cloned())
 }
 
 fn centered(cx: &Context<MainView>) -> gpui::Div {
@@ -243,5 +336,43 @@ impl Render for MainView {
                     .child(self.sidebar(cx))
                     .child(self.main_area(cx)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(project: &str) -> ThreadRow {
+        ThreadRow {
+            id: project.to_owned(),
+            project: project.to_owned(),
+            title: String::new(),
+            branch: None,
+            status: ThreadStatus::Idle,
+            updated_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn active_project_prefers_a_live_pick_then_the_newest_thread() {
+        let shell = ShellView {
+            project_titles: vec!["alpha".into(), "beta".into()],
+            rows: vec![row(""), row("beta")],
+            ..ShellView::default()
+        };
+        assert_eq!(
+            active_project(Some("alpha"), &shell).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(
+            active_project(Some("gone"), &shell).as_deref(),
+            Some("beta")
+        );
+        let empty = ShellView {
+            project_titles: vec!["alpha".into()],
+            ..ShellView::default()
+        };
+        assert_eq!(active_project(None, &empty).as_deref(), Some("alpha"));
     }
 }
