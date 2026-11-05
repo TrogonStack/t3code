@@ -1,6 +1,6 @@
 use crate::connection::{Action, ActionSender};
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
-use crate::status::{ShellView, Status, ThreadRow};
+use crate::status::{Section, ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
     Anchor, AnyElement, App, Context, Entity, Focusable as _, FontWeight, Hsla, IntoElement,
@@ -29,6 +29,8 @@ pub struct MainView {
     project_search: Entity<InputState>,
     composer: Entity<TextareaState>,
     list: UniformListScrollHandle,
+    /// Working, Snoozed and Settled shelves; the web starts all of them collapsed.
+    shelves: [bool; 3],
     selected_project: Option<String>,
     picker_open: bool,
     picker_order: Option<Vec<String>>,
@@ -62,6 +64,7 @@ impl MainView {
                     .auto_grow(3, 10)
             }),
             list: UniformListScrollHandle::new(),
+            shelves: [false; 3],
             selected_project: None,
             picker_open: false,
             picker_order: None,
@@ -116,7 +119,9 @@ impl MainView {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.shell().map_or(0, |shell| shell.rows.len());
+        let count = self
+            .shell()
+            .map_or(0, |shell| sidebar_items(&shell.rows, self.shelves).len());
         v_flex()
             .w(px(SIDEBAR_WIDTH))
             .flex_shrink_0()
@@ -136,9 +141,27 @@ impl MainView {
                             return Vec::new();
                         };
                         let (muted, hover) = (cx.theme().muted_foreground, cx.theme().list_hover);
-                        shell.rows[range]
+                        let items = sidebar_items(&shell.rows, this.shelves);
+                        items[range]
                             .iter()
-                            .map(|row| thread_row(row, muted, hover))
+                            .map(|item| match *item {
+                                SidebarItem::Row(index) => {
+                                    thread_row(&shell.rows[index], muted, hover).into_any_element()
+                                }
+                                SidebarItem::Header {
+                                    section,
+                                    count,
+                                    expanded,
+                                } => {
+                                    let shelf = shelf_index(section);
+                                    shelf_header(section, count, expanded, muted, hover)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.shelves[shelf] = !this.shelves[shelf];
+                                            cx.notify();
+                                        }))
+                                        .into_any_element()
+                                }
+                            })
                             .collect()
                     }),
                 )
@@ -565,6 +588,92 @@ fn status_tag(status: ThreadStatus) -> Option<Tag> {
     Some(tag.small().child(label))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarItem {
+    Row(usize),
+    Header {
+        section: Section,
+        count: usize,
+        expanded: bool,
+    },
+}
+
+fn shelf_index(section: Section) -> usize {
+    match section {
+        Section::Working => 0,
+        Section::Snoozed => 1,
+        _ => 2,
+    }
+}
+
+/// The web's default list: pinned and active rows, then a header per shelf (Working and
+/// Snoozed only when non-empty, Settled always) with its rows only while expanded.
+fn sidebar_items(rows: &[ThreadRow], expanded: [bool; 3]) -> Vec<SidebarItem> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut items = Vec::with_capacity(rows.len() + 3);
+    for (index, row) in rows.iter().enumerate() {
+        if matches!(row.section, Section::Pinned | Section::Active) {
+            items.push(SidebarItem::Row(index));
+        }
+    }
+    for section in [Section::Working, Section::Snoozed, Section::Settled] {
+        let count = rows.iter().filter(|row| row.section == section).count();
+        if count == 0 && section != Section::Settled {
+            continue;
+        }
+        let expanded = expanded[shelf_index(section)];
+        items.push(SidebarItem::Header {
+            section,
+            count,
+            expanded,
+        });
+        if expanded {
+            let shelf = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.section == section);
+            items.extend(shelf.map(|(index, _)| SidebarItem::Row(index)));
+        }
+    }
+    items
+}
+
+fn shelf_header(
+    section: Section,
+    count: usize,
+    expanded: bool,
+    muted: Hsla,
+    hover: Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    let label = match section {
+        Section::Working => "Working",
+        Section::Snoozed => "Snoozed",
+        _ => "Settled",
+    };
+    let chevron = if expanded {
+        IconName::ChevronDown
+    } else {
+        IconName::ChevronRight
+    };
+    h_flex()
+        .id(label)
+        .h(px(ROW_HEIGHT))
+        .w_full()
+        .px_2()
+        .gap_2()
+        .items_end()
+        .pb_2()
+        .rounded_md()
+        .text_xs()
+        .text_color(muted)
+        .hover(|style| style.bg(hover))
+        .child(Icon::new(chevron).small())
+        .child(div().flex_1().child(label))
+        .child(count.to_string())
+}
+
 fn thread_row(row: &ThreadRow, muted: Hsla, hover: Hsla) -> impl IntoElement + use<> {
     v_flex()
         .id(row.id.clone())
@@ -657,8 +766,45 @@ mod tests {
             title: String::new(),
             branch: None,
             status: ThreadStatus::Idle,
-            updated_at: String::new(),
+            section: Section::Active,
         }
+    }
+
+    #[test]
+    fn sidebar_items_keep_shelves_collapsed_until_expanded() {
+        let in_section = |id: &str, section| ThreadRow { section, ..row(id) };
+        let rows = vec![
+            in_section("p", Section::Pinned),
+            in_section("a", Section::Active),
+            in_section("w", Section::Working),
+            in_section("s", Section::Settled),
+        ];
+        let header = |section, count, expanded| SidebarItem::Header {
+            section,
+            count,
+            expanded,
+        };
+        assert_eq!(
+            sidebar_items(&rows, [false; 3]),
+            [
+                SidebarItem::Row(0),
+                SidebarItem::Row(1),
+                header(Section::Working, 1, false),
+                header(Section::Settled, 1, false),
+            ]
+        );
+        assert_eq!(
+            sidebar_items(&rows, [true, false, true]),
+            [
+                SidebarItem::Row(0),
+                SidebarItem::Row(1),
+                header(Section::Working, 1, true),
+                SidebarItem::Row(2),
+                header(Section::Settled, 1, true),
+                SidebarItem::Row(3),
+            ]
+        );
+        assert!(sidebar_items(&[], [true; 3]).is_empty());
     }
 
     #[test]

@@ -20,7 +20,18 @@ pub enum Status {
     Environment(EnvironmentProjects),
 }
 
-/// What the window needs from the shell state, newest thread first.
+/// Where the web sidebar lists a thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    Pinned,
+    Active,
+    Working,
+    Snoozed,
+    Settled,
+}
+
+/// What the window needs from the shell state, `rows` in sidebar order: sections in
+/// `Section` order, each sorted as the web sorts it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShellView {
     pub projects: usize,
@@ -38,7 +49,7 @@ pub struct ThreadRow {
     pub title: String,
     pub branch: Option<String>,
     pub status: ThreadsEntryStatus,
-    pub updated_at: String,
+    pub section: Section,
 }
 
 fn plural(count: usize, noun: &str) -> String {

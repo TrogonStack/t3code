@@ -2,7 +2,7 @@
 
 Native desktop client written in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). It is meant to replace `apps/desktop` (Electron) over time and never embeds Node or Chromium. It starts the T3 server as a child process, authenticates without pairing, and opens the RPC WebSocket.
 
-Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. Once connected, it draws a static skeleton of the main screen with [gpui-component](https://github.com/longbridge/gpui-component): a thread list (newest first) and an empty composer. Nothing is interactive yet.
+Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. Once connected, it draws a static skeleton of the main screen with [gpui-component](https://github.com/longbridge/gpui-component): a thread list laid out like the web sidebar (pinned and active threads, then collapsible Working, Snoozed and Settled shelves) and an empty composer. Only the shelf headers are interactive.
 
 ## Run
 
