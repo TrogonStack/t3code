@@ -1,11 +1,12 @@
 //! The authenticated RPC WebSocket: connect, keep alive, reconnect.
 
 use crate::auth::{self, AuthError, Credential};
-use crate::rpc::{Event, PING_FRAME, Session, SubscribeShell};
+use crate::rpc::{Event, PING_FRAME, ProjectsMutate, Session, SubscribeShell};
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
-use crate::wire::{ShellItem, SubscribeShellPayload};
+use crate::wire::{ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload};
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until};
 use tokio_tungstenite::tungstenite::Message;
@@ -15,6 +16,51 @@ const PING_INTERVAL: Duration = Duration::from_secs(5);
 // without any frame (packages/client-runtime/src/rpc/protocol.ts PING_TIMEOUT).
 const PING_TIMEOUT: Duration = Duration::from_secs(15);
 const ORCHESTRATION_PROTOCOL_VERSION: &str = "2";
+
+/// What the connection needs to know about the server it dialed.
+pub struct Environment {
+    pub label: String,
+    /// The server keeps `pinned` from `project.update` (`capabilities.projectOrganization`).
+    pub project_organization: bool,
+}
+
+/// A request from the window that the connection sends as an RPC.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    SetProjectPinned { project_id: String, pinned: bool },
+}
+
+pub type ActionSender = async_channel::Sender<Action>;
+pub type ActionReceiver = async_channel::Receiver<Action>;
+
+impl Action {
+    fn describe(&self) -> &'static str {
+        match self {
+            Self::SetProjectPinned { pinned: true, .. } => "pin project",
+            Self::SetProjectPinned { pinned: false, .. } => "unpin project",
+        }
+    }
+
+    fn payload(&self, command_id: String) -> ProjectMutation {
+        match self {
+            Self::SetProjectPinned { project_id, pinned } => ProjectMutation::Variant1 {
+                archived: None,
+                auto_pull: None,
+                command_id,
+                default_model_selection: None,
+                default_thread_env_mode: None,
+                favicon_path: None,
+                pinned: Some(*pinned),
+                project_icon: None,
+                project_id: project_id.clone(),
+                scripts: None,
+                title: None,
+                type_: ProjectMutationType::ProjectUpdate,
+                workspace_root: None,
+            },
+        }
+    }
+}
 
 /// Doubling delay between attempts, capped (Electron restarts the backend the same way).
 pub struct Backoff {
@@ -67,7 +113,13 @@ fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
 }
 
 /// Connects and stays connected until cancelled, reporting through `status`.
-pub async fn run(http_base: &str, credential: &Credential, label: &str, status: &StatusSender) {
+pub async fn run(
+    http_base: &str,
+    credential: &Credential,
+    environment: &Environment,
+    actions: &ActionReceiver,
+    status: &StatusSender,
+) {
     let client = auth::http_client();
     let mut bearer: Option<String> = None;
     let mut backoff = Backoff::new();
@@ -78,12 +130,13 @@ pub async fn run(http_base: &str, credential: &Credential, label: &str, status: 
                 publish(
                     status,
                     Status::Connected {
-                        label: label.to_owned(),
+                        label: environment.label.clone(),
+                        can_pin: environment.project_organization,
                         shell: None,
                     },
                 );
                 backoff.reset();
-                serve(socket, label, status).await
+                serve(socket, environment, actions, status).await
             }
             Err(message) => message,
         };
@@ -128,7 +181,12 @@ async fn connect(
 }
 
 /// Subscribes to the shell stream and keeps the socket alive; returns why it ended.
-async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
+async fn serve(
+    socket: Socket,
+    environment: &Environment,
+    actions: &ActionReceiver,
+    status: &StatusSender,
+) -> String {
     let (mut sink, mut stream) = socket.split();
     let mut session = Session::new();
     let mut shell = ShellState::default();
@@ -139,6 +197,9 @@ async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
     if let Err(error) = sink.send(Message::text(request)).await {
         return error.to_string();
     }
+    // Whatever was clicked while disconnected is stale by now.
+    while actions.try_recv().is_ok() {}
+    let mut pending: HashMap<String, &'static str> = HashMap::new();
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -147,6 +208,20 @@ async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
             _ = ping.tick() => {
                 if let Err(error) = sink.send(Message::text(PING_FRAME)).await {
                     return error.to_string();
+                }
+            }
+            action = actions.recv() => {
+                let Ok(action) = action else {
+                    return "window closed".to_owned();
+                };
+                match session.request::<ProjectsMutate>(&action.payload(command_id())) {
+                    Ok((id, frame)) => {
+                        pending.insert(id, action.describe());
+                        if let Err(error) = sink.send(Message::text(frame)).await {
+                            return error.to_string();
+                        }
+                    }
+                    Err(error) => eprintln!("[rpc] could not {}: {error}", action.describe()),
                 }
             }
             _ = sleep_until(deadline) => {
@@ -170,7 +245,10 @@ async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
                         }
                     }
                     for event in reaction.events {
-                        if let Some(reason) = handle(event, &mut shell, label, status) {
+                        if settle(&mut pending, &event) {
+                            continue;
+                        }
+                        if let Some(reason) = handle(event, &mut shell, environment, status) {
                             return reason;
                         }
                     }
@@ -181,11 +259,33 @@ async fn serve(socket: Socket, label: &str, status: &StatusSender) -> String {
     }
 }
 
+fn command_id() -> String {
+    let mut bytes = [0u8; 8];
+    // A failed read leaves zeros, and the server rejects a repeated command id rather than applying it twice.
+    let _ = getrandom::fill(&mut bytes);
+    format!("gpui-{}", hex::encode(bytes))
+}
+
+/// Consumes the outcome of an action's request, logging a failure; true when `event` was one.
+fn settle(pending: &mut HashMap<String, &'static str>, event: &Event) -> bool {
+    match event {
+        Event::Done { request_id, .. } => pending.remove(request_id).is_some(),
+        Event::Failed {
+            request_id,
+            message,
+        } => pending.remove(request_id).is_some_and(|what| {
+            eprintln!("[rpc] could not {what}: {message}");
+            true
+        }),
+        _ => false,
+    }
+}
+
 /// Applies one event; `Some(reason)` means the subscription is over and the socket should reopen.
 fn handle(
     event: Event,
     shell: &mut ShellState,
-    label: &str,
+    environment: &Environment,
     status: &StatusSender,
 ) -> Option<String> {
     match event {
@@ -195,7 +295,8 @@ fn handle(
                     publish(
                         status,
                         Status::Connected {
-                            label: label.to_owned(),
+                            label: environment.label.clone(),
+                            can_pin: environment.project_organization,
                             shell: Some(shell.view()),
                         },
                     );
@@ -222,6 +323,43 @@ mod tests {
         assert_eq!(delays, vec![500, 1000, 2000, 4000, 8000, 10_000, 10_000]);
         backoff.reset();
         assert_eq!(backoff.next_delay().as_millis(), 500);
+    }
+
+    #[test]
+    fn pin_action_builds_a_project_update_mutation() {
+        let pin = Action::SetProjectPinned {
+            project_id: "p1".to_owned(),
+            pinned: true,
+        };
+        let value = serde_json::to_value(pin.payload("c1".to_owned())).expect("json");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "project.update",
+                "commandId": "c1",
+                "projectId": "p1",
+                "pinned": true,
+            })
+        );
+        let unpin = Action::SetProjectPinned {
+            project_id: "p1".to_owned(),
+            pinned: false,
+        };
+        let value = serde_json::to_value(unpin.payload("c2".to_owned())).expect("json");
+        assert_eq!(value["pinned"], false);
+    }
+
+    #[test]
+    fn settle_consumes_only_the_outcome_of_a_pending_action() {
+        let mut pending = HashMap::from([("7".to_owned(), "pin project")]);
+        let failed = |id: &str| Event::Failed {
+            request_id: id.to_owned(),
+            message: "no".to_owned(),
+        };
+        assert!(!settle(&mut pending, &failed("0")));
+        assert!(settle(&mut pending, &failed("7")));
+        assert!(pending.is_empty());
+        assert!(!settle(&mut pending, &failed("7")));
     }
 
     #[test]

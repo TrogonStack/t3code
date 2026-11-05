@@ -26,6 +26,15 @@ impl Method for SubscribeShell {
     type Success = wire::ShellItem;
 }
 
+/// `projects.mutate`, which carries `project.update` among its mutations.
+pub struct ProjectsMutate;
+
+impl Method for ProjectsMutate {
+    const TAG: &'static str = "projects.mutate";
+    type Payload = wire::ProjectMutation;
+    type Success = wire::ProjectsMutateSuccess;
+}
+
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     match Value::deserialize(deserializer)? {

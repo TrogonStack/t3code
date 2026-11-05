@@ -50,6 +50,12 @@ impl ProjectEntry {
     }
 }
 
+/// The pin button's tooltip, with the default `thread.pin` shortcut.
+pub fn pin_tooltip(name: &str, pinned: bool) -> String {
+    let verb = if pinned { "Unpin" } else { "Pin" };
+    format!("{verb} {name} (\u{21e7}\u{2318}P)")
+}
+
 fn words(text: &str) -> Vec<&str> {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -194,12 +200,66 @@ pub fn picker_entries<'a>(
     listed
 }
 
+/// Rows in the order they had when the picker opened (`useOrderWhileOpen`): ids that left drop
+/// out, ids that arrived follow in their current order.
+pub fn order_while_open<'a>(
+    listed: Vec<&'a ProjectEntry>,
+    opened_with: &[String],
+) -> Vec<&'a ProjectEntry> {
+    let position = |entry: &ProjectEntry| {
+        opened_with
+            .iter()
+            .position(|id| *id == entry.id)
+            .unwrap_or(opened_with.len())
+    };
+    let mut ordered = listed;
+    ordered.sort_by_key(|entry| position(entry));
+    ordered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{Value, json};
 
     const SNAPSHOT: &str = include_str!("../tests/fixtures/shell-snapshot.json");
+
+    #[test]
+    fn order_while_open_keeps_the_opening_order_and_appends_new_rows() {
+        let entry = |id: &str, pinned: bool| ProjectEntry {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            initials: String::new(),
+            color: 0,
+            pinned,
+            scratch: false,
+        };
+        let opened = ["a", "b", "c"].map(str::to_owned);
+        let now = [entry("d", false), entry("c", true), entry("a", false)];
+        let ids = |listed: Vec<&ProjectEntry>| -> Vec<String> {
+            listed.into_iter().map(|e| e.id.clone()).collect()
+        };
+        assert_eq!(
+            ids(order_while_open(now.iter().collect(), &opened)),
+            ["a", "c", "d"]
+        );
+        assert_eq!(
+            ids(order_while_open(now.iter().collect(), &[])),
+            ["d", "c", "a"]
+        );
+    }
+
+    #[test]
+    fn pin_tooltip_names_the_action_and_shortcut() {
+        assert_eq!(
+            pin_tooltip("t3code", false),
+            "Pin t3code (\u{21e7}\u{2318}P)"
+        );
+        assert_eq!(
+            pin_tooltip("t3code", true),
+            "Unpin t3code (\u{21e7}\u{2318}P)"
+        );
+    }
 
     fn project(id: &str, title: &str, edit: impl FnOnce(&mut Value)) -> Project {
         let mut value: Value = serde_json::from_str(SNAPSHOT).expect("json");

@@ -1,13 +1,14 @@
+use crate::connection::{Action, ActionSender};
 use crate::projects::{self, ProjectEntry};
 use crate::status::{ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
-    Anchor, AnyElement, Context, Entity, Focusable as _, FontWeight, Hsla, IntoElement, Keystroke,
-    ParentElement, Render, Styled, UniformListScrollHandle, Window, div, prelude::*, px, rgb,
-    uniform_list,
+    Anchor, AnyElement, App, Context, Entity, Focusable as _, FontWeight, Hsla, IntoElement,
+    Keystroke, ParentElement, Render, RenderOnce, Styled, UniformListScrollHandle, Window, div,
+    prelude::*, px, rgb, uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, Sizable, TitleBar,
+    ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     h_flex,
@@ -30,10 +31,17 @@ pub struct MainView {
     list: UniformListScrollHandle,
     selected_project: Option<String>,
     picker_open: bool,
+    picker_order: Option<Vec<String>>,
+    actions: ActionSender,
 }
 
 impl MainView {
-    pub fn new(status: Status, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        status: Status,
+        actions: ActionSender,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let project_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search projects..."));
         cx.subscribe(&project_search, |_, _, event: &InputEvent, cx| {
@@ -54,11 +62,20 @@ impl MainView {
             list: UniformListScrollHandle::new(),
             selected_project: None,
             picker_open: false,
+            picker_order: None,
+            actions,
         }
     }
 
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
         self.status = status;
+        // Thread activity reorders recency on every delta, so the default must not follow it.
+        if self.selected_project.is_none() {
+            self.selected_project = self
+                .shell()
+                .and_then(|shell| active_project(None, shell))
+                .map(|entry| entry.id.clone());
+        }
         cx.notify();
     }
 
@@ -67,6 +84,18 @@ impl MainView {
             Status::Connected { shell, .. } => shell.as_ref(),
             _ => None,
         }
+    }
+
+    fn can_pin(&self) -> bool {
+        matches!(&self.status, Status::Connected { can_pin: true, .. })
+    }
+
+    fn picker_ids(&self) -> Option<Vec<String>> {
+        let shell = self.shell()?;
+        let active = active_project(self.selected_project.as_deref(), shell);
+        let entries = &shell.project_entries;
+        let listed = projects::picker_entries(entries, active.map(|e| e.id.as_str()), "");
+        Some(listed.into_iter().map(|entry| entry.id.clone()).collect())
     }
 
     fn environment(&self) -> String {
@@ -158,6 +187,8 @@ impl MainView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let view = cx.entity();
+        let (actions, can_pin) = (self.actions.clone(), self.can_pin());
+        let order = self.picker_order.clone();
         let search = self.project_search.clone();
         let picker = Popover::new("project-picker")
             .anchor(Anchor::TopCenter)
@@ -170,19 +201,18 @@ impl MainView {
                     search.update(cx, |state, cx| state.set_value("", window, cx));
                     view.update(cx, |this, cx| {
                         this.picker_open = *open;
+                        this.picker_order = open.then(|| this.picker_ids()).flatten();
                         cx.notify();
                     });
                 }
             })
-            .trigger(
-                Button::new("project")
-                    .ghost()
-                    .tooltip(project.to_owned())
-                    .child(div().text_2xl().child(project.to_owned())),
-            )
+            .trigger(ProjectTrigger::new(project))
             .content(move |_, _, cx| {
                 let query = search.read(cx).value();
-                let listed = projects::picker_entries(&entries, active_id.as_deref(), &query);
+                let mut listed = projects::picker_entries(&entries, active_id.as_deref(), &query);
+                if let Some(order) = &order {
+                    listed = projects::order_while_open(listed, order);
+                }
                 let theme = cx.theme();
                 let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
                 let (hover, selected) = (theme.list_hover, theme.list_active);
@@ -190,10 +220,13 @@ impl MainView {
                 let border = theme.border;
                 let rows = listed.iter().enumerate().map(|(index, entry)| {
                     let (view, id) = (view.clone(), entry.id.clone());
+                    let (actions, pin_id) = (actions.clone(), entry.id.clone());
+                    let pinned = entry.pinned;
                     let color: Hsla = rgb(entry.color_hex(dark)).into();
                     let active = active_id.as_deref() == Some(entry.id.as_str());
                     h_flex()
                         .id(("project", index))
+                        .group(PICKER_ROW_GROUP)
                         .gap_2()
                         .px_2()
                         .py_1p5()
@@ -225,7 +258,10 @@ impl MainView {
                                 .truncate()
                                 .child(entry.title.clone()),
                         )
-                        .when(entry.pinned, |row| {
+                        .when(can_pin, |row| {
+                            row.child(pin_button(index, entry, actions, pin_id))
+                        })
+                        .when(!can_pin && pinned, |row| {
                             row.child(
                                 Icon::new(gpui_kit_assets::IconName::Pin)
                                     .small()
@@ -311,15 +347,128 @@ impl MainView {
                     .bordered(false),
             )
             .child(
-                h_flex().justify_end().child(
-                    Button::new("send")
-                        .primary()
-                        .rounded_full()
-                        .icon(IconName::ArrowUp)
-                        .on_click(|_, _, _| {}),
-                ),
+                h_flex()
+                    .justify_between()
+                    .child(
+                        Button::new("attach")
+                            .ghost()
+                            .small()
+                            .icon(gpui_kit_assets::IconName::Paperclip)
+                            .tooltip("Attach files")
+                            .on_click(|_, _, _| {}),
+                    )
+                    .child(
+                        Button::new("send")
+                            .primary()
+                            .rounded_full()
+                            .icon(IconName::ArrowUp)
+                            .on_click(|_, _, _| {}),
+                    ),
             )
     }
+}
+
+/// The project name as plain heading text that underlines on hover and while its picker is open.
+#[derive(IntoElement)]
+struct ProjectTrigger {
+    name: String,
+    open: bool,
+}
+
+impl ProjectTrigger {
+    fn new(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            open: false,
+        }
+    }
+}
+
+impl Selectable for ProjectTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for ProjectTrigger {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let tooltip = self.name.clone();
+        div()
+            .id("project")
+            .ml_2()
+            .min_w_0()
+            .max_w_full()
+            .truncate()
+            .text_2xl()
+            .cursor_pointer()
+            .when(self.open, |name| name.underline())
+            .hover(|style| style.underline())
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .child(self.name)
+    }
+}
+
+const PICKER_ROW_GROUP: &str = "project-row";
+
+/// Shown on row hover, and always for a pinned project. A click toggles the pin and, because
+/// `Button` stops propagation, does not select the row.
+fn pin_button(
+    index: usize,
+    entry: &ProjectEntry,
+    actions: ActionSender,
+    project_id: String,
+) -> impl IntoElement + use<> {
+    let pinned = entry.pinned;
+    let icon = |name| Icon::new(name).small();
+    Button::new(("pin", index))
+        .ghost()
+        .xsmall()
+        .tooltip(projects::pin_tooltip(&entry.title, pinned))
+        .when(!pinned, |button| {
+            button
+                .invisible()
+                .group_hover(PICKER_ROW_GROUP, |style| style.visible())
+        })
+        .child(if pinned {
+            div()
+                .group("pin-icon")
+                .child(
+                    div()
+                        .group_hover("pin-icon", |style| style.invisible())
+                        .child(icon(gpui_kit_assets::IconName::Pin)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .invisible()
+                        .group_hover("pin-icon", |style| style.visible())
+                        .child(icon(gpui_kit_assets::IconName::PinOff)),
+                )
+        } else {
+            div().child(icon(gpui_kit_assets::IconName::Pin))
+        })
+        .on_click(move |_, _, _| {
+            let action = Action::SetProjectPinned {
+                project_id: project_id.clone(),
+                pinned: !pinned,
+            };
+            if actions.try_send(action).is_err() {
+                eprintln!("[ui] could not queue the pin request");
+            }
+        })
 }
 
 /// The picked project while it still exists, else the newest thread's project, else the first listed.

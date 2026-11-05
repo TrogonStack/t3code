@@ -2097,6 +2097,67 @@ impl ::std::convert::TryFrom<::std::string::String> for ProjectIconKind {
         value.parse()
     }
 }
+///`ProjectMutationErrorEncoded`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct ProjectMutationErrorEncoded {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub cause: ::std::option::Option<::serde_json::Value>,
+    #[serde(rename = "commandId")]
+    pub command_id: ::std::string::String,
+    pub message: ::std::string::String,
+    #[serde(rename = "_tag")]
+    pub tag: ProjectMutationErrorEncodedTag,
+}
+///`ProjectMutationErrorEncodedTag`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectMutationErrorEncodedTag {
+    ProjectMutationError,
+}
+impl ::std::fmt::Display for ProjectMutationErrorEncodedTag {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::ProjectMutationError => f.write_str("ProjectMutationError"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectMutationErrorEncodedTag {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "ProjectMutationError" => Ok(Self::ProjectMutationError),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectMutationErrorEncodedTag {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for ProjectMutationErrorEncodedTag {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
 ///`Projects`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(transparent)]
@@ -2215,6 +2276,755 @@ impl ::std::convert::TryFrom<&str> for ProjectsEntryDefaultThreadEnvMode {
 }
 impl ::std::convert::TryFrom<::std::string::String>
 for ProjectsEntryDefaultThreadEnvMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutateError`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ProjectsMutateError {
+    ProjectMutationErrorEncoded(ProjectMutationErrorEncoded),
+    EnvironmentAuthorizationErrorEncoded(EnvironmentAuthorizationErrorEncoded),
+}
+impl ::std::convert::From<ProjectMutationErrorEncoded> for ProjectsMutateError {
+    fn from(value: ProjectMutationErrorEncoded) -> Self {
+        Self::ProjectMutationErrorEncoded(value)
+    }
+}
+impl ::std::convert::From<EnvironmentAuthorizationErrorEncoded> for ProjectsMutateError {
+    fn from(value: EnvironmentAuthorizationErrorEncoded) -> Self {
+        Self::EnvironmentAuthorizationErrorEncoded(value)
+    }
+}
+///`ProjectsMutatePayload`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ProjectsMutatePayload {
+    Variant0 {
+        #[serde(rename = "commandId")]
+        command_id: ::std::string::String,
+        #[serde(
+            rename = "createWorkspaceRootIfMissing",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        create_workspace_root_if_missing: ::std::option::Option<bool>,
+        #[serde(
+            rename = "defaultModelSelection",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        default_model_selection: ::std::option::Option<ModelSelection>,
+        #[serde(rename = "projectId")]
+        project_id: ::std::string::String,
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        scripts: ::std::option::Option<DefaultProjectScripts>,
+        title: ::std::string::String,
+        #[serde(rename = "type")]
+        type_: ProjectsMutatePayloadVariant0Type,
+        #[serde(rename = "workspaceRoot")]
+        workspace_root: ::std::string::String,
+    },
+    Variant1 {
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        archived: ::std::option::Option<bool>,
+        #[serde(
+            rename = "autoPull",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        auto_pull: ::std::option::Option<bool>,
+        #[serde(rename = "commandId")]
+        command_id: ::std::string::String,
+        #[serde(
+            rename = "defaultModelSelection",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        default_model_selection: ::std::option::Option<ModelSelection>,
+        #[serde(
+            rename = "defaultThreadEnvMode",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        default_thread_env_mode: ::std::option::Option<
+            ProjectsMutatePayloadVariant1DefaultThreadEnvMode,
+        >,
+        #[serde(
+            rename = "faviconPath",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        favicon_path: ::std::option::Option<::std::string::String>,
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        pinned: ::std::option::Option<bool>,
+        #[serde(
+            rename = "projectIcon",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        project_icon: ::std::option::Option<ProjectsMutatePayloadVariant1ProjectIcon>,
+        #[serde(rename = "projectId")]
+        project_id: ::std::string::String,
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        scripts: ::std::option::Option<DefaultProjectScripts>,
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        title: ::std::option::Option<::std::string::String>,
+        #[serde(rename = "type")]
+        type_: ProjectsMutatePayloadVariant1Type,
+        #[serde(
+            rename = "workspaceRoot",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        workspace_root: ::std::option::Option<::std::string::String>,
+    },
+    Variant2 {
+        #[serde(rename = "commandId")]
+        command_id: ::std::string::String,
+        #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+        force: ::std::option::Option<bool>,
+        #[serde(rename = "projectId")]
+        project_id: ::std::string::String,
+        #[serde(rename = "type")]
+        type_: ProjectsMutatePayloadVariant2Type,
+    },
+}
+///`ProjectsMutatePayloadVariant0Type`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant0Type {
+    #[serde(rename = "project.create")]
+    ProjectCreate,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant0Type {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::ProjectCreate => f.write_str("project.create"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant0Type {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "project.create" => Ok(Self::ProjectCreate),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectsMutatePayloadVariant0Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant0Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant1DefaultThreadEnvMode`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant1DefaultThreadEnvMode {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "worktree")]
+    Worktree,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant1DefaultThreadEnvMode {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Local => f.write_str("local"),
+            Self::Worktree => f.write_str("worktree"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant1DefaultThreadEnvMode {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "local" => Ok(Self::Local),
+            "worktree" => Ok(Self::Worktree),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for ProjectsMutatePayloadVariant1DefaultThreadEnvMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant1DefaultThreadEnvMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant1ProjectIcon`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ProjectsMutatePayloadVariant1ProjectIcon {
+    Variant0 {
+        color: ProjectsMutatePayloadVariant1ProjectIconVariant0Color,
+        kind: ProjectsMutatePayloadVariant1ProjectIconVariant0Kind,
+        name: ::std::string::String,
+    },
+    Variant1 {
+        emoji: ::std::string::String,
+        kind: ProjectsMutatePayloadVariant1ProjectIconVariant1Kind,
+    },
+    Variant2(ProjectIcon2),
+    Variant3,
+}
+impl ::std::convert::From<ProjectIcon2> for ProjectsMutatePayloadVariant1ProjectIcon {
+    fn from(value: ProjectIcon2) -> Self {
+        Self::Variant2(value)
+    }
+}
+///`ProjectsMutatePayloadVariant1ProjectIconVariant0Color`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant1ProjectIconVariant0Color {
+    #[serde(rename = "gray")]
+    Gray,
+    #[serde(rename = "red")]
+    Red,
+    #[serde(rename = "orange")]
+    Orange,
+    #[serde(rename = "amber")]
+    Amber,
+    #[serde(rename = "yellow")]
+    Yellow,
+    #[serde(rename = "lime")]
+    Lime,
+    #[serde(rename = "green")]
+    Green,
+    #[serde(rename = "emerald")]
+    Emerald,
+    #[serde(rename = "teal")]
+    Teal,
+    #[serde(rename = "cyan")]
+    Cyan,
+    #[serde(rename = "sky")]
+    Sky,
+    #[serde(rename = "blue")]
+    Blue,
+    #[serde(rename = "indigo")]
+    Indigo,
+    #[serde(rename = "violet")]
+    Violet,
+    #[serde(rename = "purple")]
+    Purple,
+    #[serde(rename = "fuchsia")]
+    Fuchsia,
+    #[serde(rename = "pink")]
+    Pink,
+    #[serde(rename = "rose")]
+    Rose,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant1ProjectIconVariant0Color {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Gray => f.write_str("gray"),
+            Self::Red => f.write_str("red"),
+            Self::Orange => f.write_str("orange"),
+            Self::Amber => f.write_str("amber"),
+            Self::Yellow => f.write_str("yellow"),
+            Self::Lime => f.write_str("lime"),
+            Self::Green => f.write_str("green"),
+            Self::Emerald => f.write_str("emerald"),
+            Self::Teal => f.write_str("teal"),
+            Self::Cyan => f.write_str("cyan"),
+            Self::Sky => f.write_str("sky"),
+            Self::Blue => f.write_str("blue"),
+            Self::Indigo => f.write_str("indigo"),
+            Self::Violet => f.write_str("violet"),
+            Self::Purple => f.write_str("purple"),
+            Self::Fuchsia => f.write_str("fuchsia"),
+            Self::Pink => f.write_str("pink"),
+            Self::Rose => f.write_str("rose"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant1ProjectIconVariant0Color {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "gray" => Ok(Self::Gray),
+            "red" => Ok(Self::Red),
+            "orange" => Ok(Self::Orange),
+            "amber" => Ok(Self::Amber),
+            "yellow" => Ok(Self::Yellow),
+            "lime" => Ok(Self::Lime),
+            "green" => Ok(Self::Green),
+            "emerald" => Ok(Self::Emerald),
+            "teal" => Ok(Self::Teal),
+            "cyan" => Ok(Self::Cyan),
+            "sky" => Ok(Self::Sky),
+            "blue" => Ok(Self::Blue),
+            "indigo" => Ok(Self::Indigo),
+            "violet" => Ok(Self::Violet),
+            "purple" => Ok(Self::Purple),
+            "fuchsia" => Ok(Self::Fuchsia),
+            "pink" => Ok(Self::Pink),
+            "rose" => Ok(Self::Rose),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for ProjectsMutatePayloadVariant1ProjectIconVariant0Color {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant1ProjectIconVariant0Color {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant1ProjectIconVariant0Kind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant1ProjectIconVariant0Kind {
+    #[serde(rename = "lucide")]
+    Lucide,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant1ProjectIconVariant0Kind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Lucide => f.write_str("lucide"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant1ProjectIconVariant0Kind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "lucide" => Ok(Self::Lucide),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for ProjectsMutatePayloadVariant1ProjectIconVariant0Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant1ProjectIconVariant0Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant1ProjectIconVariant1Kind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
+    #[serde(rename = "emoji")]
+    Emoji,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Emoji => f.write_str("emoji"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "emoji" => Ok(Self::Emoji),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant1Type`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant1Type {
+    #[serde(rename = "project.update")]
+    ProjectUpdate,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant1Type {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::ProjectUpdate => f.write_str("project.update"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant1Type {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "project.update" => Ok(Self::ProjectUpdate),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectsMutatePayloadVariant1Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant1Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutatePayloadVariant2Type`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutatePayloadVariant2Type {
+    #[serde(rename = "project.delete")]
+    ProjectDelete,
+}
+impl ::std::fmt::Display for ProjectsMutatePayloadVariant2Type {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::ProjectDelete => f.write_str("project.delete"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutatePayloadVariant2Type {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "project.delete" => Ok(Self::ProjectDelete),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectsMutatePayloadVariant2Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutatePayloadVariant2Type {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutateSuccess`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct ProjectsMutateSuccess {
+    #[serde(
+        rename = "archivedAt",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub archived_at: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "autoPull", skip_serializing_if = "::std::option::Option::is_none")]
+    pub auto_pull: ::std::option::Option<bool>,
+    #[serde(rename = "createdAt")]
+    pub created_at: ::std::string::String,
+    #[serde(
+        rename = "defaultModelSelection",
+        deserialize_with = "::std::option::Option::deserialize"
+    )]
+    pub default_model_selection: ::std::option::Option<ModelSelection>,
+    #[serde(
+        rename = "defaultThreadEnvMode",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub default_thread_env_mode: ::std::option::Option<
+        ProjectsMutateSuccessDefaultThreadEnvMode,
+    >,
+    #[serde(
+        rename = "deletedAt",
+        deserialize_with = "::std::option::Option::deserialize"
+    )]
+    pub deleted_at: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "faviconPath",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub favicon_path: ::std::option::Option<::std::string::String>,
+    pub id: ::std::string::String,
+    #[serde(rename = "pinnedAt", skip_serializing_if = "::std::option::Option::is_none")]
+    pub pinned_at: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "projectIcon",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub project_icon: ::std::option::Option<ProjectsMutateSuccessProjectIcon>,
+    #[serde(
+        rename = "repositoryIdentity",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub repository_identity: ::std::option::Option<RepositoryIdentity>,
+    pub scripts: DefaultProjectScripts,
+    pub title: ::std::string::String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: ::std::string::String,
+    #[serde(rename = "workspaceRoot")]
+    pub workspace_root: ::std::string::String,
+}
+///`ProjectsMutateSuccessDefaultThreadEnvMode`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutateSuccessDefaultThreadEnvMode {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "worktree")]
+    Worktree,
+}
+impl ::std::fmt::Display for ProjectsMutateSuccessDefaultThreadEnvMode {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Local => f.write_str("local"),
+            Self::Worktree => f.write_str("worktree"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutateSuccessDefaultThreadEnvMode {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "local" => Ok(Self::Local),
+            "worktree" => Ok(Self::Worktree),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectsMutateSuccessDefaultThreadEnvMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutateSuccessDefaultThreadEnvMode {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`ProjectsMutateSuccessProjectIcon`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum ProjectsMutateSuccessProjectIcon {
+    Variant0(ProjectIcon),
+    Variant1 {
+        emoji: ::std::string::String,
+        kind: ProjectsMutateSuccessProjectIconVariant1Kind,
+    },
+    Variant2(ProjectIcon2),
+    Variant3 { kind: ::std::string::String },
+    Variant4,
+}
+impl ::std::convert::From<ProjectIcon> for ProjectsMutateSuccessProjectIcon {
+    fn from(value: ProjectIcon) -> Self {
+        Self::Variant0(value)
+    }
+}
+impl ::std::convert::From<ProjectIcon2> for ProjectsMutateSuccessProjectIcon {
+    fn from(value: ProjectIcon2) -> Self {
+        Self::Variant2(value)
+    }
+}
+///`ProjectsMutateSuccessProjectIconVariant1Kind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum ProjectsMutateSuccessProjectIconVariant1Kind {
+    #[serde(rename = "emoji")]
+    Emoji,
+}
+impl ::std::fmt::Display for ProjectsMutateSuccessProjectIconVariant1Kind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Emoji => f.write_str("emoji"),
+        }
+    }
+}
+impl ::std::str::FromStr for ProjectsMutateSuccessProjectIconVariant1Kind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "emoji" => Ok(Self::Emoji),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for ProjectsMutateSuccessProjectIconVariant1Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for ProjectsMutateSuccessProjectIconVariant1Kind {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,

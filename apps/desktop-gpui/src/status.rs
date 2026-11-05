@@ -11,6 +11,8 @@ pub enum Status {
     /// Socket is up. `shell` stays `None` until the first shell snapshot lands.
     Connected {
         label: String,
+        /// The server keeps project pins, so the window offers them.
+        can_pin: bool,
         shell: Option<ShellView>,
     },
     Failed(String),
@@ -51,12 +53,15 @@ impl fmt::Display for Status {
             Self::NotConnected => f.write_str("Not connected"),
             Self::Starting => f.write_str("Starting server..."),
             Self::Connecting => f.write_str("Connecting..."),
-            Self::Connected { label, shell: None } => write!(f, "Connected to {label}"),
+            Self::Connected {
+                label, shell: None, ..
+            } => write!(f, "Connected to {label}"),
             Self::Connected {
                 label,
                 shell: Some(ShellView {
                     projects, threads, ..
                 }),
+                ..
             } => write!(
                 f,
                 "Connected to {label} \u{b7} {projects} {} \u{b7} {threads} {}",
@@ -84,11 +89,13 @@ mod tests {
         let label = "Local".to_owned();
         let waiting = Status::Connected {
             label: label.clone(),
+            can_pin: false,
             shell: None,
         };
         assert_eq!(waiting.to_string(), "Connected to Local");
         let known = Status::Connected {
             label: label.clone(),
+            can_pin: false,
             shell: Some(ShellView {
                 projects: 2,
                 threads: 14,
@@ -101,6 +108,7 @@ mod tests {
         );
         let single = Status::Connected {
             label,
+            can_pin: false,
             shell: Some(ShellView {
                 projects: 1,
                 threads: 1,

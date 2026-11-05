@@ -5,7 +5,7 @@
 
 use crate::auth;
 use crate::config::{Config, ServerCommand};
-use crate::connection::{self, Backoff};
+use crate::connection::{self, ActionReceiver, Backoff, Environment};
 use crate::status::{Status, StatusSender, publish};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -162,10 +162,21 @@ fn forward_output(stream: impl AsyncRead + Unpin + Send + 'static) {
 #[derive(Deserialize)]
 struct Descriptor {
     label: String,
+    #[serde(default)]
+    capabilities: Capabilities,
 }
 
-/// Polls until the descriptor answers, returning the environment label.
-pub async fn wait_until_ready(client: &reqwest::Client, http_base: &str) -> Result<String, String> {
+#[derive(Default, Deserialize)]
+struct Capabilities {
+    #[serde(rename = "projectOrganization", default)]
+    project_organization: bool,
+}
+
+/// Polls until the descriptor answers, returning what the connection needs from it.
+pub async fn wait_until_ready(
+    client: &reqwest::Client,
+    http_base: &str,
+) -> Result<Environment, String> {
     let url = format!("{http_base}{READINESS_PATH}");
     let deadline = Instant::now() + READINESS_TIMEOUT;
     loop {
@@ -178,7 +189,10 @@ pub async fn wait_until_ready(client: &reqwest::Client, http_base: &str) -> Resu
             && response.status().is_success()
             && let Ok(descriptor) = response.json::<Descriptor>().await
         {
-            return Ok(descriptor.label);
+            return Ok(Environment {
+                label: descriptor.label,
+                project_organization: descriptor.capabilities.project_organization,
+            });
         }
         if Instant::now() >= deadline {
             return Err(format!(
@@ -214,12 +228,24 @@ async fn sleep_or_shutdown(delay: Duration, shutdown: &mut watch::Receiver<bool>
     }
 }
 
-async fn session(config: &Config, secret: &str, status: &StatusSender) -> String {
+async fn session(
+    config: &Config,
+    secret: &str,
+    actions: &ActionReceiver,
+    status: &StatusSender,
+) -> String {
     let client = auth::http_client();
     match wait_until_ready(&client, &config.http_base()).await {
-        Ok(label) => {
+        Ok(environment) => {
             let credential = auth::Credential::DesktopSecret(secret.to_owned());
-            connection::run(&config.http_base(), &credential, &label, status).await;
+            connection::run(
+                &config.http_base(),
+                &credential,
+                &environment,
+                actions,
+                status,
+            )
+            .await;
             unreachable_session()
         }
         Err(message) => message,
@@ -232,7 +258,12 @@ fn unreachable_session() -> String {
 }
 
 /// Runs the server and its connection until shutdown, restarting after crashes.
-pub async fn supervise(config: Config, status: StatusSender, mut shutdown: watch::Receiver<bool>) {
+pub async fn supervise(
+    config: Config,
+    actions: ActionReceiver,
+    status: StatusSender,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let mut backoff = Backoff::new();
     loop {
         publish(&status, Status::Starting);
@@ -285,7 +316,7 @@ pub async fn supervise(config: Config, status: StatusSender, mut shutdown: watch
                     None => "Server exited unexpectedly".to_owned(),
                 }
             }
-            message = session(&config, &secret, &status) => {
+            message = session(&config, &secret, &actions, &status) => {
                 terminate(&mut child).await;
                 message
             }
@@ -307,11 +338,16 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    pub fn start(runtime: &tokio::runtime::Handle, config: Config, status: StatusSender) -> Self {
+    pub fn start(
+        runtime: &tokio::runtime::Handle,
+        config: Config,
+        actions: ActionReceiver,
+        status: StatusSender,
+    ) -> Self {
         let (shutdown, shutdown_rx) = watch::channel(false);
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         runtime.spawn(async move {
-            supervise(config, status, shutdown_rx).await;
+            supervise(config, actions, status, shutdown_rx).await;
             let _ = done_tx.send(());
         });
         Self {
