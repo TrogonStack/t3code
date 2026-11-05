@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod connection;
+mod projects;
 mod rpc;
 mod server;
 mod shell;

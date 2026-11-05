@@ -1,6 +1,7 @@
 //! The shell read model built from `orchestration.subscribeShell`, mirroring
 //! `packages/client-runtime/src/state/shellReducer.ts` for what this client shows.
 
+use crate::projects;
 use crate::status::{ShellView, ThreadRow};
 use crate::wire::generated::{
     OrchestrationSubscribeShellSuccess as Item,
@@ -40,6 +41,7 @@ impl ShellState {
             .values()
             .map(|thread| ThreadRow {
                 id: thread.id.clone(),
+                project_id: thread.project_id.clone(),
                 project: self
                     .projects
                     .get(&thread.project_id)
@@ -56,16 +58,10 @@ impl ShellState {
                 .cmp(&a.updated_at)
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let mut project_titles: Vec<String> = self
-            .projects
-            .values()
-            .map(|project| project.title.clone())
-            .collect();
-        project_titles.sort_by_key(|title| title.to_lowercase());
         ShellView {
             projects: self.project_count(),
             threads: self.thread_count(),
-            project_titles,
+            project_entries: projects::build_entries(self.projects.values(), self.threads.values()),
             rows,
         }
     }
@@ -223,7 +219,12 @@ mod tests {
         }));
         let view = state.view();
         assert_eq!((view.projects, view.threads), (1, 2));
-        assert_eq!(view.project_titles, ["Project"]);
+        let titles: Vec<_> = view
+            .project_entries
+            .iter()
+            .map(|e| e.title.as_str())
+            .collect();
+        assert_eq!(titles, ["Project"]);
         let ids: Vec<_> = view.rows.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(ids, ["thread-new", "thread-v2"]);
         assert!(view.rows.iter().all(|row| row.project == "Project"));

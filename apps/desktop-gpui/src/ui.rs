@@ -1,15 +1,17 @@
+use crate::projects::{self, ProjectEntry};
 use crate::status::{ShellView, Status, ThreadRow};
 use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
 use gpui::{
-    Anchor, AnyElement, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement, Render,
-    Styled, UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    Anchor, AnyElement, Context, Entity, Focusable as _, FontWeight, Hsla, IntoElement, Keystroke,
+    ParentElement, Render, Styled, UniformListScrollHandle, Window, div, prelude::*, px, rgb,
+    uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Sizable, TitleBar,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputState, Textarea, TextareaState},
+    input::{Input, InputEvent, InputState, Textarea, TextareaState},
     kbd::Kbd,
     popover::Popover,
     tag::Tag,
@@ -23,6 +25,7 @@ const ROW_HEIGHT: f32 = 68.;
 pub struct MainView {
     status: Status,
     search: Entity<InputState>,
+    project_search: Entity<InputState>,
     composer: Entity<TextareaState>,
     list: UniformListScrollHandle,
     selected_project: Option<String>,
@@ -31,9 +34,18 @@ pub struct MainView {
 
 impl MainView {
     pub fn new(status: Status, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let project_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search projects..."));
+        cx.subscribe(&project_search, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
         Self {
             status,
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search threads")),
+            project_search,
             composer: cx.new(|cx| {
                 TextareaState::new(window, cx)
                     .placeholder("Ask anything. @ files, $ skills, / commands")
@@ -104,8 +116,8 @@ impl MainView {
                 .child(self.status.to_string())
                 .into_any_element();
         };
-        let project = active_project(self.selected_project.as_deref(), shell)
-            .unwrap_or_else(|| "your project".to_owned());
+        let active = active_project(self.selected_project.as_deref(), shell);
+        let project = active.map_or_else(|| "your project".to_owned(), |entry| entry.title.clone());
         v_flex()
             .flex_1()
             .min_w_0()
@@ -127,20 +139,35 @@ impl MainView {
             .child(
                 centered(cx)
                     .gap_6()
-                    .child(self.hero(&project, shell.project_titles.clone(), cx))
+                    .child(self.hero(
+                        &project,
+                        active.map(|entry| entry.id.clone()),
+                        shell.project_entries.clone(),
+                        cx,
+                    ))
                     .child(self.composer_box(cx)),
             )
             .into_any_element()
     }
 
-    fn hero(&self, project: &str, titles: Vec<String>, cx: &mut Context<Self>) -> impl IntoElement {
+    fn hero(
+        &self,
+        project: &str,
+        active_id: Option<String>,
+        entries: Vec<ProjectEntry>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let view = cx.entity();
+        let search = self.project_search.clone();
         let picker = Popover::new("project-picker")
             .anchor(Anchor::TopCenter)
             .open(self.picker_open)
+            .track_focus(&search.focus_handle(cx))
+            .p_0()
             .on_open_change({
-                let view = view.clone();
-                move |open, _, cx| {
+                let (view, search) = (view.clone(), search.clone());
+                move |open, window, cx| {
+                    search.update(cx, |state, cx| state.set_value("", window, cx));
                     view.update(cx, |this, cx| {
                         this.picker_open = *open;
                         cx.notify();
@@ -154,32 +181,91 @@ impl MainView {
                     .child(div().text_2xl().child(project.to_owned())),
             )
             .content(move |_, _, cx| {
-                let hover = cx.theme().list_hover;
+                let query = search.read(cx).value();
+                let listed = projects::picker_entries(&entries, active_id.as_deref(), &query);
+                let theme = cx.theme();
+                let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
+                let (hover, selected) = (theme.list_hover, theme.list_active);
+                let mono = theme.mono_font_family.clone();
+                let border = theme.border;
+                let rows = listed.iter().enumerate().map(|(index, entry)| {
+                    let (view, id) = (view.clone(), entry.id.clone());
+                    let color: Hsla = rgb(entry.color_hex(dark)).into();
+                    let active = active_id.as_deref() == Some(entry.id.as_str());
+                    h_flex()
+                        .id(("project", index))
+                        .gap_2()
+                        .px_2()
+                        .py_1p5()
+                        .items_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(active, |row| row.bg(selected))
+                        .hover(move |style| style.bg(hover))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .justify_center()
+                                .size(px(20.))
+                                .rounded(px(5.))
+                                .bg(color.opacity(0.14))
+                                .text_color(color)
+                                .text_size(px(10.))
+                                .font_weight(FontWeight::BOLD)
+                                .font_family(mono.clone())
+                                .child(entry.initials.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .truncate()
+                                .child(entry.title.clone()),
+                        )
+                        .when(entry.pinned, |row| {
+                            row.child(
+                                Icon::new(gpui_kit_assets::IconName::Pin)
+                                    .small()
+                                    .text_color(muted),
+                            )
+                        })
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.selected_project = Some(id.clone());
+                                this.picker_open = false;
+                                cx.notify();
+                            });
+                        })
+                });
                 v_flex()
-                    .id("project-list")
-                    .w(px(240.))
-                    .max_h(px(320.))
-                    .overflow_y_scroll()
-                    .children(titles.iter().enumerate().map(|(index, title)| {
-                        let (view, title) = (view.clone(), title.clone());
-                        div()
-                            .id(("project", index))
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_sm()
-                            .truncate()
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(hover))
-                            .child(title.clone())
-                            .on_click(move |_, _, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.selected_project = Some(title.clone());
-                                    this.picker_open = false;
-                                    cx.notify();
-                                });
-                            })
-                    }))
+                    .w(px(400.))
+                    .child(
+                        h_flex().px_3().border_b_1().border_color(border).child(
+                            Input::new(&search)
+                                .appearance(false)
+                                .prefix(Icon::new(IconName::Search)),
+                        ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("project-list")
+                            .max_h(px(320.))
+                            .overflow_y_scroll()
+                            .p_1()
+                            .children(rows)
+                            .when(listed.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .p_2()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child("No matching projects."),
+                                )
+                            }),
+                    )
             });
         v_flex()
             .items_center()
@@ -236,20 +322,19 @@ impl MainView {
     }
 }
 
-/// The picked project while it still exists, else the newest thread's project.
-fn active_project(selected: Option<&str>, shell: &ShellView) -> Option<String> {
+/// The picked project while it still exists, else the newest thread's project, else the first listed.
+fn active_project<'a>(selected: Option<&str>, shell: &'a ShellView) -> Option<&'a ProjectEntry> {
+    let by_id = |id: &str| shell.project_entries.iter().find(|entry| entry.id == id);
     selected
-        .filter(|title| shell.project_titles.iter().any(|known| known == title))
-        .map(str::to_owned)
+        .and_then(by_id)
         .or_else(|| {
             shell
                 .rows
                 .iter()
-                .map(|row| &row.project)
-                .find(|project| !project.is_empty())
-                .cloned()
+                .filter_map(|row| by_id(&row.project_id))
+                .find(|entry| !entry.scratch)
         })
-        .or_else(|| shell.project_titles.first().cloned())
+        .or_else(|| shell.project_entries.iter().find(|entry| !entry.scratch))
 }
 
 fn centered(cx: &Context<MainView>) -> gpui::Div {
@@ -343,10 +428,22 @@ impl Render for MainView {
 mod tests {
     use super::*;
 
-    fn row(project: &str) -> ThreadRow {
+    fn entry(id: &str, scratch: bool) -> ProjectEntry {
+        ProjectEntry {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            initials: "XX".to_owned(),
+            color: 0,
+            pinned: false,
+            scratch,
+        }
+    }
+
+    fn row(project_id: &str) -> ThreadRow {
         ThreadRow {
-            id: project.to_owned(),
-            project: project.to_owned(),
+            id: project_id.to_owned(),
+            project_id: project_id.to_owned(),
+            project: project_id.to_owned(),
             title: String::new(),
             branch: None,
             status: ThreadStatus::Idle,
@@ -355,24 +452,27 @@ mod tests {
     }
 
     #[test]
-    fn active_project_prefers_a_live_pick_then_the_newest_thread() {
+    fn active_project_prefers_a_live_pick_then_the_newest_real_project() {
         let shell = ShellView {
-            project_titles: vec!["alpha".into(), "beta".into()],
-            rows: vec![row(""), row("beta")],
+            project_entries: vec![
+                entry("alpha", false),
+                entry("none", true),
+                entry("beta", false),
+            ],
+            rows: vec![row("none"), row("gone"), row("beta")],
+            ..ShellView::default()
+        };
+        let id = |selected| active_project(selected, &shell).map(|e| e.id.as_str());
+        assert_eq!(id(Some("alpha")), Some("alpha"));
+        assert_eq!(id(Some("gone")), Some("beta"));
+        assert_eq!(id(None), Some("beta"));
+        let empty = ShellView {
+            project_entries: vec![entry("none", true), entry("alpha", false)],
             ..ShellView::default()
         };
         assert_eq!(
-            active_project(Some("alpha"), &shell).as_deref(),
+            active_project(None, &empty).map(|e| e.id.as_str()),
             Some("alpha")
         );
-        assert_eq!(
-            active_project(Some("gone"), &shell).as_deref(),
-            Some("beta")
-        );
-        let empty = ShellView {
-            project_titles: vec!["alpha".into()],
-            ..ShellView::default()
-        };
-        assert_eq!(active_project(None, &empty).as_deref(), Some("alpha"));
     }
 }

@@ -1,3 +1,4 @@
+use crate::projects::ProjectEntry;
 use crate::wire::generated::ThreadsEntryStatus;
 use std::fmt;
 
@@ -20,14 +21,15 @@ pub enum Status {
 pub struct ShellView {
     pub projects: usize,
     pub threads: usize,
-    /// Project titles in picker order.
-    pub project_titles: Vec<String>,
+    /// Unarchived projects in picker order, scratch included.
+    pub project_entries: Vec<ProjectEntry>,
     pub rows: Vec<ThreadRow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadRow {
     pub id: String,
+    pub project_id: String,
     pub project: String,
     pub title: String,
     pub branch: Option<String>,
