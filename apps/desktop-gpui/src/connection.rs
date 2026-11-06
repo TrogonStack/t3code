@@ -3,9 +3,13 @@
 use crate::auth::{self, AuthError, Credential};
 use crate::electron_dpop;
 use crate::projects::MachineKind;
-use crate::rpc::{Event, PING_FRAME, ProjectsMutate, Session, SubscribeShell};
+use crate::providers::Catalog;
+use crate::rpc::{
+    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, SubscribeShell, VcsListRefs,
+};
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
+use crate::strip::{self, Branch};
 use crate::wire::{ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload};
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -32,7 +36,14 @@ pub struct Environment {
 /// A request from the window that the connection sends as an RPC.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
-    SetProjectPinned { project_id: String, pinned: bool },
+    SetProjectPinned {
+        project_id: String,
+        pinned: bool,
+    },
+    /// The branch checked out in a project's workspace root, for the strip under the composer.
+    LoadBranch {
+        root: String,
+    },
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -43,28 +54,31 @@ impl Action {
         match self {
             Self::SetProjectPinned { pinned: true, .. } => "pin project",
             Self::SetProjectPinned { pinned: false, .. } => "unpin project",
+            Self::LoadBranch { .. } => "load the branch",
         }
     }
+}
 
-    fn payload(&self, command_id: String) -> ProjectMutation {
-        match self {
-            Self::SetProjectPinned { project_id, pinned } => ProjectMutation::Variant1 {
-                archived: None,
-                auto_pull: None,
-                command_id,
-                default_model_selection: None,
-                default_thread_env_mode: None,
-                favicon_path: None,
-                pinned: Some(*pinned),
-                project_icon: None,
-                project_id: project_id.clone(),
-                scripts: None,
-                title: None,
-                type_: ProjectMutationType::ProjectUpdate,
-                workspace_root: None,
-            },
-        }
+fn pin_mutation(project_id: &str, pinned: bool, command_id: String) -> ProjectMutation {
+    ProjectMutation::Variant1 {
+        archived: None,
+        auto_pull: None,
+        command_id,
+        default_model_selection: None,
+        default_thread_env_mode: None,
+        favicon_path: None,
+        pinned: Some(pinned),
+        project_icon: None,
+        project_id: project_id.to_owned(),
+        scripts: None,
+        title: None,
+        type_: ProjectMutationType::ProjectUpdate,
+        workspace_root: None,
     }
+}
+
+fn refs_query(root: &str) -> serde_json::Value {
+    serde_json::json!({"cwd": root, "refKind": "local", "limit": strip::REFS_LIMIT})
 }
 
 /// Doubling delay between attempts, capped (Electron restarts the backend the same way).
@@ -154,6 +168,7 @@ pub async fn run(
                     status,
                     Status::Connected {
                         label: environment.label.clone(),
+                        machine: environment.machine,
                         can_pin: environment.project_organization,
                         shell: None,
                     },
@@ -233,9 +248,21 @@ async fn serve(
     if let Err(error) = sink.send(Message::text(request)).await {
         return error.to_string();
     }
+    let mut config_request = match session.request::<ServerGetConfig>(&serde_json::json!({})) {
+        Ok((id, frame)) => match sink.send(Message::text(frame)).await {
+            Ok(()) => Some(id),
+            Err(error) => return error.to_string(),
+        },
+        Err(error) => {
+            eprintln!("[rpc] could not request the provider config: {error}");
+            None
+        }
+    };
     // Whatever was clicked while disconnected is stale by now.
     while actions.try_recv().is_ok() {}
     let mut pending: HashMap<String, &'static str> = HashMap::new();
+    // Branch lookups by request id, with the workspace root each was for.
+    let mut branches: HashMap<String, String> = HashMap::new();
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -250,9 +277,21 @@ async fn serve(
                 let Ok(action) = action else {
                     return "window closed".to_owned();
                 };
-                match session.request::<ProjectsMutate>(&action.payload(command_id())) {
-                    Ok((id, frame)) => {
-                        pending.insert(id, action.describe());
+                let request = match &action {
+                    Action::SetProjectPinned { project_id, pinned } => session
+                        .request::<ProjectsMutate>(&pin_mutation(project_id, *pinned, command_id()))
+                        .map(|(id, frame)| (id, frame, None)),
+                    Action::LoadBranch { root } => session
+                        .request::<VcsListRefs>(&refs_query(root))
+                        .map(|(id, frame)| (id, frame, Some(root.clone()))),
+                };
+                match request {
+                    Ok((id, frame, root)) => {
+                        if let Some(root) = root {
+                            branches.insert(id, root);
+                        } else {
+                            pending.insert(id, action.describe());
+                        }
                         if let Err(error) = sink.send(Message::text(frame)).await {
                             return error.to_string();
                         }
@@ -281,6 +320,15 @@ async fn serve(
                         }
                     }
                     for event in reaction.events {
+                        if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
+                            config_request = None;
+                            publish_catalog(event, status);
+                            continue;
+                        }
+                        if let Some(root) = request_id(&event).and_then(|id| branches.remove(id)) {
+                            publish_branch(root, event, status);
+                            continue;
+                        }
                         if settle(&mut pending, &event) {
                             continue;
                         }
@@ -300,6 +348,42 @@ fn command_id() -> String {
     // A failed read leaves zeros, and the server rejects a repeated command id rather than applying it twice.
     let _ = getrandom::fill(&mut bytes);
     format!("gpui-{}", hex::encode(bytes))
+}
+
+fn request_id(event: &Event) -> Option<&str> {
+    match event {
+        Event::Done { request_id, .. } | Event::Failed { request_id, .. } => Some(request_id),
+        _ => None,
+    }
+}
+
+fn owns(event: &Event, id: &str) -> bool {
+    request_id(event) == Some(id)
+}
+
+/// Publishes the branch of a workspace root; a failure leaves the strip without git controls.
+fn publish_branch(root: String, event: Event, status: &StatusSender) {
+    let branch = match event {
+        Event::Done { value, .. } => Branch::decode(&value),
+        Event::Failed { message, .. } => {
+            eprintln!("[rpc] could not load the branch of {root}: {message}");
+            None
+        }
+        _ => return,
+    };
+    publish(status, Status::Branch { root, branch });
+}
+
+/// Publishes the provider catalog; a failure leaves the composer without a model trigger.
+fn publish_catalog(event: Event, status: &StatusSender) {
+    match event {
+        Event::Done { value, .. } => match Catalog::decode(value) {
+            Ok(catalog) => publish(status, Status::Providers(catalog)),
+            Err(error) => eprintln!("[rpc] unreadable provider config: {error}"),
+        },
+        Event::Failed { message, .. } => eprintln!("[rpc] could not load providers: {message}"),
+        _ => {}
+    }
 }
 
 /// Consumes the outcome of an action's request, logging a failure; true when `event` was one.
@@ -332,6 +416,7 @@ fn handle(
                         status,
                         Status::Connected {
                             label: environment.label.clone(),
+                            machine: environment.machine,
                             can_pin: environment.project_organization,
                             shell: Some(shell.view()),
                         },
@@ -363,11 +448,7 @@ mod tests {
 
     #[test]
     fn pin_action_builds_a_project_update_mutation() {
-        let pin = Action::SetProjectPinned {
-            project_id: "p1".to_owned(),
-            pinned: true,
-        };
-        let value = serde_json::to_value(pin.payload("c1".to_owned())).expect("json");
+        let value = serde_json::to_value(pin_mutation("p1", true, "c1".to_owned())).expect("json");
         assert_eq!(
             value,
             serde_json::json!({
@@ -377,11 +458,7 @@ mod tests {
                 "pinned": true,
             })
         );
-        let unpin = Action::SetProjectPinned {
-            project_id: "p1".to_owned(),
-            pinned: false,
-        };
-        let value = serde_json::to_value(unpin.payload("c2".to_owned())).expect("json");
+        let value = serde_json::to_value(pin_mutation("p1", false, "c2".to_owned())).expect("json");
         assert_eq!(value["pinned"], false);
     }
 

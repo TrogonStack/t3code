@@ -5,17 +5,23 @@ mod config;
 mod connection;
 mod electron_dpop;
 mod environments;
+mod history;
 mod projects;
+mod providers;
 mod rpc;
 mod server;
 mod shell;
 mod status;
+mod strip;
 mod ui;
 mod wire;
 
 use assets::AppAssets;
 use config::{Attach, Config};
-use gpui::{App, AppContext as _, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{
+    App, AppContext as _, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, point,
+    px, size,
+};
 use gpui_component::{Root, Theme, ThemeMode, TitleBar};
 use gpui_platform::application;
 use server::Supervisor;
@@ -82,6 +88,14 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
+            // The web's default `sidebar.toggle` and `navigation.*` bindings.
+            cx.bind_keys([
+                KeyBinding::new("cmd-b", ui::ToggleSidebar, None),
+                KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
+                KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),
+                KeyBinding::new("cmd-[", ui::GoBack, None),
+                KeyBinding::new("cmd-]", ui::GoForward, None),
+            ]);
             if let Some(supervisor) = supervisor {
                 // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
                 cx.on_app_quit(move |_| {
@@ -90,10 +104,18 @@ fn main() {
                 })
                 .detach();
             }
-            let bounds = Bounds::centered(None, size(px(960.), px(640.)), cx);
+            // Electron's `DEFAULT_MAIN_WINDOW_SIZE`; the minimum width is the shipped app's, below
+            // the sidebar's overlay breakpoint.
+            let bounds = Bounds::centered(None, size(px(1100.), px(780.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(583.), px(620.))),
+                    // Electron's `trafficLightPosition`: centered in the 52px workspace top bar.
+                    titlebar: Some(TitlebarOptions {
+                        traffic_light_position: Some(point(px(16.), px(19.))),
+                        ..TitleBar::title_bar_options()
+                    }),
                     ..TitleBar::window_options()
                 },
                 |window, cx| {

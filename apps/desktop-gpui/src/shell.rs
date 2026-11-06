@@ -2,13 +2,14 @@
 //! `packages/client-runtime/src/state/shellReducer.ts` for what this client shows.
 
 use crate::projects;
-use crate::status::{Section, ShellView, ThreadRow};
+use crate::status::{PrBadge, PrState, Section, ShellView, ThreadRow, TopStatus};
 use crate::wire::generated::{
     OrchestrationSubscribeShellSuccess as Item,
     OrchestrationSubscribeShellSuccessVariant4Location as Location,
     OrchestrationSubscribeShellSuccessVariant5Location as RemovedLocation,
 };
 use crate::wire::generated::{
+    PullRequestsItem, PullRequestsItemSource as LinkSource, SnapshotState as PrSnapshotState,
     ThreadsEntryActivityRunStatus as Activity, ThreadsEntryInteractionMode as InteractionMode,
     ThreadsEntryPendingRuntimeRequestKind as RequestKind, ThreadsEntrySettledOverride as Override,
     ThreadsEntryStatus as RunStatus,
@@ -278,6 +279,68 @@ fn sort_settled(threads: &mut [&Thread]) {
     threads.sort_by(|a, b| newest_first((anchor(a), a), (anchor(b), b)));
 }
 
+/// `resolveThreadPullRequestBadge` with the presentation of `ThreadStatusIndicators`. A stack is
+/// the links of one native stack; stacks the web derives from head and base branches show as `+N`.
+fn pr_badge(thread: &Thread) -> Option<PrBadge> {
+    let visible: Vec<_> = thread
+        .pull_requests
+        .iter()
+        .flat_map(|links| &links.0)
+        .filter(|link| link.source != LinkSource::StackDismissed)
+        .collect();
+    if visible.is_empty() {
+        let linked = thread.linked_pull_request.as_ref()?;
+        return Some(PrBadge {
+            state: PrState::Pending,
+            stack: false,
+            text: linked.number.to_string(),
+        });
+    }
+    let state_of = |link: &&PullRequestsItem| match link.snapshot.as_ref() {
+        None => PrState::Open,
+        Some(snapshot) => match snapshot.state {
+            PrSnapshotState::Open if snapshot.is_draft => PrState::Draft,
+            PrSnapshotState::Open => PrState::Open,
+            PrSnapshotState::Closed => PrState::Closed,
+            PrSnapshotState::Merged => PrState::Merged,
+        },
+    };
+    if let [only] = visible.as_slice() {
+        return Some(PrBadge {
+            state: only
+                .snapshot
+                .as_ref()
+                .map_or(PrState::Pending, |_| state_of(&only)),
+            stack: false,
+            text: only.number.to_string(),
+        });
+    }
+    let states: Vec<PrState> = visible.iter().map(state_of).collect();
+    let state = if states.iter().all(|state| *state == PrState::Draft) {
+        PrState::Draft
+    } else if states.contains(&PrState::Open) {
+        PrState::Open
+    } else if states.iter().all(|state| *state == PrState::Merged) {
+        PrState::Merged
+    } else {
+        PrState::Closed
+    };
+    let stack_id = visible[0].stack.as_ref().map(|stack| &stack.id);
+    let stack = stack_id.is_some()
+        && visible
+            .iter()
+            .all(|link| link.stack.as_ref().map(|stack| &stack.id) == stack_id);
+    Some(PrBadge {
+        state,
+        stack,
+        text: if stack {
+            visible.len().to_string()
+        } else {
+            format!("+{}", visible.len())
+        },
+    })
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -336,7 +399,17 @@ impl ShellState {
                 .unwrap_or_default(),
             title: thread.title.clone(),
             branch: thread.branch.clone(),
-            status: thread.status,
+            worktree: thread
+                .worktree_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()),
+            provider_instance: thread.provider_instance_id.clone(),
+            top: TopStatus::of(
+                thread.status,
+                thread.blocked_on_thread_wait == Some(true),
+                thread.last_error_class,
+            ),
+            pr: pr_badge(thread),
             section,
         };
         let rows = SECTION_ORDER
@@ -521,6 +594,46 @@ mod tests {
         for (key, value) in fields {
             thread[*key] = value.clone();
         }
+    }
+
+    #[test]
+    fn the_pull_request_badge_follows_the_web() {
+        let link = |number: u64, source: &str, state: Option<&str>| {
+            let mut link = serde_json::json!({
+                "host": "github.com", "linkedAt": "2026-01-01T00:00:00.000Z",
+                "number": number, "repository": "o/r", "source": source,
+                "url": format!("https://github.com/o/r/pull/{number}"),
+                "snapshot": null, "stack": null,
+            });
+            if let Some(state) = state {
+                link["snapshot"] = serde_json::json!({
+                    "baseBranch": "main", "headBranch": "h", "isDraft": false, "state": state,
+                    "syncedAt": "2026-01-01T00:00:00.000Z", "title": "t", "updatedAt": null,
+                });
+            }
+            link
+        };
+        let badge = |links: Vec<Value>| {
+            pr_badge(&thread("t", |t| set(t, &[("pullRequests", links.into())])))
+                .map(|badge| (badge.state, badge.text))
+        };
+        assert_eq!(badge(vec![]), None);
+        assert_eq!(
+            badge(vec![link(7, "manual", None)]),
+            Some((PrState::Pending, "7".to_owned()))
+        );
+        assert_eq!(
+            badge(vec![link(7, "manual", Some("merged"))]),
+            Some((PrState::Merged, "7".to_owned()))
+        );
+        assert_eq!(
+            badge(vec![
+                link(1, "manual", Some("merged")),
+                link(2, "agent", Some("open")),
+                link(3, "stack-dismissed", Some("closed")),
+            ]),
+            Some((PrState::Open, "+2".to_owned()))
+        );
     }
 
     #[test]

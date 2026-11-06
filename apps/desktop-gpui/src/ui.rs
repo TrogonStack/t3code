@@ -1,12 +1,18 @@
-use crate::assets::MESSAGE_SQUARE_DASHED;
+use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
 use crate::connection::{Action, ActionSender};
+use crate::history::History;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
-use crate::status::{Section, ShellView, Status, ThreadRow};
-use crate::wire::generated::ThreadsEntryStatus as ThreadStatus;
+use crate::providers::{Catalog, Trigger};
+use crate::status::{PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus};
+use crate::strip::{
+    self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
+    WORKSPACE_SHORTCUT,
+};
 use gpui::{
-    Anchor, AnyElement, App, Bounds, Context, Entity, Focusable as _, FontWeight, Hsla,
-    IntoElement, Keystroke, ParentElement, Pixels, Render, RenderOnce, Styled,
-    UniformListScrollHandle, Window, canvas, div, prelude::*, px, rgb, uniform_list,
+    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Entity, Focusable as _,
+    FontWeight, Hsla, IntoElement, Keystroke, ObjectFit, ParentElement, Pixels, Render, RenderOnce,
+    Styled, UniformListScrollHandle, Window, actions, canvas, div, ease_in_out, img, prelude::*,
+    px, rgb, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -15,14 +21,72 @@ use gpui_component::{
     input::{Input, InputEvent, InputState, Textarea, TextareaState},
     kbd::Kbd,
     popover::Popover,
-    tag::Tag,
     tooltip::Tooltip,
     v_flex,
 };
-use std::{cell::Cell, rc::Rc};
+use gpui_kit_assets::IconName as Icons;
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    time::Duration,
+};
 
 const SIDEBAR_WIDTH: f32 = 300.;
-const ROW_HEIGHT: f32 = 68.;
+/// The web's `--workspace-topbar-height` on macOS desktop.
+const TOPBAR_HEIGHT: f32 = 52.;
+/// Clears the traffic lights, like `--workspace-controls-left` from `titlebar-area-x`.
+const TITLEBAR_CONTENT_LEFT: f32 = 84.;
+/// The web shows the dev stage art in dev builds (`APP_STAGE_LABEL` is "Dev").
+const STAGE_BACKDROP: bool = cfg!(debug_assertions);
+/// `SidebarStageBackdrop`'s `h-20`.
+const STAGE_BACKDROP_HEIGHT: f32 = 80.;
+
+actions!(
+    t3,
+    [
+        ToggleSidebar,
+        DismissSidebar,
+        OpenPermissions,
+        GoBack,
+        GoForward
+    ]
+);
+
+/// The web's `SIDEBAR_MOBILE_QUERY`, `(max-width: 767px)`.
+const SIDEBAR_BREAKPOINT: f32 = 767.;
+/// The left sheet's `w-[calc(100%-(--spacing(12)))] max-w-md`.
+const SIDEBAR_OVERLAY_GAP: f32 = 48.;
+const SIDEBAR_OVERLAY_MAX: f32 = 448.;
+/// The sheet's `duration-200` and its `-translate-x-8` entrance.
+const SHEET_MS: u64 = 200;
+const SHEET_SLIDE: f32 = 32.;
+/// Key context while the overlay is open, so Escape only dismisses it then.
+pub const OVERLAY_CONTEXT: &str = "SidebarOverlay";
+
+fn is_narrow(width: f32) -> bool {
+    width <= SIDEBAR_BREAKPOINT
+}
+
+fn narrow_window(window: &Window) -> bool {
+    is_narrow(f32::from(window.viewport_size().width))
+}
+
+fn overlay_width(window_width: f32) -> f32 {
+    (window_width - SIDEBAR_OVERLAY_GAP).min(SIDEBAR_OVERLAY_MAX)
+}
+
+/// The web's `toggleSidebar`: narrow viewports flip the overlay, wide ones the persistent state.
+fn toggled(narrow: bool, open: bool, overlay_open: bool) -> (bool, bool) {
+    if narrow {
+        (open, !overlay_open)
+    } else {
+        (!open, overlay_open)
+    }
+}
+/// A thread card (`h-[4.875rem]`) between the `py-0.5` of its list item.
+const CARD_HEIGHT: f32 = 78.;
+const ROW_HEIGHT: f32 = CARD_HEIGHT + 4.;
 const NO_PROJECT: &str = "No project";
 const HEADLINE_SCRATCH: &str = "What should we work on?";
 /// The web's `ComboboxPopup` cap, `max-h-[min(var(--available-height),23rem)]`.
@@ -40,13 +104,31 @@ pub struct MainView {
     list: UniformListScrollHandle,
     /// Working, Snoozed and Settled shelves; the web starts all of them collapsed.
     shelves: [bool; 3],
+    sidebar_open: bool,
+    sidebar_overlay_open: bool,
+    /// The sidebar's width at the last render, for the cards' branch truncation.
+    sidebar_width: Cell<f32>,
+    /// Hover styles cannot change layout, so the send button's hover growth is view state.
+    send_hovered: bool,
+    permissions_open: bool,
+    /// The open thread; selecting is all a row does yet.
+    selected_thread: Option<String>,
+    /// Local view state until the draft's mode is sent to the server.
+    runtime_mode: Option<RuntimeMode>,
+    permissions: Entity<PermissionsPanel>,
     selected_project: Option<String>,
+    history: History,
     picker_open: bool,
     /// Last painted trigger bounds, so the popup can shrink to fit below it as on the web.
     picker_trigger: Rc<Cell<Bounds<Pixels>>>,
     picker_order: Option<Vec<String>>,
     /// The other saved environments, by id.
     environments: Vec<EnvironmentProjects>,
+    providers: Option<Catalog>,
+    /// The branch per workspace root; `None` for a root that is not a repository.
+    branches: HashMap<String, Option<Branch>>,
+    /// Roots whose branch was asked for on this connection.
+    branches_requested: HashSet<String>,
     actions: ActionSender,
 }
 
@@ -65,22 +147,49 @@ impl MainView {
             }
         })
         .detach();
+        let composer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Ask anything. @ files, $ skills, / commands")
+                // The web's `min-h-[2lh]` and `max-h-52`.
+                .auto_grow(2, 9)
+        });
+        // The send button enables with content.
+        cx.subscribe(&composer, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let view = cx.weak_entity();
+        let permissions = cx.new(|_| PermissionsPanel {
+            view,
+            selected: RuntimeMode::FullAccess,
+            preview: None,
+        });
         Self {
             status,
-            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search threads")),
+            search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
             project_search,
-            composer: cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .placeholder("Ask anything. @ files, $ skills, / commands")
-                    .auto_grow(3, 10)
-            }),
+            composer,
             list: UniformListScrollHandle::new(),
             shelves: [false; 3],
+            sidebar_open: true,
+            sidebar_overlay_open: false,
+            sidebar_width: Cell::new(SIDEBAR_WIDTH),
+            send_hovered: false,
+            permissions_open: false,
+            selected_thread: None,
+            runtime_mode: None,
+            permissions,
             selected_project: None,
+            history: History::default(),
             picker_open: false,
             picker_trigger: Rc::default(),
             picker_order: None,
             environments: Vec::new(),
+            providers: None,
+            branches: HashMap::new(),
+            branches_requested: HashSet::new(),
             actions,
         }
     }
@@ -93,6 +202,17 @@ impl MainView {
             }
             return cx.notify();
         }
+        if let Status::Providers(catalog) = status {
+            self.providers = Some(catalog);
+            return cx.notify();
+        }
+        if let Status::Branch { root, branch } = status {
+            self.branches.insert(root, branch);
+            return cx.notify();
+        }
+        if matches!(status, Status::Connecting) {
+            self.branches_requested.clear();
+        }
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
         if self.selected_project.is_none() {
@@ -100,8 +220,29 @@ impl MainView {
                 .shell()
                 .and_then(|shell| active_project(None, shell))
                 .map(|entry| entry.id.clone());
+            if let Some(id) = &self.selected_project {
+                self.history.visit(id.clone());
+            }
         }
+        self.request_branch();
         cx.notify();
+    }
+
+    /// Asks for the branch of the active project's root once per connection.
+    fn request_branch(&mut self) {
+        let Some(entry) = self
+            .shell()
+            .and_then(|shell| active_project(self.selected_project.as_deref(), shell))
+        else {
+            return;
+        };
+        let root = entry.root.clone();
+        if entry.scratch || root.is_empty() || !self.branches_requested.insert(root.clone()) {
+            return;
+        }
+        if self.actions.try_send(Action::LoadBranch { root }).is_err() {
+            eprintln!("[ui] could not ask for the branch");
+        }
     }
 
     fn shell(&self) -> Option<&ShellView> {
@@ -123,64 +264,446 @@ impl MainView {
         Some(listed.into_iter().map(|entry| entry.key.clone()).collect())
     }
 
-    fn environment(&self) -> String {
-        match &self.status {
-            Status::Connected { label, .. } => label.clone(),
-            other => other.to_string(),
+    /// One draggable row: the sidebar's `SidebarChrome` on the left, the thread breadcrumb right.
+    fn top_bar(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let border = cx.theme().border;
+        let active = self
+            .shell()
+            .and_then(|shell| active_project(self.selected_project.as_deref(), shell));
+        let open = self.sidebar_open && !narrow;
+        TitleBar::new()
+            .h(px(TOPBAR_HEIGHT))
+            .pl_0()
+            .border_b_0()
+            .bg(gpui::transparent_black())
+            .child(self.sidebar_chrome(open, SIDEBAR_WIDTH, cx))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .px_4()
+                    .border_b_1()
+                    .border_color(border)
+                    .when(self.shell().is_some(), |row| {
+                        row.child(self.breadcrumb(active, cx))
+                    }),
+            )
+    }
+
+    /// The web's `SidebarChrome`: toggle, then the brand and history while the sidebar is shown.
+    fn sidebar_chrome(&self, open: bool, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let backdrop = open && STAGE_BACKDROP;
+        let (brand, brand_muted) = if backdrop {
+            (gpui::white(), gpui::white().opacity(0.7))
+        } else {
+            (cx.theme().foreground, cx.theme().muted_foreground)
+        };
+        let toggle = Kbd::format(&Keystroke::parse("cmd-b").expect("valid keystroke"));
+        let shortcut = |keys| Kbd::format(&Keystroke::parse(keys).expect("valid keystroke"));
+        let border = cx.theme().border;
+        h_flex()
+            .h_full()
+            .flex_shrink_0()
+            .when(open, |row| row.w(px(width)))
+            .when(!open, |row| row.border_b_1().border_color(border))
+            .pl(px(TITLEBAR_CONTENT_LEFT))
+            .pr_3()
+            .gap_1()
+            .child(
+                nav_button(
+                    "toggle-sidebar",
+                    if open {
+                        IconName::PanelLeftClose
+                    } else {
+                        IconName::PanelLeft
+                    },
+                    format!("Toggle main sidebar ({toggle})").into(),
+                    true,
+                    backdrop,
+                    cx,
+                )
+                .on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.toggle_sidebar(narrow_window(window), cx)
+                    }),
+                ),
+            )
+            // Like the web, the brand and history live in the sidebar and hide with it.
+            .when(open, |bar| {
+                bar.child(
+                    h_flex()
+                        .ml_1()
+                        .gap_1()
+                        .text_sm()
+                        .text_color(brand)
+                        .child(div().font_weight(FontWeight::BOLD).child("T3"))
+                        .child(
+                            div()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(brand_muted)
+                                .child("Code"),
+                        ),
+                )
+                .child(
+                    nav_button(
+                        "go-back",
+                        IconName::ArrowLeft,
+                        format!("Go back ({})", shortcut("cmd-[")).into(),
+                        self.history.can_back(),
+                        backdrop,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
+                )
+                .child(
+                    nav_button(
+                        "go-forward",
+                        IconName::ArrowRight,
+                        format!("Go forward ({})", shortcut("cmd-]")).into(),
+                        self.history.can_forward(),
+                        backdrop,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
+                )
+            })
+    }
+
+    fn select_project(&mut self, id: String, cx: &mut Context<Self>) {
+        self.history.visit(id.clone());
+        self.selected_project = Some(id);
+        self.picker_open = false;
+        self.sidebar_overlay_open = false;
+        self.request_branch();
+        cx.notify();
+    }
+
+    fn go_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.history.back() {
+            self.sidebar_overlay_open = false;
+            self.selected_project = Some(id.to_owned());
+            self.request_branch();
+            cx.notify();
         }
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self
-            .shell()
-            .map_or(0, |shell| sidebar_items(&shell.rows, self.shelves).len());
+    fn go_forward(&mut self, cx: &mut Context<Self>) {
+        if let Some(id) = self.history.forward() {
+            self.sidebar_overlay_open = false;
+            self.selected_project = Some(id.to_owned());
+            self.request_branch();
+            cx.notify();
+        }
+    }
+
+    fn toggle_sidebar(&mut self, narrow: bool, cx: &mut Context<Self>) {
+        (self.sidebar_open, self.sidebar_overlay_open) =
+            toggled(narrow, self.sidebar_open, self.sidebar_overlay_open);
+        cx.notify();
+    }
+
+    fn close_sidebar_overlay(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_overlay_open = false;
+        cx.notify();
+    }
+
+    /// The web's mobile `Sheet`: a dimmed backdrop and a left drawer sliding in over the content.
+    fn sidebar_drawer(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let drawer = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left_0()
+            .w(px(width))
+            .occlude()
+            .shadow_lg()
+            .child(self.sidebar_surface(width, cx))
+            .child(
+                v_flex()
+                    .size_full()
+                    .child(
+                        TitleBar::new()
+                            .h(px(TOPBAR_HEIGHT))
+                            .pl_0()
+                            .border_b_0()
+                            .bg(gpui::transparent_black())
+                            .child(self.sidebar_chrome(true, width, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .child(self.sidebar(width, window, cx)),
+                    ),
+            )
+            .with_animation(
+                "sidebar-drawer",
+                Animation::new(Duration::from_millis(SHEET_MS)).with_easing(ease_in_out),
+                |drawer, delta| drawer.left(px(-SHEET_SLIDE * (1. - delta))).opacity(delta),
+            );
+        div()
+            .absolute()
+            .inset_0()
+            .child(
+                div()
+                    .id("sidebar-backdrop")
+                    .absolute()
+                    .inset_0()
+                    .cursor_default()
+                    .bg(cx.theme().background.opacity(0.6))
+                    .on_click(cx.listener(|this, _, _, cx| this.close_sidebar_overlay(cx)))
+                    .with_animation(
+                        "sidebar-backdrop",
+                        Animation::new(Duration::from_millis(SHEET_MS)).with_easing(ease_in_out),
+                        |backdrop, delta| backdrop.opacity(delta),
+                    ),
+            )
+            .child(drawer)
+            .into_any_element()
+    }
+
+    /// The sidebar's background, border and stage art, painted under the top bar and sidebar
+    /// so the art runs behind both, as the web's `SidebarStageBackdrop` does.
+    fn sidebar_surface(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .bottom_0()
+            .w(px(width))
+            .bg(cx.theme().sidebar)
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
+            .when(STAGE_BACKDROP, |surface| {
+                surface.child(
+                    img(STAGE_DEV)
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(width))
+                        .h(px(STAGE_BACKDROP_HEIGHT))
+                        .object_fit(ObjectFit::Cover),
+                )
+            })
+    }
+
+    fn sidebar(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sidebar_width.set(width);
+        let (top, shelves) = self.shell().map_or_else(Default::default, |shell| {
+            (
+                top_rows(&shell.rows).len(),
+                shelves(&shell.rows, self.shelves),
+            )
+        });
         v_flex()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(width))
             .flex_shrink_0()
             .h_full()
             .gap_2()
             .p_2()
-            .bg(cx.theme().sidebar)
-            .border_r_1()
-            .border_color(cx.theme().sidebar_border)
-            .child(Input::new(&self.search).prefix(Icon::new(IconName::Search)))
+            .child(self.sidebar_header(window, cx))
             .child(
                 uniform_list(
                     "threads",
-                    count,
+                    top,
                     cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                         let Some(shell) = this.shell() else {
                             return Vec::new();
                         };
-                        let (muted, hover) = (cx.theme().muted_foreground, cx.theme().list_hover);
-                        let items = sidebar_items(&shell.rows, this.shelves);
-                        items[range]
+                        let rows = top_rows(&shell.rows);
+                        rows[range]
                             .iter()
-                            .map(|item| match *item {
-                                SidebarItem::Row(index) => {
-                                    thread_row(&shell.rows[index], muted, hover).into_any_element()
-                                }
-                                SidebarItem::Header {
-                                    section,
-                                    count,
-                                    expanded,
-                                } => {
-                                    let shelf = shelf_index(section);
-                                    shelf_header(section, count, expanded, muted, hover)
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.shelves[shelf] = !this.shelves[shelf];
-                                            cx.notify();
-                                        }))
-                                        .into_any_element()
-                                }
-                            })
+                            .map(|&index| this.thread_item(&shell.rows[index], cx))
                             .collect()
                     }),
                 )
                 .track_scroll(&self.list)
                 .flex_1()
-                .min_h_0(),
+                .min_h(px(ROW_HEIGHT)),
             )
+            .child(
+                v_flex().gap_px().min_h_0().children(
+                    shelves
+                        .into_iter()
+                        .map(|shelf| self.shelf(shelf, cx))
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .child(self.sidebar_footer(cx))
+    }
+
+    /// A sidebar row; picking it marks the open thread, and closes the overlay like the web.
+    fn thread_item(&self, row: &ThreadRow, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let selected = self.selected_thread.as_deref() == Some(row.id.as_str());
+        let id = row.id.clone();
+        let project = self.shell().and_then(|shell| {
+            shell
+                .project_entries
+                .iter()
+                .find(|e| e.contains(&row.project_id))
+        });
+        let provider = self
+            .providers
+            .as_ref()
+            .and_then(|catalog| catalog.instance(&row.provider_instance));
+        thread_row(
+            row,
+            project,
+            provider,
+            selected,
+            self.sidebar_width.get(),
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.selected_thread = Some(id.clone());
+            this.sidebar_overlay_open = false;
+            cx.notify();
+        }))
+    }
+
+    /// One collapsible shelf: its header, then its rows while expanded.
+    fn shelf(&self, shelf: Shelf, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let Shelf {
+            section,
+            count,
+            expanded,
+        } = shelf;
+        let index = shelf_index(section);
+        let (muted, hover) = (cx.theme().muted_foreground, cx.theme().list_hover);
+        let visible = self.shell().map_or(0, |shell| {
+            shelf_rows(
+                &shell.rows,
+                section,
+                expanded,
+                self.selected_thread.as_deref(),
+            )
+            .len()
+        });
+        v_flex()
+            .gap_px()
+            .min_h_0()
+            .child(
+                shelf_header(section, count, expanded, muted, hover).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.shelves[index] = !this.shelves[index];
+                        cx.notify();
+                    },
+                )),
+            )
+            .when(visible > 0, |shelf| {
+                shelf.child(
+                    uniform_list(
+                        ("shelf", index),
+                        visible,
+                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            let Some(shell) = this.shell() else {
+                                return Vec::new();
+                            };
+                            let selected = this.selected_thread.as_deref();
+                            let rows = shelf_rows(&shell.rows, section, expanded, selected);
+                            rows[range]
+                                .iter()
+                                .map(|&index| this.thread_item(&shell.rows[index], cx))
+                                .collect()
+                        }),
+                    )
+                    .h(px(visible.min(SHELF_VISIBLE_ROWS) as f32 * ROW_HEIGHT))
+                    .min_h_0(),
+                )
+            })
+    }
+
+    /// The web's `SidebarChromeFooter`: utility buttons left, the update control right.
+    fn sidebar_footer(&self, cx: &App) -> impl IntoElement {
+        h_flex()
+            .pt_1()
+            .gap_px()
+            .child(footer_button(
+                "settings",
+                Icon::new(IconName::Settings),
+                "Settings",
+                false,
+                cx,
+            ))
+            .child(footer_button(
+                "pull-requests",
+                Icon::new(Icons::GitPullRequest),
+                "Pull requests",
+                false,
+                cx,
+            ))
+            .child(footer_button(
+                "usage",
+                Icon::new(Icons::ChartNoAxesColumn),
+                "Usage",
+                false,
+                cx,
+            ))
+            .child(div().flex_1())
+            .child(footer_button(
+                "update",
+                Icon::new(Icons::CircleArrowUp),
+                "Update available",
+                true,
+                cx,
+            ))
+    }
+
+    /// The web's `SidebarThreadHeader`: search, then the project filter, add project and new thread.
+    fn sidebar_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit_assets::IconName as Icons;
+        let has_projects = self
+            .shell()
+            .is_some_and(|shell| !shell.project_entries.is_empty());
+        let new_thread = Kbd::format(&Keystroke::parse("cmd-n").expect("valid keystroke"));
+        let focused = self.search.focus_handle(cx).is_focused(window);
+        let (hover, ring) = (cx.theme().list_hover, cx.theme().ring.opacity(0.7));
+        h_flex()
+            .gap_1()
+            .child(
+                // The web's unstyled search: only hover and focus paint the row.
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .h_8()
+                    .px_2()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(gpui::transparent_black())
+                    .text_color(cx.theme().muted_foreground)
+                    .hover(move |style| style.bg(hover))
+                    .when(focused, |row| row.bg(hover).border_color(ring))
+                    .child(Icon::new(IconName::Search).size_4())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(Input::new(&self.search).appearance(false).small()),
+                    ),
+            )
+            .when(has_projects, |row| {
+                row.child(header_icon_button(
+                    "filter-projects",
+                    Icons::ListFilter,
+                    "Filter threads by project".into(),
+                    cx,
+                ))
+                .child(header_icon_button(
+                    "add-project",
+                    Icons::FolderPlus,
+                    "Add project".into(),
+                    cx,
+                ))
+            })
+            .child(header_icon_button(
+                "new-thread",
+                Icons::SquarePen,
+                format!("New thread ({new_thread})").into(),
+                cx,
+            ))
     }
 
     fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -198,16 +721,6 @@ impl MainView {
             .min_w_0()
             .h_full()
             .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .h(px(40.))
-                    .px_4()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(self.breadcrumb(active, cx)),
-            )
-            .child(
                 centered(cx)
                     .gap_6()
                     .child(self.hero(
@@ -217,7 +730,13 @@ impl MainView {
                         projects::with_remote_members(&shell.project_entries, &self.environments),
                         cx,
                     ))
-                    .child(self.composer_box(cx)),
+                    .child(
+                        v_flex()
+                            .w(px(720.))
+                            .max_w_full()
+                            .child(self.composer_box(cx))
+                            .children(active.and_then(|entry| self.context_strip(entry, cx))),
+                    ),
             )
             .into_any_element()
     }
@@ -262,7 +781,12 @@ impl MainView {
                         .gap(px(6.))
                         .min_w_0()
                         .text_color(muted)
+                        .cursor_pointer()
                         .hover(move |style| style.text_color(foreground))
+                        .tooltip(tooltip(format!(
+                            "New thread in {}",
+                            project_label(Some(entry))
+                        )))
                         .child(icon)
                         .child(
                             div()
@@ -391,9 +915,7 @@ impl MainView {
                         .children(environment_badge(index, entry, muted))
                         .on_click(move |_, _, cx| {
                             view.update(cx, |this, cx| {
-                                this.selected_project = Some(id.clone());
-                                this.picker_open = false;
-                                cx.notify();
+                                this.select_project(id.clone(), cx);
                             });
                         })
                 });
@@ -467,9 +989,7 @@ impl MainView {
                 .on_click(move |_, _, cx| {
                     let Some(id) = scratch_id.clone() else { return };
                     link_view.update(cx, |this, cx| {
-                        this.selected_project = Some(id);
-                        this.picker_open = false;
-                        cx.notify();
+                        this.select_project(id, cx);
                     });
                 })
                 .child("or start without a project")
@@ -487,45 +1007,451 @@ impl MainView {
         )
     }
 
+    /// The web's `ComposerSurface.ContextStrip` under the composer; none for the scratch project.
+    fn context_strip(&self, project: &ProjectEntry, cx: &App) -> Option<impl IntoElement> {
+        let Status::Connected { label, machine, .. } = &self.status else {
+            return None;
+        };
+        if project.scratch {
+            return None;
+        }
+        let defaults = self.providers.as_ref().map_or_else(
+            || Defaults::resolve(None, None, None),
+            |c| c.defaults(Some(&project.id)),
+        );
+        let environment = strip::environment_label(label);
+        let branch = self
+            .branches
+            .get(&project.root)
+            .and_then(Option::as_ref)
+            .map(|branch| {
+                let label = branch.label(defaults.env_mode, defaults.start_from_origin);
+                // The branch is the one label that gives way in a narrow window.
+                strip_control("branch", Icons::GitBranch, label.clone(), label, cx)
+                    .flex_shrink(1.)
+                    .min_w_0()
+            });
+        let is_repo = branch.is_some();
+        let workspace = defaults.env_mode;
+        let runtime_mode = self.runtime_mode.unwrap_or(defaults.runtime_mode);
+        Some(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .pt_2()
+                .child(strip_control(
+                    "host",
+                    machine_icon(*machine),
+                    environment.clone(),
+                    strip::tooltip_text(&environment, Some(HOST_SHORTCUT)),
+                    cx,
+                ))
+                .children(is_repo.then(|| strip_separator(cx)))
+                .children(is_repo.then(|| {
+                    strip_control(
+                        "workspace",
+                        workspace_icon(workspace),
+                        workspace.label().to_owned(),
+                        strip::tooltip_text(workspace.label(), Some(WORKSPACE_SHORTCUT)),
+                        cx,
+                    )
+                }))
+                .child(div().flex_1())
+                .children(branch)
+                .child(self.permissions_popover(runtime_mode, cx)),
+        )
+    }
+
+    /// The web's `ComposerContextPermissions` menu: opens above the chip, aligned to its end.
+    fn permissions_popover(&self, mode: RuntimeMode, cx: &App) -> impl IntoElement {
+        let view = self.permissions.read(cx).view.clone();
+        let panel = self.permissions.clone();
+        let content_panel = panel.clone();
+        Popover::new("permissions")
+            .anchor(Anchor::BottomRight)
+            .open(self.permissions_open)
+            .p_0()
+            .on_open_change(move |open, _, cx| {
+                panel.update(cx, |panel, _| panel.preview = None);
+                view.update(cx, |this, cx| {
+                    this.permissions_open = *open;
+                    cx.notify();
+                })
+                .ok();
+            })
+            .trigger(PermissionsTrigger { mode, open: false })
+            .content(move |_, _, cx| {
+                content_panel.update(cx, |panel, _| panel.selected = mode);
+                content_panel.clone()
+            })
+    }
+
+    fn open_permissions(&mut self, cx: &mut Context<Self>) {
+        let strip = self.shell().is_some_and(|shell| {
+            active_project(self.selected_project.as_deref(), shell).is_some_and(|e| !e.scratch)
+        });
+        self.permissions_open = strip;
+        cx.notify();
+    }
+
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let trigger = self.providers.as_ref().and_then(|catalog| {
+            let project = self.selected_project.as_deref();
+            catalog.trigger(project.filter(|id| !id.is_empty()))
+        });
         v_flex()
             .w(px(720.))
             .max_w_full()
-            .p_3()
-            .gap_2()
-            .rounded_xl()
+            .p_px()
+            .rounded(px(16.))
             .border_1()
-            .border_color(cx.theme().border)
+            // The web's dark `--chat-composer-outline`.
+            .border_color(gpui::white().opacity(0.05))
             .bg(cx.theme().secondary)
             .child(
-                Textarea::new(&self.composer)
-                    .appearance(false)
-                    .bordered(false),
+                // The web's `px-4 pt-4 pb-2` body; the negative margin cancels the textarea's own padding.
+                div().px_4().pt_4().pb_2().child(
+                    Textarea::new(&self.composer)
+                        .appearance(false)
+                        .bordered(false)
+                        .mx(px(-10.))
+                        .my(px(-8.))
+                        // The web's `leading-relaxed` at 14px.
+                        .line_height(px(22.75)),
+                ),
             )
             .child(
                 h_flex()
+                    .px_2()
+                    .pb_2()
                     .justify_between()
+                    .child(header_icon_button(
+                        "attach",
+                        gpui_kit_assets::IconName::Paperclip,
+                        "Attach files".into(),
+                        cx,
+                    ))
                     .child(
-                        div()
-                            .id("attach-tooltip")
-                            .tooltip(tooltip("Attach files"))
+                        h_flex()
+                            .gap_2()
+                            .children(trigger.map(|trigger| model_trigger(&trigger, cx)))
                             .child(
-                                Button::new("attach")
-                                    .ghost()
-                                    .small()
-                                    .icon(gpui_kit_assets::IconName::Paperclip)
-                                    .on_click(|_, _, _| {}),
+                                send_button(
+                                    !self.composer.read(cx).value().trim().is_empty(),
+                                    self.send_hovered,
+                                    cx,
+                                )
+                                .on_hover(cx.listener(
+                                    |this, hovered: &bool, _, cx| {
+                                        this.send_hovered = *hovered;
+                                        cx.notify();
+                                    },
+                                )),
                             ),
-                    )
-                    .child(
-                        Button::new("send")
-                            .primary()
-                            .rounded_full()
-                            .icon(IconName::ArrowUp)
-                            .on_click(|_, _, _| {}),
                     ),
             )
     }
+}
+
+/// The web's `ComposerControl` at `xs`: a ghost button with a 12px icon and a 12px label.
+fn strip_control(
+    id: &'static str,
+    icon: Icons,
+    label: String,
+    tip: String,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    let (foreground, muted) = (theme.foreground, theme.muted_foreground);
+    div()
+        .id(id)
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .h(px(24.))
+        .px(px(8.))
+        .rounded(px(8.))
+        .text_xs()
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
+        .tooltip(tooltip(tip))
+        .child(Icon::new(icon).size(px(12.)))
+        .child(
+            div()
+                .max_w(px(240.))
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(label),
+        )
+}
+
+/// The permissions chip as a popover trigger.
+#[derive(IntoElement)]
+struct PermissionsTrigger {
+    mode: RuntimeMode,
+    open: bool,
+}
+
+impl Selectable for PermissionsTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for PermissionsTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tip = if self.open {
+            String::new()
+        } else {
+            strip::tooltip_text("Permissions", Some(PERMISSIONS_SHORTCUT))
+        };
+        let control = strip_control(
+            "permissions",
+            runtime_icon(self.mode),
+            self.mode.label().to_owned(),
+            tip,
+            cx,
+        );
+        let foreground = cx.theme().foreground;
+        control.when(self.open, move |control| {
+            control.bg(foreground.opacity(0.06)).text_color(foreground)
+        })
+    }
+}
+
+/// The web's `ComposerPermissionsSection`: four icon segments, and the shown mode named below.
+struct PermissionsPanel {
+    view: gpui::WeakEntity<MainView>,
+    selected: RuntimeMode,
+    preview: Option<RuntimeMode>,
+}
+
+impl Render for PermissionsPanel {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (foreground, muted) = (theme.foreground, theme.muted_foreground);
+        let (track, selected_bg, hover_bg) = (
+            theme.input.opacity(0.4),
+            theme.input.opacity(0.72),
+            theme.accent,
+        );
+        let (shown, is_selected) = strip::previewed(self.selected, self.preview);
+        let last = RuntimeMode::ALL.len() - 1;
+        let segments = RuntimeMode::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, mode)| {
+                let chosen = mode == self.selected;
+                div()
+                    .id(("runtime-mode", index))
+                    .flex()
+                    .flex_1()
+                    .h_6()
+                    .items_center()
+                    .justify_center()
+                    .when(index == 0, |segment| segment.rounded_l_md())
+                    .when(index == last, |segment| segment.rounded_r_md())
+                    .cursor_pointer()
+                    .when(chosen, |segment| {
+                        segment.bg(selected_bg).text_color(foreground)
+                    })
+                    .when(!chosen, |segment| {
+                        segment
+                            .text_color(muted)
+                            .hover(move |style| style.bg(hover_bg).text_color(foreground))
+                    })
+                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                        if *hovered {
+                            this.preview = Some(mode);
+                        } else if this.preview == Some(mode) {
+                            this.preview = None;
+                        }
+                        cx.notify();
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.selected = mode;
+                        this.preview = None;
+                        this.view
+                            .update(cx, |view, cx| {
+                                view.runtime_mode = Some(mode);
+                                view.permissions_open = false;
+                                cx.notify();
+                            })
+                            .ok();
+                        cx.notify();
+                    }))
+                    .child(Icon::new(runtime_icon(mode)).size(px(14.)))
+            });
+        v_flex()
+            .w(px(288.))
+            .gap(px(6.))
+            .px_2()
+            .py(px(6.))
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted)
+                    .child("Permissions"),
+            )
+            .child(h_flex().rounded_lg().bg(track).p(px(2.)).children(segments))
+            .child(
+                v_flex()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(if is_selected { foreground } else { muted })
+                            .child(shown.label()),
+                    )
+                    .child(
+                        div()
+                            .min_h_8()
+                            .text_xs()
+                            .line_height(px(16.))
+                            .text_color(muted)
+                            .child(shown.description()),
+                    ),
+            )
+    }
+}
+
+/// The web's `Separator` between the environment and the workspace: `mx-0.5 h-3.5`.
+fn strip_separator(cx: &App) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .mx(px(2.))
+        .w(px(1.))
+        .h(px(14.))
+        .bg(cx.theme().border)
+}
+
+fn workspace_icon(mode: EnvMode) -> Icons {
+    match mode {
+        EnvMode::Local => Icons::Folder,
+        EnvMode::Worktree => Icons::FolderGit2,
+    }
+}
+
+/// `runtimeModeConfig`'s icons.
+fn runtime_icon(mode: RuntimeMode) -> Icons {
+    match mode {
+        RuntimeMode::ApprovalRequired => Icons::Lock,
+        RuntimeMode::AutoAcceptEdits => Icons::PenLine,
+        RuntimeMode::Auto => Icons::Sparkles,
+        RuntimeMode::FullAccess => Icons::ShieldOff,
+    }
+}
+
+/// The web's `ProviderModelPicker` trigger, a `ComposerControl` at `sm`. Clicking does nothing yet.
+fn model_trigger(trigger: &Trigger, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    let (foreground, muted) = (theme.foreground, theme.muted_foreground);
+    div()
+        .id("model-trigger")
+        .group("model-trigger")
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.))
+        .h(px(28.))
+        .px_2()
+        .rounded(px(8.))
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(foreground.opacity(0.8))
+        .cursor_pointer()
+        .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
+        .tooltip(tooltip(trigger.title.clone()))
+        .on_click(|_, _, _| {})
+        .child(provider_mark(trigger, cx))
+        .child(
+            div()
+                .max_w(px(224.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(trigger.model.clone()),
+        )
+        .children(trigger.effort.clone().map(|effort| {
+            div()
+                .ml(px(-2.))
+                .max_w(px(96.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_color(muted)
+                .group_hover("model-trigger", move |style| style.text_color(foreground))
+                .child(effort)
+        }))
+}
+
+/// The web's `ProviderInstanceIcon` at `size-4`: the driver's art, or its initials, with the
+/// instance chip at the bottom-right.
+fn provider_mark(trigger: &Trigger, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    let art = match provider_icon(&trigger.driver, theme.is_dark()) {
+        Some(path) => img(path).size_full().into_any_element(),
+        None => div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(10.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(crate::providers::initials(&trigger.display_name))
+            .into_any_element(),
+    };
+    div()
+        .relative()
+        .flex_shrink_0()
+        .size_4()
+        .child(art)
+        .children(trigger.badge.as_ref().map(|badge| {
+            let (bg, fg) = match badge.accent {
+                Some((bg, fg)) => (rgb(bg).into(), rgb(fg).into()),
+                None => (theme.background, theme.muted_foreground),
+            };
+            div()
+                .absolute()
+                .right(px(-2.))
+                .bottom(px(-2.))
+                .h(px(12.))
+                .min_w(px(12.))
+                .px(px(2.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(theme.secondary)
+                .shadow_sm()
+                .bg(bg)
+                .text_color(fg)
+                .text_size(px(7.))
+                .line_height(px(7.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(badge.initials.clone())
+        }))
 }
 
 /// The project name as plain heading text that underlines on hover and while its picker is open.
@@ -622,6 +1548,181 @@ fn tooltip(
             .rounded(px(6.))
             .build(window, cx)
     }
+}
+
+/// The web's `SidebarHeaderIconButton`: a 28px ghost button whose icon turns to the foreground on hover.
+fn header_icon_button(
+    id: &'static str,
+    icon: gpui_kit_assets::IconName,
+    label: gpui::SharedString,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    ghost_icon_button(id, Icon::new(icon).size_4(), label, true, cx)
+}
+
+/// The top bar's `icon-sm` buttons: `ghost`, or `media-navigation` on the stage art.
+/// Disabled ones stay dim and ignore the pointer.
+fn nav_button(
+    id: &'static str,
+    icon: IconName,
+    label: gpui::SharedString,
+    enabled: bool,
+    on_backdrop: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let icon = Icon::new(icon).size(px(14.));
+    if !on_backdrop {
+        return ghost_icon_button(id, icon, label, enabled, cx);
+    }
+    let white = gpui::white();
+    icon_button(
+        id,
+        icon,
+        label,
+        enabled,
+        white.opacity(0.9),
+        white.opacity(0.1),
+        white,
+    )
+}
+
+fn ghost_icon_button(
+    id: &'static str,
+    icon: Icon,
+    label: gpui::SharedString,
+    enabled: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    // Translucent like the web's `--accent`, so it shows on the composer as well as the sidebar.
+    let (idle, hover) = (theme.muted_foreground, theme.foreground.opacity(0.06));
+    icon_button(id, icon, label, enabled, idle, hover, theme.foreground)
+}
+
+fn icon_button(
+    id: &'static str,
+    icon: Icon,
+    label: gpui::SharedString,
+    enabled: bool,
+    idle: Hsla,
+    hover_bg: Hsla,
+    hover_fg: Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .size(px(28.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .text_color(idle)
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
+                .tooltip(tooltip(label))
+        })
+        // The web's `disabled:opacity-64`.
+        .when(!enabled, |button| button.opacity(0.64))
+        .child(icon)
+}
+
+/// The sidebar footer's `size-8` menu button, `rounded-full` for the update control.
+fn footer_button(
+    id: &'static str,
+    icon: Icon,
+    label: &'static str,
+    round: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    let (idle, hover_bg, hover_fg) = (theme.muted_foreground, theme.list_hover, theme.foreground);
+    div()
+        .id(id)
+        .flex_shrink_0()
+        .size_8()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(round, |button| button.rounded_full())
+        .when(!round, |button| button.rounded(px(6.)))
+        .text_color(idle)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
+        .tooltip(tooltip(label))
+        .child(icon.size_4())
+}
+
+/// The web's `ComposerPrimaryActions` send button: stage art in dev builds, else `message-action`.
+fn send_button(enabled: bool, hovered: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    let (bg, hover_bg, fg) = if STAGE_BACKDROP {
+        (
+            gpui::transparent_black(),
+            gpui::white().opacity(0.1),
+            gpui::white(),
+        )
+    } else if enabled {
+        (theme.primary, theme.primary_hover, theme.primary_foreground)
+    } else {
+        (
+            theme.foreground.opacity(0.12),
+            theme.foreground.opacity(0.12),
+            theme.muted_foreground,
+        )
+    };
+    // The web's `hover:scale-105` over 150ms: the circle grows 5% inside a fixed slot.
+    let grown = enabled && hovered;
+    div()
+        .id("send")
+        .group("send")
+        .relative()
+        .flex_shrink_0()
+        .size(px(32.))
+        .when(enabled, |slot| {
+            slot.cursor_pointer().tooltip(tooltip("Submit message"))
+        })
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_full()
+                .bg(bg)
+                .when(STAGE_BACKDROP && !enabled, |circle| circle.opacity(0.64))
+                .when(STAGE_BACKDROP, |circle| {
+                    circle.child(
+                        img(STAGE_DEV_BUTTON)
+                            .absolute()
+                            .size_full()
+                            // `overflow_hidden` does not round-clip images.
+                            .rounded_full()
+                            .object_fit(ObjectFit::Cover),
+                    )
+                })
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(fg)
+                        .when(enabled, |face| {
+                            face.group_hover("send", move |style| style.bg(hover_bg))
+                        })
+                        .child(Icon::new(IconName::ArrowUp).size_4()),
+                )
+                .with_animation(
+                    ("send-grow", usize::from(grown)),
+                    Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                    move |circle, delta| {
+                        let inset = px(-0.8) * if grown { delta } else { 1. - delta };
+                        circle.top(inset).left(inset).right(inset).bottom(inset)
+                    },
+                ),
+        )
 }
 
 fn machine_icon(kind: MachineKind) -> gpui_kit_assets::IconName {
@@ -747,26 +1848,17 @@ fn centered(cx: &Context<MainView>) -> gpui::Div {
         .text_color(cx.theme().foreground)
 }
 
-fn status_tag(status: ThreadStatus) -> Option<Tag> {
-    let (tag, label) = match status {
-        ThreadStatus::Running | ThreadStatus::Starting => (Tag::info(), "Running"),
-        ThreadStatus::Waiting => (Tag::warning(), "Waiting"),
-        ThreadStatus::Queued | ThreadStatus::Preparing => (Tag::secondary(), "Queued"),
-        ThreadStatus::Failed => (Tag::danger(), "Failed"),
-        _ => return None,
-    };
-    Some(tag.small().child(label))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Shelf {
+    section: Section,
+    count: usize,
+    expanded: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SidebarItem {
-    Row(usize),
-    Header {
-        section: Section,
-        count: usize,
-        expanded: bool,
-    },
-}
+/// Rows a shelf shows before it scrolls.
+const SHELF_VISIBLE_ROWS: usize = 6;
+/// The web's shelf header and footer button size (`h-8`, `size-8`).
+const SHELF_HEADER_HEIGHT: f32 = 32.;
 
 fn shelf_index(section: Section) -> usize {
     match section {
@@ -776,40 +1868,48 @@ fn shelf_index(section: Section) -> usize {
     }
 }
 
-/// The web's default list: pinned and active rows, then a header per shelf (Working and
-/// Snoozed only when non-empty, Settled always) with its rows only while expanded.
-fn sidebar_items(rows: &[ThreadRow], expanded: [bool; 3]) -> Vec<SidebarItem> {
+/// The pinned and active rows, listed above the shelves.
+fn top_rows(rows: &[ThreadRow]) -> Vec<usize> {
+    let listed = |row: &ThreadRow| matches!(row.section, Section::Pinned | Section::Active);
+    (0..rows.len())
+        .filter(|&index| listed(&rows[index]))
+        .collect()
+}
+
+/// A shelf's rows: all while expanded, else only the open thread (`routeThreadOnly`).
+fn shelf_rows(
+    rows: &[ThreadRow],
+    section: Section,
+    expanded: bool,
+    selected: Option<&str>,
+) -> Vec<usize> {
+    (0..rows.len())
+        .filter(|&index| {
+            let row = &rows[index];
+            row.section == section && (expanded || selected == Some(row.id.as_str()))
+        })
+        .collect()
+}
+
+/// The web's shelves, bottom-anchored: Working and Snoozed only when non-empty, Settled always.
+fn shelves(rows: &[ThreadRow], expanded: [bool; 3]) -> Vec<Shelf> {
     if rows.is_empty() {
         return Vec::new();
     }
-    let mut items = Vec::with_capacity(rows.len() + 3);
-    for (index, row) in rows.iter().enumerate() {
-        if matches!(row.section, Section::Pinned | Section::Active) {
-            items.push(SidebarItem::Row(index));
-        }
-    }
-    for section in [Section::Working, Section::Snoozed, Section::Settled] {
-        let count = rows.iter().filter(|row| row.section == section).count();
-        if count == 0 && section != Section::Settled {
-            continue;
-        }
-        let expanded = expanded[shelf_index(section)];
-        items.push(SidebarItem::Header {
-            section,
-            count,
-            expanded,
-        });
-        if expanded {
-            let shelf = rows
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| row.section == section);
-            items.extend(shelf.map(|(index, _)| SidebarItem::Row(index)));
-        }
-    }
-    items
+    [Section::Working, Section::Snoozed, Section::Settled]
+        .into_iter()
+        .filter_map(|section| {
+            let count = rows.iter().filter(|row| row.section == section).count();
+            (count > 0 || section == Section::Settled).then(|| Shelf {
+                section,
+                count,
+                expanded: expanded[shelf_index(section)],
+            })
+        })
+        .collect()
 }
 
+/// The web's `CollapsibleSectionHeader`: label left, then the count and a chevron right.
 fn shelf_header(
     section: Section,
     count: usize,
@@ -829,89 +1929,374 @@ fn shelf_header(
     };
     h_flex()
         .id(label)
-        .h(px(ROW_HEIGHT))
-        .w_full()
+        .h(px(SHELF_HEADER_HEIGHT))
+        .mx(px(2.))
         .px_2()
         .gap_2()
-        .items_end()
-        .pb_2()
+        .rounded_md()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(|style| style.bg(hover))
+        .child(div().flex_1().child(label))
+        .child(
+            div()
+                .font_weight(FontWeight::NORMAL)
+                .child(count.to_string()),
+        )
+        .child(Icon::new(chevron).size(px(12.)))
+}
+
+/// The web's `text-info-foreground`, `text-error-foreground` and `text-warning-foreground`.
+fn top_status_color(status: TopStatus, dark: bool) -> Option<u32> {
+    match (status, dark) {
+        (TopStatus::Waiting, _) => None,
+        (TopStatus::Working, true) => Some(0x60a5fa),
+        (TopStatus::Working, false) => Some(0x1d4ed8),
+        (TopStatus::Limited, true) => Some(0xfbbf24),
+        (TopStatus::Limited, false) => Some(0xb45309),
+        (TopStatus::Failed, true) => Some(0xf87171),
+        (TopStatus::Failed, false) => Some(0xb91c1c),
+    }
+}
+
+fn top_status_icon(status: TopStatus) -> Icons {
+    match status {
+        TopStatus::Working => Icons::CircleDashed,
+        TopStatus::Waiting => Icons::CircleDotDashed,
+        TopStatus::Limited | TopStatus::Failed => Icons::CircleAlert,
+    }
+}
+
+/// The project avatar at the favicon's `size-4`: the monogram on its tinted square.
+fn project_badge(entry: Option<&ProjectEntry>, dark: bool, mono: gpui::SharedString) -> gpui::Div {
+    let badge = div().flex_shrink_0().size_4();
+    let Some(entry) = entry else {
+        return badge;
+    };
+    let color: Hsla = rgb(entry.color_hex(dark)).into();
+    if entry.scratch {
+        return badge.child(
+            Icon::empty()
+                .path(MESSAGE_SQUARE_DASHED)
+                .size_4()
+                .text_color(color),
+        );
+    }
+    badge
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .bg(color.opacity(0.14))
+        .text_color(color)
+        .text_size(px(8.25))
+        .font_weight(FontWeight::BOLD)
+        .font_family(mono)
+        .child(entry.initials.clone())
+}
+
+/// The web's `PULL_REQUEST_STATE_PRESENTATION` tones.
+fn pr_color(state: PrState, dark: bool) -> Option<Hsla> {
+    let (hex, alpha) = match (state, dark) {
+        (PrState::Pending, _) => return None,
+        (PrState::Open, false) => (0x059669, 1.),
+        (PrState::Open, true) => (0x6ee7b7, 0.9),
+        (PrState::Draft, false) => (0x71717a, 1.),
+        (PrState::Draft, true) => (0xa1a1aa, 0.8),
+        (PrState::Closed, false) => (0xdc2626, 1.),
+        (PrState::Closed, true) => (0xfca5a5, 0.9),
+        (PrState::Merged, false) => (0x7c3aed, 1.),
+        (PrState::Merged, true) => (0xc4b5fd, 0.9),
+    };
+    Some(Hsla::from(rgb(hex)).opacity(alpha))
+}
+
+fn pr_icon(badge: &PrBadge) -> Icons {
+    match (badge.stack, badge.state) {
+        (true, _) => Icons::Layers,
+        (false, PrState::Draft) => Icons::GitPullRequestDraft,
+        (false, PrState::Closed) => Icons::GitPullRequestClosed,
+        (false, PrState::Merged) => Icons::GitMerge,
+        (false, _) => Icons::GitPullRequestArrow,
+    }
+}
+
+/// The web's `MiddleTruncate` with a character budget in place of measured text.
+fn middle_truncate(text: &str, budget: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= budget || budget < 3 {
+        return text.to_owned();
+    }
+    let keep = budget - 1;
+    let (head, tail) = (keep.div_ceil(2), keep / 2);
+    let start: String = chars[..head].iter().collect();
+    let end: String = chars[chars.len() - tail..].iter().collect();
+    format!("{start}\u{2026}{end}")
+}
+
+/// How many `text-xs` characters fit the branch: the card's width less its padding, icons and
+/// the pull request badge.
+fn branch_budget(
+    sidebar_width: f32,
+    worktree: bool,
+    pr: Option<&PrBadge>,
+    provider: bool,
+) -> usize {
+    const CHAR_WIDTH: f32 = 6.4;
+    const GAP: f32 = 6.;
+    // Sidebar padding and the card's horizontal padding.
+    let mut room = sidebar_width - 16. - 20.;
+    if worktree {
+        room -= 14. + GAP;
+    }
+    if provider {
+        room -= 16. + GAP;
+    }
+    if let Some(pr) = pr {
+        room -= 12. + 4. + pr.text.chars().count() as f32 * CHAR_WIDTH + GAP;
+    }
+    (room / CHAR_WIDTH).max(0.) as usize
+}
+
+fn card_action(
+    id: &'static str,
+    label: &'static str,
+    muted: Hsla,
+    foreground: Hsla,
+) -> gpui::Stateful<gpui::Div> {
+    h_flex()
+        .id(id)
+        .h_full()
+        .gap_1()
+        .px(px(6.))
         .rounded_md()
         .text_xs()
         .text_color(muted)
-        .hover(|style| style.bg(hover))
-        .child(Icon::new(chevron).small())
-        .child(div().flex_1().child(label))
-        .child(count.to_string())
+        .cursor_pointer()
+        .hover(move |style| style.text_color(foreground))
+        .tooltip(tooltip(label))
 }
 
-fn thread_row(row: &ThreadRow, muted: Hsla, hover: Hsla) -> impl IntoElement + use<> {
-    v_flex()
+/// The group's label, else the project's own title.
+fn project_name<'a>(row: &'a ThreadRow, entry: Option<&'a ProjectEntry>) -> &'a str {
+    entry.map_or(row.project.as_str(), |entry| entry.title.as_str())
+}
+
+/// The web's card `SidebarThreadRow`. Snooze and Settle appear on hover, as in the web, but do
+/// nothing yet.
+fn thread_row(
+    row: &ThreadRow,
+    project: Option<&ProjectEntry>,
+    provider: Option<(&str, String)>,
+    selected: bool,
+    sidebar_width: f32,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = cx.theme();
+    let dark = theme.is_dark();
+    let (muted, foreground) = (theme.muted_foreground, theme.foreground);
+    let group = gpui::SharedString::from(format!("thread-{}", row.id));
+    let name = project_name(row, project);
+    let status = row.top.map(|top| {
+        let color = top_status_color(top, dark).map_or(muted, |hex| rgb(hex).into());
+        h_flex()
+            .gap_1()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(color)
+            .group_hover(group.clone(), |style| style.invisible())
+            .child(Icon::new(top_status_icon(top)).size_4())
+            .child(top.label())
+    });
+    let actions = h_flex()
+        .absolute()
+        .top_0()
+        .right_0()
+        .h_full()
+        .invisible()
+        .group_hover(group.clone(), |style| style.visible())
+        .child(
+            card_action("snooze", "Snooze thread", muted, foreground)
+                .child(Icon::new(Icons::Clock).size(px(12.))),
+        )
+        .child(
+            card_action("settle", "Settle thread", muted, foreground)
+                .child(Icon::new(Icons::Check).size(px(14.)))
+                .child("Settle"),
+        );
+    let provider = provider.map(|(driver, display_name)| {
+        let art = match provider_icon(driver, dark) {
+            Some(path) => img(path).size_full().into_any_element(),
+            None => div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(10.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(crate::providers::initials(&display_name))
+                .into_any_element(),
+        };
+        div().flex_shrink_0().size_4().opacity(0.6).child(art)
+    });
+    div()
         .id(row.id.clone())
+        .group(group)
         .h(px(ROW_HEIGHT))
         .w_full()
-        .overflow_hidden()
-        .px_2()
-        .py_1()
-        .justify_center()
-        .rounded_md()
-        .hover(|style| style.bg(hover))
+        .py(px(2.))
+        .cursor_pointer()
         .child(
-            div()
-                .text_xs()
-                .text_color(muted)
-                .truncate()
-                .child(row.project.clone()),
-        )
-        .child(
-            h_flex()
-                .gap_2()
+            v_flex()
+                .h(px(CARD_HEIGHT))
+                .w_full()
+                .overflow_hidden()
+                .px(px(10.))
+                .py_2()
+                .rounded_md()
+                .when(selected, |card| card.bg(theme.list_active))
+                .when(!selected, |card| {
+                    card.hover(|style| style.bg(theme.list_hover))
+                })
+                .child(
+                    h_flex()
+                        .h(px(20.))
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(project_badge(project, dark, theme.mono_font_family.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(name.to_owned()),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex()
+                                .flex_shrink_0()
+                                .items_center()
+                                .justify_end()
+                                .h_full()
+                                .min_w_8()
+                                .text_xs()
+                                .children(status)
+                                .child(actions),
+                        ),
+                )
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
+                        .mt_1()
+                        .h(px(20.))
+                        .flex_shrink_0()
                         .truncate()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(foreground)
                         .child(row.title.clone()),
                 )
-                .children(status_tag(row.status).map(|tag| div().flex_shrink_0().child(tag))),
+                .child(
+                    h_flex()
+                        .mt(px(2.))
+                        .h(px(16.))
+                        .flex_shrink_0()
+                        .items_center()
+                        .gap(px(6.))
+                        .text_xs()
+                        .text_color(muted)
+                        .when(row.worktree, |line| {
+                            line.child(Icon::new(Icons::FolderGit2).size(px(14.)))
+                        })
+                        .child(div().flex_1().min_w_0().truncate().children(
+                            row.branch.as_deref().map(|branch| {
+                                middle_truncate(
+                                    branch,
+                                    branch_budget(
+                                        sidebar_width,
+                                        row.worktree,
+                                        row.pr.as_ref(),
+                                        provider.is_some(),
+                                    ),
+                                )
+                            }),
+                        ))
+                        .children(row.pr.as_ref().map(|badge| {
+                            let tone = pr_color(badge.state, dark).unwrap_or(muted);
+                            h_flex()
+                                .flex_shrink_0()
+                                .gap_1()
+                                .child(Icon::new(pr_icon(badge)).size(px(12.)).text_color(tone))
+                                .child(div().text_color(muted).child(badge.text.clone()))
+                        }))
+                        .children(provider),
+                ),
         )
-        .children(row.branch.as_ref().map(|branch| {
-            div()
-                .text_xs()
-                .text_color(muted)
-                .truncate()
-                .child(branch.clone())
-        }))
 }
 
 impl Render for MainView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = f32::from(window.viewport_size().width);
+        let narrow = is_narrow(width);
+        let docked = self.sidebar_open && !narrow;
+        let overlay = narrow && self.sidebar_overlay_open;
         v_flex()
+            .relative()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(
-                TitleBar::new().child("T3 Code").child(
-                    div()
-                        .ml_2()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.environment()),
-                ),
+            .when(overlay, |root| root.key_context(OVERLAY_CONTEXT))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
+                this.toggle_sidebar(narrow_window(window), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &DismissSidebar, _, cx| this.close_sidebar_overlay(cx)),
             )
+            .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
+            .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
+            .on_action(cx.listener(|this, _: &GoForward, _, cx| this.go_forward(cx)))
+            .when(docked, |root| {
+                root.child(self.sidebar_surface(SIDEBAR_WIDTH, cx))
+            })
+            .child(self.top_bar(narrow, cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.sidebar(cx))
+                    .when(docked, |row| {
+                        row.child(self.sidebar(SIDEBAR_WIDTH, window, cx))
+                    })
                     .child(self.main_area(cx)),
             )
+            .when(overlay, |root| {
+                root.child(self.sidebar_drawer(overlay_width(width), window, cx))
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sidebar_overlays_at_the_webs_breakpoint() {
+        assert!(is_narrow(767.));
+        assert!(!is_narrow(768.));
+        assert_eq!(overlay_width(583.), 448.);
+        assert_eq!(overlay_width(400.), 352.);
+    }
+
+    #[test]
+    fn toggling_flips_only_the_state_for_the_viewport() {
+        assert_eq!(toggled(true, true, false), (true, true));
+        assert_eq!(toggled(true, false, true), (false, false));
+        assert_eq!(toggled(false, true, false), (false, false));
+        assert_eq!(toggled(false, true, true), (false, true));
+    }
 
     fn entry(id: &str, scratch: bool) -> ProjectEntry {
         ProjectEntry {
@@ -923,6 +2308,7 @@ mod tests {
             color: 0,
             pinned: false,
             scratch,
+            root: String::new(),
             logical_key: None,
             remote: Vec::new(),
         }
@@ -935,13 +2321,42 @@ mod tests {
             project: project_id.to_owned(),
             title: String::new(),
             branch: None,
-            status: ThreadStatus::Idle,
+            worktree: false,
+            provider_instance: String::new(),
+            top: None,
+            pr: None,
             section: Section::Active,
         }
     }
 
     #[test]
-    fn sidebar_items_keep_shelves_collapsed_until_expanded() {
+    fn the_card_names_its_project_from_the_group_or_the_row() {
+        let mut thread = row("t");
+        thread.project = "own".to_owned();
+        assert_eq!(project_name(&thread, Some(&entry("group", false))), "group");
+        assert_eq!(project_name(&thread, None), "own");
+    }
+
+    #[test]
+    fn long_branches_lose_their_middle() {
+        assert_eq!(middle_truncate("main", 10), "main");
+        assert_eq!(
+            middle_truncate("yordis/t3/token-security-comprison", 12),
+            "yordis\u{2026}rison"
+        );
+        assert_eq!(middle_truncate("abcdefgh", 2), "abcdefgh");
+        let badge = PrBadge {
+            state: PrState::Open,
+            stack: false,
+            text: "19".to_owned(),
+        };
+        let plain = branch_budget(300., true, None, true);
+        assert!(branch_budget(300., true, Some(&badge), true) < plain);
+        assert!(branch_budget(448., true, None, true) > plain);
+    }
+
+    #[test]
+    fn shelves_list_only_what_the_web_does() {
         let in_section = |id: &str, section| ThreadRow { section, ..row(id) };
         let rows = vec![
             in_section("p", Section::Pinned),
@@ -949,32 +2364,28 @@ mod tests {
             in_section("w", Section::Working),
             in_section("s", Section::Settled),
         ];
-        let header = |section, count, expanded| SidebarItem::Header {
+        let shelf = |section, expanded| Shelf {
             section,
-            count,
+            count: 1,
             expanded,
         };
+        assert_eq!(top_rows(&rows), [0, 1]);
         assert_eq!(
-            sidebar_items(&rows, [false; 3]),
+            shelves(&rows, [false; 3]),
             [
-                SidebarItem::Row(0),
-                SidebarItem::Row(1),
-                header(Section::Working, 1, false),
-                header(Section::Settled, 1, false),
+                shelf(Section::Working, false),
+                shelf(Section::Settled, false)
             ]
         );
         assert_eq!(
-            sidebar_items(&rows, [true, false, true]),
-            [
-                SidebarItem::Row(0),
-                SidebarItem::Row(1),
-                header(Section::Working, 1, true),
-                SidebarItem::Row(2),
-                header(Section::Settled, 1, true),
-                SidebarItem::Row(3),
-            ]
+            shelves(&rows, [true, false, true]),
+            [shelf(Section::Working, true), shelf(Section::Settled, true)]
         );
-        assert!(sidebar_items(&[], [true; 3]).is_empty());
+        assert_eq!(shelf_rows(&rows, Section::Settled, true, None), [3]);
+        assert!(shelf_rows(&rows, Section::Settled, false, None).is_empty());
+        assert!(shelf_rows(&rows, Section::Settled, false, Some("w")).is_empty());
+        assert_eq!(shelf_rows(&rows, Section::Settled, false, Some("s")), [3]);
+        assert!(shelves(&[], [true; 3]).is_empty());
     }
 
     #[test]

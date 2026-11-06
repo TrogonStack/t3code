@@ -93,6 +93,8 @@ pub struct ProjectEntry {
     /// Any member is pinned.
     pub pinned: bool,
     pub scratch: bool,
+    /// The representative's workspace root, where the composer strip reads the git branch.
+    pub root: String,
     /// The repository key shared across environments, when the group has a repository.
     pub logical_key: Option<String>,
     /// Other environments that have the same logical project.
@@ -406,6 +408,7 @@ pub fn build_entries<'a>(
                 color,
                 pinned: group.winners.iter().any(|p| p.pinned_at.is_some()),
                 scratch: is_scratch(representative),
+                root: representative.workspace_root.clone(),
                 remote: Vec::new(),
             };
             (entry, activity)
@@ -534,6 +537,7 @@ mod tests {
             color: 0,
             pinned,
             scratch: false,
+            root: String::new(),
             logical_key: None,
             remote: Vec::new(),
         };

@@ -70,6 +70,8 @@ Without the variable the same test fails when the committed file is stale. Drift
 
 Known gaps: typify cannot flatten the `projectIcon` union (an `anyOf` with a `{kind: string}` catch-all), so `ProjectsEntry.projectIcon` is kept opaque (`serde_json::Value`) through the `OPAQUE` list. Unions without a discriminator generate as `#[serde(untagged)]` enums.
 
+`server.getConfig` is not generated: typify cannot represent its schema. `src/providers.rs` decodes the small subset the composer's model trigger reads (provider snapshots and the provider and default-model settings) straight from the JSON, dropping entries it cannot read.
+
 ## Notes
 
 - `gpui` and `gpui_platform` are the crates.io packages `gpui-pre` and `gpui-pre-platform`, pinned to the exact version `gpui-component` requires. Bump them together with `gpui-component` and `gpui-kit-assets`.

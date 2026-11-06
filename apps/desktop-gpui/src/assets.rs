@@ -5,7 +5,41 @@ use std::borrow::Cow;
 gpui_kit_assets::icon_assets!(
     ExtraIcons,
     [
-        Paperclip, Pin, PinOff, Server, Cloud, Terminal, Monitor, Laptop, HardDrive, Computer
+        Paperclip,
+        Pin,
+        PinOff,
+        Server,
+        Cloud,
+        Terminal,
+        Monitor,
+        Laptop,
+        HardDrive,
+        Computer,
+        ListFilter,
+        FolderPlus,
+        SquarePen,
+        Folder,
+        FolderGit,
+        FolderGit2,
+        GitBranch,
+        ShieldOff,
+        Lock,
+        PenLine,
+        Sparkles,
+        Settings,
+        GitPullRequest,
+        ChartNoAxesColumn,
+        CircleArrowUp,
+        CircleDashed,
+        CircleDotDashed,
+        CircleAlert,
+        Clock,
+        Check,
+        GitPullRequestArrow,
+        GitPullRequestDraft,
+        GitPullRequestClosed,
+        GitMerge,
+        Layers
     ]
 );
 
@@ -23,12 +57,107 @@ const MESSAGE_SQUARE_DASHED_SVG: &str = concat!(
     r#"<path d="M8 19h2"/><path d="M8 3h2"/></svg>"#,
 );
 
+/// The web's dev `SidebarStageBackdrop` art, dark palette, faded into the sidebar.
+pub const STAGE_DEV: &str = "images/stage-dev.svg";
+/// The same art cropped like the web's `StageBackdropButtonArt`, for the send button.
+pub const STAGE_DEV_BUTTON: &str = "images/stage-dev-button.svg";
+
+/// The web's provider icons (`ProviderInstanceIcon`), one file per color scheme where the fills differ.
+const PROVIDER_ICONS: &[(&str, &[u8])] = &[
+    (
+        "providers/antigravity.png",
+        include_bytes!("provider-icons/antigravity.png") as &[u8],
+    ),
+    (
+        "providers/claudeAgent.svg",
+        include_bytes!("provider-icons/claudeAgent.svg") as &[u8],
+    ),
+    (
+        "providers/codex-dark.svg",
+        include_bytes!("provider-icons/codex-dark.svg") as &[u8],
+    ),
+    (
+        "providers/codex-light.svg",
+        include_bytes!("provider-icons/codex-light.svg") as &[u8],
+    ),
+    (
+        "providers/cursor-dark.svg",
+        include_bytes!("provider-icons/cursor-dark.svg") as &[u8],
+    ),
+    (
+        "providers/cursor-light.svg",
+        include_bytes!("provider-icons/cursor-light.svg") as &[u8],
+    ),
+    (
+        "providers/fx-dark.svg",
+        include_bytes!("provider-icons/fx-dark.svg") as &[u8],
+    ),
+    (
+        "providers/fx-light.svg",
+        include_bytes!("provider-icons/fx-light.svg") as &[u8],
+    ),
+    (
+        "providers/grok-dark.svg",
+        include_bytes!("provider-icons/grok-dark.svg") as &[u8],
+    ),
+    (
+        "providers/grok-light.svg",
+        include_bytes!("provider-icons/grok-light.svg") as &[u8],
+    ),
+    (
+        "providers/kiro.svg",
+        include_bytes!("provider-icons/kiro.svg") as &[u8],
+    ),
+    (
+        "providers/muse.svg",
+        include_bytes!("provider-icons/muse.svg") as &[u8],
+    ),
+    (
+        "providers/opencode-dark.svg",
+        include_bytes!("provider-icons/opencode-dark.svg") as &[u8],
+    ),
+    (
+        "providers/opencode-light.svg",
+        include_bytes!("provider-icons/opencode-light.svg") as &[u8],
+    ),
+    (
+        "providers/pi-dark.svg",
+        include_bytes!("provider-icons/pi-dark.svg") as &[u8],
+    ),
+    (
+        "providers/pi-light.svg",
+        include_bytes!("provider-icons/pi-light.svg") as &[u8],
+    ),
+];
+
+/// The icon asset for a driver, or `None` for the drivers the web draws as initials.
+pub fn provider_icon(driver: &str, dark: bool) -> Option<&'static str> {
+    let scheme = if dark { "dark" } else { "light" };
+    [
+        format!("providers/{driver}-{scheme}.svg"),
+        format!("providers/{driver}.svg"),
+        format!("providers/{driver}.png"),
+    ]
+    .iter()
+    .find_map(|wanted| PROVIDER_ICONS.iter().find(|(path, _)| path == wanted))
+    .map(|(path, _)| *path)
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == MESSAGE_SQUARE_DASHED {
             return Ok(Some(Cow::Borrowed(MESSAGE_SQUARE_DASHED_SVG.as_bytes())));
+        }
+        if path == STAGE_DEV {
+            return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev.svg"))));
+        }
+        if path == STAGE_DEV_BUTTON {
+            return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev-button.svg"))));
+        }
+        if let Some((_, bytes)) = PROVIDER_ICONS.iter().find(|(known, _)| *known == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
         }
         match ExtraIcons.load(path)? {
             Some(bytes) => Ok(Some(bytes)),
@@ -64,6 +193,30 @@ mod tests {
             IconName::Monitor,
             IconName::Laptop,
             IconName::HardDrive,
+            IconName::ListFilter,
+            IconName::FolderPlus,
+            IconName::SquarePen,
+            IconName::Folder,
+            IconName::FolderGit,
+            IconName::FolderGit2,
+            IconName::GitBranch,
+            IconName::ShieldOff,
+            IconName::Lock,
+            IconName::PenLine,
+            IconName::Sparkles,
+            IconName::GitPullRequest,
+            IconName::ChartNoAxesColumn,
+            IconName::CircleArrowUp,
+            IconName::CircleDashed,
+            IconName::CircleDotDashed,
+            IconName::CircleAlert,
+            IconName::Clock,
+            IconName::Check,
+            IconName::GitPullRequestArrow,
+            IconName::GitPullRequestDraft,
+            IconName::GitPullRequestClosed,
+            IconName::GitMerge,
+            IconName::Layers,
             IconName::Computer,
         ] {
             let loaded = AppAssets.load(&icon.path()).ok().flatten();
@@ -76,5 +229,29 @@ mod tests {
                 .flatten()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn provider_icons_follow_the_color_scheme() {
+        assert_eq!(
+            provider_icon("codex", true),
+            Some("providers/codex-dark.svg")
+        );
+        assert_eq!(
+            provider_icon("codex", false),
+            Some("providers/codex-light.svg")
+        );
+        assert_eq!(
+            provider_icon("claudeAgent", true),
+            Some("providers/claudeAgent.svg")
+        );
+        assert_eq!(
+            provider_icon("antigravity", false),
+            Some("providers/antigravity.png")
+        );
+        assert_eq!(provider_icon("acpRegistry", false), None);
+        for (path, _) in PROVIDER_ICONS {
+            assert!(AppAssets.load(path).ok().flatten().is_some(), "{path}");
+        }
     }
 }

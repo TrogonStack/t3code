@@ -1,5 +1,7 @@
-use crate::projects::{EnvironmentProjects, ProjectEntry};
-use crate::wire::generated::ThreadsEntryStatus;
+use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
+use crate::providers::Catalog;
+use crate::strip::Branch;
+use crate::wire::generated::{ThreadsEntryLastErrorClass, ThreadsEntryStatus};
 use std::fmt;
 
 /// What the window shows about the managed server and its socket.
@@ -11,6 +13,7 @@ pub enum Status {
     /// Socket is up. `shell` stays `None` until the first shell snapshot lands.
     Connected {
         label: String,
+        machine: MachineKind,
         /// The server keeps project pins, so the window offers them.
         can_pin: bool,
         shell: Option<ShellView>,
@@ -18,6 +21,13 @@ pub enum Status {
     Failed(String),
     /// Another saved environment's projects; says nothing about the primary connection.
     Environment(EnvironmentProjects),
+    /// The primary connection's provider instances, for the composer's model picker.
+    Providers(Catalog),
+    /// The branch checked out in a workspace root; `None` when it is not a repository.
+    Branch {
+        root: String,
+        branch: Option<Branch>,
+    },
 }
 
 /// Where the web sidebar lists a thread.
@@ -48,8 +58,70 @@ pub struct ThreadRow {
     pub project: String,
     pub title: String,
     pub branch: Option<String>,
-    pub status: ThreadsEntryStatus,
+    pub worktree: bool,
+    pub provider_instance: String,
+    pub top: Option<TopStatus>,
+    pub pr: Option<PrBadge>,
     pub section: Section,
+}
+
+/// A pull request's state as the badge tones it; `Pending` has no snapshot yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrState {
+    Pending,
+    Open,
+    Draft,
+    Closed,
+    Merged,
+}
+
+/// The web's `ThreadPullRequestBadgePresentation`: the number, `+N` for several, or the layer
+/// count of a stack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrBadge {
+    pub state: PrState,
+    pub stack: bool,
+    pub text: String,
+}
+
+/// The status the web's thread card shows at the top right (`topStatus` in `SidebarThreadRow`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TopStatus {
+    Working,
+    Waiting,
+    Limited,
+    Failed,
+}
+
+impl TopStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Working => "Working",
+            Self::Waiting => "Waiting",
+            Self::Limited => "Limited",
+            Self::Failed => "Failed",
+        }
+    }
+
+    /// `resolveSidebarThreadStatus` without approvals, input and guest requests, which the row
+    /// does not carry yet.
+    pub fn of(
+        status: ThreadsEntryStatus,
+        blocked_on_thread_wait: bool,
+        last_error_class: Option<ThreadsEntryLastErrorClass>,
+    ) -> Option<Self> {
+        use ThreadsEntryStatus as S;
+        match status {
+            S::Running if blocked_on_thread_wait => Some(Self::Waiting),
+            S::Preparing | S::Queued | S::Starting | S::Running | S::Waiting => Some(Self::Working),
+            S::Idle => Some(Self::Waiting),
+            S::Failed if last_error_class == Some(ThreadsEntryLastErrorClass::UsageLimit) => {
+                Some(Self::Limited)
+            }
+            S::Failed => Some(Self::Failed),
+            _ => None,
+        }
+    }
 }
 
 fn plural(count: usize, noun: &str) -> String {
@@ -83,6 +155,8 @@ impl fmt::Display for Status {
             ),
             Self::Failed(message) => f.write_str(message),
             Self::Environment(other) => write!(f, "Environment {}", other.label),
+            Self::Providers(_) => f.write_str("Providers"),
+            Self::Branch { root, .. } => write!(f, "Branch of {root}"),
         }
     }
 }
@@ -99,16 +173,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_top_status_follows_the_web() {
+        let of = |status, blocked, class| TopStatus::of(status, blocked, class);
+        assert_eq!(
+            of(ThreadsEntryStatus::Running, false, None),
+            Some(TopStatus::Working)
+        );
+        assert_eq!(
+            of(ThreadsEntryStatus::Running, true, None),
+            Some(TopStatus::Waiting)
+        );
+        assert_eq!(
+            of(ThreadsEntryStatus::Idle, false, None),
+            Some(TopStatus::Waiting)
+        );
+        assert_eq!(
+            of(
+                ThreadsEntryStatus::Failed,
+                false,
+                Some(ThreadsEntryLastErrorClass::UsageLimit)
+            ),
+            Some(TopStatus::Limited)
+        );
+        assert_eq!(
+            of(ThreadsEntryStatus::Failed, false, None),
+            Some(TopStatus::Failed)
+        );
+        assert_eq!(of(ThreadsEntryStatus::Completed, false, None), None);
+    }
+
+    #[test]
     fn connected_text_includes_counts_once_known() {
         let label = "Local".to_owned();
         let waiting = Status::Connected {
             label: label.clone(),
+            machine: MachineKind::Server,
             can_pin: false,
             shell: None,
         };
         assert_eq!(waiting.to_string(), "Connected to Local");
         let known = Status::Connected {
             label: label.clone(),
+            machine: MachineKind::Server,
             can_pin: false,
             shell: Some(ShellView {
                 projects: 2,
@@ -122,6 +228,7 @@ mod tests {
         );
         let single = Status::Connected {
             label,
+            machine: MachineKind::Server,
             can_pin: false,
             shell: Some(ShellView {
                 projects: 1,

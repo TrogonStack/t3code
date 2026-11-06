@@ -35,6 +35,24 @@ impl Method for ProjectsMutate {
     type Success = wire::ProjectsMutateSuccess;
 }
 
+/// `server.getConfig`, a unary call. The wire types are not generated; `providers::Catalog` decodes it.
+pub struct ServerGetConfig;
+
+impl Method for ServerGetConfig {
+    const TAG: &'static str = "server.getConfig";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `vcs.listRefs`, a unary call. The wire types are not generated; `strip::Branch` decodes it.
+pub struct VcsListRefs;
+
+impl Method for VcsListRefs {
+    const TAG: &'static str = "vcs.listRefs";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     match Value::deserialize(deserializer)? {
