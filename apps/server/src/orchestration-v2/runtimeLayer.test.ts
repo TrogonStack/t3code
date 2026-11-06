@@ -4630,6 +4630,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         NodeServices.layer,
         NodeCrypto.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           watchFingerprint: (input) =>
             input.number === 21
               ? Deferred.await(read22).pipe(Effect.as(null))

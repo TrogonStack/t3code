@@ -214,11 +214,13 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* mergeClaudeProcessEnvironment({ homePath }, undefined, host)).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "t3-code",
           KEEP: "1",
+          OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
         });
         expect(yield* mergeClaudeProcessEnvironment({ homePath }, instance, host)).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "instance",
           CLAUDE_EFFORT: "low",
           KEEP: "1",
+          OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
         });
 
         yield* fileSystem.writeFileString(
