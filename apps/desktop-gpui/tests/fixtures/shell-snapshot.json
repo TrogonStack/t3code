@@ -1,0 +1,61 @@
+{
+  "kind": "snapshot",
+  "snapshot": {
+    "schemaVersion": 1,
+    "snapshotSequence": 5,
+    "threads": [
+      {
+        "createdBy": "user",
+        "creationSource": "web",
+        "id": "thread-v2",
+        "projectId": "project-v2",
+        "title": "Thread",
+        "providerInstanceId": "codex",
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.4"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "branch": null,
+        "worktreePath": null,
+        "lineage": {
+          "parentThreadId": null,
+          "relationshipToParent": null,
+          "rootThreadId": "thread-v2"
+        },
+        "forkedFrom": null,
+        "activeProviderThreadId": null,
+        "latestRunId": null,
+        "activeRunId": null,
+        "status": "idle",
+        "pendingRuntimeRequest": null,
+        "latestVisibleMessage": null,
+        "latestUserMessageAt": null,
+        "hasActionableProposedPlan": false,
+        "itemCount": 0,
+        "visibleItemCount": 0,
+        "createdAt": "2026-06-20T00:00:00.000Z",
+        "updatedAt": "2026-06-20T00:00:00.000Z",
+        "archivedAt": null,
+        "settledOverride": null,
+        "settledAt": null,
+        "lastVisitedAt": null,
+        "deletedAt": null
+      }
+    ],
+    "archivedThreads": [],
+    "projects": [
+      {
+        "id": "project-v2",
+        "title": "Project",
+        "workspaceRoot": "/workspace/project",
+        "repositoryIdentity": null,
+        "defaultModelSelection": null,
+        "scripts": [],
+        "createdAt": "2026-06-20T00:00:00.000Z",
+        "updatedAt": "2026-06-20T00:00:00.000Z"
+      }
+    ]
+  }
+}

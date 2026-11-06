@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="96" viewBox="0 0 360 96" fill="none">
+  <defs>
+    <linearGradient id="paper" x1="60" y1="0" x2="220" y2="96" gradientUnits="userSpaceOnUse" spreadMethod="reflect">
+      <stop stop-color="#101f6e"/>
+      <stop offset="0.5" stop-color="#2050ae"/>
+      <stop offset="1" stop-color="#3a7ad1"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(216 14) rotate(137) scale(120 84)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d4f6ff" stop-opacity="0.4"/>
+      <stop offset="0.52" stop-color="#65c8ff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#101f6e" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid-minor" width="8" height="8" patternUnits="userSpaceOnUse">
+      <path d="M8 0H0V8" stroke="#eaf6ff" stroke-opacity="0.14" stroke-width="0.5"/>
+    </pattern>
+    <pattern id="grid-major" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#eaf6ff" stroke-opacity="0.26" stroke-width="0.6"/>
+    </pattern>
+    <pattern id="ruler" width="32" height="6" patternUnits="userSpaceOnUse">
+      <path d="M4 0V2.5M12 0V2.5M20 0V4M28 0V2.5" stroke="#ddf7ff" stroke-opacity="0.5" stroke-width="0.5"/>
+    </pattern>
+    <!-- The web's mask (opaque to 55%, clear at 92%) times its ::after fade into the sidebar. -->
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff"/>
+      <stop offset="0.28" stop-color="#fff"/>
+      <stop offset="0.40" stop-color="#fff" stop-opacity="0.9"/>
+      <stop offset="0.52" stop-color="#fff" stop-opacity="0.7"/>
+      <stop offset="0.64" stop-color="#fff" stop-opacity="0.32"/>
+      <stop offset="0.75" stop-color="#fff" stop-opacity="0.08"/>
+      <stop offset="0.85" stop-color="#fff" stop-opacity="0.01"/>
+      <stop offset="0.92" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="mask" maskUnits="userSpaceOnUse" x="0" y="0" width="360" height="96">
+      <rect width="360" height="96" fill="url(#fade)"/>
+    </mask>
+  </defs>
+  <g mask="url(#mask)">
+    <rect width="360" height="96" fill="url(#paper)"/>
+    <rect width="360" height="96" fill="url(#glow)"/>
+    <rect width="360" height="96" fill="url(#grid-minor)"/>
+    <rect width="360" height="96" fill="url(#grid-major)"/>
+    <rect width="360" height="6" fill="url(#ruler)"/>
+    <g stroke="#ddf7ff" stroke-linecap="round" stroke-opacity="0.6" stroke-width="0.7">
+      <path d="M180 64H264" stroke-dasharray="5 4"/>
+      <path d="M180 61V67M264 61V67"/>
+      <path d="M276 10V44" stroke-dasharray="4 4" stroke-opacity="0.5"/>
+      <path d="M273 10H279M273 44H279" stroke-opacity="0.5"/>
+      <path d="M348 30H428" stroke-dasharray="3.5 5" stroke-opacity="0.5"/>
+      <path d="M348 27V33M428 27V33" stroke-opacity="0.5"/>
+    </g>
+    <g stroke="#ddf7ff" stroke-linecap="round" stroke-opacity="0.55" stroke-width="0.6">
+      <path d="M34 60L38 64M38 60L34 64"/>
+      <path d="M228 26H234M231 23V29"/>
+      <path d="M143 51H149M146 48V54"/>
+      <path d="M316 16L322 22M322 16L316 22"/>
+    </g>
+    <g stroke="#ddf7ff" stroke-opacity="0.35" stroke-width="0.6">
+      <circle cx="196" cy="38" r="13" stroke-dasharray="3.5 4"/>
+      <path d="M196 33V43M191 38H201" stroke-opacity="0.6" stroke-width="0.4"/>
+    </g>
+  </g>
+</svg>
