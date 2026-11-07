@@ -13,6 +13,7 @@ mod history;
 mod minimap;
 mod projects;
 mod providers;
+mod ref_picker;
 mod refs;
 mod rpc;
 mod server;

@@ -10,21 +10,22 @@ use crate::details::{self, ChangedFile, Density, Inputs, Show, VcsStatus};
 use crate::git_actions::{
     self, Action as GitAction, MenuId, Outcome, Progress, QuickKind, Terminology,
 };
-use crate::refs::{self, Page, Tag};
+use crate::ref_picker::RefMenu;
+use crate::refs::Page;
 use crate::status::CallEvent;
 use crate::usage::{self, Limits, Tone};
 use gpui::{
-    Anchor, AnyElement, App, Context, Entity, EventEmitter, Focusable as _, FontWeight, Hsla,
+    Anchor, AnyElement, App, Context, Entity, EventEmitter, FontWeight, Hsla,
     InteractiveElement as _, IntoElement, ParentElement, Render, RenderOnce, ScrollHandle,
     StatefulInteractiveElement as _, Styled, WeakEntity, Window, div, img, prelude::*, px,
     relative,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, Selectable, Sizable, WindowExt as _,
+    ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt as _,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
     h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    input::{InputEvent, InputState, Textarea, TextareaState},
     popover::Popover,
     tooltip::Tooltip,
     v_flex,
@@ -33,6 +34,7 @@ use gpui_kit_assets::IconName as Icons;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
+    rc::Rc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -864,7 +866,7 @@ impl DetailsCard {
             .ref_name
             .clone()
             .unwrap_or_else(|| "Select ref".to_owned());
-        let snapshot = RefPicker {
+        let snapshot = RefMenu {
             query: self.refs_query.clone(),
             page: self.refs.clone(),
             loading: self.refs_loading,
@@ -873,6 +875,35 @@ impl DetailsCard {
             project_cwd: props.project_cwd,
             search: self.search.clone(),
             scroll: self.ref_scroll.clone(),
+            can_create: true,
+            on_pick: Rc::new({
+                let view = view.clone();
+                move |name, current, cx| {
+                    view.update(cx, |this, cx| {
+                        if current {
+                            this.ref_open = false;
+                            cx.notify();
+                        } else {
+                            this.switch_ref(name, cx);
+                        }
+                    });
+                }
+            }),
+            on_create: Rc::new({
+                let view = view.clone();
+                move |name, cx| view.update(cx, |this, cx| this.create_ref(name, cx))
+            }),
+            on_more: Rc::new({
+                let view = view.clone();
+                move |cx| {
+                    view.update(cx, |this, cx| {
+                        if !this.refs_loading {
+                            this.list_refs(true);
+                            cx.notify();
+                        }
+                    })
+                }
+            }),
         };
         Popover::new("ref-picker")
             .anchor(Anchor::TopRight)
@@ -892,7 +923,7 @@ impl DetailsCard {
                     .child(div().flex_1().min_w_0().truncate().child(label))
                     .into_any_element()
             }))
-            .content(move |_, window, cx| snapshot.render(view.clone(), window, cx))
+            .content(move |_, window, cx| snapshot.render(window, cx))
             .into_any_element()
     }
 
@@ -1188,186 +1219,6 @@ fn menu_warning(status: &VcsStatus) -> Option<String> {
         ));
     }
     (status.remote.behind > 0).then(|| "Behind upstream. Pull/rebase first.".to_owned())
-}
-
-/// What the ref picker's popover draws, snapshotted at each render of the card.
-struct RefPicker {
-    query: String,
-    page: Page,
-    loading: bool,
-    error: Option<String>,
-    cwd: String,
-    project_cwd: String,
-    search: Entity<InputState>,
-    scroll: ScrollHandle,
-}
-
-impl RefPicker {
-    fn render(&self, view: Entity<DetailsCard>, window: &mut Window, cx: &mut App) -> AnyElement {
-        let theme = cx.theme();
-        let (muted, border, ring) = (theme.muted_foreground, theme.border, theme.ring);
-        let (hover, selected) = (theme.list_hover, theme.list_active);
-        let searching = self.search.focus_handle(cx).is_focused(window);
-        let sanitized = refs::sanitize_new_ref_name(&self.query);
-        let creatable =
-            !sanitized.is_empty() && !self.page.refs.iter().any(|r| r.name == sanitized);
-        let rows = self.page.refs.iter().enumerate().map(|(index, entry)| {
-            let tag = refs::tag(entry, &self.project_cwd);
-            let elsewhere = !entry.current
-                && entry
-                    .worktree_path
-                    .as_deref()
-                    .is_some_and(|path| path != self.cwd);
-            let (view, name) = (view.clone(), entry.name.clone());
-            let current = entry.current;
-            let label = match refs::split_for_middle_truncate(&entry.name, None) {
-                Some((head, tail)) => h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().min_w_0().truncate().child(head))
-                    .child(div().flex_shrink_0().child(tail))
-                    .into_any_element(),
-                None => div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(entry.name.clone())
-                    .into_any_element(),
-            };
-            h_flex()
-                .id(("ref", index))
-                .gap_2()
-                .px_2()
-                .py_1p5()
-                .items_center()
-                .rounded_md()
-                .text_sm()
-                .when(current, |row| row.bg(selected))
-                .when(elsewhere, |row| {
-                    row.opacity(0.5)
-                        .tooltip(tip("This ref is checked out in another worktree."))
-                })
-                .when(!elsewhere, |row| {
-                    row.cursor_pointer()
-                        .hover(move |style| style.bg(hover))
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                if current {
-                                    this.ref_open = false;
-                                    cx.notify();
-                                } else {
-                                    this.switch_ref(name.clone(), cx);
-                                }
-                            });
-                        })
-                })
-                .child(label)
-                .children(tag.map(|tag: Tag| {
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(tag.label())
-                }))
-        });
-        let create = creatable.then(|| {
-            let (view, name) = (view.clone(), sanitized.clone());
-            h_flex()
-                .id("ref-create")
-                .gap_2()
-                .px_2()
-                .py_1p5()
-                .items_center()
-                .rounded_md()
-                .text_sm()
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover))
-                .child(Icon::new(Icons::GitBranchPlus).size_4().text_color(muted))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(format!("Create new ref \"{sanitized}\"")),
-                )
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.create_ref(name.clone(), cx));
-                })
-        });
-        let more = (self.page.has_more && !self.loading).then(|| view.clone());
-        let scroll = self.scroll.clone();
-        let footer = self.page.status(self.loading);
-        let empty = self.page.refs.is_empty() && !self.loading && create.is_none();
-        v_flex()
-            .w(px(288.))
-            .rounded_lg()
-            .overflow_hidden()
-            .child(
-                div().px_3().pt(px(10.)).child(
-                    h_flex()
-                        .pb(px(6.))
-                        .border_b_1()
-                        .border_color(if searching { ring } else { border.opacity(0.7) })
-                        .child(
-                            Input::new(&self.search)
-                                .appearance(false)
-                                .h(px(26.))
-                                .px_0()
-                                .prefix(
-                                    Icon::new(IconName::Search)
-                                        .size_4()
-                                        .text_color(muted.opacity(0.55)),
-                                ),
-                        ),
-                ),
-            )
-            .child(
-                v_flex()
-                    .id("ref-list")
-                    .max_h(px(280.))
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .on_scroll({
-                        let scroll = scroll.clone();
-                        move |_, _, cx| {
-                            let Some(view) = &more else { return };
-                            let offset = scroll.offset().y;
-                            let remaining = scroll.max_offset().y + offset;
-                            if remaining < px(160.) {
-                                view.update(cx, |this, cx| {
-                                    if !this.refs_loading {
-                                        this.list_refs(true);
-                                        cx.notify();
-                                    }
-                                });
-                            }
-                        }
-                    })
-                    .p_1()
-                    .children(create)
-                    .children(rows)
-                    .when(empty, |list| {
-                        list.child(
-                            div().p_2().text_sm().text_color(muted).child(
-                                self.error
-                                    .clone()
-                                    .unwrap_or_else(|| "No matching refs.".to_owned()),
-                            ),
-                        )
-                    }),
-            )
-            .children(footer.map(|text| {
-                div()
-                    .px_3()
-                    .py_1p5()
-                    .border_t_1()
-                    .border_color(border)
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text)
-            }))
-            .into_any_element()
-    }
 }
 
 impl Render for DetailsCard {
