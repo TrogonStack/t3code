@@ -152,6 +152,9 @@ pub struct MainView {
     rendered_sidebar_width: Cell<f32>,
     /// The topbar brand row's natural width at the last paint, the web's `SidebarBrandWidthProbe`.
     brand_width: Rc<Cell<f32>>,
+    /// The floating composer's height at the last paint; the transcript's last row reserves it.
+    composer_height: Rc<Cell<f32>>,
+    reserved_composer_height: Cell<f32>,
     /// Hover styles cannot change layout, so the send button's hover growth is view state.
     send_hovered: bool,
     permissions_open: bool,
@@ -226,6 +229,8 @@ impl MainView {
             sidebar_width: SIDEBAR_DEFAULT_WIDTH,
             rendered_sidebar_width: Cell::new(SIDEBAR_DEFAULT_WIDTH),
             brand_width: Rc::new(Cell::new(0.)),
+            composer_height: Rc::new(Cell::new(0.)),
+            reserved_composer_height: Cell::new(0.),
             send_hovered: false,
             permissions_open: false,
             selected_thread: None,
@@ -305,6 +310,12 @@ impl MainView {
                     _ => 0,
                 };
                 let (old, new) = (count(&previous.result), count(&result));
+                // The old last row loses the composer reserve when rows arrive after it.
+                let same = if same == old && new > old {
+                    same.saturating_sub(1)
+                } else {
+                    same
+                };
                 self.transcript_list.splice(same..old, new - same);
             }
             None => {
@@ -914,19 +925,38 @@ impl MainView {
         let scratch = active.is_some_and(|entry| entry.scratch);
         let project = active.map_or_else(|| "your project".to_owned(), |entry| entry.title.clone());
         if self.selected_thread.is_some() {
+            // The web's `persistComposerContextStrip` defaults off, so open threads show no strip,
+            // and the composer floats over the transcript, which scrolls beneath it.
+            let measured = self.composer_height.clone();
             return v_flex()
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .h_full()
                 .child(self.transcript_view(viewport_height, cx))
                 .child(
                     v_flex()
-                        .w_full()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
                         .items_center()
                         .px_6()
                         .pb_4()
-                        .child(self.composer_box(cx))
-                        .children(active.and_then(|entry| self.context_strip(entry, cx))),
+                        .child(
+                            canvas(
+                                move |rect, window, _| {
+                                    let height = f32::from(rect.size.height);
+                                    if measured.replace(height) != height {
+                                        window.refresh();
+                                    }
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .child(self.composer_box(cx)),
                 )
                 .into_any_element();
         }
@@ -968,21 +998,32 @@ impl MainView {
             None => note("Loading...".to_owned()),
             Some(Err(message)) => note(format!("Could not load this thread: {message}")),
             Some(Ok(entries)) if entries.is_empty() => note("No messages yet".to_owned()),
-            Some(Ok(_)) => div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .child(
-                    list(
-                        self.transcript_list.clone(),
-                        cx.processor(|this, ix, _, cx| this.transcript_item(ix, cx)),
-                    )
-                    .size_full(),
-                )
-                .children(self.transcript_minimap(viewport_height, cx))
-                .into_any_element(),
+            Some(Ok(entries)) => {
+                let reserve = self.composer_height.get();
+                if self.reserved_composer_height.replace(reserve) != reserve {
+                    let last = entries.len() - 1;
+                    self.transcript_list.remeasure_items(last..last + 1);
+                }
+                self.transcript_list_view(viewport_height, cx)
+            }
         }
+    }
+
+    fn transcript_list_view(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(
+                list(
+                    self.transcript_list.clone(),
+                    cx.processor(|this, ix, _, cx| this.transcript_item(ix, cx)),
+                )
+                .size_full(),
+            )
+            .children(self.transcript_minimap(viewport_height, cx))
+            .into_any_element()
     }
 
     /// The rows on screen, from the list's last layout.
@@ -1181,6 +1222,11 @@ impl MainView {
             return div().into_any_element();
         };
         let theme = cx.theme();
+        let last = self
+            .transcript
+            .as_ref()
+            .and_then(|t| t.result.as_ref().ok())
+            .is_some_and(|entries| ix + 1 == entries.len());
         let text: gpui::SharedString = entry.text.to_string().into();
         let body = match entry.kind {
             Kind::User => h_flex().justify_end().child(
@@ -1209,6 +1255,9 @@ impl MainView {
             .justify_center()
             .px_6()
             .py_2()
+            .when(last, |row| {
+                row.pb(px(8. + self.reserved_composer_height.get()))
+            })
             .child(div().w_full().max_w(px(720.)).child(body))
             .into_any_element()
     }
@@ -1591,7 +1640,8 @@ impl MainView {
             .border_1()
             // The web's dark `--chat-composer-outline`.
             .border_color(gpui::white().opacity(0.05))
-            .bg(cx.theme().secondary)
+            // The web's glass surface at `--glass-opacity`; GPUI has no backdrop blur.
+            .bg(cx.theme().secondary.opacity(0.8))
             .child(
                 // The web's `px-4 pt-4 pb-2` body; the negative margin cancels the textarea's own padding.
                 div().px_4().pt_4().pb_2().child(
