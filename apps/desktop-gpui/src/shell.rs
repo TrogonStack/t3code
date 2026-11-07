@@ -443,13 +443,29 @@ impl ShellState {
         match item {
             // The completion marker carries nothing the counts need.
             Item::Variant0 { .. } => false,
-            Item::Variant1 { snapshot, .. } => {
-                self.projects = snapshot
-                    .projects
-                    .0
-                    .into_iter()
-                    .map(|p| (p.id.clone(), p))
-                    .collect();
+            Item::Variant1 {
+                snapshot,
+                resolved_repository_identity_roots: resolved,
+                ..
+            } => {
+                // `authoritative = item.resolvedRepositoryIdentityRoots === undefined` in
+                // `shell.ts`; the server only sends non-empty root groups, so empty is absent.
+                if !resolved.is_empty() {
+                    self.merge_enrichment(snapshot.projects.0, &resolved);
+                    return true;
+                }
+                // `retainRepositoryIdentity`: a refresh that lost the identity keeps the known one.
+                let mut projects: HashMap<String, Project> = HashMap::new();
+                for mut project in snapshot.projects.0 {
+                    if project.repository_identity.is_none()
+                        && let Some(prior) = self.projects.get(&project.id)
+                        && prior.workspace_root == project.workspace_root
+                    {
+                        project.repository_identity = prior.repository_identity.clone();
+                    }
+                    projects.insert(project.id.clone(), project);
+                }
+                self.projects = projects;
                 self.threads = snapshot
                     .threads
                     .0
@@ -516,6 +532,26 @@ impl ShellState {
         }
     }
 
+    /// `mergeShellSnapshotProjects` for an enrichment refresh: only repository identities change,
+    /// on known projects with the same workspace root. Resolved roots take the identity exactly,
+    /// others only fill a missing one. Threads, sequence and the project set are untouched.
+    fn merge_enrichment(&mut self, refreshed: Vec<Project>, resolved: &[String]) {
+        for candidate in refreshed {
+            let Some(project) = self.projects.get_mut(&candidate.id) else {
+                continue;
+            };
+            if project.workspace_root != candidate.workspace_root {
+                continue;
+            }
+            if resolved.contains(&project.workspace_root)
+                || (project.repository_identity.is_none()
+                    && candidate.repository_identity.is_some())
+            {
+                project.repository_identity = candidate.repository_identity;
+            }
+        }
+    }
+
     /// Events at or below the last applied sequence are stale.
     fn advance(&mut self, sequence: i64) -> bool {
         if sequence <= self.sequence {
@@ -558,6 +594,59 @@ mod tests {
         let state = seeded();
         assert!(state.is_seeded());
         assert_eq!((state.project_count(), state.thread_count()), (1, 1));
+    }
+
+    #[test]
+    fn enrichment_refreshes_only_update_repository_identity() {
+        let mut state = seeded();
+        let key = |state: &ShellState| {
+            state.projects["project-v2"]
+                .repository_identity
+                .as_ref()
+                .map(|identity| identity.canonical_key.clone())
+        };
+        let refresh = |roots: &[&str], root: &str| {
+            with(SNAPSHOT, |value| {
+                value["resolvedRepositoryIdentityRoots"] = roots.into();
+                let snapshot = &mut value["snapshot"];
+                snapshot["threads"] = serde_json::json!([]);
+                snapshot["snapshotSequence"] = 99.into();
+                let project = &mut snapshot["projects"][0];
+                project["workspaceRoot"] = root.into();
+                project["repositoryIdentity"] = serde_json::json!({
+                    "canonicalKey": "github.com/o/r", "locator": {"remoteName": "origin", "remoteUrl": "u", "source": "git-remote"}
+                });
+            })
+        };
+        // A different workspace root is not the same project.
+        state.apply(refresh(&["/elsewhere"], "/elsewhere"));
+        assert_eq!(key(&state), None);
+        // An unresolved root only fills a missing identity.
+        state.apply(refresh(&["/other"], "/workspace/project"));
+        assert_eq!(key(&state).as_deref(), Some("github.com/o/r"));
+        // The threads, project set and sequence survive every refresh.
+        assert_eq!((state.thread_count(), state.project_count()), (1, 1));
+        assert_eq!(state.sequence, 5);
+        // A resolved root takes the identity exactly, including none.
+        state.apply(with(SNAPSHOT, |value| {
+            value["resolvedRepositoryIdentityRoots"] = serde_json::json!(["/workspace/project"]);
+            value["snapshot"]["threads"] = serde_json::json!([]);
+        }));
+        assert_eq!(key(&state), None);
+        assert_eq!(state.thread_count(), 1);
+    }
+
+    #[test]
+    fn an_authoritative_snapshot_keeps_a_known_identity() {
+        let mut state = seeded();
+        state.apply(with(SNAPSHOT, |value| {
+            value["resolvedRepositoryIdentityRoots"] = serde_json::json!(["/workspace/project"]);
+            value["snapshot"]["projects"][0]["repositoryIdentity"] = serde_json::json!({
+                "canonicalKey": "k", "locator": {"remoteName": "origin", "remoteUrl": "u", "source": "git-remote"}
+            });
+        }));
+        state.apply(item(SNAPSHOT));
+        assert!(state.projects["project-v2"].repository_identity.is_some());
     }
 
     #[test]
