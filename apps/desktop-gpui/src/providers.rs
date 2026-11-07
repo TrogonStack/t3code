@@ -4,6 +4,7 @@
 //! which the generated wire types do not cover.
 
 use crate::strip::Defaults;
+use crate::usage::Limits;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -150,6 +151,9 @@ struct Provider {
     availability: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     models: Vec<Model>,
+    /// Kept raw: `usage::Limits` decodes it for the details card.
+    #[serde(default)]
+    usage_limits: Option<Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -323,6 +327,14 @@ impl Catalog {
                 .and_then(|o| o.new_worktrees_start_from_origin)
                 .or(settings.new_worktrees_start_from_origin),
         )
+    }
+
+    /// The usage limits an instance reports, for the details card's limits row.
+    pub fn usage_limits(&self, instance_id: &str) -> Option<Limits> {
+        self.providers
+            .iter()
+            .find(|provider| provider.instance_id == instance_id)
+            .and_then(|provider| Limits::decode(provider.usage_limits.as_ref()?))
     }
 
     /// A provider instance's icon, for the sidebar's thread cards.
@@ -1000,6 +1012,7 @@ mod tests {
             status: "ready".into(),
             availability: None,
             models: Vec::new(),
+            usage_limits: None,
         };
         assert_eq!(display_name(&named("codex", Some("Codex"))), "Codex");
         assert_eq!(

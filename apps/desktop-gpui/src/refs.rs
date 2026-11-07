@@ -198,7 +198,10 @@ mod tests {
     fn automatic_tails_start_on_a_word() {
         assert_eq!(tail_of("t3/clone-repo-to-other-machine"), "machine");
         assert_eq!(tail_of("t3/investigate-release-build-times"), "times");
-        assert_eq!(tail_of("t3/compare-long-featurenames-ab"), "featurenames-ab");
+        assert_eq!(
+            tail_of("t3/compare-long-featurenames-ab"),
+            "featurenames-ab"
+        );
         assert_eq!(tail_of("t3/abcdefghijklmnopqrstuvwxyz"), "qrstuvwxyz");
     }
 
@@ -248,10 +251,7 @@ mod tests {
             }),
             Some(Tag::Worktree)
         );
-        assert_eq!(
-            with(|r| r.worktree_path = Some("/repo".to_owned())),
-            None
-        );
+        assert_eq!(with(|r| r.worktree_path = Some("/repo".to_owned())), None);
         assert_eq!(
             with(|r| {
                 r.current = true;
@@ -293,7 +293,10 @@ mod tests {
         assert_eq!(page.total, 768);
         assert_eq!(page.status(false).as_deref(), Some("Showing 2 of 768 refs"));
         assert_eq!(page.status(true).as_deref(), Some("Loading more refs..."));
-        assert_eq!(Page::default().status(true).as_deref(), Some("Loading refs..."));
+        assert_eq!(
+            Page::default().status(true).as_deref(),
+            Some("Loading refs...")
+        );
 
         let whole = Page::decode(&json!({"refs": [], "nextCursor": null, "totalCount": 0}));
         assert_eq!(whole.status(false), None);

@@ -126,6 +126,44 @@ impl Method for TerminalClose {
     type Payload = Value;
     type Success = Value;
 }
+macro_rules! untyped_method {
+    ($(#[$doc:meta])* $name:ident, $tag:literal) => {
+        $(#[$doc])*
+        pub struct $name;
+
+        impl Method for $name {
+            const TAG: &'static str = $tag;
+            type Payload = Value;
+            type Success = Value;
+        }
+    };
+}
+
+untyped_method!(
+    /// `vcs.switchRef`: checks out a ref in `cwd`.
+    VcsSwitchRef,
+    "vcs.switchRef"
+);
+untyped_method!(
+    /// `vcs.createRef`: creates a branch and, with `switchRef`, checks it out.
+    VcsCreateRef,
+    "vcs.createRef"
+);
+untyped_method!(
+    /// `vcs.pull`: pulls the current branch from its upstream.
+    VcsPull,
+    "vcs.pull"
+);
+untyped_method!(
+    /// `vcs.refreshStatus`: re-reads the status the card watches.
+    VcsRefreshStatus,
+    "vcs.refreshStatus"
+);
+untyped_method!(
+    /// `git.runStackedAction`, a stream of progress events ending with the action's result.
+    GitRunStackedAction,
+    "git.runStackedAction"
+);
 
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {

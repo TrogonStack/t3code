@@ -7,12 +7,13 @@ use crate::electron_dpop;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, Session,
-    ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach,
-    TerminalClose, TerminalResize, TerminalWrite, VcsListRefs,
+    Event, GitRunStackedAction, PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig,
+    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
+    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
+    VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::shell::ShellState;
-use crate::status::{Status, StatusSender, publish};
+use crate::status::{CallEvent, Status, StatusSender, publish};
 use crate::strip::{self, Branch};
 use crate::terminal::{self, Grid, Target};
 use crate::thread::ThreadState;
@@ -80,6 +81,24 @@ pub enum Action {
     TerminalClose {
         thread_id: String,
     },
+    /// A request the details card makes; the outcome comes back as `Status::Call` with `token`.
+    Call {
+        token: u64,
+        call: Call,
+        payload: serde_json::Value,
+    },
+}
+
+/// The RPCs an `Action::Call` can name, all with untyped payloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Call {
+    ListRefs,
+    SwitchRef,
+    CreateRef,
+    Pull,
+    RefreshStatus,
+    /// A stream: progress events, then the result.
+    RunStackedAction,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -99,6 +118,35 @@ impl Action {
             Self::TerminalWrite { .. } => "write to the terminal",
             Self::TerminalResize { .. } => "resize the terminal",
             Self::TerminalClose { .. } => "close the terminal",
+            Self::Call { call, .. } => call.describe(),
+        }
+    }
+}
+
+impl Call {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::ListRefs => "list the refs",
+            Self::SwitchRef => "switch the ref",
+            Self::CreateRef => "create the ref",
+            Self::Pull => "pull",
+            Self::RefreshStatus => "refresh the status",
+            Self::RunStackedAction => "run the action",
+        }
+    }
+
+    fn request(
+        self,
+        session: &mut Session,
+        payload: &serde_json::Value,
+    ) -> Result<(String, String), String> {
+        match self {
+            Self::ListRefs => session.request::<VcsListRefs>(payload),
+            Self::SwitchRef => session.request::<VcsSwitchRef>(payload),
+            Self::CreateRef => session.request::<VcsCreateRef>(payload),
+            Self::Pull => session.request::<VcsPull>(payload),
+            Self::RefreshStatus => session.request::<VcsRefreshStatus>(payload),
+            Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
         }
     }
 }
@@ -358,6 +406,8 @@ async fn serve(
     let mut branches: HashMap<String, String> = HashMap::new();
     // Diff loads by request id, with the directory each was for.
     let mut diffs: HashMap<String, String> = HashMap::new();
+    // The card's calls by request id, with the token its answers carry.
+    let mut calls: HashMap<String, u64> = HashMap::new();
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -372,6 +422,21 @@ async fn serve(
                 let Ok(action) = action else {
                     return "window closed".to_owned();
                 };
+                if let Action::Call { token, call, payload } = &action {
+                    match call.request(&mut session, payload) {
+                        Ok((id, frame)) => {
+                            calls.insert(id, *token);
+                            if let Err(error) = sink.send(Message::text(frame)).await {
+                                return error.to_string();
+                            }
+                        }
+                        Err(error) => publish(
+                            status,
+                            Status::Call { token: *token, event: CallEvent::Failed(error) },
+                        ),
+                    }
+                    continue;
+                }
                 let request = match &action {
                     Action::SelectThread(id) => {
                         *selected = id.clone();
@@ -434,6 +499,7 @@ async fn serve(
                     Action::LoadBranch { root } => session
                         .request::<VcsListRefs>(&refs_query(root))
                         .map(|(id, frame)| (id, frame, Some(root.clone()))),
+                    Action::Call { .. } => continue,
                 };
                 match request {
                     Ok((id, frame, root)) => {
@@ -488,6 +554,9 @@ async fn serve(
                             publish_diff(cwd, event, status);
                             continue;
                         }
+                        let Some(event) = route_call(&mut calls, event, status) else {
+                            continue;
+                        };
                         if let Some(root) = request_id(&event).and_then(|id| branches.remove(id)) {
                             publish_branch(root, event, status);
                             continue;
@@ -796,6 +865,50 @@ fn owns(event: &Event, id: &str) -> bool {
     request_id(event) == Some(id)
 }
 
+/// Publishes the outcome of a card call; hands back what belongs to no call.
+fn route_call(
+    calls: &mut HashMap<String, u64>,
+    event: Event,
+    status: &StatusSender,
+) -> Option<Event> {
+    let (id, answer) = match event {
+        Event::Item { request_id, value } => (request_id, CallEvent::Progress(value)),
+        Event::Done { request_id, value } => (request_id, CallEvent::Done(value)),
+        Event::Failed {
+            request_id,
+            message,
+        } => (request_id, CallEvent::Failed(message)),
+        other => return Some(other),
+    };
+    let Some(token) = calls.get(&id).copied() else {
+        return Some(match answer {
+            CallEvent::Progress(value) => Event::Item {
+                request_id: id,
+                value,
+            },
+            CallEvent::Done(value) => Event::Done {
+                request_id: id,
+                value,
+            },
+            CallEvent::Failed(message) => Event::Failed {
+                request_id: id,
+                message,
+            },
+        });
+    };
+    if !matches!(answer, CallEvent::Progress(_)) {
+        calls.remove(&id);
+    }
+    publish(
+        status,
+        Status::Call {
+            token,
+            event: answer,
+        },
+    );
+    None
+}
+
 /// Publishes the branch of a workspace root; a failure leaves the strip without git controls.
 fn publish_branch(root: String, event: Event, status: &StatusSender) {
     let branch = match event {
@@ -929,6 +1042,44 @@ mod tests {
         assert!(settle(&mut pending, &failed("7")));
         assert!(pending.is_empty());
         assert!(!settle(&mut pending, &failed("7")));
+    }
+
+    #[test]
+    fn call_events_carry_their_token_and_others_pass_through() {
+        let (status, published) = async_channel::unbounded();
+        let mut calls = HashMap::from([("4".to_owned(), 9u64)]);
+        let item = Event::Item {
+            request_id: "4".to_owned(),
+            value: serde_json::json!({"type": "phase_started"}),
+        };
+        assert!(route_call(&mut calls, item, &status).is_none());
+        assert!(calls.contains_key("4"));
+        let done = Event::Done {
+            request_id: "4".to_owned(),
+            value: serde_json::Value::Null,
+        };
+        assert!(route_call(&mut calls, done, &status).is_none());
+        assert!(calls.is_empty());
+        let other = Event::Failed {
+            request_id: "5".to_owned(),
+            message: "no".to_owned(),
+        };
+        assert!(route_call(&mut calls, other, &status).is_some());
+        assert!(matches!(
+            published.try_recv(),
+            Ok(Status::Call {
+                token: 9,
+                event: CallEvent::Progress(_)
+            })
+        ));
+        assert!(matches!(
+            published.try_recv(),
+            Ok(Status::Call {
+                token: 9,
+                event: CallEvent::Done(_)
+            })
+        ));
+        assert!(published.try_recv().is_err());
     }
 
     #[test]

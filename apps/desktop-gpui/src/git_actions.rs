@@ -343,7 +343,10 @@ mod tests {
     }
 
     fn pr_item(items: &[MenuItem]) -> &MenuItem {
-        items.iter().find(|item| item.id == MenuId::Pr).expect("pr item")
+        items
+            .iter()
+            .find(|item| item.id == MenuId::Pr)
+            .expect("pr item")
     }
 
     #[test]
@@ -459,7 +462,10 @@ mod tests {
             json!({}),
         );
         assert_eq!(quick(&dirty).label, "Commit, push & MR");
-        assert_eq!(pr_item(&build_menu_items(Some(&ahead), false, true)).label, "Create MR");
+        assert_eq!(
+            pr_item(&build_menu_items(Some(&ahead), false, true)).label,
+            "Create MR"
+        );
         let copy = default_branch_dialog_copy(
             Action::CreatePr,
             "main",

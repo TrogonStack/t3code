@@ -271,7 +271,9 @@ impl Local {
                     })
                 })
                 .collect(),
-            base_ref: value["branchChanges"]["baseRef"].as_str().map(str::to_owned),
+            base_ref: value["branchChanges"]["baseRef"]
+                .as_str()
+                .map(str::to_owned),
             provider_kind: value["sourceControlProvider"]["kind"]
                 .as_str()
                 .map(str::to_owned),

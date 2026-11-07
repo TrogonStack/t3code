@@ -255,7 +255,8 @@ mod tests {
             notice(json!({"windows": []})).as_deref(),
             Some("No limits reported.")
         );
-        let windows = json!({"windows": [{"id": "a", "kind": "session", "label": "5h", "usedPercent": 10}]});
+        let windows =
+            json!({"windows": [{"id": "a", "kind": "session", "label": "5h", "usedPercent": 10}]});
         assert_eq!(notice(windows), None);
         assert!(Limits::decode(&Value::Null).is_none());
     }
@@ -320,7 +321,10 @@ mod tests {
             parse_timestamp("2026-01-01T02:00:00+02:00"),
             Some(1_767_225_600_000)
         );
-        assert_eq!(parse_timestamp("2024-02-29T12:30:15.500Z"), Some(1_709_209_815_500));
+        assert_eq!(
+            parse_timestamp("2024-02-29T12:30:15.500Z"),
+            Some(1_709_209_815_500)
+        );
         assert_eq!(parse_timestamp("soon"), None);
     }
 }

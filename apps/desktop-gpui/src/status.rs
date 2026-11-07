@@ -54,6 +54,19 @@ pub enum Status {
         cwd: String,
         diff: Result<diff::Preview, String>,
     },
+    /// The outcome of a request the details card made, by the token it was sent with.
+    Call {
+        token: u64,
+        event: CallEvent,
+    },
+}
+
+/// One answer to a card call: streams report `Progress` before they finish.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallEvent {
+    Progress(serde_json::Value),
+    Done(serde_json::Value),
+    Failed(String),
 }
 
 /// Where the web sidebar lists a thread.
@@ -203,6 +216,7 @@ impl fmt::Display for Status {
             Self::Vcs { cwd, .. } => write!(f, "Status of {cwd}"),
             Self::Terminal { thread_id, .. } => write!(f, "Terminal of {thread_id}"),
             Self::Diff { cwd, .. } => write!(f, "Diff of {cwd}"),
+            Self::Call { token, .. } => write!(f, "Call {token}"),
         }
     }
 }
