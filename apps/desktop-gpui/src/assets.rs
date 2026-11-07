@@ -42,6 +42,7 @@ gpui_kit_assets::icon_assets!(
         Layers,
         ArrowRightLeft,
         SquareMenu,
+        PanelBottom,
         ChevronDown,
         SquareArrowOutUpRight,
         FileDiff
@@ -190,6 +191,7 @@ mod tests {
         for icon in [
             IconName::Paperclip,
             IconName::SquareMenu,
+            IconName::PanelBottom,
             IconName::ChevronDown,
             IconName::SquareArrowOutUpRight,
             IconName::FileDiff,

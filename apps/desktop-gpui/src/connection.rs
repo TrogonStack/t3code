@@ -7,11 +7,13 @@ use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
     Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, ShellOpenInEditor, SubscribeShell,
-    SubscribeThread, SubscribeVcsStatus, VcsListRefs,
+    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
+    TerminalWrite, VcsListRefs,
 };
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
 use crate::strip::{self, Branch};
+use crate::terminal::{self, Grid, Target};
 use crate::thread::ThreadState;
 use crate::wire::{
     ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload, SubscribeThreadPayload,
@@ -59,6 +61,20 @@ pub enum Action {
         cwd: String,
         editor: String,
     },
+    /// The terminal the drawer shows; `None` detaches, and the shell keeps running.
+    AttachTerminal(Option<Target>),
+    TerminalWrite {
+        thread_id: String,
+        data: String,
+    },
+    TerminalResize {
+        thread_id: String,
+        grid: Grid,
+    },
+    /// Ends the thread's shell.
+    TerminalClose {
+        thread_id: String,
+    },
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -73,6 +89,10 @@ impl Action {
             Self::SelectThread(_) => "open the thread",
             Self::WatchVcs(_) => "watch the version control status",
             Self::OpenInEditor { .. } => "open in the editor",
+            Self::AttachTerminal(_) => "attach the terminal",
+            Self::TerminalWrite { .. } => "write to the terminal",
+            Self::TerminalResize { .. } => "resize the terminal",
+            Self::TerminalClose { .. } => "close the terminal",
         }
     }
 }
@@ -180,6 +200,7 @@ pub async fn run(
     // Outlives a socket: a reconnect subscribes to the thread again.
     let mut selected: Option<String> = None;
     let mut watched: Option<String> = None;
+    let mut terminal: Option<Target> = None;
     let mut backoff = Backoff::new();
     loop {
         publish(status, Status::Connecting);
@@ -199,7 +220,7 @@ pub async fn run(
                     socket,
                     environment,
                     actions,
-                    (&mut selected, &mut watched),
+                    (&mut selected, &mut watched, &mut terminal),
                     status,
                 )
                 .await
@@ -269,7 +290,11 @@ async fn serve(
     socket: Socket,
     environment: &Environment,
     actions: &ActionReceiver,
-    (selected, watched): (&mut Option<String>, &mut Option<String>),
+    (selected, watched, wanted_terminal): (
+        &mut Option<String>,
+        &mut Option<String>,
+        &mut Option<Target>,
+    ),
     status: &StatusSender,
 ) -> String {
     let (mut sink, mut stream) = socket.split();
@@ -297,6 +322,7 @@ async fn serve(
         match action {
             Action::SelectThread(id) => *selected = id,
             Action::WatchVcs(cwd) => *watched = cwd,
+            Action::AttachTerminal(target) => *wanted_terminal = target,
             _ => {}
         }
     }
@@ -310,6 +336,13 @@ async fn serve(
     let mut vcs = VcsWatch::default();
     if let Err(error) = vcs
         .select(watched.as_deref(), &mut session, &mut sink)
+        .await
+    {
+        return error;
+    }
+    let mut terminals = Terminals::default();
+    if let Err(error) = terminals
+        .select(wanted_terminal.as_ref(), &mut session, &mut sink)
         .await
     {
         return error;
@@ -350,6 +383,25 @@ async fn serve(
                         }
                         continue;
                     }
+                    Action::AttachTerminal(target) => {
+                        *wanted_terminal = target.clone();
+                        if let Err(error) = terminals
+                            .select(target.as_ref(), &mut session, &mut sink)
+                            .await
+                        {
+                            return error;
+                        }
+                        continue;
+                    }
+                    Action::TerminalWrite { thread_id, data } => session
+                        .request::<TerminalWrite>(&terminal::write_payload(thread_id, data))
+                        .map(|(id, frame)| (id, frame, None)),
+                    Action::TerminalResize { thread_id, grid } => session
+                        .request::<TerminalResize>(&terminal::resize_payload(thread_id, *grid))
+                        .map(|(id, frame)| (id, frame, None)),
+                    Action::TerminalClose { thread_id } => session
+                        .request::<TerminalClose>(&terminal::close_payload(thread_id))
+                        .map(|(id, frame)| (id, frame, None)),
                     Action::OpenInEditor { cwd, editor } => session
                         .request::<ShellOpenInEditor>(&serde_json::json!({
                             "cwd": cwd,
@@ -402,6 +454,9 @@ async fn serve(
                             continue;
                         };
                         let Some(event) = vcs.route(event, status) else {
+                            continue;
+                        };
+                        let Some(event) = terminals.route(event, status) else {
                             continue;
                         };
                         if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
@@ -617,6 +672,84 @@ impl VcsWatch {
                 publish(status, Status::Vcs { cwd, status: None });
             }
         }
+        None
+    }
+}
+
+/// The open terminal attachment, and the interrupted ones whose last frames still arrive.
+#[derive(Default)]
+struct Terminals {
+    open: Option<OpenTerminal>,
+    stale: HashSet<String>,
+}
+
+struct OpenTerminal {
+    target: Target,
+    request_id: String,
+}
+
+impl Terminals {
+    /// Switches the attachment to `wanted`, interrupting the previous one. Detaching leaves the
+    /// shell running on the server; attaching to a target again replays its history.
+    async fn select(
+        &mut self,
+        wanted: Option<&Target>,
+        session: &mut Session,
+        sink: &mut Sink,
+    ) -> Result<(), String> {
+        if self.open.as_ref().map(|open| &open.target) == wanted {
+            return Ok(());
+        }
+        if let Some(open) = self.open.take() {
+            let frame = session.interrupt(&open.request_id);
+            self.stale.insert(open.request_id);
+            sink.send(Message::text(frame))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let Some(target) = wanted else {
+            return Ok(());
+        };
+        let (request_id, frame) = session.request::<TerminalAttach>(&target.attach_payload())?;
+        self.open = Some(OpenTerminal {
+            target: target.clone(),
+            request_id,
+        });
+        sink.send(Message::text(frame))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Consumes the events of the attach request, publishing each; hands back the rest.
+    fn route(&mut self, event: Event, status: &StatusSender) -> Option<Event> {
+        let id = match &event {
+            Event::Item { request_id, .. }
+            | Event::Done { request_id, .. }
+            | Event::Failed { request_id, .. } => request_id.clone(),
+            _ => return Some(event),
+        };
+        if self.stale.contains(&id) {
+            if !matches!(event, Event::Item { .. }) {
+                self.stale.remove(&id);
+            }
+            return None;
+        }
+        let Some(open) = self.open.as_ref().filter(|open| open.request_id == id) else {
+            return Some(event);
+        };
+        let thread_id = open.target.thread_id.clone();
+        let event = match event {
+            Event::Item { value, .. } => terminal::decode_event(&value)?,
+            Event::Failed { message, .. } => {
+                self.open = None;
+                terminal::Event::Error(message)
+            }
+            _ => {
+                self.open = None;
+                terminal::Event::Closed
+            }
+        };
+        publish(status, Status::Terminal { thread_id, event });
         None
     }
 }

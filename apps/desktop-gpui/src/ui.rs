@@ -12,6 +12,8 @@ use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
     WORKSPACE_SHORTCUT,
 };
+use crate::terminal::{self, Target};
+use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
 use gpui::{
@@ -39,6 +41,8 @@ use std::{
     time::Duration,
 };
 
+/// The drag handle on the terminal drawer's top edge.
+const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 /// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
 const SIDEBAR_DEFAULT_WIDTH: f32 = 256.;
 /// The web's `THREAD_SIDEBAR_MIN_WIDTH`, `13 * 16`.
@@ -65,6 +69,7 @@ actions!(
         GoBack,
         GoForward,
         ToggleDetails,
+        ToggleTerminal,
         OpenFavoriteEditor
     ]
 );
@@ -82,6 +87,16 @@ pub const OVERLAY_CONTEXT: &str = "SidebarOverlay";
 
 #[derive(Clone)]
 struct SidebarResize;
+
+/// The drag payload of the terminal drawer's top edge.
+#[derive(Clone)]
+struct TerminalResizeDrag;
+
+impl Render for TerminalResizeDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
 
 impl Render for SidebarResize {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -196,6 +211,13 @@ pub struct MainView {
     editor_pick: Option<String>,
     editor_menu_open: bool,
     editor_menu: Entity<EditorMenu>,
+    /// Threads (and drafts, by project) whose terminal drawer is open; it starts closed.
+    terminal_open: HashSet<String>,
+    /// The drawer's height per thread, as dragged.
+    terminal_heights: HashMap<String, f32>,
+    terminal: Entity<TerminalView>,
+    /// The terminal the connection was last asked to attach.
+    terminal_attached: Option<Target>,
     /// The main area's width at the last render, for fitting the details card.
     main_width: Cell<f32>,
     actions: ActionSender,
@@ -241,6 +263,7 @@ impl MainView {
             editors: Vec::new(),
             preferred: None,
         });
+        let terminal_actions = actions.clone();
         Self {
             status,
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
@@ -280,6 +303,10 @@ impl MainView {
             editor_pick: None,
             editor_menu_open: false,
             editor_menu,
+            terminal_open: HashSet::new(),
+            terminal_heights: HashMap::new(),
+            terminal: cx.new(|cx| TerminalView::new(terminal_actions, cx)),
+            terminal_attached: None,
             main_width: Cell::new(0.),
             actions,
         }
@@ -309,6 +336,11 @@ impl MainView {
             self.vcs.insert(cwd, status);
             return cx.notify();
         }
+        if let Status::Terminal { thread_id, event } = status {
+            self.terminal
+                .update(cx, |view, cx| view.apply(&thread_id, event, cx));
+            return;
+        }
         if matches!(status, Status::Connecting) {
             self.branches_requested.clear();
             self.vcs.clear();
@@ -329,6 +361,7 @@ impl MainView {
         }
         self.request_branch();
         self.sync_vcs();
+        self.sync_terminal(cx);
         cx.notify();
     }
 
@@ -385,6 +418,7 @@ impl MainView {
         self.sync_thread();
         self.request_branch();
         self.sync_vcs();
+        self.sync_terminal(cx);
         cx.notify();
     }
 
@@ -498,6 +532,95 @@ impl MainView {
         }
     }
 
+    /// Where the open thread's terminal runs, which needs the same directory the card works on.
+    fn terminal_target(&self) -> Option<Target> {
+        let key = self.details_key()?;
+        let cwd = self.details_cwd()?;
+        let shell = self.shell()?;
+        let row = self
+            .selected_thread
+            .as_deref()
+            .and_then(|id| shell.rows.iter().find(|row| row.id == id));
+        let worktree_path = row.and_then(|row| row.worktree_path.clone());
+        let entry = match row {
+            Some(row) => shell
+                .project_entries
+                .iter()
+                .find(|entry| entry.contains(&row.project_id)),
+            None => active_project(self.selected_project.as_deref(), shell),
+        };
+        let project_root = entry
+            .map(|entry| entry.root.clone())
+            .filter(|root| !root.is_empty())
+            .unwrap_or(cwd);
+        Some(Target {
+            thread_id: key,
+            project_root,
+            worktree_path,
+        })
+    }
+
+    fn terminal_visible(&self) -> bool {
+        self.details_key()
+            .is_some_and(|key| self.terminal_open.contains(&key))
+            && self.terminal_target().is_some()
+    }
+
+    /// The web's `terminal.toggle`. Closing the drawer leaves the shell running.
+    fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        if self.terminal_target().is_none() {
+            return;
+        }
+        let opened = self.terminal_open.insert(key.clone());
+        if !opened {
+            self.terminal_open.remove(&key);
+        }
+        self.editor_menu_open = false;
+        self.sync_terminal(cx);
+        if opened {
+            let handle = self.terminal.focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+        cx.notify();
+    }
+
+    /// Attaches the open drawer's terminal to the connection, and detaches when none shows.
+    fn sync_terminal(&mut self, cx: &mut Context<Self>) {
+        let wanted = self
+            .terminal_visible()
+            .then(|| self.terminal_target())
+            .flatten();
+        if wanted == self.terminal_attached {
+            return;
+        }
+        let thread_id = wanted.as_ref().map(|target| target.thread_id.clone());
+        self.terminal.update(cx, |view, _| view.show(thread_id));
+        self.terminal_attached = wanted.clone();
+        if self
+            .actions
+            .try_send(Action::AttachTerminal(wanted))
+            .is_err()
+        {
+            eprintln!("[ui] could not ask for the terminal");
+        }
+    }
+
+    /// The drawer's height: as dragged, within what the window and chat column leave.
+    fn terminal_height(&self, viewport_height: f32) -> f32 {
+        let max = terminal::max_height(
+            viewport_height,
+            viewport_height - TOPBAR_HEIGHT - self.composer_height.get(),
+        );
+        let dragged = self
+            .details_key()
+            .and_then(|key| self.terminal_heights.get(&key).copied())
+            .unwrap_or(terminal::DEFAULT_HEIGHT);
+        terminal::clamp_height(dragged, max)
+    }
+
     fn installed_editors(&self) -> Vec<&'static str> {
         self.providers.as_ref().map_or_else(Vec::new, |catalog| {
             details::installed_editors(catalog.available_editors())
@@ -587,10 +710,27 @@ impl MainView {
                         row.child(self.breadcrumb(active, title, cx))
                             .child(div().flex_1())
                             .when(self.details_cwd().is_some(), |row| {
-                                row.child(self.details_toggle(cx))
+                                row.child(self.terminal_toggle(cx))
+                                    .child(self.details_toggle(cx))
                             })
                     }),
             )
+    }
+
+    /// The web's `PanelLayoutControls` terminal drawer toggle, pressed while the drawer is open.
+    fn terminal_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let pressed = self.terminal_visible();
+        let foreground = cx.theme().foreground;
+        header_icon_button(
+            "toggle-terminal",
+            Icons::PanelBottom,
+            format!("Toggle terminal drawer ({})", terminal::TOGGLE_SHORTCUT).into(),
+            cx,
+        )
+        .when(pressed, move |button| {
+            button.bg(foreground.opacity(0.06)).text_color(foreground)
+        })
+        .on_click(cx.listener(|this, _, window, cx| this.toggle_terminal(window, cx)))
     }
 
     /// The web's `PanelLayoutControls` thread details toggle, pressed while the card is open.
@@ -1256,20 +1396,79 @@ impl MainView {
 
     /// The main content, with the thread details card floating at its top right when it fits.
     fn main_area(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
+        let drawer = self.terminal_drawer(viewport_height, cx);
+        let drawer_height = if self.terminal_visible() {
+            self.terminal_height(viewport_height)
+        } else {
+            0.
+        };
         let content = self.main_content(viewport_height, cx);
-        let card = self.details_card(viewport_height - TOPBAR_HEIGHT, cx);
-        div()
-            .relative()
-            .flex()
+        let card = self.details_card(viewport_height - TOPBAR_HEIGHT - drawer_height, cx);
+        v_flex()
             .flex_1()
             .min_w_0()
             .h_full()
-            .when(card.is_some(), |area| {
-                area.pr(px(details::CARD_WIDTH + details::CARD_GAP + 32.))
-            })
-            .child(content)
-            .children(card)
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .when(card.is_some(), |area| {
+                        area.pr(px(details::CARD_WIDTH + details::CARD_GAP + 32.))
+                    })
+                    .child(content)
+                    .children(card),
+            )
+            .children(drawer)
             .into_any_element()
+    }
+
+    /// The web's `ThreadTerminalDrawer`: the thread's shell under the chat, its top edge draggable.
+    fn terminal_drawer(&self, viewport_height: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.terminal_visible() {
+            return None;
+        }
+        let line = cx.theme().border;
+        let height = self.terminal_height(viewport_height);
+        Some(
+            div()
+                .relative()
+                .flex_none()
+                .w_full()
+                .h(px(height))
+                .border_t_1()
+                .border_color(line)
+                .child(self.terminal.clone())
+                .child(
+                    div()
+                        .id("terminal-resize")
+                        .absolute()
+                        .top(px(-TERMINAL_HANDLE_HEIGHT / 2.))
+                        .left_0()
+                        .right_0()
+                        .h(px(TERMINAL_HANDLE_HEIGHT))
+                        .occlude()
+                        .cursor_row_resize()
+                        .on_drag(TerminalResizeDrag, |drag, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.new(|_| drag.clone())
+                        })
+                        .on_drag_move(cx.listener(
+                            |this, event: &DragMoveEvent<TerminalResizeDrag>, window, cx| {
+                                let Some(key) = this.details_key() else {
+                                    return;
+                                };
+                                let viewport = f32::from(window.viewport_size().height);
+                                let dragged = viewport - f32::from(event.event.position.y);
+                                this.terminal_heights.insert(key, dragged);
+                                cx.notify();
+                            },
+                        )),
+                )
+                .into_any_element(),
+        )
     }
 
     fn main_content(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -3525,6 +3724,11 @@ impl Render for MainView {
             )
             .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                    this.toggle_terminal(window, cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &OpenFavoriteEditor, _, cx| this.open_favorite_editor(cx)),
             )

@@ -15,6 +15,9 @@ mod server;
 mod shell;
 mod status;
 mod strip;
+mod terminal;
+mod terminal_screen;
+mod terminal_view;
 mod thread;
 mod thread_card;
 mod ui;
@@ -98,6 +101,7 @@ fn main() {
                 KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
                 KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),
                 KeyBinding::new("shift-cmd-b", ui::ToggleDetails, None),
+                KeyBinding::new("cmd-j", ui::ToggleTerminal, None),
                 KeyBinding::new("cmd-o", ui::OpenFavoriteEditor, None),
                 KeyBinding::new("cmd-[", ui::GoBack, None),
                 KeyBinding::new("cmd-]", ui::GoForward, None),

@@ -81,6 +81,43 @@ impl Method for SubscribeVcsStatus {
     type Success = Value;
 }
 
+/// `terminal.attach`, a stream that opens the session when the server has none and then carries
+/// its snapshot and output. The wire types are not generated; `terminal::decode_event` reads it.
+pub struct TerminalAttach;
+
+impl Method for TerminalAttach {
+    const TAG: &'static str = "terminal.attach";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `terminal.write`, a unary call that types into the shell.
+pub struct TerminalWrite;
+
+impl Method for TerminalWrite {
+    const TAG: &'static str = "terminal.write";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `terminal.resize`, a unary call that sets the session's shared grid.
+pub struct TerminalResize;
+
+impl Method for TerminalResize {
+    const TAG: &'static str = "terminal.resize";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `terminal.close`, a unary call that ends the session.
+pub struct TerminalClose;
+
+impl Method for TerminalClose {
+    const TAG: &'static str = "terminal.close";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     match Value::deserialize(deserializer)? {

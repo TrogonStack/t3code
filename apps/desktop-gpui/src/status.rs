@@ -2,6 +2,7 @@ use crate::details::VcsStatus;
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::strip::Branch;
+use crate::terminal;
 use crate::thread::Entry;
 use crate::thread_card::PrLine;
 use crate::wire::generated::{ThreadsEntryLastErrorClass, ThreadsEntryStatus};
@@ -41,6 +42,11 @@ pub enum Status {
     Vcs {
         cwd: String,
         status: Option<VcsStatus>,
+    },
+    /// One element of the terminal drawer's attach stream, for the thread it belongs to.
+    Terminal {
+        thread_id: String,
+        event: terminal::Event,
     },
 }
 
@@ -189,6 +195,7 @@ impl fmt::Display for Status {
             Self::Thread { id, .. } => write!(f, "Thread {id}"),
             Self::Branch { root, .. } => write!(f, "Branch of {root}"),
             Self::Vcs { cwd, .. } => write!(f, "Status of {cwd}"),
+            Self::Terminal { thread_id, .. } => write!(f, "Terminal of {thread_id}"),
         }
     }
 }
