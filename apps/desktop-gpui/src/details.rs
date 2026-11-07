@@ -191,6 +191,12 @@ impl Lines {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: String,
+    pub lines: Lines,
+}
+
 /// The local half of the `subscribeVcsStatus` stream (`VcsStatusLocalResult`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Local {
@@ -201,6 +207,12 @@ pub struct Local {
     pub has_working_tree_changes: bool,
     pub working_tree: Lines,
     pub branch_changes: Option<Lines>,
+    /// The base the branch totals compare against (`branchChanges.baseRef`).
+    pub base_ref: Option<String>,
+    /// `workingTree.files`, which the commit dialog lists.
+    pub files: Vec<ChangedFile>,
+    /// `sourceControlProvider.kind`, which picks PR or MR wording.
+    pub provider_kind: Option<String>,
 }
 
 /// The remote half (`VcsStatusRemoteResult`); absent until the server has looked, which reads as
@@ -211,7 +223,21 @@ pub struct Remote {
     pub ahead: u64,
     pub behind: u64,
     pub ahead_of_default: Option<u64>,
-    pub pr_open: bool,
+    pub pr: Option<PullRequest>,
+}
+
+/// The change request `pr` carries; only its state decides the actions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PullRequest {
+    pub number: u64,
+    pub url: String,
+    pub open: bool,
+}
+
+impl Remote {
+    pub fn pr_open(&self) -> bool {
+        self.pr.as_ref().is_some_and(|pr| pr.open)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -234,6 +260,21 @@ impl Local {
                 .get("branchChanges")
                 .filter(|changes| changes.is_object())
                 .map(Lines::decode),
+            files: value["workingTree"]["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|file| {
+                    Some(ChangedFile {
+                        path: file["path"].as_str()?.to_owned(),
+                        lines: Lines::decode(file),
+                    })
+                })
+                .collect(),
+            base_ref: value["branchChanges"]["baseRef"].as_str().map(str::to_owned),
+            provider_kind: value["sourceControlProvider"]["kind"]
+                .as_str()
+                .map(str::to_owned),
         })
     }
 }
@@ -248,7 +289,11 @@ impl Remote {
             ahead: value["aheadCount"].as_u64().unwrap_or(0),
             behind: value["behindCount"].as_u64().unwrap_or(0),
             ahead_of_default: value["aheadOfDefaultCount"].as_u64(),
-            pr_open: value["pr"]["state"] == "open",
+            pr: value["pr"].is_object().then(|| PullRequest {
+                number: value["pr"]["number"].as_u64().unwrap_or(0),
+                url: value["pr"]["url"].as_str().unwrap_or_default().to_owned(),
+                open: value["pr"]["state"] == "open",
+            }),
         }
     }
 }
@@ -317,7 +362,7 @@ impl VcsStatus {
         if remote.behind > 0 || remote.ahead > 0 {
             return false;
         }
-        if remote.pr_open {
+        if remote.pr_open() {
             return true;
         }
         let delta = remote.ahead_of_default.unwrap_or(remote.ahead) > 0;
