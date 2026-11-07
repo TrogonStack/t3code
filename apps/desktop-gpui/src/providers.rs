@@ -273,8 +273,39 @@ pub struct Mark {
     pub badge: Option<Badge>,
 }
 
+/// A model chosen in the picker for one composer: the instance it runs on and its slug.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pick {
+    pub instance_id: String,
+    pub model: String,
+}
+
+/// One model row of the picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickerModel {
+    pub slug: String,
+    pub label: String,
+    /// The model's full name, for the tooltip.
+    pub title: String,
+    pub sub_provider: Option<String>,
+}
+
+/// One provider instance of the picker's sidebar, with its models.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickerInstance {
+    pub instance_id: String,
+    pub mark: Mark,
+    pub name: String,
+    /// What the sidebar says when the instance cannot take a turn.
+    pub unavailable: Option<String>,
+    pub models: Vec<PickerModel>,
+    driver: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Trigger {
+    pub instance_id: String,
+    pub slug: String,
     pub mark: Mark,
     pub model: String,
     pub effort: Option<String>,
@@ -358,12 +389,84 @@ impl Catalog {
             .unwrap_or_else(|| slug.to_owned())
     }
 
+    /// The instances the picker lists, in the web's order: the ones enabled for `project`.
+    pub fn picker(&self, project: Option<&str>) -> Vec<PickerInstance> {
+        let entries = self.entries(project);
+        entries
+            .iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| {
+                let provider = entry.provider;
+                let mark = mark(&entries, entry);
+                PickerInstance {
+                    instance_id: provider.instance_id.clone(),
+                    name: mark.display_name.clone(),
+                    unavailable: (!entry.available() || provider.status == "error")
+                        .then(|| unavailable_note(&mark.display_name, provider)),
+                    models: provider
+                        .models
+                        .iter()
+                        .map(|model| PickerModel {
+                            slug: model.slug.clone(),
+                            label: trigger_model_name(model, &provider.driver),
+                            title: display_model_name(&model.name, model.sub_provider.as_deref()),
+                            sub_provider: model.sub_provider.clone(),
+                        })
+                        .collect(),
+                    driver: provider.driver.clone(),
+                    mark,
+                }
+            })
+            .collect()
+    }
+
+    /// The choice of `slug` on `instance_id`, when that instance can take a turn and has the model.
+    pub fn pick(&self, project: Option<&str>, instance_id: &str, slug: &str) -> Option<Pick> {
+        let entries = self.entries(project);
+        let entry = entries.iter().find(|entry| {
+            entry.provider.instance_id == instance_id
+                && entry.enabled
+                && entry.available()
+                && entry.provider.status != "error"
+        })?;
+        entry
+            .provider
+            .models
+            .iter()
+            .any(|model| model.slug == slug)
+            .then(|| Pick {
+                instance_id: instance_id.to_owned(),
+                model: slug.to_owned(),
+            })
+    }
+
     /// The trigger a fresh draft in `project` shows; `None` when no provider is selectable.
     pub fn trigger(&self, project: Option<&str>) -> Option<Trigger> {
+        self.trigger_for(project, None)
+    }
+
+    /// The trigger of a draft whose user may have picked a model; a pick that no longer resolves
+    /// (the instance was disabled, or went away) falls back to the draft's default.
+    pub fn trigger_for(&self, project: Option<&str>, pick: Option<&Pick>) -> Option<Trigger> {
         let entries = self.entries(project);
-        let (entry, selection) = self.default_entry(&entries, project)?;
+        let picked = pick.and_then(|pick| {
+            let entry = entries.iter().find(|entry| {
+                entry.provider.instance_id == pick.instance_id && entry.enabled && entry.available()
+            })?;
+            let selection = Selection {
+                instance_id: Some(pick.instance_id.clone()),
+                provider: None,
+                model: pick.model.clone(),
+                options: Value::Null,
+            };
+            Some((entry, selection))
+        });
+        let (entry, requested) = match &picked {
+            Some((entry, selection)) => (*entry, Some(selection)),
+            None => self.default_entry(&entries, project)?,
+        };
         let provider = entry.provider;
-        let requested = selection
+        let requested = requested
             .filter(|selection| selection.instance() == Some(provider.instance_id.as_str()));
         let slug = match requested {
             Some(selection) => resolve_model(&provider.models, &selection.model)
@@ -389,12 +492,14 @@ impl Catalog {
                 let label = if slug.is_empty() {
                     "Choose model".to_owned()
                 } else {
-                    slug
+                    slug.clone()
                 };
                 (label.clone(), label, None)
             }
         };
         Some(Trigger {
+            instance_id: provider.instance_id.clone(),
+            slug,
             mark: mark(&entries, entry),
             model,
             effort,
@@ -471,6 +576,95 @@ impl Catalog {
         first_selectable(group.iter().copied())
             .or_else(|| first_selectable(entries.iter()))
             .map(|entry| (entry, None))
+    }
+}
+
+/// `describeUnavailableInstance` for an instance the picker cannot select.
+fn unavailable_note(name: &str, provider: &Provider) -> String {
+    let kind = if provider.status == "error" {
+        "Unavailable"
+    } else {
+        "Not ready"
+    };
+    format!("{name}: {kind}.")
+}
+
+/// The picker's search: every token must match a field; exact names first, then the tightest
+/// matches in list order (`modelPickerSearch.ts` without its fuzzy tier).
+pub fn rank_models<'a>(
+    instances: &'a [PickerInstance],
+    query: &str,
+) -> Vec<(&'a PickerInstance, &'a PickerModel)> {
+    let tokens: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let normalized = tokens.join(" ");
+    let mut ranked: Vec<(i32, usize, &PickerInstance, &PickerModel)> = Vec::new();
+    let mut order = 0;
+    for instance in instances {
+        for model in &instance.models {
+            order += 1;
+            let fields = [
+                model.title.to_lowercase(),
+                model.label.to_lowercase(),
+                model
+                    .sub_provider
+                    .clone()
+                    .unwrap_or_default()
+                    .to_lowercase(),
+                instance.driver.to_lowercase(),
+                instance.name.to_lowercase(),
+            ];
+            if tokens.is_empty() {
+                ranked.push((0, order, instance, model));
+                continue;
+            }
+            if fields[..2].iter().any(|field| *field == normalized) {
+                ranked.push((-1000, order, instance, model));
+                continue;
+            }
+            let mut score = 0;
+            let mut matched = true;
+            for token in &tokens {
+                match fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, field)| {
+                        token_score(field, token).map(|tier| index as i32 * 10 + tier)
+                    })
+                    .min()
+                {
+                    Some(best) => score += best,
+                    None => {
+                        matched = false;
+                        break;
+                    }
+                }
+            }
+            if matched {
+                ranked.push((score, order, instance, model));
+            }
+        }
+    }
+    ranked.sort_by_key(|(score, order, ..)| (*score, *order));
+    ranked
+        .into_iter()
+        .map(|(_, _, instance, model)| (instance, model))
+        .collect()
+}
+
+fn token_score(field: &str, token: &str) -> Option<i32> {
+    if field == token {
+        Some(0)
+    } else if field.starts_with(token) {
+        Some(2)
+    } else if field
+        .split(|ch: char| !ch.is_alphanumeric())
+        .any(|word| word.starts_with(token))
+    {
+        Some(4)
+    } else if field.contains(token) {
+        Some(6)
+    } else {
+        None
     }
 }
 
@@ -1307,5 +1501,75 @@ mod tests {
             .trigger(None),
             None
         );
+    }
+
+    fn two_instances() -> Catalog {
+        catalog(
+            vec![
+                provider(
+                    "codex",
+                    "codex",
+                    "ready",
+                    vec![
+                        model("gpt-5", "GPT-5", true),
+                        model("gpt-5-mini", "GPT-5 Mini", false),
+                    ],
+                ),
+                provider(
+                    "claudeAgent",
+                    "claudeAgent",
+                    "ready",
+                    vec![model("opus", "Claude Opus", true)],
+                ),
+            ],
+            json!({"providerInstances": {"codex": {"enabled": true}, "claudeAgent": {"enabled": true}}}),
+        )
+    }
+
+    #[test]
+    fn a_pick_replaces_the_default_trigger() {
+        let catalog = two_instances();
+        let default = catalog.trigger(None).unwrap();
+        assert_eq!(default.instance_id, "codex");
+        assert_eq!(default.slug, "gpt-5");
+        let pick = catalog.pick(None, "claudeAgent", "opus").unwrap();
+        let picked = catalog.trigger_for(None, Some(&pick)).unwrap();
+        assert_eq!(
+            (picked.instance_id.as_str(), picked.slug.as_str()),
+            ("claudeAgent", "opus")
+        );
+    }
+
+    #[test]
+    fn a_pick_that_no_longer_resolves_is_rejected_or_ignored() {
+        let catalog = two_instances();
+        assert_eq!(catalog.pick(None, "claudeAgent", "nope"), None);
+        assert_eq!(catalog.pick(None, "ghost", "opus"), None);
+        let stale = Pick {
+            instance_id: "ghost".to_owned(),
+            model: "x".to_owned(),
+        };
+        assert_eq!(
+            catalog.trigger_for(None, Some(&stale)),
+            catalog.trigger(None)
+        );
+    }
+
+    #[test]
+    fn search_ranks_exact_names_first_and_requires_every_token() {
+        let catalog = two_instances();
+        let instances = catalog.picker(None);
+        assert_eq!(instances.len(), 2);
+        let slugs = |query: &str| -> Vec<String> {
+            rank_models(&instances, query)
+                .iter()
+                .map(|(_, model)| model.slug.clone())
+                .collect()
+        };
+        assert_eq!(slugs(""), ["gpt-5", "gpt-5-mini", "opus"]);
+        assert_eq!(slugs("gpt-5"), ["gpt-5", "gpt-5-mini"]);
+        assert_eq!(slugs("mini gpt"), ["gpt-5-mini"]);
+        assert_eq!(slugs("claude"), ["opus"]);
+        assert!(slugs("zzz").is_empty());
     }
 }
