@@ -8,11 +8,12 @@ use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
     WORKSPACE_SHORTCUT,
 };
+use crate::thread::{Entry, Kind};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Entity, Focusable as _,
-    FontWeight, Hsla, IntoElement, Keystroke, ObjectFit, ParentElement, Pixels, Render, RenderOnce,
-    Styled, UniformListScrollHandle, Window, actions, canvas, div, ease_in_out, img, prelude::*,
-    px, rgb, uniform_list,
+    FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment, ListState, ObjectFit,
+    ParentElement, Pixels, Render, RenderOnce, Styled, UniformListScrollHandle, Window, actions,
+    canvas, div, ease_in_out, img, list, prelude::*, px, rgb, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -87,6 +88,19 @@ fn toggled(narrow: bool, open: bool, overlay_open: bool) -> (bool, bool) {
 /// A thread card (`h-[4.875rem]`) between the `py-0.5` of its list item.
 const CARD_HEIGHT: f32 = 78.;
 const ROW_HEIGHT: f32 = CARD_HEIGHT + 4.;
+/// Where the window is: the project in the picker and the thread open in the main area, if any.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Route {
+    project: Option<String>,
+    thread: Option<String>,
+}
+
+/// The open thread's transcript as last published by the connection.
+struct Transcript {
+    id: String,
+    result: Result<Vec<Entry>, String>,
+}
+
 const NO_PROJECT: &str = "No project";
 const HEADLINE_SCRATCH: &str = "What should we work on?";
 /// The web's `ComboboxPopup` cap, `max-h-[min(var(--available-height),23rem)]`.
@@ -111,13 +125,14 @@ pub struct MainView {
     /// Hover styles cannot change layout, so the send button's hover growth is view state.
     send_hovered: bool,
     permissions_open: bool,
-    /// The open thread; selecting is all a row does yet.
     selected_thread: Option<String>,
+    transcript: Option<Transcript>,
+    transcript_list: ListState,
     /// Local view state until the draft's mode is sent to the server.
     runtime_mode: Option<RuntimeMode>,
     permissions: Entity<PermissionsPanel>,
     selected_project: Option<String>,
-    history: History,
+    history: History<Route>,
     picker_open: bool,
     /// Last painted trigger bounds, so the popup can shrink to fit below it as on the web.
     picker_trigger: Rc<Cell<Bounds<Pixels>>>,
@@ -179,6 +194,9 @@ impl MainView {
             send_hovered: false,
             permissions_open: false,
             selected_thread: None,
+            transcript: None,
+            // Overdraw keeps a screenful of rows measured beyond each edge.
+            transcript_list: ListState::new(0, ListAlignment::Top, px(600.)),
             runtime_mode: None,
             permissions,
             selected_project: None,
@@ -206,6 +224,10 @@ impl MainView {
             self.providers = Some(catalog);
             return cx.notify();
         }
+        if let Status::Thread { id, transcript } = status {
+            self.set_transcript(id, transcript);
+            return cx.notify();
+        }
         if let Status::Branch { root, branch } = status {
             self.branches.insert(root, branch);
             return cx.notify();
@@ -221,11 +243,77 @@ impl MainView {
                 .and_then(|shell| active_project(None, shell))
                 .map(|entry| entry.id.clone());
             if let Some(id) = &self.selected_project {
-                self.history.visit(id.clone());
+                self.history.visit(Route {
+                    project: Some(id.clone()),
+                    thread: None,
+                });
             }
         }
         self.request_branch();
         cx.notify();
+    }
+
+    /// Keeps the rows of the open thread; an update for any other thread is stale.
+    fn set_transcript(&mut self, id: String, result: Result<Vec<Entry>, String>) {
+        if self.selected_thread.as_deref() != Some(id.as_str()) {
+            return;
+        }
+        let count = |result: &Result<Vec<Entry>, String>| result.as_ref().map_or(0, Vec::len);
+        let previous = self.transcript.take().filter(|t| t.id == id);
+        match &previous {
+            // Rows that streamed keep their measured height; only the changed tail is remeasured.
+            Some(previous) => {
+                let same = match (&previous.result, &result) {
+                    (Ok(old), Ok(new)) => old.iter().zip(new).take_while(|(a, b)| a == b).count(),
+                    _ => 0,
+                };
+                let (old, new) = (count(&previous.result), count(&result));
+                self.transcript_list.splice(same..old, new - same);
+            }
+            None => {
+                self.transcript_list.reset(count(&result));
+                self.transcript_list.set_follow_mode(FollowMode::Tail);
+            }
+        }
+        self.transcript = Some(Transcript { id, result });
+    }
+
+    /// Points the connection's thread subscription at the selection.
+    fn sync_thread(&mut self) {
+        if self.transcript.as_ref().map(|t| &t.id) != self.selected_thread.as_ref() {
+            self.transcript = None;
+        }
+        let action = Action::SelectThread(self.selected_thread.clone());
+        if self.actions.try_send(action).is_err() {
+            eprintln!("[ui] could not ask for the thread");
+        }
+    }
+
+    fn apply_route(&mut self, route: Route, cx: &mut Context<Self>) {
+        self.sidebar_overlay_open = false;
+        self.selected_project = route.project;
+        self.selected_thread = route.thread;
+        self.sync_thread();
+        self.request_branch();
+        cx.notify();
+    }
+
+    /// Opens a thread in its project, or the empty new-thread state for `None`.
+    fn open_thread(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        let project = self.shell().and_then(|shell| {
+            let row = shell.rows.iter().find(|row| Some(&row.id) == id.as_ref())?;
+            let entry = shell
+                .project_entries
+                .iter()
+                .find(|entry| entry.contains(&row.project_id))?;
+            Some(entry.id.clone())
+        });
+        let route = Route {
+            project: project.or_else(|| self.selected_project.clone()),
+            thread: id,
+        };
+        self.history.visit(route.clone());
+        self.apply_route(route, cx);
     }
 
     /// Asks for the branch of the active project's root once per connection.
@@ -271,6 +359,11 @@ impl MainView {
             .shell()
             .and_then(|shell| active_project(self.selected_project.as_deref(), shell));
         let open = self.sidebar_open && !narrow;
+        let title = self
+            .shell()
+            .zip(self.selected_thread.as_deref())
+            .and_then(|(shell, id)| shell.rows.iter().find(|row| row.id == id))
+            .map_or("New thread", |row| row.title.as_str());
         TitleBar::new()
             .h(px(TOPBAR_HEIGHT))
             .pl_0()
@@ -286,7 +379,7 @@ impl MainView {
                     .border_b_1()
                     .border_color(border)
                     .when(self.shell().is_some(), |row| {
-                        row.child(self.breadcrumb(active, cx))
+                        row.child(self.breadcrumb(active, title, cx))
                     }),
             )
     }
@@ -370,30 +463,26 @@ impl MainView {
             })
     }
 
+    /// Picking a project starts a new thread in it.
     fn select_project(&mut self, id: String, cx: &mut Context<Self>) {
-        self.history.visit(id.clone());
-        self.selected_project = Some(id);
+        let route = Route {
+            project: Some(id),
+            thread: None,
+        };
+        self.history.visit(route.clone());
         self.picker_open = false;
-        self.sidebar_overlay_open = false;
-        self.request_branch();
-        cx.notify();
+        self.apply_route(route, cx);
     }
 
     fn go_back(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.history.back() {
-            self.sidebar_overlay_open = false;
-            self.selected_project = Some(id.to_owned());
-            self.request_branch();
-            cx.notify();
+        if let Some(route) = self.history.back().cloned() {
+            self.apply_route(route, cx);
         }
     }
 
     fn go_forward(&mut self, cx: &mut Context<Self>) {
-        if let Some(id) = self.history.forward() {
-            self.sidebar_overlay_open = false;
-            self.selected_project = Some(id.to_owned());
-            self.request_branch();
-            cx.notify();
+        if let Some(route) = self.history.forward().cloned() {
+            self.apply_route(route, cx);
         }
     }
 
@@ -533,7 +622,7 @@ impl MainView {
             .child(self.sidebar_footer(cx))
     }
 
-    /// A sidebar row; picking it marks the open thread, and closes the overlay like the web.
+    /// A sidebar row; picking it opens the thread, and closes the overlay like the web.
     fn thread_item(&self, row: &ThreadRow, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let selected = self.selected_thread.as_deref() == Some(row.id.as_str());
         let id = row.id.clone();
@@ -555,11 +644,7 @@ impl MainView {
             self.sidebar_width.get(),
             cx,
         )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.selected_thread = Some(id.clone());
-            this.sidebar_overlay_open = false;
-            cx.notify();
-        }))
+        .on_click(cx.listener(move |this, _, _, cx| this.open_thread(Some(id.clone()), cx)))
     }
 
     /// One collapsible shelf: its header, then its rows while expanded.
@@ -698,12 +783,15 @@ impl MainView {
                     cx,
                 ))
             })
-            .child(header_icon_button(
-                "new-thread",
-                Icons::SquarePen,
-                format!("New thread ({new_thread})").into(),
-                cx,
-            ))
+            .child(
+                header_icon_button(
+                    "new-thread",
+                    Icons::SquarePen,
+                    format!("New thread ({new_thread})").into(),
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.open_thread(None, cx))),
+            )
     }
 
     fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -716,6 +804,23 @@ impl MainView {
         let active = active_project(self.selected_project.as_deref(), shell);
         let scratch = active.is_some_and(|entry| entry.scratch);
         let project = active.map_or_else(|| "your project".to_owned(), |entry| entry.title.clone());
+        if self.selected_thread.is_some() {
+            return v_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(self.transcript_view(cx))
+                .child(
+                    v_flex()
+                        .w_full()
+                        .items_center()
+                        .px_6()
+                        .pb_4()
+                        .child(self.composer_box(cx))
+                        .children(active.and_then(|entry| self.context_strip(entry, cx))),
+                )
+                .into_any_element();
+        }
         v_flex()
             .flex_1()
             .min_w_0()
@@ -741,9 +846,82 @@ impl MainView {
             .into_any_element()
     }
 
+    /// The open thread's rows, or why there are none yet.
+    fn transcript_view(&self, cx: &mut Context<Self>) -> AnyElement {
+        let note = |text: String| {
+            centered(cx)
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(text)
+                .into_any_element()
+        };
+        match self.transcript.as_ref().map(|t| &t.result) {
+            None => note("Loading...".to_owned()),
+            Some(Err(message)) => note(format!("Could not load this thread: {message}")),
+            Some(Ok(entries)) if entries.is_empty() => note("No messages yet".to_owned()),
+            Some(Ok(_)) => div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .child(
+                    list(
+                        self.transcript_list.clone(),
+                        cx.processor(|this, ix, _, cx| this.transcript_item(ix, cx)),
+                    )
+                    .size_full(),
+                )
+                .into_any_element(),
+        }
+    }
+
+    /// One row in the web's 720px column: the user's words in a bubble on the right, the
+    /// assistant's plain, tool work as a muted line.
+    fn transcript_item(&self, ix: usize, cx: &App) -> AnyElement {
+        let Some(entry) = self
+            .transcript
+            .as_ref()
+            .and_then(|t| t.result.as_ref().ok())
+            .and_then(|entries| entries.get(ix))
+        else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme();
+        let text: gpui::SharedString = entry.text.to_string().into();
+        let body = match entry.kind {
+            Kind::User => h_flex().justify_end().child(
+                div()
+                    .max_w(px(560.))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(16.))
+                    .bg(theme.secondary)
+                    .text_sm()
+                    .child(text),
+            ),
+            Kind::Assistant => h_flex().child(div().min_w_0().text_sm().child(text)),
+            Kind::Work => h_flex().child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .font_family(theme.mono_font_family.clone())
+                    .text_color(theme.muted_foreground)
+                    .child(text),
+            ),
+        };
+        h_flex()
+            .w_full()
+            .justify_center()
+            .px_6()
+            .py_2()
+            .child(div().w_full().max_w(px(720.)).child(body))
+            .into_any_element()
+    }
+
     fn breadcrumb(
         &self,
         active: Option<&ProjectEntry>,
+        title: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
@@ -787,6 +965,10 @@ impl MainView {
                             "New thread in {}",
                             project_label(Some(entry))
                         )))
+                        .on_click(cx.listener({
+                            let id = entry.id.clone();
+                            move |this, _, _, cx| this.select_project(id.clone(), cx)
+                        }))
                         .child(icon)
                         .child(
                             div()
@@ -803,7 +985,12 @@ impl MainView {
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .children(project)
-            .child(div().text_color(foreground).child("New thread"))
+            .child(
+                div()
+                    .text_color(foreground)
+                    .truncate()
+                    .child(title.to_owned()),
+            )
     }
 
     fn hero(
@@ -1556,7 +1743,7 @@ fn header_icon_button(
     icon: gpui_kit_assets::IconName,
     label: gpui::SharedString,
     cx: &App,
-) -> impl IntoElement + use<> {
+) -> gpui::Stateful<gpui::Div> {
     ghost_icon_button(id, Icon::new(icon).size_4(), label, true, cx)
 }
 

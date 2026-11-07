@@ -705,6 +705,27 @@ for OrchestrationGetArchivedShellSnapshotError {
         Self::EnvironmentAuthorizationErrorEncoded(value)
     }
 }
+///`OrchestrationGetThreadProjectionError`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum OrchestrationGetThreadProjectionError {
+    OrchestrationV2GetThreadProjectionErrorEncoded(
+        OrchestrationV2GetThreadProjectionErrorEncoded,
+    ),
+    EnvironmentAuthorizationErrorEncoded(EnvironmentAuthorizationErrorEncoded),
+}
+impl ::std::convert::From<OrchestrationV2GetThreadProjectionErrorEncoded>
+for OrchestrationGetThreadProjectionError {
+    fn from(value: OrchestrationV2GetThreadProjectionErrorEncoded) -> Self {
+        Self::OrchestrationV2GetThreadProjectionErrorEncoded(value)
+    }
+}
+impl ::std::convert::From<EnvironmentAuthorizationErrorEncoded>
+for OrchestrationGetThreadProjectionError {
+    fn from(value: EnvironmentAuthorizationErrorEncoded) -> Self {
+        Self::EnvironmentAuthorizationErrorEncoded(value)
+    }
+}
 ///`OrchestrationSubscribeShellPayload`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug, Default)]
 pub struct OrchestrationSubscribeShellPayload {
@@ -1222,6 +1243,67 @@ for OrchestrationSubscribeShellSuccessVariant5Location {
         value.parse()
     }
 }
+///`OrchestrationSubscribeThreadPayload`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct OrchestrationSubscribeThreadPayload {
+    #[serde(
+        rename = "acceptBoundedSnapshot",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub accept_bounded_snapshot: ::std::option::Option<bool>,
+    #[serde(
+        rename = "acceptCompactIds",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub accept_compact_ids: ::std::option::Option<bool>,
+    #[serde(
+        rename = "acceptCompactTurnItems",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub accept_compact_turn_items: ::std::option::Option<bool>,
+    #[serde(
+        rename = "acceptDedupedBodies",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub accept_deduped_bodies: ::std::option::Option<bool>,
+    #[serde(
+        rename = "acceptDeferredWork",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub accept_deferred_work: ::std::option::Option<bool>,
+    #[serde(
+        rename = "afterSequence",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub after_sequence: ::std::option::Option<i64>,
+    #[serde(
+        rename = "requestCompletionMarker",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub request_completion_marker: ::std::option::Option<bool>,
+    #[serde(rename = "threadId")]
+    pub thread_id: ::std::string::String,
+}
+///`OrchestrationSubscribeThreadSuccess`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct OrchestrationSubscribeThreadSuccess(pub ::serde_json::Value);
+impl ::std::ops::Deref for OrchestrationSubscribeThreadSuccess {
+    type Target = ::serde_json::Value;
+    fn deref(&self) -> &::serde_json::Value {
+        &self.0
+    }
+}
+impl ::std::convert::From<OrchestrationSubscribeThreadSuccess> for ::serde_json::Value {
+    fn from(value: OrchestrationSubscribeThreadSuccess) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<::serde_json::Value> for OrchestrationSubscribeThreadSuccess {
+    fn from(value: ::serde_json::Value) -> Self {
+        Self(value)
+    }
+}
 ///`OrchestrationV2GetShellSnapshotErrorEncoded`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct OrchestrationV2GetShellSnapshotErrorEncoded {
@@ -1279,6 +1361,73 @@ impl ::std::convert::TryFrom<&str> for OrchestrationV2GetShellSnapshotErrorEncod
 }
 impl ::std::convert::TryFrom<::std::string::String>
 for OrchestrationV2GetShellSnapshotErrorEncodedTag {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`OrchestrationV2GetThreadProjectionErrorEncoded`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct OrchestrationV2GetThreadProjectionErrorEncoded {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub cause: ::std::option::Option<::serde_json::Value>,
+    pub message: ::std::string::String,
+    #[serde(rename = "_tag")]
+    pub tag: OrchestrationV2GetThreadProjectionErrorEncodedTag,
+    #[serde(rename = "threadId")]
+    pub thread_id: ::std::string::String,
+}
+///`OrchestrationV2GetThreadProjectionErrorEncodedTag`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum OrchestrationV2GetThreadProjectionErrorEncodedTag {
+    OrchestrationV2GetThreadProjectionError,
+}
+impl ::std::fmt::Display for OrchestrationV2GetThreadProjectionErrorEncodedTag {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::OrchestrationV2GetThreadProjectionError => {
+                f.write_str("OrchestrationV2GetThreadProjectionError")
+            }
+        }
+    }
+}
+impl ::std::str::FromStr for OrchestrationV2GetThreadProjectionErrorEncodedTag {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "OrchestrationV2GetThreadProjectionError" => {
+                Ok(Self::OrchestrationV2GetThreadProjectionError)
+            }
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for OrchestrationV2GetThreadProjectionErrorEncodedTag {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for OrchestrationV2GetThreadProjectionErrorEncodedTag {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,

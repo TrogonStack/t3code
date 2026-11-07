@@ -5,14 +5,19 @@ use crate::electron_dpop;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, SubscribeShell, VcsListRefs,
+    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, SubscribeShell, SubscribeThread,
+    VcsListRefs,
 };
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
 use crate::strip::{self, Branch};
-use crate::wire::{ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload};
+use crate::thread::ThreadState;
+use crate::wire::{
+    ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload, SubscribeThreadPayload,
+};
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until};
 use tokio_tungstenite::tungstenite::Message;
@@ -44,6 +49,8 @@ pub enum Action {
     LoadBranch {
         root: String,
     },
+    /// The thread whose transcript the window shows; `None` closes the subscription.
+    SelectThread(Option<String>),
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -55,6 +62,7 @@ impl Action {
             Self::SetProjectPinned { pinned: true, .. } => "pin project",
             Self::SetProjectPinned { pinned: false, .. } => "unpin project",
             Self::LoadBranch { .. } => "load the branch",
+            Self::SelectThread(_) => "open the thread",
         }
     }
 }
@@ -159,6 +167,8 @@ pub async fn run(
 ) {
     let client = auth::http_client();
     let mut bearer: Option<String> = None;
+    // Outlives a socket: a reconnect subscribes to the thread again.
+    let mut selected: Option<String> = None;
     let mut backoff = Backoff::new();
     loop {
         publish(status, Status::Connecting);
@@ -174,7 +184,7 @@ pub async fn run(
                     },
                 );
                 backoff.reset();
-                serve(socket, environment, actions, status).await
+                serve(socket, environment, actions, &mut selected, status).await
             }
             Err(message) => message,
         };
@@ -236,6 +246,7 @@ async fn serve(
     socket: Socket,
     environment: &Environment,
     actions: &ActionReceiver,
+    selected: &mut Option<String>,
     status: &StatusSender,
 ) -> String {
     let (mut sink, mut stream) = socket.split();
@@ -258,8 +269,19 @@ async fn serve(
             None
         }
     };
-    // Whatever was clicked while disconnected is stale by now.
-    while actions.try_recv().is_ok() {}
+    // Whatever was clicked while disconnected is stale by now, except which thread is open.
+    while let Ok(action) = actions.try_recv() {
+        if let Action::SelectThread(id) = action {
+            *selected = id;
+        }
+    }
+    let mut threads = Threads::default();
+    if let Err(error) = threads
+        .select(selected.as_deref(), &mut session, &mut sink)
+        .await
+    {
+        return error;
+    }
     let mut pending: HashMap<String, &'static str> = HashMap::new();
     // Branch lookups by request id, with the workspace root each was for.
     let mut branches: HashMap<String, String> = HashMap::new();
@@ -278,6 +300,15 @@ async fn serve(
                     return "window closed".to_owned();
                 };
                 let request = match &action {
+                    Action::SelectThread(id) => {
+                        *selected = id.clone();
+                        if let Err(error) =
+                            threads.select(id.as_deref(), &mut session, &mut sink).await
+                        {
+                            return error;
+                        }
+                        continue;
+                    }
                     Action::SetProjectPinned { project_id, pinned } => session
                         .request::<ProjectsMutate>(&pin_mutation(project_id, *pinned, command_id()))
                         .map(|(id, frame)| (id, frame, None)),
@@ -320,6 +351,9 @@ async fn serve(
                         }
                     }
                     for event in reaction.events {
+                        let Some(event) = threads.route(event, status) else {
+                            continue;
+                        };
                         if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
                             config_request = None;
                             publish_catalog(event, status);
@@ -340,6 +374,109 @@ async fn serve(
                 Some(Ok(_)) => deadline = Instant::now() + PING_TIMEOUT,
             }
         }
+    }
+}
+
+type Sink = SplitSink<Socket, Message>;
+
+/// The open thread subscription, and the interrupted ones whose last frames still arrive.
+#[derive(Default)]
+struct Threads {
+    open: Option<OpenThread>,
+    stale: HashSet<String>,
+}
+
+struct OpenThread {
+    thread_id: String,
+    request_id: String,
+    state: ThreadState,
+}
+
+impl Threads {
+    /// Switches the subscription to `wanted`, interrupting the previous one.
+    async fn select(
+        &mut self,
+        wanted: Option<&str>,
+        session: &mut Session,
+        sink: &mut Sink,
+    ) -> Result<(), String> {
+        if self.open.as_ref().map(|open| open.thread_id.as_str()) == wanted {
+            return Ok(());
+        }
+        if let Some(open) = self.open.take() {
+            let frame = session.interrupt(&open.request_id);
+            self.stale.insert(open.request_id);
+            sink.send(Message::text(frame))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let Some(thread_id) = wanted else {
+            return Ok(());
+        };
+        let payload = SubscribeThreadPayload {
+            accept_bounded_snapshot: None,
+            accept_compact_ids: None,
+            accept_compact_turn_items: None,
+            accept_deduped_bodies: None,
+            accept_deferred_work: None,
+            after_sequence: None,
+            request_completion_marker: None,
+            thread_id: thread_id.to_owned(),
+        };
+        let (request_id, frame) = session.request::<SubscribeThread>(&payload)?;
+        self.open = Some(OpenThread {
+            thread_id: thread_id.to_owned(),
+            request_id,
+            state: ThreadState::default(),
+        });
+        sink.send(Message::text(frame))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Consumes the events of thread requests, publishing the transcript; hands back the rest.
+    fn route(&mut self, event: Event, status: &StatusSender) -> Option<Event> {
+        let id = match &event {
+            Event::Item { request_id, .. }
+            | Event::Done { request_id, .. }
+            | Event::Failed { request_id, .. } => request_id.clone(),
+            _ => return Some(event),
+        };
+        if self.stale.contains(&id) {
+            if !matches!(event, Event::Item { .. }) {
+                self.stale.remove(&id);
+            }
+            return None;
+        }
+        let Some(open) = self.open.as_mut().filter(|open| open.request_id == id) else {
+            return Some(event);
+        };
+        let thread_id = open.thread_id.clone();
+        match event {
+            Event::Item { value, .. } => {
+                if open.state.apply(&value) && open.state.is_seeded() {
+                    publish(
+                        status,
+                        Status::Thread {
+                            id: thread_id,
+                            transcript: Ok(open.state.entries()),
+                        },
+                    );
+                }
+            }
+            Event::Failed { message, .. } => {
+                self.open = None;
+                publish(
+                    status,
+                    Status::Thread {
+                        id: thread_id,
+                        transcript: Err(message),
+                    },
+                );
+            }
+            _ => self.open = None,
+        }
+        None
     }
 }
 
@@ -473,6 +610,70 @@ mod tests {
         assert!(settle(&mut pending, &failed("7")));
         assert!(pending.is_empty());
         assert!(!settle(&mut pending, &failed("7")));
+    }
+
+    #[test]
+    fn thread_events_are_routed_and_interrupted_ones_swallowed() {
+        let (status, published) = async_channel::unbounded();
+        let item = |id: &str, value: serde_json::Value| Event::Item {
+            request_id: id.to_owned(),
+            value,
+        };
+        let snapshot = serde_json::json!({
+            "kind": "snapshot",
+            "snapshotSequence": 1,
+            "projection": {"visibleTurnItems": [{
+                "visibility": "local",
+                "item": {"id": "u", "ordinal": 1, "type": "user_message", "text": "hi"},
+            }]},
+        });
+        let mut threads = Threads {
+            open: Some(OpenThread {
+                thread_id: "t1".to_owned(),
+                request_id: "5".to_owned(),
+                state: ThreadState::default(),
+            }),
+            stale: HashSet::from(["4".to_owned()]),
+        };
+        // Other requests pass through, and a stale stream's frames never reach the shell.
+        assert!(
+            threads
+                .route(item("9", snapshot.clone()), &status)
+                .is_some()
+        );
+        assert!(
+            threads
+                .route(item("4", snapshot.clone()), &status)
+                .is_none()
+        );
+        let done = Event::Done {
+            request_id: "4".to_owned(),
+            value: serde_json::Value::Null,
+        };
+        assert!(threads.route(done, &status).is_none());
+        assert!(threads.stale.is_empty());
+        assert!(published.try_recv().is_err());
+        assert!(threads.route(item("5", snapshot), &status).is_none());
+        let Ok(Status::Thread { id, transcript }) = published.try_recv() else {
+            panic!("the open thread publishes its transcript");
+        };
+        assert_eq!(
+            (id.as_str(), transcript.map(|rows| rows.len())),
+            ("t1", Ok(1))
+        );
+        let failed = Event::Failed {
+            request_id: "5".to_owned(),
+            message: "gone".to_owned(),
+        };
+        assert!(threads.route(failed, &status).is_none());
+        assert!(threads.open.is_none());
+        assert!(matches!(
+            published.try_recv(),
+            Ok(Status::Thread {
+                transcript: Err(_),
+                ..
+            })
+        ));
     }
 
     #[test]

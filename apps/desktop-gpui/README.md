@@ -2,7 +2,7 @@
 
 Native desktop client written in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). It is meant to replace `apps/desktop` (Electron) over time and never embeds Node or Chromium. It starts the T3 server as a child process, authenticates without pairing, and opens the RPC WebSocket.
 
-Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. Once connected, it draws a static skeleton of the main screen with [gpui-component](https://github.com/longbridge/gpui-component): a thread list laid out like the web sidebar (pinned and active threads, then collapsible Working, Snoozed and Settled shelves) and an empty composer. Only the shelf headers are interactive.
+Status: connection shell. The window shows the connection state ("Starting server...", "Connecting...", "Connected to <environment> · N projects · M threads", or the error). The counts come from a live `orchestration.subscribeShell` subscription. Once connected, it draws a static skeleton of the main screen with [gpui-component](https://github.com/longbridge/gpui-component): a thread list laid out like the web sidebar (pinned and active threads, then collapsible Working, Snoozed and Settled shelves) and an empty composer. Clicking a thread opens its read-only transcript (user and assistant messages, tool work as muted lines) from a live `orchestration.subscribeThread` subscription; the composer is still static.
 
 ## Run
 
@@ -52,7 +52,8 @@ vp run --filter @t3tools/desktop-gpui test   # cargo test
 2. Polls `GET /.well-known/t3/environment` until the server is ready.
 3. Exchanges the HMAC bootstrap token for a bearer session, mints a WebSocket ticket, and opens `/ws`.
 4. Subscribes to `orchestration.subscribeShell`, acks each stream chunk, and reduces snapshot and delta items into project and thread counts (`src/rpc.rs`, `src/shell.rs`).
-5. Sends an RPC `Ping` every 5 seconds and reconnects with backoff after 15 seconds of silence or when the stream ends.
+5. Subscribes to `orchestration.subscribeThread` for the selected thread and reduces its snapshot and `turn-item.updated` events into transcript rows (`src/thread.rs`). Switching threads interrupts the previous stream; a reconnect resubscribes from a fresh snapshot.
+6. Sends an RPC `Ping` every 5 seconds and reconnects with backoff after 15 seconds of silence or when the stream ends.
 
 On quit the app sends SIGTERM to the server it spawned and SIGKILL after 5 seconds. If the app is killed, the server notices its parent changed within about 2 seconds and shuts itself down.
 
@@ -68,7 +69,7 @@ T3_UPDATE_GENERATED=1 cargo test --test wire_types
 
 Without the variable the same test fails when the committed file is stale. Drift in the schema itself is caught by `generate --check` in CI and `vp run check:changed`.
 
-Known gaps: typify cannot flatten the `projectIcon` union (an `anyOf` with a `{kind: string}` catch-all), so `ProjectsEntry.projectIcon` is kept opaque (`serde_json::Value`) through the `OPAQUE` list. Unions without a discriminator generate as `#[serde(untagged)]` enums.
+Known gaps: the success type of `orchestration.subscribeThread` is empty in the schema, so `src/thread.rs` reads its items from JSON. typify cannot flatten the `projectIcon` union (an `anyOf` with a `{kind: string}` catch-all), so `ProjectsEntry.projectIcon` is kept opaque (`serde_json::Value`) through the `OPAQUE` list. Unions without a discriminator generate as `#[serde(untagged)]` enums.
 
 `server.getConfig` is not generated: typify cannot represent its schema. `src/providers.rs` decodes the small subset the composer's model trigger reads (provider snapshots and the provider and default-model settings) straight from the JSON, dropping entries it cannot read.
 

@@ -9,7 +9,11 @@ use std::path::PathBuf;
 
 /// RPC methods whose payload, success and error types are generated. Add a method here when the
 /// client starts calling it.
-const METHODS: &[&str] = &["orchestration.subscribeShell", "projects.mutate"];
+const METHODS: &[&str] = &[
+    "orchestration.subscribeShell",
+    "orchestration.subscribeThread",
+    "projects.mutate",
+];
 
 /// Properties typify cannot represent, kept as `serde_json::Value`: (definition, property).
 /// Gaps are listed in the README.

@@ -26,6 +26,16 @@ impl Method for SubscribeShell {
     type Success = wire::ShellItem;
 }
 
+/// `orchestration.subscribeThread`, a stream of one thread's snapshot and events. The success
+/// type is opaque in the schema; `thread::ThreadState` reads the items.
+pub struct SubscribeThread;
+
+impl Method for SubscribeThread {
+    const TAG: &'static str = "orchestration.subscribeThread";
+    type Payload = wire::SubscribeThreadPayload;
+    type Success = Value;
+}
+
 /// `projects.mutate`, which carries `project.update` among its mutations.
 pub struct ProjectsMutate;
 
@@ -157,6 +167,12 @@ impl Session {
         Ok((id, frame.to_string()))
     }
 
+    /// The frame that stops a stream, as `Fiber.interrupt` does on the web client.
+    pub fn interrupt(&mut self, id: &str) -> String {
+        self.open.remove(id);
+        json!({ "_tag": "Interrupt", "requestId": id }).to_string()
+    }
+
     pub fn react(&mut self, text: &str) -> Reaction {
         let mut reaction = Reaction::default();
         let Ok(frame) = serde_json::from_str::<ServerFrame>(text) else {
@@ -238,6 +254,14 @@ mod tests {
         );
         let (second, _) = session.request::<SubscribeShell>(&payload).expect("frame");
         assert_eq!(second, "1");
+    }
+
+    #[test]
+    fn interrupt_frame_names_the_request() {
+        assert_eq!(
+            Session::new().interrupt("4"),
+            r#"{"_tag":"Interrupt","requestId":"4"}"#
+        );
     }
 
     #[test]

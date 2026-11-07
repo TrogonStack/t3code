@@ -1,6 +1,7 @@
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::strip::Branch;
+use crate::thread::Entry;
 use crate::wire::generated::{ThreadsEntryLastErrorClass, ThreadsEntryStatus};
 use std::fmt;
 
@@ -23,6 +24,11 @@ pub enum Status {
     Environment(EnvironmentProjects),
     /// The primary connection's provider instances, for the composer's model picker.
     Providers(Catalog),
+    /// The selected thread's transcript, or why it could not be loaded.
+    Thread {
+        id: String,
+        transcript: Result<Vec<Entry>, String>,
+    },
     /// The branch checked out in a workspace root; `None` when it is not a repository.
     Branch {
         root: String,
@@ -156,6 +162,7 @@ impl fmt::Display for Status {
             Self::Failed(message) => f.write_str(message),
             Self::Environment(other) => write!(f, "Environment {}", other.label),
             Self::Providers(_) => f.write_str("Providers"),
+            Self::Thread { id, .. } => write!(f, "Thread {id}"),
             Self::Branch { root, .. } => write!(f, "Branch of {root}"),
         }
     }

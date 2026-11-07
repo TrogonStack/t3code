@@ -13,6 +13,7 @@ mod server;
 mod shell;
 mod status;
 mod strip;
+mod thread;
 mod ui;
 mod wire;
 

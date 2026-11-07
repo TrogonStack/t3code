@@ -6,7 +6,8 @@ pub mod generated;
 
 pub use generated::{
     OrchestrationSubscribeShellPayload as SubscribeShellPayload,
-    OrchestrationSubscribeShellSuccess as ShellItem, ProjectsEntry as Project,
+    OrchestrationSubscribeShellSuccess as ShellItem,
+    OrchestrationSubscribeThreadPayload as SubscribeThreadPayload, ProjectsEntry as Project,
     ProjectsMutatePayload as ProjectMutation,
     ProjectsMutatePayloadVariant1Type as ProjectMutationType, ProjectsMutateSuccess,
     ThreadsEntry as Thread,
