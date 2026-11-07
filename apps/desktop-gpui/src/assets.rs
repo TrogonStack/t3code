@@ -45,7 +45,10 @@ gpui_kit_assets::icon_assets!(
         PanelBottom,
         ChevronDown,
         SquareArrowOutUpRight,
-        FileDiff
+        FileDiff,
+        CloudUpload,
+        GitBranchPlus,
+        GitCommitHorizontal
     ]
 );
 
@@ -149,6 +152,46 @@ pub fn provider_icon(driver: &str, dark: bool) -> Option<&'static str> {
     .map(|(path, _)| *path)
 }
 
+/// The editor brand marks the web's `OpenInPicker` draws that the provider icons do not already cover.
+const EDITOR_ICONS: &[(&str, &[u8])] = &[
+    (
+        "editors/finder.svg",
+        include_bytes!("editor-icons/finder.svg") as &[u8],
+    ),
+    (
+        "editors/idea.svg",
+        include_bytes!("editor-icons/idea.svg") as &[u8],
+    ),
+    (
+        "editors/vscode.svg",
+        include_bytes!("editor-icons/vscode.svg") as &[u8],
+    ),
+    (
+        "editors/zed-dark.svg",
+        include_bytes!("editor-icons/zed-dark.svg") as &[u8],
+    ),
+    (
+        "editors/zed-light.svg",
+        include_bytes!("editor-icons/zed-light.svg") as &[u8],
+    ),
+];
+
+/// The brand icon for an editor id, or `None` where the web falls back to a generic glyph.
+pub fn editor_icon(editor: &str, dark: bool) -> Option<&'static str> {
+    let scheme = if dark { "dark" } else { "light" };
+    match editor {
+        "cursor" | "kiro" | "antigravity" => provider_icon(editor, dark),
+        "vscode" => Some("editors/vscode.svg"),
+        "idea" => Some("editors/idea.svg"),
+        "file-manager" => Some("editors/finder.svg"),
+        "zed" => EDITOR_ICONS
+            .iter()
+            .map(|(path, _)| *path)
+            .find(|path| *path == format!("editors/zed-{scheme}.svg")),
+        _ => None,
+    }
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -163,6 +206,9 @@ impl AssetSource for AppAssets {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev-button.svg"))));
         }
         if let Some((_, bytes)) = PROVIDER_ICONS.iter().find(|(known, _)| *known == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
+        if let Some((_, bytes)) = EDITOR_ICONS.iter().find(|(known, _)| *known == path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         match ExtraIcons.load(path)? {
@@ -230,6 +276,9 @@ mod tests {
             IconName::Layers,
             IconName::ArrowRightLeft,
             IconName::Computer,
+            IconName::CloudUpload,
+            IconName::GitBranchPlus,
+            IconName::GitCommitHorizontal,
         ] {
             let loaded = AppAssets.load(&icon.path()).ok().flatten();
             assert!(loaded.is_some(), "{} is not embedded", icon.path());
@@ -241,6 +290,20 @@ mod tests {
                 .flatten()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn editor_icons_resolve_and_load() {
+        assert_eq!(editor_icon("zed", true), Some("editors/zed-dark.svg"));
+        assert_eq!(editor_icon("zed", false), Some("editors/zed-light.svg"));
+        assert_eq!(editor_icon("cursor", true), Some("providers/cursor-dark.svg"));
+        assert_eq!(editor_icon("trae", true), None);
+        for id in ["cursor", "kiro", "vscode", "zed", "antigravity", "idea", "file-manager"] {
+            for dark in [true, false] {
+                let path = editor_icon(id, dark).expect(id);
+                assert!(AppAssets.load(path).ok().flatten().is_some(), "{path}");
+            }
+        }
     }
 
     #[test]
