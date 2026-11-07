@@ -10,10 +10,11 @@ use crate::strip::{
 };
 use crate::thread::{Entry, Kind};
 use gpui::{
-    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Entity, Focusable as _,
-    FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment, ListState, ObjectFit,
-    ParentElement, Pixels, Render, RenderOnce, Styled, UniformListScrollHandle, Window, actions,
-    canvas, div, ease_in_out, img, list, prelude::*, px, rgb, uniform_list,
+    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
+    Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment, ListState,
+    MouseButton, MouseDownEvent, ObjectFit, ParentElement, Pixels, Render, RenderOnce, Styled,
+    UniformListScrollHandle, Window, actions, canvas, div, ease_in_out, img, list, prelude::*, px,
+    rgb, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -33,7 +34,14 @@ use std::{
     time::Duration,
 };
 
-const SIDEBAR_WIDTH: f32 = 300.;
+/// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
+const SIDEBAR_DEFAULT_WIDTH: f32 = 256.;
+/// The web's `THREAD_SIDEBAR_MIN_WIDTH`, `13 * 16`.
+const SIDEBAR_MIN_WIDTH: f32 = 208.;
+/// The web's `THREAD_MAIN_CONTENT_MIN_WIDTH`, `40 * 16`.
+const MAIN_CONTENT_MIN_WIDTH: f32 = 640.;
+/// The rail's hit area, the web's `w-4`, centered on the sidebar's right edge.
+const SIDEBAR_RAIL_WIDTH: f32 = 16.;
 /// The web's `--workspace-topbar-height` on macOS desktop.
 const TOPBAR_HEIGHT: f32 = 52.;
 /// Clears the traffic lights, like `--workspace-controls-left` from `titlebar-area-x`.
@@ -64,6 +72,21 @@ const SHEET_MS: u64 = 200;
 const SHEET_SLIDE: f32 = 32.;
 /// Key context while the overlay is open, so Escape only dismisses it then.
 pub const OVERLAY_CONTEXT: &str = "SidebarOverlay";
+
+#[derive(Clone)]
+struct SidebarResize;
+
+impl Render for SidebarResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// The web's `resolveInitialThreadSidebarWidth` bounds: the window leaves the content its minimum.
+fn clamp_sidebar_width(width: f32, window_width: f32) -> f32 {
+    let max = SIDEBAR_MIN_WIDTH.max(window_width - MAIN_CONTENT_MIN_WIDTH);
+    width.clamp(SIDEBAR_MIN_WIDTH, max)
+}
 
 fn is_narrow(width: f32) -> bool {
     width <= SIDEBAR_BREAKPOINT
@@ -120,8 +143,10 @@ pub struct MainView {
     shelves: [bool; 3],
     sidebar_open: bool,
     sidebar_overlay_open: bool,
-    /// The sidebar's width at the last render, for the cards' branch truncation.
-    sidebar_width: Cell<f32>,
+    /// The docked sidebar's width as dragged, before fitting the window.
+    sidebar_width: f32,
+    /// The docked width at the last render, for the cards' branch truncation.
+    rendered_sidebar_width: Cell<f32>,
     /// Hover styles cannot change layout, so the send button's hover growth is view state.
     send_hovered: bool,
     permissions_open: bool,
@@ -190,7 +215,8 @@ impl MainView {
             shelves: [false; 3],
             sidebar_open: true,
             sidebar_overlay_open: false,
-            sidebar_width: Cell::new(SIDEBAR_WIDTH),
+            sidebar_width: SIDEBAR_DEFAULT_WIDTH,
+            rendered_sidebar_width: Cell::new(SIDEBAR_DEFAULT_WIDTH),
             send_hovered: false,
             permissions_open: false,
             selected_thread: None,
@@ -353,7 +379,12 @@ impl MainView {
     }
 
     /// One draggable row: the sidebar's `SidebarChrome` on the left, the thread breadcrumb right.
-    fn top_bar(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    fn top_bar(
+        &self,
+        narrow: bool,
+        sidebar_width: f32,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let border = cx.theme().border;
         let active = self
             .shell()
@@ -369,7 +400,7 @@ impl MainView {
             .pl_0()
             .border_b_0()
             .bg(gpui::transparent_black())
-            .child(self.sidebar_chrome(open, SIDEBAR_WIDTH, cx))
+            .child(self.sidebar_chrome(open, sidebar_width, cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -577,8 +608,51 @@ impl MainView {
             })
     }
 
+    /// The web's `SidebarRail`: drag to resize, double-click to reset.
+    fn sidebar_rail(&self, width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let line = cx.theme().sidebar_border;
+        h_flex()
+            .id("sidebar-rail")
+            .group("sidebar-rail")
+            .absolute()
+            .top(px(TOPBAR_HEIGHT))
+            .bottom_0()
+            .left(px(width - SIDEBAR_RAIL_WIDTH / 2.))
+            .w(px(SIDEBAR_RAIL_WIDTH))
+            .justify_center()
+            .occlude()
+            .cursor_col_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    if event.click_count == 2 {
+                        this.sidebar_width = SIDEBAR_DEFAULT_WIDTH;
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_drag(SidebarResize, |drag, _, _, cx| {
+                cx.stop_propagation();
+                cx.new(|_| drag.clone())
+            })
+            .on_drag_move(
+                cx.listener(|this, event: &DragMoveEvent<SidebarResize>, window, cx| {
+                    let viewport = f32::from(window.viewport_size().width);
+                    this.sidebar_width =
+                        clamp_sidebar_width(f32::from(event.event.position.x), viewport);
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .w(px(2.))
+                    .group_hover("sidebar-rail", move |style| style.bg(line)),
+            )
+    }
+
     fn sidebar(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.sidebar_width.set(width);
+        self.rendered_sidebar_width.set(width);
         let (top, shelves) = self.shell().map_or_else(Default::default, |shell| {
             (
                 top_rows(&shell.rows).len(),
@@ -641,7 +715,7 @@ impl MainView {
             project,
             provider,
             selected,
-            self.sidebar_width.get(),
+            self.rendered_sidebar_width.get(),
             cx,
         )
         .on_click(cx.listener(move |this, _, _, cx| this.open_thread(Some(id.clone()), cx)))
@@ -2430,6 +2504,7 @@ impl Render for MainView {
         let width = f32::from(window.viewport_size().width);
         let narrow = is_narrow(width);
         let docked = self.sidebar_open && !narrow;
+        let sidebar_width = clamp_sidebar_width(self.sidebar_width, width);
         let overlay = narrow && self.sidebar_overlay_open;
         v_flex()
             .relative()
@@ -2447,18 +2522,21 @@ impl Render for MainView {
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
             .on_action(cx.listener(|this, _: &GoForward, _, cx| this.go_forward(cx)))
             .when(docked, |root| {
-                root.child(self.sidebar_surface(SIDEBAR_WIDTH, cx))
+                root.child(self.sidebar_surface(sidebar_width, cx))
             })
-            .child(self.top_bar(narrow, cx))
+            .child(self.top_bar(narrow, sidebar_width, cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
                     .when(docked, |row| {
-                        row.child(self.sidebar(SIDEBAR_WIDTH, window, cx))
+                        row.child(self.sidebar(sidebar_width, window, cx))
                     })
                     .child(self.main_area(cx)),
             )
+            .when(docked, |root| {
+                root.child(self.sidebar_rail(sidebar_width, cx))
+            })
             .when(overlay, |root| {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
@@ -2475,6 +2553,14 @@ mod tests {
         assert!(!is_narrow(768.));
         assert_eq!(overlay_width(583.), 448.);
         assert_eq!(overlay_width(400.), 352.);
+    }
+
+    #[test]
+    fn the_sidebar_width_stays_between_the_minimum_and_what_the_content_leaves() {
+        assert_eq!(clamp_sidebar_width(100., 1200.), 208.);
+        assert_eq!(clamp_sidebar_width(300., 1200.), 300.);
+        assert_eq!(clamp_sidebar_width(900., 1200.), 560.);
+        assert_eq!(clamp_sidebar_width(300., 800.), 208.);
     }
 
     #[test]
