@@ -371,6 +371,21 @@ impl MainView {
         self.apply_route(route, cx);
     }
 
+    /// The web's brand link to `/`, which opens a new draft in the most recently updated project.
+    fn go_home(&mut self, cx: &mut Context<Self>) {
+        let project = self
+            .shell()
+            .and_then(|shell| active_project(None, shell))
+            .map(|entry| entry.id.clone())
+            .or_else(|| self.selected_project.clone());
+        let route = Route {
+            project,
+            thread: None,
+        };
+        self.history.visit(route.clone());
+        self.apply_route(route, cx);
+    }
+
     /// Asks for the branch of the active project's root once per connection.
     fn request_branch(&mut self) {
         let Some(entry) = self
@@ -493,10 +508,16 @@ impl MainView {
                 .when(open, |bar| {
                     bar.child(
                         h_flex()
+                            .id("sidebar-brand")
                             .ml_1()
+                            .h(px(28.))
+                            .px_1()
                             .gap_1()
+                            .rounded_md()
                             .text_sm()
                             .text_color(brand)
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.go_home(cx)))
                             .child(div().font_weight(FontWeight::BOLD).child("T3"))
                             .child(
                                 div()
