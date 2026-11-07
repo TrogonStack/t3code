@@ -2,7 +2,7 @@ use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider
 use crate::connection::{Action, ActionSender};
 use crate::history::History;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
-use crate::providers::{Catalog, Trigger};
+use crate::providers::{Catalog, Mark, Trigger};
 use crate::status::{PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus};
 use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
@@ -1644,7 +1644,7 @@ fn model_trigger(trigger: &Trigger, cx: &App) -> gpui::Stateful<gpui::Div> {
         .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
         .tooltip(tooltip(trigger.title.clone()))
         .on_click(|_, _, _| {})
-        .child(provider_mark(trigger, cx))
+        .child(provider_mark(&trigger.mark, 1., cx))
         .child(
             div()
                 .max_w(px(224.))
@@ -1667,10 +1667,10 @@ fn model_trigger(trigger: &Trigger, cx: &App) -> gpui::Stateful<gpui::Div> {
 }
 
 /// The web's `ProviderInstanceIcon` at `size-4`: the driver's art, or its initials, with the
-/// instance chip at the bottom-right.
-fn provider_mark(trigger: &Trigger, cx: &App) -> gpui::Div {
+/// instance chip at the bottom-right. `icon_opacity` dims the art only, like `iconClassName`.
+fn provider_mark(mark: &Mark, icon_opacity: f32, cx: &App) -> gpui::Div {
     let theme = cx.theme();
-    let art = match provider_icon(&trigger.driver, theme.is_dark()) {
+    let art = match provider_icon(&mark.driver, theme.is_dark()) {
         Some(path) => img(path).size_full().into_any_element(),
         None => div()
             .size_full()
@@ -1679,15 +1679,15 @@ fn provider_mark(trigger: &Trigger, cx: &App) -> gpui::Div {
             .justify_center()
             .text_size(px(10.))
             .font_weight(FontWeight::SEMIBOLD)
-            .child(crate::providers::initials(&trigger.display_name))
+            .child(crate::providers::initials(&mark.display_name))
             .into_any_element(),
     };
     div()
         .relative()
         .flex_shrink_0()
         .size_4()
-        .child(art)
-        .children(trigger.badge.as_ref().map(|badge| {
+        .child(div().size_full().opacity(icon_opacity).child(art))
+        .children(mark.badge.as_ref().map(|badge| {
             let (bg, fg) = match badge.accent {
                 Some((bg, fg)) => (rgb(bg).into(), rgb(fg).into()),
                 None => (theme.background, theme.muted_foreground),
@@ -2350,7 +2350,7 @@ fn project_name<'a>(row: &'a ThreadRow, entry: Option<&'a ProjectEntry>) -> &'a 
 fn thread_row(
     row: &ThreadRow,
     project: Option<&ProjectEntry>,
-    provider: Option<(&str, String)>,
+    provider: Option<Mark>,
     selected: bool,
     sidebar_width: f32,
     cx: &App,
@@ -2386,21 +2386,7 @@ fn thread_row(
                 .child(Icon::new(Icons::Check).size(px(14.)))
                 .child("Settle"),
         );
-    let provider = provider.map(|(driver, display_name)| {
-        let art = match provider_icon(driver, dark) {
-            Some(path) => img(path).size_full().into_any_element(),
-            None => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(10.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(crate::providers::initials(&display_name))
-                .into_any_element(),
-        };
-        div().flex_shrink_0().size_4().opacity(0.6).child(art)
-    });
+    let provider = provider.map(|mark| provider_mark(&mark, 0.6, cx));
     div()
         .id(row.id.clone())
         .group(group)

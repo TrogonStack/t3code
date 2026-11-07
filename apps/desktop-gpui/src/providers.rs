@@ -258,11 +258,17 @@ pub struct Badge {
     pub accent: Option<(u32, u32)>,
 }
 
+/// What a provider instance's icon shows: the driver's art or initials, plus the instance chip.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Trigger {
+pub struct Mark {
     pub driver: String,
     pub display_name: String,
     pub badge: Option<Badge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trigger {
+    pub mark: Mark,
     pub model: String,
     pub effort: Option<String>,
     /// The model's full name, for the tooltip.
@@ -309,13 +315,13 @@ impl Catalog {
         )
     }
 
-    /// The driver and display name of a provider instance, for the sidebar's provider icon.
-    pub fn instance(&self, instance_id: &str) -> Option<(&str, String)> {
-        let provider = self
-            .providers
+    /// A provider instance's icon, for the sidebar's thread cards.
+    pub fn instance(&self, instance_id: &str) -> Option<Mark> {
+        let entries = self.entries(None);
+        let entry = entries
             .iter()
-            .find(|provider| provider.instance_id == instance_id)?;
-        Some((&provider.driver, display_name(provider)))
+            .find(|entry| entry.provider.instance_id == instance_id)?;
+        Some(mark(&entries, entry))
     }
 
     /// The trigger a fresh draft in `project` shows; `None` when no provider is selectable.
@@ -339,7 +345,6 @@ impl Catalog {
                 "opencode" | "antigravity" => None,
                 _ => provider.models.first(),
             });
-        let display_name = display_name(provider);
         let (model, title, effort) = match shown {
             Some(model) => (
                 trigger_model_name(model, &provider.driver),
@@ -356,9 +361,7 @@ impl Catalog {
             }
         };
         Some(Trigger {
-            driver: provider.driver.clone(),
-            badge: show_badge(&entries, entry).then(|| badge(provider, &display_name)),
-            display_name,
+            mark: mark(&entries, entry),
             model,
             effort,
             title,
@@ -618,6 +621,15 @@ fn show_badge(entries: &[Entry], entry: &Entry) -> bool {
         .filter(|candidate| !entry.enabled || candidate.enabled)
         .count()
         > 1
+}
+
+fn mark(entries: &[Entry], entry: &Entry) -> Mark {
+    let display_name = display_name(entry.provider);
+    Mark {
+        driver: entry.provider.driver.clone(),
+        badge: show_badge(entries, entry).then(|| badge(entry.provider, &display_name)),
+        display_name,
+    }
 }
 
 fn badge(provider: &Provider, display_name: &str) -> Badge {
@@ -1044,7 +1056,7 @@ mod tests {
             ],
             json!({}),
         );
-        assert_eq!(catalog.trigger(None).unwrap().driver, "claudeAgent");
+        assert_eq!(catalog.trigger(None).unwrap().mark.driver, "claudeAgent");
     }
 
     #[test]
@@ -1063,7 +1075,7 @@ mod tests {
             ],
             json!({}),
         );
-        assert_eq!(catalog.trigger(None).unwrap().driver, "claudeAgent");
+        assert_eq!(catalog.trigger(None).unwrap().mark.driver, "claudeAgent");
     }
 
     #[test]
@@ -1085,7 +1097,7 @@ mod tests {
             json!({"defaultModelSelection": {"instanceId": "codex", "model": "gpt b"}}),
         );
         let trigger = catalog.trigger(None).unwrap();
-        assert_eq!(trigger.driver, "codex");
+        assert_eq!(trigger.mark.driver, "codex");
         assert_eq!(trigger.title, "GPT B");
     }
 
@@ -1104,8 +1116,11 @@ mod tests {
             providers.clone(),
             json!({"projectSettingsOverrides": {"p": {"defaultModelSelection": {"instanceId": "claudeAgent", "model": "b"}}}}),
         );
-        assert_eq!(enabled.trigger(Some("p")).unwrap().driver, "claudeAgent");
-        assert_eq!(enabled.trigger(None).unwrap().driver, "codex");
+        assert_eq!(
+            enabled.trigger(Some("p")).unwrap().mark.driver,
+            "claudeAgent"
+        );
+        assert_eq!(enabled.trigger(None).unwrap().mark.driver, "codex");
         let disabled = catalog(
             providers,
             json!({"projectSettingsOverrides": {"p": {
@@ -1113,7 +1128,7 @@ mod tests {
                 "providerInstances": {"claudeAgent": {"enabled": false}}
             }}}),
         );
-        assert_eq!(disabled.trigger(Some("p")).unwrap().driver, "codex");
+        assert_eq!(disabled.trigger(Some("p")).unwrap().mark.driver, "codex");
     }
 
     #[test]
