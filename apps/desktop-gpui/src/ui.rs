@@ -13,8 +13,7 @@ use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment, ListState,
     MouseButton, MouseDownEvent, ObjectFit, ParentElement, Pixels, Render, RenderOnce, Styled,
-    UniformListScrollHandle, Window, actions, canvas, div, ease_in_out, img, list, prelude::*, px,
-    rgb, uniform_list,
+    Window, actions, canvas, div, ease_in_out, img, list, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -138,7 +137,7 @@ pub struct MainView {
     search: Entity<InputState>,
     project_search: Entity<InputState>,
     composer: Entity<TextareaState>,
-    list: UniformListScrollHandle,
+    settled_shown: usize,
     /// Working, Snoozed and Settled shelves; the web starts all of them collapsed.
     shelves: [bool; 3],
     sidebar_open: bool,
@@ -211,7 +210,7 @@ impl MainView {
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
             project_search,
             composer,
-            list: UniformListScrollHandle::new(),
+            settled_shown: SETTLED_TAIL_INITIAL_COUNT,
             shelves: [false; 3],
             sidebar_open: true,
             sidebar_overlay_open: false,
@@ -653,12 +652,26 @@ impl MainView {
 
     fn sidebar(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rendered_sidebar_width.set(width);
-        let (top, shelves) = self.shell().map_or_else(Default::default, |shell| {
-            (
-                top_rows(&shell.rows).len(),
-                shelves(&shell.rows, self.shelves),
-            )
-        });
+        let shelves = self
+            .shell()
+            .map_or_else(Vec::new, |shell| shelves(&shell.rows, self.shelves));
+        let top = self
+            .shell()
+            .map_or_else(Vec::new, |shell| top_rows(&shell.rows));
+        let mut list = v_flex()
+            .id("threads")
+            .flex_1()
+            .min_h_0()
+            .gap_px()
+            .overflow_y_scroll();
+        for index in top {
+            if let Some(shell) = self.shell() {
+                list = list.child(self.thread_item(&shell.rows[index], cx).flex_shrink_0());
+            }
+        }
+        for (position, shelf) in shelves.into_iter().enumerate() {
+            list = list.child(self.shelf(shelf, position == 0, cx));
+        }
         v_flex()
             .w(px(width))
             .flex_shrink_0()
@@ -666,33 +679,7 @@ impl MainView {
             .gap_2()
             .p_2()
             .child(self.sidebar_header(window, cx))
-            .child(
-                uniform_list(
-                    "threads",
-                    top,
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        let Some(shell) = this.shell() else {
-                            return Vec::new();
-                        };
-                        let rows = top_rows(&shell.rows);
-                        rows[range]
-                            .iter()
-                            .map(|&index| this.thread_item(&shell.rows[index], cx))
-                            .collect()
-                    }),
-                )
-                .track_scroll(&self.list)
-                .flex_1()
-                .min_h(px(ROW_HEIGHT)),
-            )
-            .child(
-                v_flex().gap_px().min_h_0().children(
-                    shelves
-                        .into_iter()
-                        .map(|shelf| self.shelf(shelf, cx))
-                        .collect::<Vec<_>>(),
-                ),
-            )
+            .child(list)
             .child(self.sidebar_footer(cx))
     }
 
@@ -721,8 +708,9 @@ impl MainView {
         .on_click(cx.listener(move |this, _, _, cx| this.open_thread(Some(id.clone()), cx)))
     }
 
-    /// One collapsible shelf: its header, then its rows while expanded.
-    fn shelf(&self, shelf: Shelf, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// One collapsible shelf: its header, then its rows while expanded. The first shelf takes
+    /// the free space above it (`mt-auto`), so shelves sit at the bottom until content overflows.
+    fn shelf(&self, shelf: Shelf, first: bool, cx: &mut Context<Self>) -> AnyElement {
         let Shelf {
             section,
             count,
@@ -730,47 +718,60 @@ impl MainView {
         } = shelf;
         let index = shelf_index(section);
         let (muted, hover) = (cx.theme().muted_foreground, cx.theme().list_hover);
-        let visible = self.shell().map_or(0, |shell| {
-            shelf_rows(
-                &shell.rows,
-                section,
-                expanded,
-                self.selected_thread.as_deref(),
-            )
-            .len()
-        });
+        let mut items: Vec<AnyElement> = vec![
+            shelf_header(section, count, expanded, muted, hover)
+                .flex_shrink_0()
+                .when(first, |header| header.mt_auto())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.shelves[index] = !this.shelves[index];
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ];
+        let mut more = 0;
+        if let Some(shell) = self.shell() {
+            let selected = self.selected_thread.as_deref();
+            let mut rows = shelf_rows(&shell.rows, section, expanded, selected);
+            if section == Section::Settled && expanded {
+                let window = settled_window(&rows, &shell.rows, self.settled_shown, selected);
+                rows = window.rows;
+                more = window.more;
+            }
+            items.extend(rows.into_iter().map(|row| {
+                self.thread_item(&shell.rows[row], cx)
+                    .flex_shrink_0()
+                    .into_any_element()
+            }));
+        }
+        if more > 0 {
+            items.push(
+                h_flex()
+                    .id("settled-show-more")
+                    .h(px(36.))
+                    .flex_shrink_0()
+                    .mx(px(2.))
+                    .px_2()
+                    .gap_2()
+                    .rounded_md()
+                    .text_xs()
+                    .text_color(muted)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(hover))
+                    .child(Icon::new(IconName::ChevronDown).size(px(12.)))
+                    .child(format!("Show {more} more"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.settled_shown += SETTLED_TAIL_PAGE_COUNT;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
         v_flex()
             .gap_px()
-            .min_h_0()
-            .child(
-                shelf_header(section, count, expanded, muted, hover).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.shelves[index] = !this.shelves[index];
-                        cx.notify();
-                    },
-                )),
-            )
-            .when(visible > 0, |shelf| {
-                shelf.child(
-                    uniform_list(
-                        ("shelf", index),
-                        visible,
-                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                            let Some(shell) = this.shell() else {
-                                return Vec::new();
-                            };
-                            let selected = this.selected_thread.as_deref();
-                            let rows = shelf_rows(&shell.rows, section, expanded, selected);
-                            rows[range]
-                                .iter()
-                                .map(|&index| this.thread_item(&shell.rows[index], cx))
-                                .collect()
-                        }),
-                    )
-                    .h(px(visible.min(SHELF_VISIBLE_ROWS) as f32 * ROW_HEIGHT))
-                    .min_h_0(),
-                )
-            })
+            .flex_shrink_0()
+            .when(first, |shelf| shelf.mt_auto())
+            .children(items)
+            .into_any_element()
     }
 
     /// The web's `SidebarChromeFooter`: utility buttons left, the update control right.
@@ -2116,8 +2117,9 @@ struct Shelf {
     expanded: bool,
 }
 
-/// Rows a shelf shows before it scrolls.
-const SHELF_VISIBLE_ROWS: usize = 6;
+/// The web's `SETTLED_TAIL_INITIAL_COUNT` and `SETTLED_TAIL_PAGE_COUNT`.
+const SETTLED_TAIL_INITIAL_COUNT: usize = 10;
+const SETTLED_TAIL_PAGE_COUNT: usize = 25;
 /// The web's shelf header and footer button size (`h-8`, `size-8`).
 const SHELF_HEADER_HEIGHT: f32 = 32.;
 
@@ -2150,6 +2152,33 @@ fn shelf_rows(
             row.section == section && (expanded || selected == Some(row.id.as_str()))
         })
         .collect()
+}
+
+struct SettledWindow {
+    rows: Vec<usize>,
+    more: usize,
+}
+
+/// The first `shown` settled rows plus the open thread when it falls outside them, and how many
+/// the next "Show more" reveals.
+fn settled_window(
+    rows: &[usize],
+    all: &[ThreadRow],
+    shown: usize,
+    selected: Option<&str>,
+) -> SettledWindow {
+    let hidden = rows.len().saturating_sub(shown);
+    let open = rows
+        .iter()
+        .skip(shown)
+        .copied()
+        .find(|&index| selected == Some(all[index].id.as_str()));
+    let mut window = rows[..rows.len().min(shown)].to_vec();
+    window.extend(open);
+    SettledWindow {
+        rows: window,
+        more: hidden.min(SETTLED_TAIL_PAGE_COUNT),
+    }
 }
 
 /// The web's shelves, bottom-anchored: Working and Snoozed only when non-empty, Settled always.
@@ -2645,6 +2674,18 @@ mod tests {
         assert!(shelf_rows(&rows, Section::Settled, false, Some("w")).is_empty());
         assert_eq!(shelf_rows(&rows, Section::Settled, false, Some("s")), [3]);
         assert!(shelves(&[], [true; 3]).is_empty());
+
+        let settled: Vec<ThreadRow> = (0..40)
+            .map(|i| in_section(&format!("s{i}"), Section::Settled))
+            .collect();
+        let all = shelf_rows(&settled, Section::Settled, true, None);
+        let first = settled_window(&all, &settled, 10, None);
+        assert_eq!((first.rows.len(), first.more), (10, 25));
+        let open = settled_window(&all, &settled, 10, Some("s30"));
+        assert_eq!((open.rows.len(), open.rows[10], open.more), (11, 30, 25));
+        let last = settled_window(&all, &settled, 35, None);
+        assert_eq!((last.rows.len(), last.more), (35, 5));
+        assert_eq!(settled_window(&all, &settled, 40, None).more, 0);
     }
 
     #[test]
