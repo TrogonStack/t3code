@@ -72,7 +72,7 @@ jobs:
       # the PR's scripts to read.
       - name: Checkout reviewed commit
         if: steps.expo-token.outputs.present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -83,7 +83,7 @@ jobs:
       # trusted workflows with other secrets would restore what PR code wrote.
       - name: Setup Vite+
         if: steps.expo-token.outputs.present == 'true'
-        uses: voidzero-dev/setup-vp@v1.21.2
+        uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
           node-version-file: package.json
           cache: false
@@ -101,7 +101,7 @@ jobs:
 
       - name: Setup EAS
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8
         with:
           # Pinned and installed with npm for the same reasons as mobile-eas-preview.yml.
           eas-version: 21.8.0
@@ -129,7 +129,7 @@ jobs:
 
       - name: Deploy with fingerprint check
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action/continuous-deploy-fingerprint@main
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@5273c2136bd09c2a341fe3340d3e767ce5a13015 # main
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
           RUNNER_DEBUG: "1"
