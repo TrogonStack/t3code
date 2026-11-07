@@ -307,10 +307,152 @@ pub fn feature_branch_unavailable_reason(branch: &str, has_changes: bool) -> Opt
     })
 }
 
+/// What the primary button reports while a stacked action runs (`GitActionsControl.tsx`'s
+/// progress state): the phase, and the last line of hook output.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub phase: Option<String>,
+    pub hook: Option<String>,
+    pub output: Option<String>,
+}
+
+/// How a stacked action ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Success {
+        title: String,
+        description: Option<String>,
+    },
+    Failed(String),
+}
+
+impl Progress {
+    pub const STARTING: &'static str = "Starting source control action...";
+
+    /// The status line: a running hook, else the phase.
+    pub fn label(&self) -> String {
+        match (&self.hook, &self.phase) {
+            (Some(hook), _) => format!("Running {hook}..."),
+            (None, Some(phase)) => phase.clone(),
+            (None, None) => Self::STARTING.to_owned(),
+        }
+    }
+
+    /// Folds one `GitActionProgressEvent`; the finishing events give the outcome.
+    pub fn apply(&mut self, event: &serde_json::Value) -> Option<Outcome> {
+        match event["kind"].as_str()? {
+            "phase_started" => {
+                self.phase = event["label"].as_str().map(str::to_owned);
+                self.hook = None;
+            }
+            "hook_started" => self.hook = event["hookName"].as_str().map(str::to_owned),
+            "hook_output" => {
+                let line = event["text"]
+                    .as_str()
+                    .and_then(|text| text.lines().rev().find(|line| !line.trim().is_empty()));
+                if let Some(line) = line {
+                    self.output = Some(line.trim().to_owned());
+                }
+            }
+            "hook_finished" => self.hook = None,
+            "action_finished" => return Some(Self::finished(&event["result"])),
+            "action_failed" => {
+                let message = event["message"].as_str();
+                return Some(Outcome::Failed(
+                    message.unwrap_or("Action failed.").to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The toast of a result, or the plain wording when the server sent none.
+    pub fn finished(result: &serde_json::Value) -> Outcome {
+        let toast = &result["toast"];
+        Outcome::Success {
+            title: toast["title"].as_str().unwrap_or("Done").to_owned(),
+            description: toast["description"].as_str().map(str::to_owned),
+        }
+    }
+}
+
+/// `formatElapsedDescription`: seconds, then minutes and seconds.
+pub fn format_elapsed(seconds: u64) -> String {
+    if seconds < 60 {
+        format!("{seconds}s")
+    } else {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    }
+}
+
+/// The toast a pull result gives (`vcs.pull`): updated, or already in sync.
+pub fn pull_outcome(result: &serde_json::Value) -> Outcome {
+    let name = result["refName"].as_str().unwrap_or("The branch");
+    if result["status"] == "pulled" {
+        let from = result["upstreamRef"].as_str().unwrap_or("upstream");
+        Outcome::Success {
+            title: "Pulled".to_owned(),
+            description: Some(format!("Updated {name} from {from}")),
+        }
+    } else {
+        Outcome::Success {
+            title: "Already up to date".to_owned(),
+            description: Some(format!("{name} is already synchronized.")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn progress_follows_the_stream() {
+        let mut progress = Progress::default();
+        assert_eq!(progress.label(), Progress::STARTING);
+        assert!(progress.apply(&json!({"kind": "phase_started", "label": "Pushing..."})).is_none());
+        assert_eq!(progress.label(), "Pushing...");
+        progress.apply(&json!({"kind": "hook_started", "hookName": "pre-push"}));
+        assert_eq!(progress.label(), "Running pre-push...");
+        progress.apply(&json!({"kind": "hook_output", "text": "lint\nok\n\n"}));
+        assert_eq!(progress.output.as_deref(), Some("ok"));
+        progress.apply(&json!({"kind": "hook_finished"}));
+        assert_eq!(progress.label(), "Pushing...");
+        let done = progress.apply(&json!({
+            "kind": "action_finished",
+            "result": {"toast": {"title": "Pushed", "description": "feature"}}
+        }));
+        assert_eq!(
+            done,
+            Some(Outcome::Success {
+                title: "Pushed".to_owned(),
+                description: Some("feature".to_owned())
+            })
+        );
+        assert_eq!(
+            progress.apply(&json!({"kind": "action_failed", "message": "no remote"})),
+            Some(Outcome::Failed("no remote".to_owned()))
+        );
+        assert!(progress.apply(&json!({"kind": "action_started"})).is_none());
+    }
+
+    #[test]
+    fn elapsed_and_pull_wording() {
+        assert_eq!(format_elapsed(9), "9s");
+        assert_eq!(format_elapsed(75), "1m 15s");
+        let pulled = pull_outcome(&json!({"status": "pulled", "refName": "main", "upstreamRef": "origin/main"}));
+        assert_eq!(
+            pulled,
+            Outcome::Success {
+                title: "Pulled".to_owned(),
+                description: Some("Updated main from origin/main".to_owned())
+            }
+        );
+        let synced = pull_outcome(&json!({"status": "skipped_up_to_date", "refName": "main"}));
+        assert!(matches!(synced, Outcome::Success { title, .. } if title == "Already up to date"));
+    }
 
     fn status(local: Value, remote: Value) -> VcsStatus {
         let mut base = json!({

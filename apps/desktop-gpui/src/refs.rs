@@ -40,6 +40,8 @@ pub struct Page {
     pub refs: Vec<Ref>,
     pub total: usize,
     pub has_more: bool,
+    /// Where the next page starts, from `nextCursor`.
+    pub next_cursor: Option<u64>,
 }
 
 impl Page {
@@ -63,6 +65,7 @@ impl Page {
             .map_or(refs.len(), |count| count as usize);
         Self {
             has_more: !value["nextCursor"].is_null(),
+            next_cursor: value["nextCursor"].as_u64(),
             refs,
             total,
         }
@@ -104,21 +107,6 @@ pub fn tag(entry: &Ref, project_cwd: &str) -> Option<Tag> {
 /// `sanitizeNewRefName`: spaces in a typed name become dashes.
 pub fn sanitize_new_ref_name(name: &str) -> String {
     name.split_whitespace().collect::<Vec<_>>().join("-")
-}
-
-/// `deriveLocalBranchNameFromRemoteRef`: `origin/feature/x` is the local `feature/x`.
-pub fn local_name_of_remote(name: &str) -> &str {
-    name.split_once('/').map_or(name, |(_, rest)| rest)
-}
-
-/// `shouldIncludeBranchPickerItem` for a ref: the query matches as typed or as a ref name.
-pub fn matches_query(name: &str, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    let name = name.to_lowercase();
-    name.contains(&query) || name.contains(&sanitize_new_ref_name(&query))
 }
 
 const DEFAULT_TAIL: usize = 10;
@@ -262,17 +250,7 @@ mod tests {
     }
 
     #[test]
-    fn queries_match_as_typed_or_sanitized() {
-        assert!(matches_query("feature/Ui-Polish", "ui-pol"));
-        assert!(matches_query("feature/ui-polish", "ui polish"));
-        assert!(matches_query("anything", "  "));
-        assert!(!matches_query("main", "dev"));
-    }
-
-    #[test]
-    fn names_derive_from_remote_refs() {
-        assert_eq!(local_name_of_remote("origin/feature/x"), "feature/x");
-        assert_eq!(local_name_of_remote("main"), "main");
+    fn new_names_are_sanitized() {
         assert_eq!(sanitize_new_ref_name("  my  new branch "), "my-new-branch");
     }
 

@@ -20,6 +20,8 @@ const MIN_CARD_HEIGHT: f32 = 160.;
 /// A `h-8` row, and a section's `pt-2 pb-2.5` with its 1px divider when separated.
 const ROW_HEIGHT: f32 = 32.;
 const SECTION_PADDING: f32 = 18.;
+/// A usage row is `h-6`.
+const USAGE_ROW_HEIGHT: f32 = 24.;
 
 /// What room there is for the card in the main area, or `None` when it does not fit beside the
 /// chat lane (the web falls back to a popover there).
@@ -60,15 +62,19 @@ pub struct Inputs {
     pub has_editors: bool,
     /// A fresh draft or a thread with no run, with nothing to commit or push.
     pub quiet_empty_draft: bool,
+    /// The rows the usage limits would take: one per window, or one for the notice; 0 for none.
+    pub usage_rows: usize,
 }
 
-/// The rows each section renders, as `ThreadDetailsPanel` flags them. Environment, scripts and
-/// git actions are not in this client yet.
+/// The rows each section renders, as `ThreadDetailsPanel` flags them. Environment and scripts
+/// are not in this client yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Show {
     pub open_in: bool,
     pub branch: bool,
+    pub git_actions: bool,
     pub changes: bool,
+    pub usage: bool,
 }
 
 impl Show {
@@ -76,20 +82,30 @@ impl Show {
         Self {
             open_in: inputs.has_cwd && inputs.has_editors && density != Density::Essential,
             branch: inputs.has_cwd && inputs.is_repo,
+            git_actions: inputs.has_cwd && inputs.is_repo,
             changes: inputs.has_cwd && inputs.is_repo && !inputs.quiet_empty_draft,
+            usage: inputs.usage_rows > 0 && density != Density::Essential,
         }
     }
 
     /// Nothing to render, so the card is left out rather than drawn empty.
     pub fn is_empty(self) -> bool {
-        !(self.open_in || self.branch || self.changes)
+        !(self.open_in || self.branch || self.git_actions || self.changes || self.usage)
     }
 
     /// The card's content height at `density`, standing in for the web's measured heights.
-    pub fn content_height(self, density: Density) -> f32 {
+    pub fn content_height(self, density: Density, usage_rows: usize) -> f32 {
         let workspace = self.open_in as u8 as f32 * ROW_HEIGHT;
-        let version = (self.branch as u8 + self.changes as u8) as f32 * ROW_HEIGHT;
-        let sections = [workspace, version].into_iter().filter(|rows| *rows > 0.);
+        let version =
+            (self.branch as u8 + self.git_actions as u8 + self.changes as u8) as f32 * ROW_HEIGHT;
+        let usage = if self.usage {
+            usage_rows as f32 * USAGE_ROW_HEIGHT
+        } else {
+            0.
+        };
+        let sections = [workspace, version, usage]
+            .into_iter()
+            .filter(|rows| *rows > 0.);
         let count = sections.clone().count() as f32;
         let divider = if density == Density::Full {
             (count - 1.).max(0.)
@@ -102,7 +118,8 @@ impl Show {
 
 /// The density for `height`, from the content each density would render.
 pub fn density_for(height: f32, inputs: Inputs) -> Density {
-    let heights = |density| Show::resolve(density, inputs).content_height(density);
+    let heights =
+        |density| Show::resolve(density, inputs).content_height(density, inputs.usage_rows);
     resolve_density(height, heights(Density::Full), heights(Density::Compact))
 }
 
@@ -399,6 +416,7 @@ mod tests {
             is_repo: true,
             has_editors: true,
             quiet_empty_draft: false,
+            usage_rows: 0,
         }
     }
 
@@ -433,10 +451,17 @@ mod tests {
         assert_eq!(resolve_density(350., 400., 300.), Density::Compact);
         assert_eq!(resolve_density(200., 400., 300.), Density::Essential);
         assert_eq!(resolve_density(10., 0., 0.), Density::Full);
-        // Three rows in two sections: 3 * 32 + 2 * 18 + a divider when full.
-        assert_eq!(density_for(133., inputs()), Density::Full);
-        assert_eq!(density_for(132., inputs()), Density::Compact);
+        // Four rows in two sections: 4 * 32 + 2 * 18 + a divider when full.
+        assert_eq!(density_for(165., inputs()), Density::Full);
+        assert_eq!(density_for(164., inputs()), Density::Compact);
         assert_eq!(density_for(100., inputs()), Density::Essential);
+        // Two usage windows add a third section of two 24px rows.
+        let limited = Inputs {
+            usage_rows: 2,
+            ..inputs()
+        };
+        assert_eq!(density_for(165. + 48. + 18. + 1., limited), Density::Full);
+        assert_eq!(density_for(165. + 48. + 18., limited), Density::Compact);
     }
 
     #[test]
@@ -451,15 +476,21 @@ mod tests {
             Show {
                 open_in: true,
                 branch: true,
-                changes: true
+                git_actions: true,
+                changes: true,
+                usage: false
             }
         );
+        assert!(show(Density::Full, |i| i.usage_rows = 1).usage);
+        assert!(!show(Density::Essential, |i| i.usage_rows = 1).usage);
         assert!(!show(Density::Essential, |_| {}).open_in);
         assert!(!show(Density::Full, |i| i.has_editors = false).open_in);
         let not_repo = show(Density::Full, |i| i.is_repo = false);
-        assert!(not_repo.open_in && !not_repo.branch && !not_repo.changes);
+        assert!(
+            not_repo.open_in && !not_repo.branch && !not_repo.git_actions && !not_repo.changes
+        );
         let quiet = show(Density::Full, |i| i.quiet_empty_draft = true);
-        assert!(quiet.branch && !quiet.changes);
+        assert!(quiet.branch && quiet.git_actions && !quiet.changes);
         assert!(show(Density::Full, |i| i.has_cwd = false).is_empty());
     }
 
