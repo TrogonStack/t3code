@@ -20,7 +20,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::{Instant, MissedTickBehavior, interval, sleep, sleep_until};
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Message, protocol::WebSocketConfig};
 
 const PING_INTERVAL: Duration = Duration::from_secs(5);
 // Pings go out every 5 s and a busy server stops answering them, so allow 15 s
@@ -235,9 +235,14 @@ async fn connect(
         )?;
         url.query_pairs_mut().append_pair("dpop", &proof);
     }
-    let (socket, _) = tokio_tungstenite::connect_async(url.as_str())
-        .await
-        .map_err(|error| error.to_string())?;
+    // Browsers cap neither frames nor messages, and shell snapshots outgrow tungstenite's 16 MiB default.
+    let config = WebSocketConfig::default()
+        .max_frame_size(None)
+        .max_message_size(None);
+    let (socket, _) =
+        tokio_tungstenite::connect_async_with_config(url.as_str(), Some(config), false)
+            .await
+            .map_err(|error| error.to_string())?;
     Ok(socket)
 }
 
