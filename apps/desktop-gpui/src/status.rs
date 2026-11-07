@@ -44,9 +44,10 @@ pub enum Status {
         cwd: String,
         status: Option<VcsStatus>,
     },
-    /// One element of the terminal drawer's attach stream, for the thread it belongs to.
+    /// One element of a terminal's attach stream, for the thread and terminal it belongs to.
     Terminal {
         thread_id: String,
+        terminal_id: String,
         event: terminal::Event,
     },
     /// The working-tree diff of a directory, or why it could not be loaded.
@@ -214,7 +215,11 @@ impl fmt::Display for Status {
             Self::Thread { id, .. } => write!(f, "Thread {id}"),
             Self::Branch { root, .. } => write!(f, "Branch of {root}"),
             Self::Vcs { cwd, .. } => write!(f, "Status of {cwd}"),
-            Self::Terminal { thread_id, .. } => write!(f, "Terminal of {thread_id}"),
+            Self::Terminal {
+                thread_id,
+                terminal_id,
+                ..
+            } => write!(f, "Terminal {terminal_id} of {thread_id}"),
             Self::Diff { cwd, .. } => write!(f, "Diff of {cwd}"),
             Self::Call { token, .. } => write!(f, "Call {token}"),
         }

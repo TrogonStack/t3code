@@ -21,6 +21,7 @@ mod status;
 mod strip;
 mod terminal;
 mod terminal_screen;
+mod terminal_state;
 mod terminal_view;
 mod thread;
 mod thread_card;
@@ -111,6 +112,11 @@ fn main() {
                 KeyBinding::new("cmd-o", ui::OpenFavoriteEditor, None),
                 KeyBinding::new("cmd-[", ui::GoBack, None),
                 KeyBinding::new("cmd-]", ui::GoForward, None),
+                // The web's `terminal.*` defaults, which apply while the terminal has focus.
+                KeyBinding::new("cmd-d", ui::SplitTerminal, Some("Terminal")),
+                KeyBinding::new("shift-cmd-d", ui::SplitTerminalVertical, Some("Terminal")),
+                KeyBinding::new("cmd-n", ui::NewTerminal, Some("Terminal")),
+                KeyBinding::new("cmd-w", ui::CloseTerminal, Some("Terminal")),
             ]);
             if let Some(supervisor) = supervisor {
                 // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.

@@ -67,19 +67,22 @@ pub enum Action {
         cwd: String,
         editor: String,
     },
-    /// The terminal the drawer shows; `None` detaches, and the shell keeps running.
-    AttachTerminal(Option<Target>),
+    /// The terminals the drawer shows; any not listed detach, and their shells keep running.
+    AttachTerminals(Vec<Target>),
     TerminalWrite {
         thread_id: String,
+        terminal_id: String,
         data: String,
     },
     TerminalResize {
         thread_id: String,
+        terminal_id: String,
         grid: Grid,
     },
-    /// Ends the thread's shell.
+    /// Ends a shell and its history.
     TerminalClose {
         thread_id: String,
+        terminal_id: String,
     },
     /// A request the details card makes; the outcome comes back as `Status::Call` with `token`.
     Call {
@@ -114,7 +117,7 @@ impl Action {
             Self::WatchVcs(_) => "watch the version control status",
             Self::LoadDiff { .. } => "load the diff",
             Self::OpenInEditor { .. } => "open in the editor",
-            Self::AttachTerminal(_) => "attach the terminal",
+            Self::AttachTerminals(_) => "attach the terminals",
             Self::TerminalWrite { .. } => "write to the terminal",
             Self::TerminalResize { .. } => "resize the terminal",
             Self::TerminalClose { .. } => "close the terminal",
@@ -254,7 +257,7 @@ pub async fn run(
     // Outlives a socket: a reconnect subscribes to the thread again.
     let mut selected: Option<String> = None;
     let mut watched: Option<String> = None;
-    let mut terminal: Option<Target> = None;
+    let mut terminal: Vec<Target> = Vec::new();
     let mut backoff = Backoff::new();
     loop {
         publish(status, Status::Connecting);
@@ -347,7 +350,7 @@ async fn serve(
     (selected, watched, wanted_terminal): (
         &mut Option<String>,
         &mut Option<String>,
-        &mut Option<Target>,
+        &mut Vec<Target>,
     ),
     status: &StatusSender,
 ) -> String {
@@ -376,7 +379,7 @@ async fn serve(
         match action {
             Action::SelectThread(id) => *selected = id,
             Action::WatchVcs(cwd) => *watched = cwd,
-            Action::AttachTerminal(target) => *wanted_terminal = target,
+            Action::AttachTerminals(targets) => *wanted_terminal = targets,
             _ => {}
         }
     }
@@ -396,7 +399,7 @@ async fn serve(
     }
     let mut terminals = Terminals::default();
     if let Err(error) = terminals
-        .select(wanted_terminal.as_ref(), &mut session, &mut sink)
+        .select(wanted_terminal, &mut session, &mut sink)
         .await
     {
         return error;
@@ -456,24 +459,43 @@ async fn serve(
                         }
                         continue;
                     }
-                    Action::AttachTerminal(target) => {
-                        *wanted_terminal = target.clone();
+                    Action::AttachTerminals(targets) => {
+                        *wanted_terminal = targets.clone();
                         if let Err(error) = terminals
-                            .select(target.as_ref(), &mut session, &mut sink)
+                            .select(targets, &mut session, &mut sink)
                             .await
                         {
                             return error;
                         }
                         continue;
                     }
-                    Action::TerminalWrite { thread_id, data } => session
-                        .request::<TerminalWrite>(&terminal::write_payload(thread_id, data))
+                    Action::TerminalWrite {
+                        thread_id,
+                        terminal_id,
+                        data,
+                    } => session
+                        .request::<TerminalWrite>(&terminal::write_payload(
+                            thread_id,
+                            terminal_id,
+                            data,
+                        ))
                         .map(|(id, frame)| (id, frame, None)),
-                    Action::TerminalResize { thread_id, grid } => session
-                        .request::<TerminalResize>(&terminal::resize_payload(thread_id, *grid))
+                    Action::TerminalResize {
+                        thread_id,
+                        terminal_id,
+                        grid,
+                    } => session
+                        .request::<TerminalResize>(&terminal::resize_payload(
+                            thread_id,
+                            terminal_id,
+                            *grid,
+                        ))
                         .map(|(id, frame)| (id, frame, None)),
-                    Action::TerminalClose { thread_id } => session
-                        .request::<TerminalClose>(&terminal::close_payload(thread_id))
+                    Action::TerminalClose {
+                        thread_id,
+                        terminal_id,
+                    } => session
+                        .request::<TerminalClose>(&terminal::close_payload(thread_id, terminal_id))
                         .map(|(id, frame)| (id, frame, None)),
                     Action::LoadDiff { cwd } => {
                         match session.request::<ReviewGetDiffPreview>(&diff_query(cwd)) {
@@ -769,10 +791,10 @@ impl VcsWatch {
     }
 }
 
-/// The open terminal attachment, and the interrupted ones whose last frames still arrive.
+/// The open terminal attachments, and the interrupted ones whose last frames still arrive.
 #[derive(Default)]
 struct Terminals {
-    open: Option<OpenTerminal>,
+    open: Vec<OpenTerminal>,
     stale: HashSet<String>,
 }
 
@@ -782,38 +804,43 @@ struct OpenTerminal {
 }
 
 impl Terminals {
-    /// Switches the attachment to `wanted`, interrupting the previous one. Detaching leaves the
-    /// shell running on the server; attaching to a target again replays its history.
+    /// Attaches exactly `wanted`, interrupting the rest. Detaching leaves a shell running on the
+    /// server; attaching to a target again replays its history.
     async fn select(
         &mut self,
-        wanted: Option<&Target>,
+        wanted: &[Target],
         session: &mut Session,
         sink: &mut Sink,
     ) -> Result<(), String> {
-        if self.open.as_ref().map(|open| &open.target) == wanted {
-            return Ok(());
-        }
-        if let Some(open) = self.open.take() {
+        let (keep, dropped): (Vec<_>, Vec<_>) = std::mem::take(&mut self.open)
+            .into_iter()
+            .partition(|open| wanted.contains(&open.target));
+        self.open = keep;
+        for open in dropped {
             let frame = session.interrupt(&open.request_id);
             self.stale.insert(open.request_id);
             sink.send(Message::text(frame))
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        let Some(target) = wanted else {
-            return Ok(());
-        };
-        let (request_id, frame) = session.request::<TerminalAttach>(&target.attach_payload())?;
-        self.open = Some(OpenTerminal {
-            target: target.clone(),
-            request_id,
-        });
-        sink.send(Message::text(frame))
-            .await
-            .map_err(|error| error.to_string())
+        for target in wanted {
+            if self.open.iter().any(|open| &open.target == target) {
+                continue;
+            }
+            let (request_id, frame) =
+                session.request::<TerminalAttach>(&target.attach_payload())?;
+            self.open.push(OpenTerminal {
+                target: target.clone(),
+                request_id,
+            });
+            sink.send(Message::text(frame))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 
-    /// Consumes the events of the attach request, publishing each; hands back the rest.
+    /// Consumes the events of the attach requests, publishing each; hands back the rest.
     fn route(&mut self, event: Event, status: &StatusSender) -> Option<Event> {
         let id = match &event {
             Event::Item { request_id, .. }
@@ -827,22 +854,29 @@ impl Terminals {
             }
             return None;
         }
-        let Some(open) = self.open.as_ref().filter(|open| open.request_id == id) else {
+        let Some(index) = self.open.iter().position(|open| open.request_id == id) else {
             return Some(event);
         };
-        let thread_id = open.target.thread_id.clone();
+        let target = self.open[index].target.clone();
         let event = match event {
             Event::Item { value, .. } => terminal::decode_event(&value)?,
             Event::Failed { message, .. } => {
-                self.open = None;
+                self.open.remove(index);
                 terminal::Event::Error(message)
             }
             _ => {
-                self.open = None;
+                self.open.remove(index);
                 terminal::Event::Closed
             }
         };
-        publish(status, Status::Terminal { thread_id, event });
+        publish(
+            status,
+            Status::Terminal {
+                thread_id: target.thread_id,
+                terminal_id: target.terminal_id,
+                event,
+            },
+        );
         None
     }
 }

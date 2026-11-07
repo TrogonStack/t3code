@@ -21,7 +21,8 @@ const PADDING_Y: f32 = 8.;
 const LINE_HEIGHT_RATIO: f32 = 1.35;
 
 pub struct TerminalView {
-    thread_id: Option<String>,
+    thread_id: String,
+    terminal_id: String,
     screen: Screen,
     /// Whether the server's snapshot has landed; input and resizes wait for it.
     ready: bool,
@@ -38,9 +39,15 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub fn new(actions: ActionSender, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        thread_id: String,
+        terminal_id: String,
+        actions: ActionSender,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
-            thread_id: None,
+            thread_id,
+            terminal_id,
             screen: Screen::new(FALLBACK_GRID),
             ready: false,
             ended: false,
@@ -56,24 +63,8 @@ impl TerminalView {
         self.focus.focus(window, cx);
     }
 
-    /// Points the surface at a thread's terminal; the server replays the session's history.
-    pub fn show(&mut self, thread_id: Option<String>) {
-        if self.thread_id == thread_id {
-            return;
-        }
-        self.thread_id = thread_id;
-        self.screen = Screen::new(FALLBACK_GRID);
-        self.ready = false;
-        self.ended = false;
-        self.requested = None;
-        self.scroll_remainder = 0.;
-    }
-
-    /// Applies one element of the attach stream; an element for another thread is stale.
-    pub fn apply(&mut self, thread_id: &str, event: Event, cx: &mut Context<Self>) {
-        if self.thread_id.as_deref() != Some(thread_id) {
-            return;
-        }
+    /// Applies one element of the terminal's attach stream.
+    pub fn apply(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
             Event::Snapshot {
                 history,
@@ -110,7 +101,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Prints why the shell is gone, and releases the server's session as the web does on exit.
+    /// Prints why the shell is gone; the drawer drops the terminal, as the web does on exit.
     fn end(&mut self, message: &str) {
         if self.ended {
             return;
@@ -118,9 +109,6 @@ impl TerminalView {
         self.ended = true;
         self.screen
             .feed(&format!("\r\n\x1b[2m[{message}]\x1b[0m\r\n"));
-        if let Some(thread_id) = self.thread_id.clone() {
-            self.send(Action::TerminalClose { thread_id });
-        }
     }
 
     fn send(&self, action: Action) {
@@ -130,11 +118,15 @@ impl TerminalView {
     }
 
     fn write(&mut self, data: String) {
-        let Some(thread_id) = self.thread_id.clone().filter(|_| self.ready && !self.ended) else {
+        if !self.ready || self.ended {
             return;
-        };
+        }
         self.screen.snap_to_bottom();
-        self.send(Action::TerminalWrite { thread_id, data });
+        self.send(Action::TerminalWrite {
+            thread_id: self.thread_id.clone(),
+            terminal_id: self.terminal_id.clone(),
+            data,
+        });
     }
 
     /// What the shell's terminal queries asked to be written back.
@@ -192,9 +184,11 @@ impl TerminalView {
         }
         self.requested = Some(grid);
         self.screen.resize(grid);
-        if let Some(thread_id) = self.thread_id.clone() {
-            self.send(Action::TerminalResize { thread_id, grid });
-        }
+        self.send(Action::TerminalResize {
+            thread_id: self.thread_id.clone(),
+            terminal_id: self.terminal_id.clone(),
+            grid,
+        });
     }
 }
 

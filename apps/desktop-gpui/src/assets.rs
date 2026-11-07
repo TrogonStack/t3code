@@ -50,7 +50,14 @@ gpui_kit_assets::icon_assets!(
         GitBranchPlus,
         GitCommitHorizontal,
         CloudDownload,
-        Info
+        Info,
+        SquareSplitHorizontal,
+        SquareSplitVertical,
+        Plus,
+        Trash,
+        Square,
+        SquareTerminal,
+        X
     ]
 );
 
@@ -240,6 +247,13 @@ mod tests {
             IconName::Paperclip,
             IconName::SquareMenu,
             IconName::PanelBottom,
+            IconName::SquareSplitHorizontal,
+            IconName::SquareSplitVertical,
+            IconName::Plus,
+            IconName::Trash,
+            IconName::Square,
+            IconName::SquareTerminal,
+            IconName::X,
             IconName::ChevronDown,
             IconName::SquareArrowOutUpRight,
             IconName::FileDiff,

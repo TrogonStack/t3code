@@ -13,7 +13,8 @@ use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
     WORKSPACE_SHORTCUT,
 };
-use crate::terminal::{self, Target};
+use crate::terminal::{self, Event as TerminalEvent, Target};
+use crate::terminal_state::{self, Placement, Terminals};
 use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
@@ -21,8 +22,8 @@ use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
     ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement,
-    Pixels, Render, RenderOnce, Styled, Window, actions, canvas, div, ease_in_out, img, list,
-    prelude::*, px, rgb,
+    Pixels, Render, RenderOnce, SharedString, Styled, Window, actions, canvas, div, ease_in_out,
+    img, list, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -42,6 +43,8 @@ use std::{
     time::Duration,
 };
 
+/// The terminal sidebar's `w-36`.
+const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod right_panel;
@@ -73,6 +76,10 @@ actions!(
         GoForward,
         ToggleDetails,
         ToggleTerminal,
+        SplitTerminal,
+        SplitTerminalVertical,
+        NewTerminal,
+        CloseTerminal,
         ToggleRightPanel,
         OpenFavoriteEditor
     ]
@@ -224,9 +231,12 @@ pub struct MainView {
     terminal_open: HashSet<String>,
     /// The drawer's height per thread, as dragged.
     terminal_heights: HashMap<String, f32>,
-    terminal: Entity<TerminalView>,
-    /// The terminal the connection was last asked to attach.
-    terminal_attached: Option<Target>,
+    /// The terminals of each thread with a drawer, in groups.
+    terminals: HashMap<String, Terminals>,
+    /// One surface per attached terminal, by thread and terminal id.
+    terminal_views: HashMap<(String, String), Entity<TerminalView>>,
+    /// The terminals the connection was last asked to attach.
+    terminal_attached: Vec<Target>,
     card: Entity<DetailsCard>,
     /// The main area's width at the last render, for fitting the details card.
     main_width: Cell<f32>,
@@ -267,7 +277,6 @@ impl MainView {
             selected: RuntimeMode::FullAccess,
             preview: None,
         });
-        let terminal_actions = actions.clone();
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
             .detach();
@@ -314,8 +323,9 @@ impl MainView {
             diff_list: cx.new(|_| right_panel::DiffList::new()),
             terminal_open: HashSet::new(),
             terminal_heights: HashMap::new(),
-            terminal: cx.new(|cx| TerminalView::new(terminal_actions, cx)),
-            terminal_attached: None,
+            terminals: HashMap::new(),
+            terminal_views: HashMap::new(),
+            terminal_attached: Vec::new(),
             card,
             main_width: Cell::new(0.),
             actions,
@@ -346,9 +356,26 @@ impl MainView {
             self.vcs.insert(cwd, status);
             return cx.notify();
         }
-        if let Status::Terminal { thread_id, event } = status {
-            self.terminal
-                .update(cx, |view, cx| view.apply(&thread_id, event, cx));
+        if let Status::Terminal {
+            thread_id,
+            terminal_id,
+            event,
+        } = status
+        {
+            // The web closes a terminal whose session exited, without asking.
+            let exited = matches!(
+                event,
+                TerminalEvent::Exited | TerminalEvent::Snapshot { exited: true, .. }
+            );
+            if let Some(view) = self
+                .terminal_views
+                .get(&(thread_id.clone(), terminal_id.clone()))
+            {
+                view.update(cx, |view, cx| view.apply(event, cx));
+            }
+            if exited {
+                self.close_terminal(&thread_id, &terminal_id, cx);
+            }
             return;
         }
         if let Status::Diff { cwd, diff } = status {
@@ -579,6 +606,7 @@ impl MainView {
             thread_id: key,
             project_root,
             worktree_path,
+            terminal_id: terminal::DEFAULT_TERMINAL_ID.into(),
         })
     }
 
@@ -588,7 +616,7 @@ impl MainView {
             && self.terminal_target().is_some()
     }
 
-    /// The web's `terminal.toggle`. Closing the drawer leaves the shell running.
+    /// The web's `terminal.toggle`. Closing the drawer leaves the shells running.
     fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.details_key() else {
             return;
@@ -597,36 +625,163 @@ impl MainView {
             return;
         }
         let opened = self.terminal_open.insert(key.clone());
-        if !opened {
+        if opened {
+            let terminals = self.terminals.entry(key).or_default();
+            if terminals.is_empty() {
+                terminals.add(terminal::DEFAULT_TERMINAL_ID, Placement::New);
+            }
+        } else {
             self.terminal_open.remove(&key);
         }
         self.sync_terminal(cx);
         if opened {
-            let handle = self.terminal.focus_handle(cx);
-            window.focus(&handle, cx);
+            self.focus_terminal(window, cx);
         }
         cx.notify();
     }
 
-    /// Attaches the open drawer's terminal to the connection, and detaches when none shows.
+    fn active_terminal(&self) -> Option<(String, &Terminals)> {
+        let key = self.details_key()?;
+        let terminals = self.terminals.get(&key)?;
+        Some((key, terminals))
+    }
+
+    fn focus_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self
+            .active_terminal()
+            .and_then(|(key, terminals)| self.terminal_views.get(&(key, terminals.active.clone())));
+        if let Some(view) = view {
+            let handle = view.focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+    }
+
+    /// The terminals the open drawer shows: the visible group.
+    fn wanted_terminals(&self) -> Vec<Target> {
+        if !self.terminal_visible() {
+            return Vec::new();
+        }
+        let Some(base) = self.terminal_target() else {
+            return Vec::new();
+        };
+        self.terminals
+            .get(&base.thread_id)
+            .and_then(Terminals::visible)
+            .map(|group| group.ids.iter().map(|id| base.for_terminal(id)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Attaches the visible group's terminals to the connection, and detaches the rest.
     fn sync_terminal(&mut self, cx: &mut Context<Self>) {
-        let wanted = self
-            .terminal_visible()
-            .then(|| self.terminal_target())
-            .flatten();
+        let wanted = self.wanted_terminals();
+        for target in &wanted {
+            let key = (target.thread_id.clone(), target.terminal_id.clone());
+            if !self.terminal_views.contains_key(&key) {
+                let actions = self.actions.clone();
+                let (thread_id, terminal_id) = key.clone();
+                let view = cx.new(|cx| TerminalView::new(thread_id, terminal_id, actions, cx));
+                self.terminal_views.insert(key, view);
+            }
+        }
+        self.terminal_views.retain(|(thread_id, terminal_id), _| {
+            wanted
+                .iter()
+                .any(|target| &target.thread_id == thread_id && &target.terminal_id == terminal_id)
+        });
         if wanted == self.terminal_attached {
             return;
         }
-        let thread_id = wanted.as_ref().map(|target| target.thread_id.clone());
-        self.terminal.update(cx, |view, _| view.show(thread_id));
         self.terminal_attached = wanted.clone();
         if self
             .actions
-            .try_send(Action::AttachTerminal(wanted))
+            .try_send(Action::AttachTerminals(wanted))
             .is_err()
         {
-            eprintln!("[ui] could not ask for the terminal");
+            eprintln!("[ui] could not ask for the terminals");
         }
+    }
+
+    /// `onNewTerminal`, `onSplitTerminal` and `onSplitTerminalVertical`; a full group refuses.
+    fn add_terminal(&mut self, placement: Placement, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.terminal_visible() {
+            return;
+        }
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        let terminals = self.terminals.entry(key).or_default();
+        let id = terminals.next_id(&terminal_state::uuid_suffix());
+        if !terminals.add(&id, placement) {
+            return;
+        }
+        self.sync_terminal(cx);
+        self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
+    fn activate_terminal(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        let Some(terminals) = self.terminals.get_mut(&key) else {
+            return;
+        };
+        if terminals.active == id {
+            return;
+        }
+        terminals.activate(id);
+        self.sync_terminal(cx);
+        self.focus_terminal(window, cx);
+        cx.notify();
+    }
+
+    /// The web asks before closing a terminal by hand (`confirmTerminalClose`).
+    fn request_close(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        let label = terminal_state::label(&id);
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            &format!("Close terminal \"{label}\"?"),
+            Some("This stops the running process and clears its history."),
+            &["Cancel", "Confirm"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(1) {
+                this.update_in(cx, |this, window, cx| {
+                    this.close_terminal(&key, &id, cx);
+                    this.focus_terminal(window, cx);
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// `closeThreadTerminal`: ends the shell, and closes the drawer with the last terminal.
+    fn close_terminal(&mut self, thread_id: &str, terminal_id: &str, cx: &mut Context<Self>) {
+        let Some(terminals) = self.terminals.get_mut(thread_id) else {
+            return;
+        };
+        if !terminals.ids().any(|id| id == terminal_id) {
+            return;
+        }
+        terminals.close(terminal_id);
+        if terminals.is_empty() {
+            self.terminals.remove(thread_id);
+            self.terminal_open.remove(thread_id);
+        }
+        let close = Action::TerminalClose {
+            thread_id: thread_id.to_owned(),
+            terminal_id: terminal_id.to_owned(),
+        };
+        if self.actions.try_send(close).is_err() {
+            eprintln!("[ui] could not close the terminal");
+        }
+        self.sync_terminal(cx);
+        cx.notify();
     }
 
     /// The drawer's height: as dragged, within what the window and chat column leave.
@@ -1340,7 +1495,7 @@ impl MainView {
                 .h(px(height))
                 .border_t_1()
                 .border_color(line)
-                .child(self.terminal.clone())
+                .child(self.terminal_body(cx))
                 .child(
                     div()
                         .id("terminal-resize")
@@ -1369,6 +1524,351 @@ impl MainView {
                 )
                 .into_any_element(),
         )
+    }
+
+    /// The drawer's panes, with the toolbar floating over them, or the sidebar beside them once
+    /// there is more than one terminal.
+    fn terminal_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some((key, terminals)) = self.active_terminal() else {
+            return div().into_any_element();
+        };
+        let theme = cx.theme();
+        let (background, border) = (theme.background, theme.border);
+        let sidebar = terminals.count() > 1;
+        let panes = self.terminal_panes(&key, terminals, cx);
+        let buttons = self.terminal_buttons(terminals, sidebar, cx);
+        let (pill, side) = if sidebar {
+            (None, Some(buttons))
+        } else {
+            (Some(buttons), None)
+        };
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .bg(background)
+            .when(sidebar, |body| body.gap(px(6.)))
+            .child(div().flex_1().min_w_0().h_full().child(panes))
+            .when_some(pill, |body, [split, split_vertical, new, close]| {
+                let line = border.opacity(0.8);
+                let separator = move || div().h(px(16.)).w(px(1.)).bg(line);
+                body.child(
+                    h_flex()
+                        .absolute()
+                        .top(px(8.))
+                        .right(px(8.))
+                        .items_center()
+                        .overflow_hidden()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(line)
+                        .bg(background)
+                        .shadow_xs()
+                        .child(split)
+                        .child(separator())
+                        .child(split_vertical)
+                        .child(separator())
+                        .child(new)
+                        .child(separator())
+                        .child(close),
+                )
+            })
+            .when_some(side, |body, [split, split_vertical, new, close]| {
+                let line = border.opacity(0.7);
+                let divided =
+                    move |button: gpui::Stateful<gpui::Div>| button.border_l_1().border_color(line);
+                body.child(
+                    v_flex()
+                        .w(px(TERMINAL_SIDEBAR_WIDTH))
+                        .min_w(px(TERMINAL_SIDEBAR_WIDTH))
+                        .h_full()
+                        .border_1()
+                        .border_color(line)
+                        .bg(cx.theme().muted.opacity(0.1))
+                        .child(
+                            h_flex()
+                                .h(px(22.))
+                                .items_stretch()
+                                .justify_end()
+                                .border_b_1()
+                                .border_color(line)
+                                .child(split)
+                                .child(divided(split_vertical))
+                                .child(divided(new))
+                                .child(divided(close)),
+                        )
+                        .child(self.terminal_list(terminals, cx)),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The web's split, split vertically, new and close buttons, with its labels and shortcuts.
+    fn terminal_buttons(
+        &self,
+        terminals: &Terminals,
+        sidebar: bool,
+        cx: &mut Context<Self>,
+    ) -> [gpui::Stateful<gpui::Div>; 4] {
+        let limit = terminals.split_limit_reached();
+        let active = terminals.active.clone();
+        let accent = cx
+            .theme()
+            .foreground
+            .opacity(if sidebar { 0.042 } else { 0.06 });
+        let split_label = |direction: &str, shortcut: &str| {
+            if limit {
+                format!(
+                    "Split Terminal {direction} (max {} per group)",
+                    terminal_state::MAX_PER_GROUP
+                )
+            } else {
+                format!("Split Terminal {direction} ({shortcut})")
+            }
+        };
+        let button = |id: &'static str, icon: Icons, label: String, disabled: bool, cx: &App| {
+            let foreground = cx.theme().foreground.opacity(0.9);
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(sidebar, |button| button.h_full().px(px(4.)))
+                .when(!sidebar, |button| button.p(px(4.)))
+                .text_color(foreground)
+                .child(Icon::new(icon).size(px(13.)))
+                .when(disabled, |button| button.opacity(0.64).cursor_not_allowed())
+                .when(!disabled, |button| {
+                    button.cursor_pointer().hover(move |style| style.bg(accent))
+                })
+                .tooltip(tooltip(label))
+        };
+        [
+            button(
+                "terminal-split",
+                Icons::SquareSplitHorizontal,
+                split_label("Horizontally", "\u{2318}D"),
+                limit,
+                cx,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.add_terminal(Placement::Split { vertical: false }, window, cx)
+            })),
+            button(
+                "terminal-split-vertical",
+                Icons::SquareSplitVertical,
+                split_label("Vertically", "\u{21e7}\u{2318}D"),
+                limit,
+                cx,
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.add_terminal(Placement::Split { vertical: true }, window, cx)
+            })),
+            button(
+                "terminal-new",
+                Icons::Plus,
+                "New Terminal (\u{2318}N)".into(),
+                false,
+                cx,
+            )
+            .on_click(
+                cx.listener(|this, _, window, cx| this.add_terminal(Placement::New, window, cx)),
+            ),
+            button(
+                "terminal-close",
+                Icons::Trash,
+                "Close Terminal (\u{2318}W)".into(),
+                false,
+                cx,
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.request_close(active.clone(), window, cx)
+            })),
+        ]
+    }
+
+    /// `TerminalSplitPanes`: the visible group's terminals side by side, or stacked.
+    fn terminal_panes(
+        &self,
+        key: &str,
+        terminals: &Terminals,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(group) = terminals.visible() else {
+            return div().into_any_element();
+        };
+        let border = cx.theme().border;
+        let vertical = group.vertical;
+        let panes = group
+            .ids
+            .iter()
+            .enumerate()
+            .filter_map(|(index, id)| {
+                let view = self.terminal_views.get(&(key.to_owned(), id.clone()))?;
+                let line = if *id == terminals.active {
+                    border
+                } else {
+                    border.opacity(0.7)
+                };
+                let activate = id.clone();
+                Some(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .when(index > 0 && vertical, |pane| pane.border_t_1())
+                        .when(index > 0 && !vertical, |pane| pane.border_l_1())
+                        .border_color(line)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.activate_terminal(&activate, window, cx)
+                            }),
+                        )
+                        .child(view.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let container = if vertical { v_flex() } else { h_flex() };
+        container
+            .size_full()
+            .overflow_hidden()
+            .children(panes)
+            .into_any_element()
+    }
+
+    /// `TerminalSidebarGroup` for each group.
+    fn terminal_list(&self, terminals: &Terminals, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (foreground, muted, muted_background) =
+            (theme.foreground, theme.muted_foreground, theme.muted);
+        let accent = |scale: f32| foreground.opacity(0.06 * scale);
+        let headers =
+            terminals.groups.len() > 1 || terminals.groups.iter().any(|group| group.ids.len() > 1);
+        let groups = terminals.groups.iter().map(|group| {
+            let active_group = group.ids.contains(&terminals.active);
+            let focus = if active_group {
+                terminals.active.clone()
+            } else {
+                group.ids.first().cloned().unwrap_or_default()
+            };
+            let split = group.ids.len() > 1;
+            let (title, icon) = match (split, group.vertical) {
+                (false, _) => ("Single", Icons::Square),
+                (true, true) => ("Stacked", Icons::SquareSplitVertical),
+                (true, false) => ("Side by side", Icons::SquareSplitHorizontal),
+            };
+            let header = div()
+                .id(SharedString::from(format!("terminal-group-{}", group.id)))
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .h(px(22.))
+                .w_full()
+                .px(px(6.))
+                .rounded(px(4.))
+                .text_size(px(11.))
+                .cursor_pointer()
+                .when(active_group, |header| {
+                    header.bg(accent(0.5)).text_color(foreground)
+                })
+                .when(!active_group, |header| {
+                    header
+                        .text_color(muted)
+                        .hover(move |style| style.bg(accent(0.4)).text_color(foreground))
+                })
+                .child(Icon::new(icon).size(px(12.)).flex_shrink_0())
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(muted.opacity(0.7))
+                        .child(group.ids.len().to_string()),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_terminal(&focus, window, cx)
+                }));
+            let rows = group.ids.iter().map(|id| {
+                let active = *id == terminals.active;
+                let label = terminal_state::label(id);
+                let close_label = if active {
+                    format!("Close {label} (\u{2318}W)")
+                } else {
+                    format!("Close {label}")
+                };
+                let hover_group = SharedString::from(format!("terminal-tab-{id}"));
+                let (close_id, select_id, close_target, select_target) =
+                    (id.clone(), id.clone(), id.clone(), id.clone());
+                h_flex()
+                    .id(SharedString::from(format!("terminal-row-{id}")))
+                    .group(hover_group.clone())
+                    .h(px(24.))
+                    .w_full()
+                    .items_center()
+                    .gap(px(2.))
+                    .rounded(px(6.))
+                    .pr(px(8.))
+                    .pl(px(6.))
+                    .text_xs()
+                    .when(active, |row| row.bg(accent(1.)).text_color(foreground))
+                    .when(!active, |row| {
+                        row.text_color(muted)
+                            .hover(move |style| style.bg(accent(0.6)).text_color(foreground))
+                    })
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("terminal-close-{close_id}")))
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .justify_center()
+                            .size(px(16.))
+                            .rounded(px(2.))
+                            .cursor_pointer()
+                            .hover(move |style| style.bg(muted_background))
+                            .tooltip(tooltip(close_label))
+                            .child(
+                                div()
+                                    .flex()
+                                    .group_hover(hover_group.clone(), |style| style.hidden())
+                                    .child(Icon::new(Icons::SquareTerminal).size(px(12.))),
+                            )
+                            .child(
+                                div()
+                                    .hidden()
+                                    .group_hover(hover_group, |style| style.flex())
+                                    .child(Icon::new(Icons::X).size(px(12.))),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_close(close_target.clone(), window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("terminal-select-{select_id}")))
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .cursor_pointer()
+                            .child(label)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.activate_terminal(&select_target, window, cx)
+                            })),
+                    )
+            });
+            v_flex()
+                .pb(px(2.))
+                .when(headers, |group| group.child(header))
+                .child(v_flex().gap(px(2.)).children(rows))
+        });
+        v_flex()
+            .id("terminal-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(4.))
+            .py(px(4.))
+            .children(groups)
     }
 
     fn main_content(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
@@ -3506,6 +4006,21 @@ impl Render for MainView {
                     this.toggle_terminal(window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &SplitTerminal, window, cx| {
+                this.add_terminal(Placement::Split { vertical: false }, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitTerminalVertical, window, cx| {
+                this.add_terminal(Placement::Split { vertical: true }, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
+                this.add_terminal(Placement::New, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseTerminal, window, cx| {
+                let active = this.active_terminal().map(|(_, t)| t.active.clone());
+                if let Some(active) = active {
+                    this.request_close(active, window, cx)
+                }
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenFavoriteEditor, _, cx| this.open_favorite_editor(cx)),
             )

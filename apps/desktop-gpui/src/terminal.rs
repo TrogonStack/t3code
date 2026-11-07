@@ -74,11 +74,20 @@ impl Grid {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
     pub thread_id: String,
+    pub terminal_id: String,
     pub project_root: String,
     pub worktree_path: Option<String>,
 }
 
 impl Target {
+    /// The same place for another terminal of the thread.
+    pub fn for_terminal(&self, terminal_id: &str) -> Self {
+        Self {
+            terminal_id: terminal_id.to_owned(),
+            ..self.clone()
+        }
+    }
+
     pub fn cwd(&self) -> &str {
         self.worktree_path.as_deref().unwrap_or(&self.project_root)
     }
@@ -92,7 +101,7 @@ impl Target {
         }
         let mut payload = json!({
             "threadId": self.thread_id,
-            "terminalId": DEFAULT_TERMINAL_ID,
+            "terminalId": self.terminal_id,
             "cwd": self.cwd(),
             "env": env,
         });
@@ -103,22 +112,22 @@ impl Target {
     }
 }
 
-pub fn write_payload(thread_id: &str, data: &str) -> Value {
-    json!({ "threadId": thread_id, "terminalId": DEFAULT_TERMINAL_ID, "data": data })
+pub fn write_payload(thread_id: &str, terminal_id: &str, data: &str) -> Value {
+    json!({ "threadId": thread_id, "terminalId": terminal_id, "data": data })
 }
 
-pub fn resize_payload(thread_id: &str, grid: Grid) -> Value {
+pub fn resize_payload(thread_id: &str, terminal_id: &str, grid: Grid) -> Value {
     json!({
         "threadId": thread_id,
-        "terminalId": DEFAULT_TERMINAL_ID,
+        "terminalId": terminal_id,
         "cols": grid.cols,
         "rows": grid.rows,
     })
 }
 
 /// Ends the session and its history, as `closeTerminalSession` does.
-pub fn close_payload(thread_id: &str) -> Value {
-    json!({ "threadId": thread_id, "terminalId": DEFAULT_TERMINAL_ID, "deleteHistory": true })
+pub fn close_payload(thread_id: &str, terminal_id: &str) -> Value {
+    json!({ "threadId": thread_id, "terminalId": terminal_id, "deleteHistory": true })
 }
 
 /// One element of the `terminal.attach` stream (`TerminalAttachStreamEvent`).
@@ -360,6 +369,7 @@ mod tests {
     fn attach_runs_in_the_worktree_else_the_project_root() {
         let mut target = Target {
             thread_id: "t1".into(),
+            terminal_id: "term-1".into(),
             project_root: "/work/app".into(),
             worktree_path: None,
         };
@@ -389,17 +399,17 @@ mod tests {
     }
 
     #[test]
-    fn unary_payloads_name_the_default_terminal() {
+    fn unary_payloads_name_their_terminal() {
         assert_eq!(
-            write_payload("t1", "ls\r"),
+            write_payload("t1", "term-1", "ls\r"),
             json!({"threadId": "t1", "terminalId": "term-1", "data": "ls\r"})
         );
         assert_eq!(
-            resize_payload("t1", Grid { cols: 90, rows: 12 }),
+            resize_payload("t1", "term-1", Grid { cols: 90, rows: 12 }),
             json!({"threadId": "t1", "terminalId": "term-1", "cols": 90, "rows": 12})
         );
         assert_eq!(
-            close_payload("t1"),
+            close_payload("t1", "term-1"),
             json!({"threadId": "t1", "terminalId": "term-1", "deleteHistory": true})
         );
     }
