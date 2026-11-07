@@ -72,6 +72,15 @@ impl Method for ShellOpenInEditor {
     type Success = Value;
 }
 
+/// `review.getDiffPreview`, a unary call. The wire types are not generated; `diff::Preview` decodes it.
+pub struct ReviewGetDiffPreview;
+
+impl Method for ReviewGetDiffPreview {
+    const TAG: &'static str = "review.getDiffPreview";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `subscribeVcsStatus`, a stream of snapshot and update events; `details::VcsStatus` reads them.
 pub struct SubscribeVcsStatus;
 

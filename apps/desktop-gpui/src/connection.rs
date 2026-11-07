@@ -2,13 +2,14 @@
 
 use crate::auth::{self, AuthError, Credential};
 use crate::details::VcsStatus;
+use crate::diff;
 use crate::electron_dpop;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, ShellOpenInEditor, SubscribeShell,
-    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
-    TerminalWrite, VcsListRefs,
+    Event, PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, Session,
+    ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach,
+    TerminalClose, TerminalResize, TerminalWrite, VcsListRefs,
 };
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
@@ -56,6 +57,10 @@ pub enum Action {
     SelectThread(Option<String>),
     /// The directory whose version control status the details card shows; `None` stops watching.
     WatchVcs(Option<String>),
+    /// The working-tree diff of `cwd`, for the right panel's Diff surface.
+    LoadDiff {
+        cwd: String,
+    },
     /// Launches `editor` (an `EditorId`) on the server's machine at `cwd`.
     OpenInEditor {
         cwd: String,
@@ -88,6 +93,7 @@ impl Action {
             Self::LoadBranch { .. } => "load the branch",
             Self::SelectThread(_) => "open the thread",
             Self::WatchVcs(_) => "watch the version control status",
+            Self::LoadDiff { .. } => "load the diff",
             Self::OpenInEditor { .. } => "open in the editor",
             Self::AttachTerminal(_) => "attach the terminal",
             Self::TerminalWrite { .. } => "write to the terminal",
@@ -350,6 +356,8 @@ async fn serve(
     let mut pending: HashMap<String, &'static str> = HashMap::new();
     // Branch lookups by request id, with the workspace root each was for.
     let mut branches: HashMap<String, String> = HashMap::new();
+    // Diff loads by request id, with the directory each was for.
+    let mut diffs: HashMap<String, String> = HashMap::new();
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -402,6 +410,18 @@ async fn serve(
                     Action::TerminalClose { thread_id } => session
                         .request::<TerminalClose>(&terminal::close_payload(thread_id))
                         .map(|(id, frame)| (id, frame, None)),
+                    Action::LoadDiff { cwd } => {
+                        match session.request::<ReviewGetDiffPreview>(&diff_query(cwd)) {
+                            Ok((id, frame)) => {
+                                diffs.insert(id, cwd.clone());
+                                if let Err(error) = sink.send(Message::text(frame)).await {
+                                    return error.to_string();
+                                }
+                            }
+                            Err(error) => eprintln!("[rpc] could not {}: {error}", action.describe()),
+                        }
+                        continue;
+                    }
                     Action::OpenInEditor { cwd, editor } => session
                         .request::<ShellOpenInEditor>(&serde_json::json!({
                             "cwd": cwd,
@@ -462,6 +482,10 @@ async fn serve(
                         if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
                             config_request = None;
                             publish_catalog(event, status);
+                            continue;
+                        }
+                        if let Some(cwd) = request_id(&event).and_then(|id| diffs.remove(id)) {
+                            publish_diff(cwd, event, status);
                             continue;
                         }
                         if let Some(root) = request_id(&event).and_then(|id| branches.remove(id)) {
@@ -783,6 +807,27 @@ fn publish_branch(root: String, event: Event, status: &StatusSender) {
         _ => return,
     };
     publish(status, Status::Branch { root, branch });
+}
+
+/// The web's `branchDiffPreviewInput` for the unstaged scope.
+fn diff_query(cwd: &str) -> serde_json::Value {
+    serde_json::json!({
+        "cwd": cwd,
+        "sourceKind": "working-tree",
+        "ignoreWhitespace": false,
+    })
+}
+
+/// Publishes a directory's diff, or the reason it could not be loaded.
+fn publish_diff(cwd: String, event: Event, status: &StatusSender) {
+    let diff = match event {
+        Event::Done { value, .. } => {
+            diff::Preview::decode(&value).ok_or_else(|| "The server sent no diff.".to_owned())
+        }
+        Event::Failed { message, .. } => Err(message),
+        _ => return,
+    };
+    publish(status, Status::Diff { cwd, diff });
 }
 
 /// Publishes the provider catalog; a failure leaves the composer without a model trigger.

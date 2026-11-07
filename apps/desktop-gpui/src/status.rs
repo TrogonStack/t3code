@@ -1,4 +1,5 @@
 use crate::details::VcsStatus;
+use crate::diff;
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::strip::Branch;
@@ -47,6 +48,11 @@ pub enum Status {
     Terminal {
         thread_id: String,
         event: terminal::Event,
+    },
+    /// The working-tree diff of a directory, or why it could not be loaded.
+    Diff {
+        cwd: String,
+        diff: Result<diff::Preview, String>,
     },
 }
 
@@ -196,6 +202,7 @@ impl fmt::Display for Status {
             Self::Branch { root, .. } => write!(f, "Branch of {root}"),
             Self::Vcs { cwd, .. } => write!(f, "Status of {cwd}"),
             Self::Terminal { thread_id, .. } => write!(f, "Terminal of {thread_id}"),
+            Self::Diff { cwd, .. } => write!(f, "Diff of {cwd}"),
         }
     }
 }

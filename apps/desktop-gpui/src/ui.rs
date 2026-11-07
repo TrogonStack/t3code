@@ -43,6 +43,8 @@ use std::{
 
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
+mod right_panel;
+
 /// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
 const SIDEBAR_DEFAULT_WIDTH: f32 = 256.;
 /// The web's `THREAD_SIDEBAR_MIN_WIDTH`, `13 * 16`.
@@ -70,6 +72,7 @@ actions!(
         GoForward,
         ToggleDetails,
         ToggleTerminal,
+        ToggleRightPanel,
         OpenFavoriteEditor
     ]
 );
@@ -207,6 +210,15 @@ pub struct MainView {
     vcs: HashMap<String, Option<VcsStatus>>,
     /// The directory the connection was last asked to watch.
     vcs_watching: Option<String>,
+    /// Threads whose right panel is open, in memory like the web's `rightPanelStore` state.
+    right_panel_open: HashSet<String>,
+    /// The docked panel's width as dragged, before fitting the window.
+    right_panel_width: f32,
+    /// The working-tree diff per directory the panel loaded.
+    diffs: HashMap<String, right_panel::Load>,
+    /// Directories whose diff was asked for on this connection.
+    diffs_requested: HashSet<String>,
+    diff_list: Entity<right_panel::DiffList>,
     /// The editor last picked or launched, in place of the web's `t3code:last-editor`.
     editor_pick: Option<String>,
     editor_menu_open: bool,
@@ -300,6 +312,11 @@ impl MainView {
             details_closed: HashSet::new(),
             vcs: HashMap::new(),
             vcs_watching: None,
+            right_panel_open: HashSet::new(),
+            right_panel_width: right_panel::DEFAULT_WIDTH,
+            diffs: HashMap::new(),
+            diffs_requested: HashSet::new(),
+            diff_list: cx.new(|_| right_panel::DiffList::new()),
             editor_pick: None,
             editor_menu_open: false,
             editor_menu,
@@ -341,9 +358,14 @@ impl MainView {
                 .update(cx, |view, cx| view.apply(&thread_id, event, cx));
             return;
         }
+        if let Status::Diff { cwd, diff } = status {
+            self.set_diff(cwd, diff);
+            return cx.notify();
+        }
         if matches!(status, Status::Connecting) {
             self.branches_requested.clear();
             self.vcs.clear();
+            self.diffs_requested.clear();
         }
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
@@ -362,6 +384,7 @@ impl MainView {
         self.request_branch();
         self.sync_vcs();
         self.sync_terminal(cx);
+        self.sync_diff();
         cx.notify();
     }
 
@@ -419,6 +442,7 @@ impl MainView {
         self.request_branch();
         self.sync_vcs();
         self.sync_terminal(cx);
+        self.sync_diff();
         cx.notify();
     }
 
@@ -710,8 +734,11 @@ impl MainView {
                         row.child(self.breadcrumb(active, title, cx))
                             .child(div().flex_1())
                             .when(self.details_cwd().is_some(), |row| {
-                                row.child(self.terminal_toggle(cx))
-                                    .child(self.details_toggle(cx))
+                                row.child(self.details_toggle(cx))
+                                    .child(self.terminal_toggle(cx))
+                            })
+                            .when(self.right_panel_available(), |row| {
+                                row.child(self.right_panel_toggle(cx))
                             })
                     }),
             )
@@ -806,12 +833,23 @@ impl MainView {
                         gpui::rgb(0xef4444).into(),
                         cx,
                     ));
-                rows = rows.child(detail_row(
+                let changes = detail_row(
                     Icons::FileDiff,
                     "Changes".to_owned(),
                     Some(counts.into_any_element()),
                     cx,
-                ));
+                );
+                rows = rows.child(
+                    div()
+                        .id("details-changes")
+                        .rounded(px(6.))
+                        .when(self.selected_thread.is_some(), |row| {
+                            row.cursor_pointer()
+                                .hover(|style| style.bg(gpui::white().opacity(0.06)))
+                                .on_click(cx.listener(|this, _, _, cx| this.open_diff(cx)))
+                        })
+                        .child(changes),
+                );
             }
             sections.push(rows.into_any_element());
         }
@@ -3708,8 +3746,9 @@ impl Render for MainView {
         let docked = self.sidebar_open && !narrow;
         let sidebar_width = clamp_sidebar_width(self.sidebar_width, self.brand_width.get(), width);
         let overlay = narrow && self.sidebar_overlay_open;
-        self.main_width
-            .set(width - if docked { sidebar_width } else { 0. });
+        let container = width - if docked { sidebar_width } else { 0. };
+        let panel = self.right_panel(width, container, cx);
+        self.main_width.set(container - panel.docked_width);
         v_flex()
             .relative()
             .size_full()
@@ -3724,6 +3763,7 @@ impl Render for MainView {
             )
             .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| this.toggle_right_panel(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleTerminal, window, cx| {
                     this.toggle_terminal(window, cx)
@@ -3745,8 +3785,11 @@ impl Render for MainView {
                     .when(docked, |row| {
                         row.child(self.sidebar(sidebar_width, window, cx))
                     })
-                    .child(self.main_area(f32::from(window.viewport_size().height), cx)),
+                    .child(self.main_area(f32::from(window.viewport_size().height), cx))
+                    .children(panel.column),
             )
+            .children(panel.rail)
+            .children(panel.sheet)
             .when(docked, |root| {
                 root.child(self.sidebar_rail(sidebar_width, cx))
             })
