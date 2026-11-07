@@ -81,10 +81,12 @@ impl Render for SidebarResize {
     }
 }
 
-/// The web's `resolveInitialThreadSidebarWidth` bounds: the window leaves the content its minimum.
-fn clamp_sidebar_width(width: f32, window_width: f32) -> f32 {
-    let max = SIDEBAR_MIN_WIDTH.max(window_width - MAIN_CONTENT_MIN_WIDTH);
-    width.clamp(SIDEBAR_MIN_WIDTH, max)
+/// The web's sidebar bounds: at least the brand row (`resolveThreadSidebarMinimumWidth`), and
+/// the window leaves the content its minimum.
+fn clamp_sidebar_width(width: f32, brand_width: f32, window_width: f32) -> f32 {
+    let min = SIDEBAR_MIN_WIDTH.max(brand_width.ceil());
+    let max = min.max(window_width - MAIN_CONTENT_MIN_WIDTH);
+    width.clamp(min, max)
 }
 
 fn is_narrow(width: f32) -> bool {
@@ -146,6 +148,8 @@ pub struct MainView {
     sidebar_width: f32,
     /// The docked width at the last render, for the cards' branch truncation.
     rendered_sidebar_width: Cell<f32>,
+    /// The topbar brand row's natural width at the last paint, the web's `SidebarBrandWidthProbe`.
+    brand_width: Rc<Cell<f32>>,
     /// Hover styles cannot change layout, so the send button's hover growth is view state.
     send_hovered: bool,
     permissions_open: bool,
@@ -216,6 +220,7 @@ impl MainView {
             sidebar_overlay_open: false,
             sidebar_width: SIDEBAR_DEFAULT_WIDTH,
             rendered_sidebar_width: Cell::new(SIDEBAR_DEFAULT_WIDTH),
+            brand_width: Rc::new(Cell::new(0.)),
             send_hovered: false,
             permissions_open: false,
             selected_thread: None,
@@ -425,6 +430,79 @@ impl MainView {
         let toggle = Kbd::format(&Keystroke::parse("cmd-b").expect("valid keystroke"));
         let shortcut = |keys| Kbd::format(&Keystroke::parse(keys).expect("valid keystroke"));
         let border = cx.theme().border;
+        let brand_width = self.brand_width.clone();
+        let content =
+            h_flex()
+                .relative()
+                .h_full()
+                .flex_shrink_0()
+                .gap_1()
+                .when(open, |row| {
+                    row.child(
+                        canvas(
+                            move |rect, _, _| brand_width.set(f32::from(rect.right()) + 12.),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                })
+                .child(
+                    nav_button(
+                        "toggle-sidebar",
+                        if open {
+                            IconName::PanelLeftClose
+                        } else {
+                            IconName::PanelLeft
+                        },
+                        format!("Toggle main sidebar ({toggle})").into(),
+                        true,
+                        backdrop,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_sidebar(narrow_window(window), cx)
+                    })),
+                )
+                // Like the web, the brand and history live in the sidebar and hide with it.
+                .when(open, |bar| {
+                    bar.child(
+                        h_flex()
+                            .ml_1()
+                            .gap_1()
+                            .text_sm()
+                            .text_color(brand)
+                            .child(div().font_weight(FontWeight::BOLD).child("T3"))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(brand_muted)
+                                    .child("Code"),
+                            ),
+                    )
+                    .child(
+                        nav_button(
+                            "go-back",
+                            IconName::ArrowLeft,
+                            format!("Go back ({})", shortcut("cmd-[")).into(),
+                            self.history.can_back(),
+                            backdrop,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
+                    )
+                    .child(
+                        nav_button(
+                            "go-forward",
+                            IconName::ArrowRight,
+                            format!("Go forward ({})", shortcut("cmd-]")).into(),
+                            self.history.can_forward(),
+                            backdrop,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
+                    )
+                });
         h_flex()
             .h_full()
             .flex_shrink_0()
@@ -432,65 +510,7 @@ impl MainView {
             .when(!open, |row| row.border_b_1().border_color(border))
             .pl(px(TITLEBAR_CONTENT_LEFT))
             .pr_3()
-            .gap_1()
-            .child(
-                nav_button(
-                    "toggle-sidebar",
-                    if open {
-                        IconName::PanelLeftClose
-                    } else {
-                        IconName::PanelLeft
-                    },
-                    format!("Toggle main sidebar ({toggle})").into(),
-                    true,
-                    backdrop,
-                    cx,
-                )
-                .on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.toggle_sidebar(narrow_window(window), cx)
-                    }),
-                ),
-            )
-            // Like the web, the brand and history live in the sidebar and hide with it.
-            .when(open, |bar| {
-                bar.child(
-                    h_flex()
-                        .ml_1()
-                        .gap_1()
-                        .text_sm()
-                        .text_color(brand)
-                        .child(div().font_weight(FontWeight::BOLD).child("T3"))
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(brand_muted)
-                                .child("Code"),
-                        ),
-                )
-                .child(
-                    nav_button(
-                        "go-back",
-                        IconName::ArrowLeft,
-                        format!("Go back ({})", shortcut("cmd-[")).into(),
-                        self.history.can_back(),
-                        backdrop,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.go_back(cx))),
-                )
-                .child(
-                    nav_button(
-                        "go-forward",
-                        IconName::ArrowRight,
-                        format!("Go forward ({})", shortcut("cmd-]")).into(),
-                        self.history.can_forward(),
-                        backdrop,
-                        cx,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.go_forward(cx))),
-                )
-            })
+            .child(content)
     }
 
     /// Picking a project starts a new thread in it.
@@ -637,8 +657,11 @@ impl MainView {
             .on_drag_move(
                 cx.listener(|this, event: &DragMoveEvent<SidebarResize>, window, cx| {
                     let viewport = f32::from(window.viewport_size().width);
-                    this.sidebar_width =
-                        clamp_sidebar_width(f32::from(event.event.position.x), viewport);
+                    this.sidebar_width = clamp_sidebar_width(
+                        f32::from(event.event.position.x),
+                        this.brand_width.get(),
+                        viewport,
+                    );
                     cx.notify();
                 }),
             )
@@ -2519,7 +2542,7 @@ impl Render for MainView {
         let width = f32::from(window.viewport_size().width);
         let narrow = is_narrow(width);
         let docked = self.sidebar_open && !narrow;
-        let sidebar_width = clamp_sidebar_width(self.sidebar_width, width);
+        let sidebar_width = clamp_sidebar_width(self.sidebar_width, self.brand_width.get(), width);
         let overlay = narrow && self.sidebar_overlay_open;
         v_flex()
             .relative()
@@ -2572,10 +2595,12 @@ mod tests {
 
     #[test]
     fn the_sidebar_width_stays_between_the_minimum_and_what_the_content_leaves() {
-        assert_eq!(clamp_sidebar_width(100., 1200.), 208.);
-        assert_eq!(clamp_sidebar_width(300., 1200.), 300.);
-        assert_eq!(clamp_sidebar_width(900., 1200.), 560.);
-        assert_eq!(clamp_sidebar_width(300., 800.), 208.);
+        assert_eq!(clamp_sidebar_width(100., 0., 1200.), 208.);
+        assert_eq!(clamp_sidebar_width(300., 0., 1200.), 300.);
+        assert_eq!(clamp_sidebar_width(900., 0., 1200.), 560.);
+        assert_eq!(clamp_sidebar_width(300., 0., 800.), 208.);
+        assert_eq!(clamp_sidebar_width(200., 251.4, 1200.), 252.);
+        assert_eq!(clamp_sidebar_width(300., 251.4, 800.), 252.);
     }
 
     #[test]
