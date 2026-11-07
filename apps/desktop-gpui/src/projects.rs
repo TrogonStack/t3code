@@ -3,8 +3,10 @@
 //! `sortLogicalProjectsForSidebar` (Sidebar.logic.ts) and `buildSidebarProjectPickerEntries`
 //! (sidebarProjectGrouping.ts). Each row is a group of projects that share a repository.
 
+use crate::status::ThreadRow;
 use crate::wire::generated::RepositoryIdentity;
 use crate::wire::{Project, Thread};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// `[name, light, dark]` as sRGB hex: Tailwind's 600 and 400 shades, in `PROJECT_ICON_COLORS` order.
@@ -519,6 +521,99 @@ pub fn order_while_open<'a>(
     ordered
 }
 
+/// The sidebar's project scope, `resolveSidebarProjectScopeKeys`: the chosen group keys that
+/// still name a listed project, so a scope whose project is gone reads as all projects.
+pub fn resolve_scope(entries: &[ProjectEntry], keys: &[String]) -> Vec<String> {
+    keys.iter()
+        .filter(|key| {
+            entries
+                .iter()
+                .any(|entry| !entry.scratch && entry.key == **key)
+        })
+        .cloned()
+        .collect()
+}
+
+/// A scope pick: a plain pick narrows to that project, a shift pick adds or removes it
+/// (`toggleProjectScopeKey`), and `None` is the "All projects" row.
+pub fn pick_scope(scope: &[String], key: Option<&str>, additive: bool) -> Vec<String> {
+    let Some(key) = key else {
+        return Vec::new();
+    };
+    if !additive {
+        return vec![key.to_owned()];
+    }
+    if scope.iter().any(|chosen| chosen == key) {
+        scope
+            .iter()
+            .filter(|chosen| *chosen != key)
+            .cloned()
+            .collect()
+    } else {
+        scope.iter().cloned().chain([key.to_owned()]).collect()
+    }
+}
+
+/// Whether the scope lists a thread of `project_id`; an empty scope lists every thread.
+pub fn in_scope(entries: &[ProjectEntry], scope: &[String], project_id: &str) -> bool {
+    scope.is_empty()
+        || entries
+            .iter()
+            .any(|entry| scope.contains(&entry.key) && entry.contains(project_id))
+}
+
+/// The rows the sidebar lists under the scope; borrowed when nothing is scoped.
+pub fn scoped_rows<'a>(
+    rows: &'a [ThreadRow],
+    entries: &[ProjectEntry],
+    scope: &[String],
+) -> Cow<'a, [ThreadRow]> {
+    if scope.is_empty() {
+        return Cow::Borrowed(rows);
+    }
+    Cow::Owned(
+        rows.iter()
+            .filter(|row| in_scope(entries, scope, &row.project_id))
+            .cloned()
+            .collect(),
+    )
+}
+
+/// A folder picked for a new project: `inferProjectTitleFromPath` and the dispatch path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewProject {
+    pub title: String,
+    pub workspace_root: String,
+}
+
+impl NewProject {
+    /// `None` for an empty path. Trailing separators go, as the web normalizes the dispatch path.
+    pub fn from_path(path: &str) -> Option<Self> {
+        let trimmed = path.trim();
+        let root = match trimmed.trim_end_matches(['/', '\\']) {
+            "" if trimmed.is_empty() => return None,
+            "" => "/",
+            root => root,
+        };
+        let title = root
+            .rsplit(['/', '\\'])
+            .find(|segment| !segment.is_empty())
+            .unwrap_or(root);
+        Some(Self {
+            title: title.to_owned(),
+            workspace_root: root.to_owned(),
+        })
+    }
+}
+
+/// The listed project already rooted at `root`, `findProjectByPath` over the group representatives.
+pub fn project_at<'a>(entries: &'a [ProjectEntry], root: &str) -> Option<&'a ProjectEntry> {
+    let wanted = normalize_path(root);
+    entries.iter().find(|entry| {
+        !entry.scratch && !entry.root.is_empty() && normalize_path(&entry.root) == wanted
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +649,109 @@ mod tests {
             ids(order_while_open(now.iter().collect(), &[])),
             ["d", "c", "a"]
         );
+    }
+
+    fn scoped_entry(key: &str, members: &[&str], root: &str, scratch: bool) -> ProjectEntry {
+        ProjectEntry {
+            key: key.to_owned(),
+            id: members[0].to_owned(),
+            member_ids: members.iter().map(|id| (*id).to_owned()).collect(),
+            title: key.to_owned(),
+            initials: String::new(),
+            color: 0,
+            pinned: false,
+            scratch,
+            root: root.to_owned(),
+            logical_key: None,
+            remote: Vec::new(),
+        }
+    }
+
+    fn thread_in(project_id: &str) -> ThreadRow {
+        ThreadRow {
+            id: format!("thread-{project_id}"),
+            project_id: project_id.to_owned(),
+            project: project_id.to_owned(),
+            title: String::new(),
+            branch: None,
+            worktree: false,
+            provider_instance: String::new(),
+            top: None,
+            pr: None,
+            section: crate::status::Section::Active,
+            model: String::new(),
+            instance_history: Vec::new(),
+            pr_lines: Vec::new(),
+            last_error: None,
+            worktree_path: None,
+            has_run: false,
+        }
+    }
+
+    #[test]
+    fn scope_picks_narrow_toggle_and_clear() {
+        let scope = ["a".to_owned()];
+        assert_eq!(pick_scope(&scope, Some("b"), false), ["b"]);
+        assert_eq!(pick_scope(&scope, Some("b"), true), ["a", "b"]);
+        assert_eq!(pick_scope(&scope, Some("a"), true), Vec::<String>::new());
+        assert_eq!(pick_scope(&scope, None, true), Vec::<String>::new());
+    }
+
+    #[test]
+    fn scope_lists_the_threads_of_every_member_of_a_chosen_group() {
+        let entries = [
+            scoped_entry("repo", &["p1", "p2"], "/work/repo", false),
+            scoped_entry("other", &["p3"], "/work/other", false),
+        ];
+        let rows = [thread_in("p1"), thread_in("p2"), thread_in("p3")];
+        let scope = ["repo".to_owned()];
+        let ids = |listed: Cow<[ThreadRow]>| -> Vec<String> {
+            listed.iter().map(|row| row.project_id.clone()).collect()
+        };
+        assert_eq!(ids(scoped_rows(&rows, &entries, &scope)), ["p1", "p2"]);
+        assert!(matches!(
+            scoped_rows(&rows, &entries, &[]),
+            Cow::Borrowed(_)
+        ));
+        assert!(in_scope(&entries, &[], "p3"));
+        assert!(!in_scope(&entries, &scope, "p3"));
+    }
+
+    #[test]
+    fn a_scope_drops_keys_that_no_longer_name_a_project() {
+        let entries = [
+            scoped_entry("a", &["a"], "/a", false),
+            scoped_entry("scratch", &["s"], "", true),
+        ];
+        let keys = ["gone", "a", "scratch"].map(str::to_owned);
+        assert_eq!(resolve_scope(&entries, &keys), ["a"]);
+    }
+
+    #[test]
+    fn a_new_project_takes_its_title_from_the_last_path_segment() {
+        let new = NewProject::from_path("/Users/me/code/t3code/").expect("path");
+        assert_eq!(new.title, "t3code");
+        assert_eq!(new.workspace_root, "/Users/me/code/t3code");
+        let windows = NewProject::from_path("C:\\work\\app\\").expect("path");
+        assert_eq!(windows.title, "app");
+        assert_eq!(
+            NewProject::from_path("/").expect("root").workspace_root,
+            "/"
+        );
+        assert_eq!(NewProject::from_path("  "), None);
+    }
+
+    #[test]
+    fn an_added_folder_matches_a_listed_project_ignoring_trailing_separators() {
+        let entries = [
+            scoped_entry("scratch", &["s"], "/work/app", true),
+            scoped_entry("app", &["p1"], "/work/app", false),
+        ];
+        assert_eq!(
+            project_at(&entries, "/work/app/").map(|e| e.key.as_str()),
+            Some("app")
+        );
+        assert!(project_at(&entries, "/work/other").is_none());
     }
 
     #[test]

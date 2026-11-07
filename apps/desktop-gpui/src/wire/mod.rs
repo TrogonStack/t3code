@@ -9,6 +9,7 @@ pub use generated::{
     OrchestrationSubscribeShellSuccess as ShellItem,
     OrchestrationSubscribeThreadPayload as SubscribeThreadPayload, ProjectsEntry as Project,
     ProjectsMutatePayload as ProjectMutation,
+    ProjectsMutatePayloadVariant0Type as ProjectMutationCreateType,
     ProjectsMutatePayloadVariant1Type as ProjectMutationType, ProjectsMutateSuccess,
     ThreadsEntry as Thread,
 };

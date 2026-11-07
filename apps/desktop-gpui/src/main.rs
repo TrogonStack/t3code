@@ -112,6 +112,9 @@ fn main() {
                 KeyBinding::new("cmd-j", ui::ToggleTerminal, None),
                 KeyBinding::new("alt-cmd-b", ui::ToggleRightPanel, None),
                 KeyBinding::new("cmd-o", ui::OpenFavoriteEditor, None),
+                // `chat.new` and `chat.newWithoutProject`; `terminal.new` wins while a terminal has focus.
+                KeyBinding::new("cmd-n", ui::NewThread, None),
+                KeyBinding::new("alt-cmd-n", ui::NewScratchThread, None),
                 KeyBinding::new("cmd-[", ui::GoBack, None),
                 KeyBinding::new("cmd-]", ui::GoForward, None),
                 // The web's `terminal.*` defaults, which apply while the terminal has focus.

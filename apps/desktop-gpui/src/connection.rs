@@ -18,7 +18,8 @@ use crate::strip::{self, Branch};
 use crate::terminal::{self, Grid, Target};
 use crate::thread::ThreadState;
 use crate::wire::{
-    ProjectMutation, ProjectMutationType, ShellItem, SubscribeShellPayload, SubscribeThreadPayload,
+    ProjectMutation, ProjectMutationCreateType, ProjectMutationType, ShellItem,
+    SubscribeShellPayload, SubscribeThreadPayload,
 };
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -49,6 +50,13 @@ pub enum Action {
     SetProjectPinned {
         project_id: String,
         pinned: bool,
+    },
+    /// Registers a folder as a project; the outcome comes back as `Status::ProjectAdded` or
+    /// `Status::ProjectFailed`.
+    AddProject {
+        project_id: String,
+        title: String,
+        workspace_root: String,
     },
     /// The branch checked out in a project's workspace root, for the strip under the composer.
     LoadBranch {
@@ -112,6 +120,7 @@ impl Action {
         match self {
             Self::SetProjectPinned { pinned: true, .. } => "pin project",
             Self::SetProjectPinned { pinned: false, .. } => "unpin project",
+            Self::AddProject { .. } => "add the project",
             Self::LoadBranch { .. } => "load the branch",
             Self::SelectThread(_) => "open the thread",
             Self::WatchVcs(_) => "watch the version control status",
@@ -169,6 +178,25 @@ fn pin_mutation(project_id: &str, pinned: bool, command_id: String) -> ProjectMu
         title: None,
         type_: ProjectMutationType::ProjectUpdate,
         workspace_root: None,
+    }
+}
+
+fn create_mutation(
+    project_id: &str,
+    title: &str,
+    workspace_root: &str,
+    command_id: String,
+) -> ProjectMutation {
+    ProjectMutation::Variant0 {
+        command_id,
+        // The web's add project flow creates a folder that is missing.
+        create_workspace_root_if_missing: Some(true),
+        default_model_selection: None,
+        project_id: project_id.to_owned(),
+        scripts: None,
+        title: title.to_owned(),
+        type_: ProjectMutationCreateType::ProjectCreate,
+        workspace_root: workspace_root.to_owned(),
     }
 }
 
@@ -420,6 +448,8 @@ async fn serve(
     let mut diffs: HashMap<String, String> = HashMap::new();
     // The card's calls by request id, with the token its answers carry.
     let mut calls: HashMap<String, u64> = HashMap::new();
+    // Add project requests by request id, with the project id each created.
+    let mut adds: HashMap<String, String> = HashMap::new();
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
@@ -543,6 +573,24 @@ async fn serve(
                     Action::SetProjectPinned { project_id, pinned } => session
                         .request::<ProjectsMutate>(&pin_mutation(project_id, *pinned, command_id()))
                         .map(|(id, frame)| (id, frame, None)),
+                    Action::AddProject {
+                        project_id,
+                        title,
+                        workspace_root,
+                    } => {
+                        let mutation =
+                            create_mutation(project_id, title, workspace_root, command_id());
+                        match session.request::<ProjectsMutate>(&mutation) {
+                            Ok((id, frame)) => {
+                                adds.insert(id, project_id.clone());
+                                if let Err(error) = sink.send(Message::text(frame)).await {
+                                    return error.to_string();
+                                }
+                            }
+                            Err(error) => publish(status, Status::ProjectFailed(error)),
+                        }
+                        continue;
+                    }
                     Action::LoadBranch { root } => session
                         .request::<VcsListRefs>(&refs_query(root))
                         .map(|(id, frame)| (id, frame, Some(root.clone()))),
@@ -606,6 +654,9 @@ async fn serve(
                         };
                         if let Some(root) = request_id(&event).and_then(|id| branches.remove(id)) {
                             publish_branch(root, event, status);
+                            continue;
+                        }
+                        if route_add(&mut adds, &event, status) {
                             continue;
                         }
                         if settle(&mut pending, &event) {
@@ -906,6 +957,28 @@ impl Terminals {
     }
 }
 
+/// A project id in the UUID v4 text form the web mints.
+pub fn new_project_id() -> String {
+    let mut bytes = [0u8; 16];
+    // A failed read leaves zeros, and the server rejects an id that is already a project.
+    let _ = getrandom::fill(&mut bytes);
+    uuid_v4(bytes)
+}
+
+fn uuid_v4(mut bytes: [u8; 16]) -> String {
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex = hex::encode(bytes);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
 fn command_id() -> String {
     let mut bytes = [0u8; 8];
     // A failed read leaves zeros, and the server rejects a repeated command id rather than applying it twice.
@@ -1014,6 +1087,24 @@ fn publish_catalog(event: Event, status: &StatusSender) {
     }
 }
 
+/// Publishes the outcome of an add project request; true when `event` was one.
+fn route_add(adds: &mut HashMap<String, String>, event: &Event, status: &StatusSender) -> bool {
+    match event {
+        Event::Done { request_id, .. } => adds.remove(request_id).is_some_and(|project_id| {
+            publish(status, Status::ProjectAdded(project_id));
+            true
+        }),
+        Event::Failed {
+            request_id,
+            message,
+        } => adds.remove(request_id).is_some_and(|_| {
+            publish(status, Status::ProjectFailed(message.clone()));
+            true
+        }),
+        _ => false,
+    }
+}
+
 /// Consumes the outcome of an action's request, logging a failure; true when `event` was one.
 fn settle(pending: &mut HashMap<String, &'static str>, event: &Event) -> bool {
     match event {
@@ -1072,6 +1163,60 @@ mod tests {
         assert_eq!(delays, vec![500, 1000, 2000, 4000, 8000, 10_000, 10_000]);
         backoff.reset();
         assert_eq!(backoff.next_delay().as_millis(), 500);
+    }
+
+    #[test]
+    fn project_ids_have_the_uuid_v4_shape() {
+        assert_eq!(uuid_v4([0xff; 16]), "ffffffff-ffff-4fff-bfff-ffffffffffff");
+    }
+
+    #[test]
+    fn add_action_builds_a_project_create_mutation() {
+        let value = serde_json::to_value(create_mutation(
+            "p1",
+            "t3code",
+            "/work/t3code",
+            "c1".to_owned(),
+        ))
+        .expect("json");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "commandId": "c1",
+                "createWorkspaceRootIfMissing": true,
+                "projectId": "p1",
+                "title": "t3code",
+                "type": "project.create",
+                "workspaceRoot": "/work/t3code",
+            })
+        );
+    }
+
+    #[test]
+    fn route_add_consumes_only_the_outcome_of_an_add() {
+        let (status, receiver) = async_channel::unbounded();
+        let mut adds = HashMap::from([("7".to_owned(), "p1".to_owned())]);
+        let done = Event::Done {
+            request_id: "7".to_owned(),
+            value: serde_json::Value::Null,
+        };
+        let failed = |id: &str| Event::Failed {
+            request_id: id.to_owned(),
+            message: "boom".to_owned(),
+        };
+        assert!(!route_add(&mut adds, &failed("0"), &status));
+        assert!(route_add(&mut adds, &done, &status));
+        assert_eq!(
+            receiver.try_recv().ok(),
+            Some(Status::ProjectAdded("p1".to_owned()))
+        );
+        adds.insert("8".to_owned(), "p2".to_owned());
+        assert!(route_add(&mut adds, &failed("8"), &status));
+        assert_eq!(
+            receiver.try_recv().ok(),
+            Some(Status::ProjectFailed("boom".to_owned()))
+        );
+        assert!(adds.is_empty());
     }
 
     #[test]

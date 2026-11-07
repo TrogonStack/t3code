@@ -455,6 +455,7 @@ impl MainView {
             "toggle-right-panel",
             Icons::PanelRight,
             format!("Toggle right panel ({TOGGLE_SHORTCUT})").into(),
+            true,
             cx,
         )
         .when(pressed, move |button| {
@@ -531,8 +532,14 @@ impl MainView {
             .child(tab)
             .child(div().flex_1())
             .child(
-                header_icon_button("refresh-diff", Icons::RefreshCw, "Refresh diff".into(), cx)
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh_diff(cx))),
+                header_icon_button(
+                    "refresh-diff",
+                    Icons::RefreshCw,
+                    "Refresh diff".into(),
+                    true,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_diff(cx))),
             )
             .when(sheet, |strip| {
                 strip.child(

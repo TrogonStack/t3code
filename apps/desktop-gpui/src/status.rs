@@ -62,6 +62,10 @@ pub enum Status {
         label: String,
         requests: Vec<SlowRequest>,
     },
+    /// The server created the project; the shell lists it once its delta lands.
+    ProjectAdded(String),
+    /// Why adding a project failed.
+    ProjectFailed(String),
     /// The outcome of a request the details card made, by the token it was sent with.
     Call {
         token: u64,
@@ -229,6 +233,8 @@ impl fmt::Display for Status {
             } => write!(f, "Terminal {terminal_id} of {thread_id}"),
             Self::Diff { cwd, .. } => write!(f, "Diff of {cwd}"),
             Self::Call { token, .. } => write!(f, "Call {token}"),
+            Self::ProjectAdded(id) => write!(f, "ProjectAdded {id}"),
+            Self::ProjectFailed(message) => write!(f, "ProjectFailed {message}"),
             Self::SlowRequests { requests, .. } => write!(f, "SlowRequests {}", requests.len()),
         }
     }

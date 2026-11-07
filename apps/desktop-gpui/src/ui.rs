@@ -1,10 +1,10 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
-use crate::connection::{Action, ActionSender};
+use crate::connection::{Action, ActionSender, new_project_id};
 use crate::details::{self, VcsStatus};
 use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
 use crate::minimap;
-use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
+use crate::projects::{self, EnvironmentProjects, MachineKind, NewProject, ProjectEntry};
 use crate::providers::{Catalog, Mark, Trigger};
 use crate::slow_requests;
 use crate::status::{
@@ -19,13 +19,13 @@ use crate::terminal_state::{self, Placement, Terminals};
 use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
-use crate::toast::{ToastHost, ToastId};
+use crate::toast::{Kind as ToastKind, Toast, ToastHost, ToastId};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
     ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement,
-    Pixels, Render, RenderOnce, SharedString, Styled, Window, actions, canvas, div, ease_in_out,
-    img, list, prelude::*, px, rgb,
+    PathPromptOptions, Pixels, Render, RenderOnce, SharedString, Styled, Window, actions, canvas,
+    div, ease_in_out, img, list, prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -83,7 +83,9 @@ actions!(
         NewTerminal,
         CloseTerminal,
         ToggleRightPanel,
-        OpenFavoriteEditor
+        OpenFavoriteEditor,
+        NewThread,
+        NewScratchThread
     ]
 );
 
@@ -204,6 +206,12 @@ pub struct MainView {
     selected_project: Option<String>,
     history: History<Route>,
     picker_open: bool,
+    /// The sidebar's project scope as group keys, empty for all projects; in memory only.
+    project_scope: Vec<String>,
+    scope_open: bool,
+    scope_search: Entity<InputState>,
+    /// The project the server was asked to create, opened once the shell lists it.
+    adding_project: Option<String>,
     /// Last painted trigger bounds, so the popup can shrink to fit below it as on the web.
     picker_trigger: Rc<Cell<Bounds<Pixels>>>,
     picker_order: Option<Vec<String>>,
@@ -263,6 +271,14 @@ impl MainView {
             }
         })
         .detach();
+        let scope_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search projects..."));
+        cx.subscribe(&scope_search, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Ask anything. @ files, $ skills, / commands")
@@ -312,6 +328,10 @@ impl MainView {
             selected_project: None,
             history: History::default(),
             picker_open: false,
+            project_scope: Vec::new(),
+            scope_open: false,
+            scope_search,
+            adding_project: None,
             picker_trigger: Rc::default(),
             picker_order: None,
             environments: Vec::new(),
@@ -362,6 +382,15 @@ impl MainView {
     }
 
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
+        if let Status::ProjectFailed(message) = status {
+            self.adding_project = None;
+            self.error_toast("Failed to add project", message, cx);
+            return;
+        }
+        if let Status::ProjectAdded(id) = status {
+            self.adding_project = Some(id);
+            return self.open_added_project(cx);
+        }
         if let Status::SlowRequests { label, requests } = status {
             self.sync_slow_toast(&label, &requests, cx);
             return;
@@ -439,11 +468,38 @@ impl MainView {
                 });
             }
         }
+        self.open_added_project(cx);
         self.request_branch();
         self.sync_vcs();
         self.sync_terminal(cx);
         self.sync_diff();
         cx.notify();
+    }
+
+    fn error_toast(&mut self, title: &str, description: String, cx: &mut Context<Self>) {
+        let toast = Toast::new(title.to_owned())
+            .kind(ToastKind::Error)
+            .description(description);
+        self.toasts.update(cx, |toasts, cx| {
+            toasts.add(toast, cx);
+        });
+    }
+
+    /// Opens a new thread in the project the server created, as the web does once it exists.
+    fn open_added_project(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.adding_project.clone() else {
+            return;
+        };
+        let listed = self.shell().is_some_and(|shell| {
+            shell
+                .project_entries
+                .iter()
+                .any(|entry| entry.contains(&id))
+        });
+        if listed {
+            self.adding_project = None;
+            self.select_project(id, cx);
+        }
     }
 
     /// Keeps the rows of the open thread; an update for any other thread is stale.
@@ -494,6 +550,22 @@ impl MainView {
 
     fn apply_route(&mut self, route: Route, cx: &mut Context<Self>) {
         self.sidebar_overlay_open = false;
+        // A thread the scope hides widens it to all projects, like the web's route reveal.
+        let hidden = self
+            .shell()
+            .zip(route.thread.as_deref())
+            .is_some_and(|(shell, id)| {
+                shell
+                    .rows
+                    .iter()
+                    .find(|row| row.id == id)
+                    .is_some_and(|row| {
+                        !projects::in_scope(&shell.project_entries, &self.scope(), &row.project_id)
+                    })
+            });
+        if hidden {
+            self.project_scope.clear();
+        }
         self.selected_project = route.project;
         self.selected_thread = route.thread;
         self.sync_thread();
@@ -535,6 +607,89 @@ impl MainView {
         };
         self.history.visit(route.clone());
         self.apply_route(route, cx);
+    }
+
+    /// The `chat.newLocal` command: a draft in the open thread's project, else the selected one.
+    fn new_thread(&mut self, cx: &mut Context<Self>) {
+        if self
+            .shell()
+            .is_some_and(|shell| !shell.project_entries.is_empty())
+        {
+            self.open_thread(None, cx);
+        }
+    }
+
+    /// The `chat.newWithoutProject` command: a draft in the managed scratch project.
+    fn new_scratch_thread(&mut self, cx: &mut Context<Self>) {
+        let scratch = self
+            .shell()
+            .and_then(|shell| scratch_entry(&shell.project_entries))
+            .map(|entry| entry.id.clone());
+        if let Some(id) = scratch {
+            self.select_project(id, cx);
+        }
+    }
+
+    /// The web's add project flow with the native folder picker standing in for its browse step.
+    fn add_project(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Add project".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picked.await;
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(Some(paths))) => {
+                    if let Some(path) = paths.first() {
+                        this.create_project(&path.to_string_lossy(), cx);
+                    }
+                }
+                Ok(Err(error)) => this.error_toast("Failed to add project", error.to_string(), cx),
+                _ => {}
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A folder that is already a project opens a new thread in it; any other becomes one.
+    fn create_project(&mut self, path: &str, cx: &mut Context<Self>) {
+        let Some(new) = NewProject::from_path(path) else {
+            return;
+        };
+        let Some(shell) = self.shell() else {
+            return;
+        };
+        if let Some(existing) = projects::project_at(&shell.project_entries, &new.workspace_root) {
+            let id = existing.id.clone();
+            return self.select_project(id, cx);
+        }
+        let project_id = new_project_id();
+        self.adding_project = Some(project_id.clone());
+        let add = Action::AddProject {
+            project_id,
+            title: new.title,
+            workspace_root: new.workspace_root,
+        };
+        if self.actions.try_send(add).is_err() {
+            eprintln!("[ui] could not add the project");
+        }
+    }
+
+    /// The sidebar's project scope without the projects that are gone.
+    fn scope(&self) -> Vec<String> {
+        self.shell().map_or_else(Vec::new, |shell| {
+            projects::resolve_scope(&shell.project_entries, &self.project_scope)
+        })
+    }
+
+    /// A pick in the scope menu; a plain pick closes it, a shift pick keeps it open to add more.
+    fn pick_scope(&mut self, key: Option<&str>, additive: bool, cx: &mut Context<Self>) {
+        self.project_scope = projects::pick_scope(&self.scope(), key, additive);
+        self.scope_open = additive && key.is_some();
+        cx.notify();
     }
 
     /// Asks for the branch of the active project's root once per connection.
@@ -915,6 +1070,7 @@ impl MainView {
             "toggle-terminal",
             Icons::PanelBottom,
             format!("Toggle terminal drawer ({})", terminal::TOGGLE_SHORTCUT).into(),
+            true,
             cx,
         )
         .when(pressed, move |button| {
@@ -931,6 +1087,7 @@ impl MainView {
             "toggle-details",
             Icons::SquareMenu,
             format!("Toggle thread details ({})", details::TOGGLE_SHORTCUT).into(),
+            true,
             cx,
         )
         .when(pressed, move |button| {
@@ -1246,12 +1403,13 @@ impl MainView {
 
     fn sidebar(&self, width: f32, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rendered_sidebar_width.set(width);
-        let shelves = self
+        let scope = self.scope();
+        let scoped = self
             .shell()
-            .map_or_else(Vec::new, |shell| shelves(&shell.rows, self.shelves));
-        let top = self
-            .shell()
-            .map_or_else(Vec::new, |shell| top_rows(&shell.rows));
+            .map(|shell| projects::scoped_rows(&shell.rows, &shell.project_entries, &scope));
+        let rows: &[ThreadRow] = scoped.as_deref().unwrap_or(&[]);
+        let shelves = shelves(rows, self.shelves);
+        let top = top_rows(rows);
         let mut list = v_flex()
             .id("threads")
             .flex_1()
@@ -1259,12 +1417,10 @@ impl MainView {
             .gap_px()
             .overflow_y_scroll();
         for index in top {
-            if let Some(shell) = self.shell() {
-                list = list.child(self.thread_item(&shell.rows[index], cx).flex_shrink_0());
-            }
+            list = list.child(self.thread_item(&rows[index], cx).flex_shrink_0());
         }
         for (position, shelf) in shelves.into_iter().enumerate() {
-            list = list.child(self.shelf(shelf, position == 0, cx));
+            list = list.child(self.shelf(shelf, position == 0, rows, cx));
         }
         v_flex()
             .w(px(width))
@@ -1323,7 +1479,13 @@ impl MainView {
 
     /// One collapsible shelf: its header, then its rows while expanded. The first shelf takes
     /// the free space above it (`mt-auto`), so shelves sit at the bottom until content overflows.
-    fn shelf(&self, shelf: Shelf, first: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn shelf(
+        &self,
+        shelf: Shelf,
+        first: bool,
+        all: &[ThreadRow],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Shelf {
             section,
             count,
@@ -1342,16 +1504,16 @@ impl MainView {
                 .into_any_element(),
         ];
         let mut more = 0;
-        if let Some(shell) = self.shell() {
+        {
             let selected = self.selected_thread.as_deref();
-            let mut rows = shelf_rows(&shell.rows, section, expanded, selected);
+            let mut rows = shelf_rows(all, section, expanded, selected);
             if section == Section::Settled && expanded {
-                let window = settled_window(&rows, &shell.rows, self.settled_shown, selected);
+                let window = settled_window(&rows, all, self.settled_shown, selected);
                 rows = window.rows;
                 more = window.more;
             }
             items.extend(rows.into_iter().map(|row| {
-                self.thread_item(&shell.rows[row], cx)
+                self.thread_item(&all[row], cx)
                     .flex_shrink_0()
                     .into_any_element()
             }));
@@ -1458,28 +1620,199 @@ impl MainView {
                     ),
             )
             .when(has_projects, |row| {
-                row.child(header_icon_button(
-                    "filter-projects",
-                    Icons::ListFilter,
-                    "Filter threads by project".into(),
-                    cx,
-                ))
-                .child(header_icon_button(
-                    "add-project",
-                    Icons::FolderPlus,
-                    "Add project".into(),
-                    cx,
-                ))
+                row.child(self.scope_menu(cx)).child(
+                    header_icon_button(
+                        "add-project",
+                        Icons::FolderPlus,
+                        "Add project".into(),
+                        true,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
+                )
             })
             .child(
                 header_icon_button(
                     "new-thread",
                     Icons::SquarePen,
                     format!("New thread ({new_thread})").into(),
+                    has_projects,
                     cx,
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.open_thread(None, cx))),
+                .when(has_projects, |button| {
+                    button.on_click(cx.listener(|this, _, _, cx| this.new_thread(cx)))
+                }),
             )
+    }
+
+    /// The web's project scope combobox: "All projects" and one row per project; a shift click
+    /// adds a project to the scope instead of replacing it.
+    fn scope_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let search = self.scope_search.clone();
+        let entries = self
+            .shell()
+            .map_or_else(Vec::new, |shell| shell.project_entries.clone());
+        let scope = self.scope();
+        let dark = cx.theme().is_dark();
+        let scoped: Vec<(String, u32)> = entries
+            .iter()
+            .filter(|entry| scope.contains(&entry.key))
+            .map(|entry| (entry.initials.clone(), entry.color_hex(dark)))
+            .collect();
+        let label = {
+            let names: Vec<&str> = entries
+                .iter()
+                .filter(|entry| scope.contains(&entry.key))
+                .map(|entry| entry.title.as_str())
+                .collect();
+            if names.is_empty() {
+                "Filter threads by project".to_owned()
+            } else {
+                format!("Filter threads by project: {}", names.join(", "))
+            }
+        };
+        Popover::new("project-scope")
+            .anchor(Anchor::TopLeft)
+            .open(self.scope_open)
+            .track_focus(&search.focus_handle(cx))
+            .p_0()
+            .on_open_change({
+                let (view, search) = (view.clone(), search.clone());
+                move |open, window, cx| {
+                    search.update(cx, |state, cx| state.set_value("", window, cx));
+                    view.update(cx, |this, cx| {
+                        this.scope_open = *open;
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(ScopeTrigger {
+                label: label.into(),
+                scoped,
+                open: false,
+            })
+            .content(move |_, _, cx| {
+                let query = search.read(cx).value();
+                let listed = projects::picker_entries(&entries, None, &query);
+                let theme = cx.theme();
+                let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
+                let (hover, selected, border) = (theme.list_hover, theme.list_active, theme.border);
+                let mono = theme.mono_font_family.clone();
+                let row = |id: SharedString, active: bool, key: Option<String>| {
+                    let view = view.clone();
+                    h_flex()
+                        .id(id)
+                        .gap_2()
+                        .px_2()
+                        .py_1p5()
+                        .items_center()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(active, |row| row.bg(selected))
+                        .hover(move |style| style.bg(hover))
+                        .on_click(move |event, _, cx| {
+                            let additive = event.modifiers().shift;
+                            view.update(cx, |this, cx| {
+                                this.pick_scope(key.as_deref(), additive, cx)
+                            });
+                        })
+                };
+                let all = "all projects".contains(query.trim().to_lowercase().as_str());
+                let rows = listed.iter().enumerate().map(|(index, entry)| {
+                    let color: Hsla = rgb(entry.color_hex(dark)).into();
+                    let active = scope.contains(&entry.key);
+                    row(
+                        format!("scope-{index}").into(),
+                        active,
+                        Some(entry.key.clone()),
+                    )
+                    .child(monogram(&entry.initials, color, 20., &mono))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .truncate()
+                            .child(entry.title.clone()),
+                    )
+                    .when(active, |row| {
+                        row.child(Icon::new(IconName::Check).size_4().text_color(muted))
+                    })
+                });
+                v_flex()
+                    .w(px(288.))
+                    .rounded_lg()
+                    .overflow_hidden()
+                    .child(
+                        div().px_3().pt(px(10.)).child(
+                            h_flex()
+                                .pb(px(6.))
+                                .border_b_1()
+                                .border_color(border.opacity(0.7))
+                                .child(
+                                    Input::new(&search)
+                                        .appearance(false)
+                                        .h(px(26.))
+                                        .px_0()
+                                        .prefix(
+                                            Icon::new(IconName::Search)
+                                                .size_4()
+                                                .text_color(muted.opacity(0.55)),
+                                        ),
+                                ),
+                        ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("scope-list")
+                            .max_h(px(PICKER_MAX_HEIGHT - PICKER_SEARCH_HEIGHT))
+                            .overflow_y_scroll()
+                            .p_1()
+                            .when(all, |list| {
+                                list.child(
+                                    row("scope-all".into(), scope.is_empty(), None)
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_shrink_0()
+                                                .justify_center()
+                                                .size(px(20.))
+                                                .child(
+                                                    Icon::new(Icons::Folder)
+                                                        .size_4()
+                                                        .text_color(muted),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_sm()
+                                                .truncate()
+                                                .child("All projects"),
+                                        )
+                                        .when(scope.is_empty(), |row| {
+                                            row.child(
+                                                Icon::new(IconName::Check)
+                                                    .size_4()
+                                                    .text_color(muted),
+                                            )
+                                        }),
+                                )
+                            })
+                            .children(rows)
+                            .when(!all && listed.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .p_2()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child("No matching projects."),
+                                )
+                            }),
+                    )
+            })
     }
 
     /// The main content, with the thread details card floating at its top right when it fits.
@@ -2651,6 +2984,7 @@ impl MainView {
                         "attach",
                         gpui_kit_assets::IconName::Paperclip,
                         "Attach files".into(),
+                        true,
                         cx,
                     ))
                     .child(
@@ -3075,9 +3409,78 @@ fn header_icon_button(
     id: &'static str,
     icon: gpui_kit_assets::IconName,
     label: gpui::SharedString,
+    enabled: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
-    ghost_icon_button(id, Icon::new(icon).size_4(), label, true, cx)
+    ghost_icon_button(id, Icon::new(icon).size_4(), label, enabled, cx)
+}
+
+/// A project's monogram badge: its initials on the project color at 14%.
+fn monogram(initials: &str, color: Hsla, size: f32, font: &SharedString) -> gpui::Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .size(px(size))
+        .rounded(px(size / 4.))
+        .bg(color.opacity(0.14))
+        .text_color(color)
+        .text_size(px(size / 2.))
+        .font_weight(FontWeight::BOLD)
+        .font_family(font.clone())
+        .child(initials.to_owned())
+}
+
+/// The scope menu's header button: the filter icon, or the badges of the scoped projects.
+#[derive(IntoElement)]
+struct ScopeTrigger {
+    label: SharedString,
+    scoped: Vec<(String, u32)>,
+    open: bool,
+}
+
+impl Selectable for ScopeTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for ScopeTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.scoped.is_empty() {
+            return ghost_icon_button(
+                "filter-projects",
+                Icon::new(Icons::ListFilter).size_4(),
+                self.label,
+                true,
+                cx,
+            );
+        }
+        let mono = cx.theme().mono_font_family.clone();
+        // Two badges at most, overlapped, as the web's stacked favicons.
+        let size = if self.scoped.len() > 1 { 14. } else { 16. };
+        let badges = h_flex().children(self.scoped.iter().take(2).enumerate().map(
+            |(index, (initials, color))| {
+                monogram(initials, rgb(*color).into(), size, &mono)
+                    .when(index > 0, |badge| badge.ml(px(-6.)))
+            },
+        ));
+        ghost_icon_button("filter-projects", badges, self.label, true, cx)
+    }
 }
 
 /// The top bar's `icon-sm` buttons: `ghost`, or `media-navigation` on the stage art.
@@ -3108,7 +3511,7 @@ fn nav_button(
 
 fn ghost_icon_button(
     id: &'static str,
-    icon: Icon,
+    icon: impl IntoElement,
     label: gpui::SharedString,
     enabled: bool,
     cx: &App,
@@ -3121,7 +3524,7 @@ fn ghost_icon_button(
 
 fn icon_button(
     id: &'static str,
-    icon: Icon,
+    icon: impl IntoElement,
     label: gpui::SharedString,
     enabled: bool,
     idle: Hsla,
@@ -4057,6 +4460,8 @@ impl Render for MainView {
             .on_action(
                 cx.listener(|this, _: &OpenFavoriteEditor, _, cx| this.open_favorite_editor(cx)),
             )
+            .on_action(cx.listener(|this, _: &NewThread, _, cx| this.new_thread(cx)))
+            .on_action(cx.listener(|this, _: &NewScratchThread, _, cx| this.new_scratch_thread(cx)))
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
             .on_action(cx.listener(|this, _: &GoForward, _, cx| this.go_forward(cx)))
             .when(docked, |root| {
