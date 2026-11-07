@@ -1,5 +1,6 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
 use crate::connection::{Action, ActionSender};
+use crate::details::{self, Density, Inputs, Show, VcsStatus};
 use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
@@ -62,7 +63,9 @@ actions!(
         DismissSidebar,
         OpenPermissions,
         GoBack,
-        GoForward
+        GoForward,
+        ToggleDetails,
+        OpenFavoriteEditor
     ]
 );
 
@@ -183,6 +186,18 @@ pub struct MainView {
     branches: HashMap<String, Option<Branch>>,
     /// Roots whose branch was asked for on this connection.
     branches_requested: HashSet<String>,
+    /// Threads (and drafts, by project) whose details card the user closed; it starts open.
+    details_closed: HashSet<String>,
+    /// The version control status per directory the card watched, `None` where it failed.
+    vcs: HashMap<String, Option<VcsStatus>>,
+    /// The directory the connection was last asked to watch.
+    vcs_watching: Option<String>,
+    /// The editor last picked or launched, in place of the web's `t3code:last-editor`.
+    editor_pick: Option<String>,
+    editor_menu_open: bool,
+    editor_menu: Entity<EditorMenu>,
+    /// The main area's width at the last render, for fitting the details card.
+    main_width: Cell<f32>,
     actions: ActionSender,
 }
 
@@ -215,10 +230,16 @@ impl MainView {
         })
         .detach();
         let view = cx.weak_entity();
+        let menu_view = view.clone();
         let permissions = cx.new(|_| PermissionsPanel {
             view,
             selected: RuntimeMode::FullAccess,
             preview: None,
+        });
+        let editor_menu = cx.new(|_| EditorMenu {
+            view: menu_view,
+            editors: Vec::new(),
+            preferred: None,
         });
         Self {
             status,
@@ -253,6 +274,13 @@ impl MainView {
             providers: None,
             branches: HashMap::new(),
             branches_requested: HashSet::new(),
+            details_closed: HashSet::new(),
+            vcs: HashMap::new(),
+            vcs_watching: None,
+            editor_pick: None,
+            editor_menu_open: false,
+            editor_menu,
+            main_width: Cell::new(0.),
             actions,
         }
     }
@@ -277,8 +305,13 @@ impl MainView {
             self.branches.insert(root, branch);
             return cx.notify();
         }
+        if let Status::Vcs { cwd, status } = status {
+            self.vcs.insert(cwd, status);
+            return cx.notify();
+        }
         if matches!(status, Status::Connecting) {
             self.branches_requested.clear();
+            self.vcs.clear();
         }
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
@@ -295,6 +328,7 @@ impl MainView {
             }
         }
         self.request_branch();
+        self.sync_vcs();
         cx.notify();
     }
 
@@ -350,6 +384,7 @@ impl MainView {
         self.selected_thread = route.thread;
         self.sync_thread();
         self.request_branch();
+        self.sync_vcs();
         cx.notify();
     }
 
@@ -400,6 +435,101 @@ impl MainView {
         }
         if self.actions.try_send(Action::LoadBranch { root }).is_err() {
             eprintln!("[ui] could not ask for the branch");
+        }
+    }
+
+    /// Where the details card's state is kept: the open thread, or the project of a draft.
+    fn details_key(&self) -> Option<String> {
+        if let Some(id) = &self.selected_thread {
+            return Some(id.clone());
+        }
+        let shell = self.shell()?;
+        let entry = active_project(self.selected_project.as_deref(), shell)?;
+        Some(format!("draft:{}", entry.id))
+    }
+
+    fn details_open(&self) -> bool {
+        self.details_key()
+            .is_some_and(|key| !self.details_closed.contains(&key))
+    }
+
+    /// The directory the card works on: the thread's worktree, else its project's root.
+    fn details_cwd(&self) -> Option<String> {
+        let shell = self.shell()?;
+        let row = self
+            .selected_thread
+            .as_deref()
+            .and_then(|id| shell.rows.iter().find(|row| row.id == id));
+        if let Some(path) = row.and_then(|row| row.worktree_path.clone()) {
+            return Some(path);
+        }
+        let entry = match row {
+            Some(row) => shell
+                .project_entries
+                .iter()
+                .find(|entry| entry.contains(&row.project_id)),
+            None if self.selected_thread.is_some() => None,
+            None => active_project(self.selected_project.as_deref(), shell),
+        }?;
+        (!entry.scratch && !entry.root.is_empty()).then(|| entry.root.clone())
+    }
+
+    fn toggle_details(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        if !self.details_closed.remove(&key) {
+            self.details_closed.insert(key);
+        }
+        self.editor_menu_open = false;
+        self.sync_vcs();
+        cx.notify();
+    }
+
+    /// Watches the status of the card's directory while the card is open, and only then.
+    fn sync_vcs(&mut self) {
+        let wanted = self.details_open().then(|| self.details_cwd()).flatten();
+        if wanted == self.vcs_watching {
+            return;
+        }
+        self.vcs_watching = wanted.clone();
+        if self.actions.try_send(Action::WatchVcs(wanted)).is_err() {
+            eprintln!("[ui] could not ask for the version control status");
+        }
+    }
+
+    fn installed_editors(&self) -> Vec<&'static str> {
+        self.providers.as_ref().map_or_else(Vec::new, |catalog| {
+            details::installed_editors(catalog.available_editors())
+        })
+    }
+
+    fn preferred_editor(&self) -> Option<&'static str> {
+        details::preferred_editor(self.editor_pick.as_deref(), &self.installed_editors())
+    }
+
+    fn open_in_editor(&mut self, editor: &'static str, cx: &mut Context<Self>) {
+        let Some(cwd) = self.details_cwd() else {
+            return;
+        };
+        self.editor_pick = Some(editor.to_owned());
+        let action = Action::OpenInEditor {
+            cwd,
+            editor: editor.to_owned(),
+        };
+        if self.actions.try_send(action).is_err() {
+            eprintln!("[ui] could not ask to open the editor");
+        }
+        cx.notify();
+    }
+
+    /// The web's `editor.openFavorite`, live while the card's picker is.
+    fn open_favorite_editor(&mut self, cx: &mut Context<Self>) {
+        if !self.details_open() {
+            return;
+        }
+        if let Some(editor) = self.preferred_editor() {
+            self.open_in_editor(editor, cx);
         }
     }
 
@@ -455,8 +585,175 @@ impl MainView {
                     .border_color(border)
                     .when(self.shell().is_some(), |row| {
                         row.child(self.breadcrumb(active, title, cx))
+                            .child(div().flex_1())
+                            .when(self.details_cwd().is_some(), |row| {
+                                row.child(self.details_toggle(cx))
+                            })
                     }),
             )
+    }
+
+    /// The web's `PanelLayoutControls` thread details toggle, pressed while the card is open.
+    fn details_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let pressed = self.details_open();
+        let foreground = cx.theme().foreground;
+        header_icon_button(
+            "toggle-details",
+            Icons::SquareMenu,
+            format!("Toggle thread details ({})", details::TOGGLE_SHORTCUT).into(),
+            cx,
+        )
+        .when(pressed, move |button| {
+            button.bg(foreground.opacity(0.06)).text_color(foreground)
+        })
+        .on_click(cx.listener(|this, _, _, cx| this.toggle_details(cx)))
+    }
+
+    /// The web's `ThreadDetailsCard`: Open in, then the branch and its changes. Environment,
+    /// scripts and git actions are not in this client yet.
+    fn details_card(&self, available: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.details_open() {
+            return None;
+        }
+        let cwd = self.details_cwd()?;
+        let max_height = details::card_height(self.main_width.get(), available)?;
+        let status = self.vcs.get(&cwd).and_then(Option::as_ref);
+        let editors = self.installed_editors();
+        let has_run = self.selected_thread.as_deref().is_some_and(|id| {
+            self.shell()
+                .is_some_and(|shell| shell.rows.iter().any(|row| row.id == id && row.has_run))
+        });
+        let inputs = Inputs {
+            has_cwd: true,
+            is_repo: status.is_some_and(|status| status.local.is_repo),
+            has_editors: !editors.is_empty(),
+            quiet_empty_draft: details::quiet_empty_draft(has_run, status),
+        };
+        let density = details::density_for(max_height, inputs);
+        let show = Show::resolve(density, inputs);
+        if show.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let (border, divider) = (gpui::white().opacity(0.05), theme.border);
+        let mut sections: Vec<AnyElement> = Vec::new();
+        if show.open_in {
+            sections.push(self.open_in_row(&editors, cx).into_any_element());
+        }
+        if show.branch || show.changes {
+            let mut rows = v_flex();
+            if let Some(status) = status.filter(|_| show.branch) {
+                let label = status
+                    .local
+                    .ref_name
+                    .clone()
+                    .unwrap_or_else(|| "Select ref".to_owned());
+                rows = rows.child(detail_row(Icons::GitBranch, label, None, cx));
+            }
+            if let Some(status) = status.filter(|_| show.changes) {
+                let totals = status.changes_totals();
+                let counts = h_flex()
+                    .gap_1()
+                    .child(diff_count(
+                        '+',
+                        totals.insertions,
+                        gpui::rgb(0x22c55e).into(),
+                        cx,
+                    ))
+                    .child(diff_count(
+                        '-',
+                        totals.deletions,
+                        gpui::rgb(0xef4444).into(),
+                        cx,
+                    ));
+                rows = rows.child(detail_row(
+                    Icons::FileDiff,
+                    "Changes".to_owned(),
+                    Some(counts.into_any_element()),
+                    cx,
+                ));
+            }
+            sections.push(rows.into_any_element());
+        }
+        let last = sections.len().saturating_sub(1);
+        let body = sections.into_iter().enumerate().map(|(index, section)| {
+            v_flex()
+                .pt_2()
+                .pb(px(10.))
+                .px_2()
+                .when(density == Density::Full && index < last, |wrap| {
+                    wrap.border_b_1().border_color(divider)
+                })
+                .child(section)
+        });
+        Some(
+            div()
+                .id("thread-details-card")
+                .absolute()
+                .top(px(details::CARD_GAP))
+                .right(px(details::CARD_GAP))
+                .w(px(details::CARD_WIDTH))
+                .max_h(px(max_height))
+                .overflow_y_scroll()
+                .rounded(px(16.))
+                .border_1()
+                .border_color(border)
+                .bg(cx.theme().secondary.opacity(0.8))
+                .shadow_lg()
+                .children(body)
+                .into_any_element(),
+        )
+    }
+
+    /// The web's `OpenInPicker`: the preferred editor, and a menu of the installed ones.
+    fn open_in_row(&self, editors: &[&'static str], cx: &mut Context<Self>) -> impl IntoElement {
+        let preferred = self.preferred_editor();
+        let label = preferred.map_or("Open in", |id| details::editor_label(id));
+        let (foreground, hover) = (cx.theme().foreground, cx.theme().list_hover);
+        let view = cx.entity();
+        let menu = self.editor_menu.clone();
+        menu.update(cx, |menu, _| {
+            menu.editors = editors.to_vec();
+            menu.preferred = preferred;
+        });
+        let content_menu = menu.clone();
+        let popover = Popover::new("editor-menu")
+            .anchor(Anchor::TopRight)
+            .open(self.editor_menu_open)
+            .p_0()
+            .on_open_change(move |open, _, cx| {
+                view.update(cx, |this, cx| {
+                    this.editor_menu_open = *open;
+                    cx.notify();
+                });
+            })
+            .trigger(EditorTrigger { open: false })
+            .content(move |_, _, _| content_menu.clone());
+        h_flex()
+            .gap_1()
+            .child(
+                h_flex()
+                    .id("open-in-editor")
+                    .flex_1()
+                    .min_w_0()
+                    .h_8()
+                    .px_2()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(foreground)
+                    .hover(move |style| style.bg(hover))
+                    .when(preferred.is_none(), |row| row.opacity(0.5))
+                    .child(Icon::new(Icons::SquareArrowOutUpRight).size_4())
+                    .child(div().truncate().child(match preferred {
+                        Some(_) => format!("Open in {label}"),
+                        None => label.to_owned(),
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_favorite_editor(cx))),
+            )
+            .child(popover)
     }
 
     /// The web's `SidebarChrome`: toggle, then the brand and history while the sidebar is shown.
@@ -957,7 +1254,25 @@ impl MainView {
             )
     }
 
+    /// The main content, with the thread details card floating at its top right when it fits.
     fn main_area(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
+        let content = self.main_content(viewport_height, cx);
+        let card = self.details_card(viewport_height - TOPBAR_HEIGHT, cx);
+        div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .when(card.is_some(), |area| {
+                area.pr(px(details::CARD_WIDTH + details::CARD_GAP + 32.))
+            })
+            .child(content)
+            .children(card)
+            .into_any_element()
+    }
+
+    fn main_content(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
         let Some(shell) = self.shell() else {
             return centered(cx)
                 .text_xl()
@@ -1811,6 +2126,129 @@ impl RenderOnce for PermissionsTrigger {
             control.bg(foreground.opacity(0.06)).text_color(foreground)
         })
     }
+}
+
+/// The details card's chevron, as a popover trigger.
+#[derive(IntoElement)]
+struct EditorTrigger {
+    open: bool,
+}
+
+impl Selectable for EditorTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for EditorTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let foreground = cx.theme().foreground;
+        ghost_icon_button(
+            "editor-menu-trigger",
+            Icon::new(Icons::ChevronDown).size_4(),
+            "Choose editor".into(),
+            true,
+            cx,
+        )
+        .when(self.open, move |button| {
+            button.bg(foreground.opacity(0.06)).text_color(foreground)
+        })
+    }
+}
+
+/// The installed editors; clicking one only makes it the preferred one, as on the web.
+struct EditorMenu {
+    view: gpui::WeakEntity<MainView>,
+    editors: Vec<&'static str>,
+    preferred: Option<&'static str>,
+}
+
+impl Render for EditorMenu {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (foreground, muted, hover) = (theme.foreground, theme.muted_foreground, theme.accent);
+        let preferred = self.preferred;
+        v_flex()
+            .w(px(220.))
+            .p_1()
+            .children(self.editors.iter().map(|&id| {
+                h_flex()
+                    .id(id)
+                    .h_8()
+                    .px_2()
+                    .gap_2()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_sm()
+                    .text_color(foreground)
+                    .hover(move |style| style.bg(hover))
+                    .child(div().flex_1().truncate().child(details::editor_label(id)))
+                    .when(preferred == Some(id), |row| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(details::OPEN_FAVORITE_SHORTCUT),
+                        )
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.view
+                            .update(cx, |view, cx| {
+                                view.editor_pick = Some(id.to_owned());
+                                view.editor_menu_open = false;
+                                cx.notify();
+                            })
+                            .ok();
+                        cx.notify();
+                    }))
+            }))
+    }
+}
+
+/// A `h-8` row of the card: icon, label, and a trailing value.
+fn detail_row(
+    icon: Icons,
+    label: String,
+    trailing: Option<AnyElement>,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    h_flex()
+        .h_8()
+        .px_2()
+        .gap_2()
+        .text_sm()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.foreground)
+        .child(Icon::new(icon).size_4().text_color(theme.muted_foreground))
+        .child(div().flex_1().min_w_0().truncate().child(label))
+        .children(trailing)
+}
+
+/// `+N` or `-N`, tinted while non-zero.
+fn diff_count(sign: char, count: u64, tint: Hsla, cx: &App) -> impl IntoElement {
+    let color = if count == 0 {
+        cx.theme().muted_foreground
+    } else {
+        tint
+    };
+    div()
+        .text_xs()
+        .text_color(color)
+        .child(format!("{sign}{}", details::format_diff_count(count)))
 }
 
 /// The web's `ComposerPermissionsSection`: four icon segments, and the shown mode named below.
@@ -3071,6 +3509,8 @@ impl Render for MainView {
         let docked = self.sidebar_open && !narrow;
         let sidebar_width = clamp_sidebar_width(self.sidebar_width, self.brand_width.get(), width);
         let overlay = narrow && self.sidebar_overlay_open;
+        self.main_width
+            .set(width - if docked { sidebar_width } else { 0. });
         v_flex()
             .relative()
             .size_full()
@@ -3084,6 +3524,10 @@ impl Render for MainView {
                 cx.listener(|this, _: &DismissSidebar, _, cx| this.close_sidebar_overlay(cx)),
             )
             .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
+            .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenFavoriteEditor, _, cx| this.open_favorite_editor(cx)),
+            )
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
             .on_action(cx.listener(|this, _: &GoForward, _, cx| this.go_forward(cx)))
             .when(docked, |root| {
@@ -3170,6 +3614,8 @@ mod tests {
             instance_history: Vec::new(),
             pr_lines: Vec::new(),
             last_error: None,
+            worktree_path: None,
+            has_run: false,
         }
     }
 

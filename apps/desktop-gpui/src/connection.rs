@@ -1,12 +1,13 @@
 //! The authenticated RPC WebSocket: connect, keep alive, reconnect.
 
 use crate::auth::{self, AuthError, Credential};
+use crate::details::VcsStatus;
 use crate::electron_dpop;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, SubscribeShell, SubscribeThread,
-    VcsListRefs,
+    Event, PING_FRAME, ProjectsMutate, ServerGetConfig, Session, ShellOpenInEditor, SubscribeShell,
+    SubscribeThread, SubscribeVcsStatus, VcsListRefs,
 };
 use crate::shell::ShellState;
 use crate::status::{Status, StatusSender, publish};
@@ -51,6 +52,13 @@ pub enum Action {
     },
     /// The thread whose transcript the window shows; `None` closes the subscription.
     SelectThread(Option<String>),
+    /// The directory whose version control status the details card shows; `None` stops watching.
+    WatchVcs(Option<String>),
+    /// Launches `editor` (an `EditorId`) on the server's machine at `cwd`.
+    OpenInEditor {
+        cwd: String,
+        editor: String,
+    },
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -63,6 +71,8 @@ impl Action {
             Self::SetProjectPinned { pinned: false, .. } => "unpin project",
             Self::LoadBranch { .. } => "load the branch",
             Self::SelectThread(_) => "open the thread",
+            Self::WatchVcs(_) => "watch the version control status",
+            Self::OpenInEditor { .. } => "open in the editor",
         }
     }
 }
@@ -169,6 +179,7 @@ pub async fn run(
     let mut bearer: Option<String> = None;
     // Outlives a socket: a reconnect subscribes to the thread again.
     let mut selected: Option<String> = None;
+    let mut watched: Option<String> = None;
     let mut backoff = Backoff::new();
     loop {
         publish(status, Status::Connecting);
@@ -184,7 +195,14 @@ pub async fn run(
                     },
                 );
                 backoff.reset();
-                serve(socket, environment, actions, &mut selected, status).await
+                serve(
+                    socket,
+                    environment,
+                    actions,
+                    (&mut selected, &mut watched),
+                    status,
+                )
+                .await
             }
             Err(message) => message,
         };
@@ -251,7 +269,7 @@ async fn serve(
     socket: Socket,
     environment: &Environment,
     actions: &ActionReceiver,
-    selected: &mut Option<String>,
+    (selected, watched): (&mut Option<String>, &mut Option<String>),
     status: &StatusSender,
 ) -> String {
     let (mut sink, mut stream) = socket.split();
@@ -276,13 +294,22 @@ async fn serve(
     };
     // Whatever was clicked while disconnected is stale by now, except which thread is open.
     while let Ok(action) = actions.try_recv() {
-        if let Action::SelectThread(id) = action {
-            *selected = id;
+        match action {
+            Action::SelectThread(id) => *selected = id,
+            Action::WatchVcs(cwd) => *watched = cwd,
+            _ => {}
         }
     }
     let mut threads = Threads::default();
     if let Err(error) = threads
         .select(selected.as_deref(), &mut session, &mut sink)
+        .await
+    {
+        return error;
+    }
+    let mut vcs = VcsWatch::default();
+    if let Err(error) = vcs
+        .select(watched.as_deref(), &mut session, &mut sink)
         .await
     {
         return error;
@@ -314,6 +341,21 @@ async fn serve(
                         }
                         continue;
                     }
+                    Action::WatchVcs(cwd) => {
+                        *watched = cwd.clone();
+                        if let Err(error) =
+                            vcs.select(cwd.as_deref(), &mut session, &mut sink).await
+                        {
+                            return error;
+                        }
+                        continue;
+                    }
+                    Action::OpenInEditor { cwd, editor } => session
+                        .request::<ShellOpenInEditor>(&serde_json::json!({
+                            "cwd": cwd,
+                            "editor": editor,
+                        }))
+                        .map(|(id, frame)| (id, frame, None)),
                     Action::SetProjectPinned { project_id, pinned } => session
                         .request::<ProjectsMutate>(&pin_mutation(project_id, *pinned, command_id()))
                         .map(|(id, frame)| (id, frame, None)),
@@ -357,6 +399,9 @@ async fn serve(
                     }
                     for event in reaction.events {
                         let Some(event) = threads.route(event, status) else {
+                            continue;
+                        };
+                        let Some(event) = vcs.route(event, status) else {
                             continue;
                         };
                         if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
@@ -480,6 +525,97 @@ impl Threads {
                 );
             }
             _ => self.open = None,
+        }
+        None
+    }
+}
+
+/// The open version control subscription, and the interrupted ones whose last frames still arrive.
+#[derive(Default)]
+struct VcsWatch {
+    open: Option<OpenVcs>,
+    stale: HashSet<String>,
+}
+
+struct OpenVcs {
+    cwd: String,
+    request_id: String,
+    status: Option<VcsStatus>,
+}
+
+impl VcsWatch {
+    /// Switches the subscription to `wanted`, interrupting the previous one.
+    async fn select(
+        &mut self,
+        wanted: Option<&str>,
+        session: &mut Session,
+        sink: &mut Sink,
+    ) -> Result<(), String> {
+        if self.open.as_ref().map(|open| open.cwd.as_str()) == wanted {
+            return Ok(());
+        }
+        if let Some(open) = self.open.take() {
+            let frame = session.interrupt(&open.request_id);
+            self.stale.insert(open.request_id);
+            sink.send(Message::text(frame))
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let Some(cwd) = wanted else {
+            return Ok(());
+        };
+        let (request_id, frame) =
+            session.request::<SubscribeVcsStatus>(&serde_json::json!({ "cwd": cwd }))?;
+        self.open = Some(OpenVcs {
+            cwd: cwd.to_owned(),
+            request_id,
+            status: None,
+        });
+        sink.send(Message::text(frame))
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    /// Consumes the events of status requests, publishing the merged status; hands back the rest.
+    fn route(&mut self, event: Event, status: &StatusSender) -> Option<Event> {
+        let id = match &event {
+            Event::Item { request_id, .. }
+            | Event::Done { request_id, .. }
+            | Event::Failed { request_id, .. } => request_id.clone(),
+            _ => return Some(event),
+        };
+        if self.stale.contains(&id) {
+            if !matches!(event, Event::Item { .. }) {
+                self.stale.remove(&id);
+            }
+            return None;
+        }
+        let Some(open) = self.open.as_mut().filter(|open| open.request_id == id) else {
+            return Some(event);
+        };
+        let cwd = open.cwd.clone();
+        match event {
+            Event::Item { value, .. } => {
+                if let Some(next) = VcsStatus::apply(open.status.as_ref(), &value) {
+                    open.status = Some(next.clone());
+                    publish(
+                        status,
+                        Status::Vcs {
+                            cwd,
+                            status: Some(next),
+                        },
+                    );
+                }
+            }
+            Event::Failed { message, .. } => {
+                eprintln!("[rpc] could not watch the status of {cwd}: {message}");
+                self.open = None;
+                publish(status, Status::Vcs { cwd, status: None });
+            }
+            _ => {
+                self.open = None;
+                publish(status, Status::Vcs { cwd, status: None });
+            }
         }
         None
     }
@@ -678,6 +814,53 @@ mod tests {
                 transcript: Err(_),
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn status_events_merge_and_the_stream_ending_clears_it() {
+        let (status, published) = async_channel::unbounded();
+        let item = |id: &str, value: serde_json::Value| Event::Item {
+            request_id: id.to_owned(),
+            value,
+        };
+        let snapshot = serde_json::json!({
+            "_tag": "snapshot",
+            "local": {"isRepo": true, "refName": "main", "workingTree": {"insertions": 1, "deletions": 0}},
+            "remote": null,
+        });
+        let mut watch = VcsWatch {
+            open: Some(OpenVcs {
+                cwd: "/repo".to_owned(),
+                request_id: "3".to_owned(),
+                status: None,
+            }),
+            stale: HashSet::from(["2".to_owned()]),
+        };
+        assert!(watch.route(item("9", snapshot.clone()), &status).is_some());
+        assert!(watch.route(item("2", snapshot.clone()), &status).is_none());
+        assert!(published.try_recv().is_err());
+        assert!(watch.route(item("3", snapshot), &status).is_none());
+        let Ok(Status::Vcs {
+            cwd,
+            status: Some(merged),
+        }) = published.try_recv()
+        else {
+            panic!("the open watch publishes its status");
+        };
+        assert_eq!(
+            (cwd.as_str(), merged.local.working_tree.insertions),
+            ("/repo", 1)
+        );
+        let done = Event::Done {
+            request_id: "3".to_owned(),
+            value: serde_json::Value::Null,
+        };
+        assert!(watch.route(done, &status).is_none());
+        assert!(watch.open.is_none());
+        assert!(matches!(
+            published.try_recv(),
+            Ok(Status::Vcs { status: None, .. })
         ));
     }
 

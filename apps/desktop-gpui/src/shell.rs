@@ -440,6 +440,11 @@ impl ShellState {
                     Some(ThreadsEntryLastErrorClass::UsageLimit) => LastError::UsageLimit,
                     _ => LastError::Other,
                 }),
+            worktree_path: thread
+                .worktree_path
+                .clone()
+                .filter(|path| !path.trim().is_empty()),
+            has_run: thread.latest_run_id.is_some(),
         };
         let rows = SECTION_ORDER
             .into_iter()

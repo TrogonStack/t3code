@@ -241,6 +241,8 @@ struct Config {
     providers: Vec<Provider>,
     #[serde(default)]
     settings: Settings,
+    #[serde(default, rename = "availableEditors", deserialize_with = "lenient")]
+    available_editors: Vec<String>,
 }
 
 /// The provider snapshots and settings of one environment.
@@ -248,6 +250,7 @@ struct Config {
 pub struct Catalog {
     providers: Vec<Provider>,
     settings: Settings,
+    available_editors: Vec<String>,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -291,11 +294,18 @@ impl Catalog {
         let Config {
             providers,
             settings,
+            available_editors,
         } = serde_json::from_value(value).map_err(|error| error.to_string())?;
         Ok(Self {
             providers,
             settings,
+            available_editors,
         })
+    }
+
+    /// The editor ids the server found on its machine (`server.getConfig` `availableEditors`).
+    pub fn available_editors(&self) -> &[String] {
+        &self.available_editors
     }
 
     /// The workspace and permission defaults of a fresh draft in `project`: its override, then the server settings.
@@ -902,6 +912,16 @@ mod tests {
 
     fn catalog(providers: Vec<Value>, settings: Value) -> Catalog {
         Catalog::decode(json!({"providers": providers, "settings": settings})).unwrap()
+    }
+
+    #[test]
+    fn the_installed_editors_ride_along_and_default_to_none() {
+        let with = Catalog::decode(json!({
+            "providers": [], "settings": {}, "availableEditors": ["zed", "file-manager"],
+        }))
+        .unwrap();
+        assert_eq!(with.available_editors(), ["zed", "file-manager"]);
+        assert!(catalog(vec![], json!({})).available_editors().is_empty());
     }
 
     #[test]

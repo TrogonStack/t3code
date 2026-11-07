@@ -40,7 +40,11 @@ gpui_kit_assets::icon_assets!(
         GitPullRequestClosed,
         GitMerge,
         Layers,
-        ArrowRightLeft
+        ArrowRightLeft,
+        SquareMenu,
+        ChevronDown,
+        SquareArrowOutUpRight,
+        FileDiff
     ]
 );
 
@@ -185,6 +189,10 @@ mod tests {
     fn every_catalog_icon_the_app_uses_loads() {
         for icon in [
             IconName::Paperclip,
+            IconName::SquareMenu,
+            IconName::ChevronDown,
+            IconName::SquareArrowOutUpRight,
+            IconName::FileDiff,
             IconName::Pin,
             IconName::PinOff,
             IconName::Search,

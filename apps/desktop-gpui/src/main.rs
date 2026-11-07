@@ -3,6 +3,7 @@ mod auth;
 mod catalog;
 mod config;
 mod connection;
+mod details;
 mod electron_dpop;
 mod environments;
 mod history;
@@ -96,6 +97,8 @@ fn main() {
                 KeyBinding::new("cmd-b", ui::ToggleSidebar, None),
                 KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
                 KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),
+                KeyBinding::new("shift-cmd-b", ui::ToggleDetails, None),
+                KeyBinding::new("cmd-o", ui::OpenFavoriteEditor, None),
                 KeyBinding::new("cmd-[", ui::GoBack, None),
                 KeyBinding::new("cmd-]", ui::GoForward, None),
             ]);

@@ -63,6 +63,24 @@ impl Method for VcsListRefs {
     type Success = Value;
 }
 
+/// `shell.openInEditor`, a unary call that launches an editor on the server's machine.
+pub struct ShellOpenInEditor;
+
+impl Method for ShellOpenInEditor {
+    const TAG: &'static str = "shell.openInEditor";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `subscribeVcsStatus`, a stream of snapshot and update events; `details::VcsStatus` reads them.
+pub struct SubscribeVcsStatus;
+
+impl Method for SubscribeVcsStatus {
+    const TAG: &'static str = "subscribeVcsStatus";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
     match Value::deserialize(deserializer)? {

@@ -1,3 +1,4 @@
+use crate::details::VcsStatus;
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::strip::Branch;
@@ -34,6 +35,12 @@ pub enum Status {
     Branch {
         root: String,
         branch: Option<Branch>,
+    },
+    /// The version control status of a directory the details card watches; `None` when the
+    /// subscription failed or ended.
+    Vcs {
+        cwd: String,
+        status: Option<VcsStatus>,
     },
 }
 
@@ -75,6 +82,10 @@ pub struct ThreadRow {
     pub instance_history: Vec<String>,
     pub pr_lines: Vec<PrLine>,
     pub last_error: Option<LastError>,
+    /// The thread's own worktree, where its changes live; `None` works in the project root.
+    pub worktree_path: Option<String>,
+    /// Whether the thread has ever run, which un-quiets the details card's changes row.
+    pub has_run: bool,
 }
 
 /// The card's error row: `usage_limit` is a warning, any other class an error.
@@ -177,6 +188,7 @@ impl fmt::Display for Status {
             Self::Providers(_) => f.write_str("Providers"),
             Self::Thread { id, .. } => write!(f, "Thread {id}"),
             Self::Branch { root, .. } => write!(f, "Branch of {root}"),
+            Self::Vcs { cwd, .. } => write!(f, "Status of {cwd}"),
         }
     }
 }
