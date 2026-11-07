@@ -4,15 +4,16 @@
 use crate::projects;
 use crate::status::{PrBadge, PrState, Section, ShellView, ThreadRow, TopStatus};
 use crate::wire::generated::{
-    OrchestrationSubscribeShellSuccess as Item,
-    OrchestrationSubscribeShellSuccessVariant4Location as Location,
-    OrchestrationSubscribeShellSuccessVariant5Location as RemovedLocation,
-};
-use crate::wire::generated::{
-    PullRequestsItem, PullRequestsItemSource as LinkSource, SnapshotState as PrSnapshotState,
+    LineageRelationshipToParent as LineageRelationship, PullRequestsItem,
+    PullRequestsItemSource as LinkSource, SnapshotState as PrSnapshotState,
     ThreadsEntryActivityRunStatus as Activity, ThreadsEntryInteractionMode as InteractionMode,
     ThreadsEntryPendingRuntimeRequestKind as RequestKind, ThreadsEntrySettledOverride as Override,
     ThreadsEntryStatus as RunStatus,
+};
+use crate::wire::generated::{
+    OrchestrationSubscribeShellSuccess as Item,
+    OrchestrationSubscribeShellSuccessVariant4Location as Location,
+    OrchestrationSubscribeShellSuccessVariant5Location as RemovedLocation,
 };
 use crate::wire::{Project, Thread};
 use std::cmp::Ordering;
@@ -199,6 +200,14 @@ fn section_of(thread: &Thread, now_ms: i64) -> Section {
     }
 }
 
+/// `isListedThreadLineage` in `packages/contracts/src/orchestrationV2.ts`: subagents and side
+/// chats live inside their parent's view, never in the sidebar. The web also hides tasks linked
+/// environments run for a listed thread (`delegatedUnderParent`); this client does not track them.
+fn is_listed(thread: &Thread) -> bool {
+    thread.lineage.relationship_to_parent != Some(LineageRelationship::Subagent)
+        && thread.lineage.side_chat != Some(true)
+}
+
 fn newest_first(a: (i64, &Thread), b: (i64, &Thread)) -> Ordering {
     b.0.cmp(&a.0).then_with(|| a.1.id.cmp(&b.1.id))
 }
@@ -380,7 +389,7 @@ impl ShellState {
     /// default settings: Working shelf on, no project folders, nothing dragged.
     pub fn view_at(&self, now_ms: i64) -> ShellView {
         let mut sections: [Vec<&Thread>; 5] = Default::default();
-        for thread in self.threads.values() {
+        for thread in self.threads.values().filter(|thread| is_listed(thread)) {
             sections[section_of(thread, now_ms) as usize].push(thread);
         }
         let [pinned, active, working, snoozed, settled] = &mut sections;
@@ -421,7 +430,10 @@ impl ShellState {
         ShellView {
             projects: self.project_count(),
             threads: self.thread_count(),
-            project_entries: projects::build_entries(self.projects.values(), self.threads.values()),
+            project_entries: projects::build_entries(
+                self.projects.values(),
+                self.threads.values().filter(|thread| is_listed(thread)),
+            ),
             rows,
         }
     }
@@ -594,6 +606,34 @@ mod tests {
         for (key, value) in fields {
             thread[*key] = value.clone();
         }
+    }
+
+    #[test]
+    fn subagents_and_side_chats_have_no_sidebar_row() {
+        let view = view_of(vec![
+            thread("top", |_| {}),
+            thread("child", |t| {
+                t["lineage"] = serde_json::json!({
+                    "parentThreadId": "top", "relationshipToParent": "subagent", "rootThreadId": "top"
+                });
+                set(t, &[("settledOverride", "settled".into())]);
+            }),
+            thread("chat", |t| {
+                t["lineage"] = serde_json::json!({
+                    "parentThreadId": "top", "relationshipToParent": null,
+                    "rootThreadId": "top", "sideChat": true
+                });
+                set(t, &[("pinnedAt", "2026-01-01T00:00:00.000Z".into())]);
+            }),
+            thread("forked", |t| {
+                t["lineage"] = serde_json::json!({
+                    "parentThreadId": "top", "relationshipToParent": "fork", "rootThreadId": "top"
+                });
+            }),
+        ]);
+        let mut shown = ids(&view);
+        shown.sort_unstable();
+        assert_eq!(shown, ["forked", "top"]);
     }
 
     #[test]
