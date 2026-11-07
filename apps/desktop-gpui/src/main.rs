@@ -6,6 +6,7 @@ mod connection;
 mod electron_dpop;
 mod environments;
 mod history;
+mod minimap;
 mod projects;
 mod providers;
 mod rpc;

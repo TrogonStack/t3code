@@ -6404,6 +6404,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "libc",
+ "markdown",
  "p256",
  "prettyplease",
  "reqwest",

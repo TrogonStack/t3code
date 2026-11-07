@@ -1,6 +1,7 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
 use crate::connection::{Action, ActionSender};
 use crate::history::History;
+use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::{Catalog, Mark, Trigger};
 use crate::status::{PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus};
@@ -11,9 +12,10 @@ use crate::strip::{
 use crate::thread::{Entry, Kind};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
-    Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment, ListState,
-    MouseButton, MouseDownEvent, ObjectFit, ParentElement, Pixels, Render, RenderOnce, Styled,
-    Window, actions, canvas, div, ease_in_out, img, list, prelude::*, px, rgb,
+    Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
+    ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement,
+    Pixels, Render, RenderOnce, Styled, Window, actions, canvas, div, ease_in_out, img, list,
+    prelude::*, px, rgb,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
@@ -156,6 +158,9 @@ pub struct MainView {
     selected_thread: Option<String>,
     transcript: Option<Transcript>,
     transcript_list: ListState,
+    minimap_items: Vec<minimap::Item>,
+    /// The hovered tick and its card text, parsed once when the hover lands on it.
+    minimap_hover: Option<(usize, minimap::Preview)>,
     /// Local view state until the draft's mode is sent to the server.
     runtime_mode: Option<RuntimeMode>,
     permissions: Entity<PermissionsPanel>,
@@ -227,6 +232,8 @@ impl MainView {
             transcript: None,
             // Overdraw keeps a screenful of rows measured beyond each edge.
             transcript_list: ListState::new(0, ListAlignment::Top, px(600.)),
+            minimap_items: Vec::new(),
+            minimap_hover: None,
             runtime_mode: None,
             permissions,
             selected_project: None,
@@ -305,6 +312,10 @@ impl MainView {
                 self.transcript_list.set_follow_mode(FollowMode::Tail);
             }
         }
+        self.minimap_items = result
+            .as_ref()
+            .map_or_else(|_| Vec::new(), |entries| minimap::items(entries));
+        self.minimap_hover = None;
         self.transcript = Some(Transcript { id, result });
     }
 
@@ -892,7 +903,7 @@ impl MainView {
             )
     }
 
-    fn main_area(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn main_area(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
         let Some(shell) = self.shell() else {
             return centered(cx)
                 .text_xl()
@@ -907,7 +918,7 @@ impl MainView {
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .child(self.transcript_view(cx))
+                .child(self.transcript_view(viewport_height, cx))
                 .child(
                     v_flex()
                         .w_full()
@@ -945,7 +956,7 @@ impl MainView {
     }
 
     /// The open thread's rows, or why there are none yet.
-    fn transcript_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn transcript_view(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
         let note = |text: String| {
             centered(cx)
                 .text_sm()
@@ -958,6 +969,7 @@ impl MainView {
             Some(Err(message)) => note(format!("Could not load this thread: {message}")),
             Some(Ok(entries)) if entries.is_empty() => note("No messages yet".to_owned()),
             Some(Ok(_)) => div()
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .w_full()
@@ -968,8 +980,193 @@ impl MainView {
                     )
                     .size_full(),
                 )
+                .children(self.transcript_minimap(viewport_height, cx))
                 .into_any_element(),
         }
+    }
+
+    /// The rows on screen, from the list's last layout.
+    fn visible_rows(&self) -> Option<(usize, usize)> {
+        let viewport = self.transcript_list.viewport_bounds();
+        if viewport.size.height <= px(0.) {
+            return None;
+        }
+        let start = self.transcript_list.logical_scroll_top().item_ix;
+        let mut end = start;
+        for ix in start..self.transcript_list.item_count() {
+            match self.transcript_list.bounds_for_item(ix) {
+                Some(bounds) if bounds.top() < viewport.bottom() => end = ix,
+                _ => break,
+            }
+        }
+        Some((start, end))
+    }
+
+    /// The web's `TimelineMinimap`: a tick per user turn at the left edge, brighter while the turn
+    /// is on screen, with a card of the turn on hover and a click that scrolls to it.
+    fn transcript_minimap(
+        &self,
+        viewport_height: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let items = &self.minimap_items;
+        let count = items.len();
+        let viewport = self.transcript_list.viewport_bounds();
+        let (width, height) = (
+            f32::from(viewport.size.width),
+            f32::from(viewport.size.height),
+        );
+        let hit_width = minimap::hit_strip_width(width);
+        if count < minimap::MIN_ITEMS || hit_width <= 0. || height <= 0. {
+            return None;
+        }
+        let theme = cx.theme();
+        let (foreground, muted, border, popover) = (
+            theme.foreground,
+            theme.muted_foreground,
+            theme.border,
+            theme.popover,
+        );
+        let rail_height = minimap::rail_height(count, viewport_height);
+        let rail_top = (height - rail_height) / 2.;
+        let window_top = f32::from(viewport.top()) + rail_top;
+        let hover = self
+            .minimap_hover
+            .as_ref()
+            .filter(|(index, _)| *index < count);
+        let hover_index = hover.map(|(index, _)| *index);
+        let visible = self.visible_rows();
+        let persistent = minimap::has_persistent_gutter(width);
+        let strips = items.iter().enumerate().map(|(index, item)| {
+            let distance = hover_index.map(|active| index.abs_diff(active));
+            let top = minimap::top_percent(index, count) / 100. * rail_height;
+            div()
+                .absolute()
+                .left_0()
+                .top(px(top - 1.))
+                .h(px(2.))
+                .w(px(24. * minimap::strip_scale(distance)))
+                .rounded_full()
+                .bg(muted.opacity(if distance == Some(0) { 0.6 } else { 0.25 }))
+                .when(minimap::in_view(item.row, visible), |strip| {
+                    strip.child(
+                        div()
+                            .size_full()
+                            .rounded_full()
+                            .bg(foreground.opacity(0.55)),
+                    )
+                })
+        });
+        let card = hover.map(|(index, preview)| {
+            let top = minimap::top_percent(*index, count) / 100. * rail_height;
+            // The web shifts the card by a share of its own height, which GPUI cannot do before
+            // layout, so the card sits in a zero-height row that is centered, or pinned, on the tick.
+            let shift = minimap::card_shift(*index, count);
+            div()
+                .absolute()
+                .left(px(32.))
+                .top(px(top))
+                .w(px(320.))
+                .h_0()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .when(shift == 0., |row| row.justify_start())
+                .when(shift == -1., |row| row.justify_end())
+                .child(
+                    div()
+                        .id("minimap-card")
+                        .flex_shrink_0()
+                        .p_3()
+                        .rounded(px(12.))
+                        .border_1()
+                        .border_color(border)
+                        .bg(popover)
+                        .shadow_xl()
+                        .on_mouse_move(|_, _, cx| cx.stop_propagation())
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            div()
+                                .truncate()
+                                .text_sm()
+                                .line_height(px(20.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(
+                                    preview
+                                        .user
+                                        .clone()
+                                        .unwrap_or_else(|| "User message".to_owned()),
+                                ),
+                        )
+                        .children(preview.assistant.clone().map(|text| {
+                            div()
+                                .mt_1()
+                                .line_clamp(3)
+                                .text_sm()
+                                .line_height(px(20.))
+                                .text_color(muted)
+                                .child(text)
+                        })),
+                )
+        });
+        Some(
+            div()
+                .id("transcript-minimap")
+                .absolute()
+                .left(px(minimap::HIT_STRIP_LEFT_PX))
+                .top(px(rail_top))
+                .h(px(rail_height))
+                .w(px(if hover.is_some() { 352. } else { hit_width }))
+                .cursor_pointer()
+                .when(!persistent && hover.is_none(), |rail| rail.opacity(0.))
+                .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                    let y = f32::from(event.position.y);
+                    let index = minimap::index_from_pointer(
+                        this.minimap_items.len(),
+                        window_top,
+                        rail_height,
+                        y,
+                    );
+                    if index == this.minimap_hover.as_ref().map(|(index, _)| *index) {
+                        return;
+                    }
+                    this.minimap_hover = index.and_then(|index| {
+                        let item = this.minimap_items.get(index)?;
+                        Some((index, minimap::preview(item)))
+                    });
+                    cx.notify();
+                }))
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    if !hovered && this.minimap_hover.take().is_some() {
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    let row = this
+                        .minimap_hover
+                        .as_ref()
+                        .and_then(|(index, _)| this.minimap_items.get(*index).map(|item| item.row));
+                    if let Some(item_ix) = row {
+                        this.transcript_list.scroll_to(ListOffset {
+                            item_ix,
+                            offset_in_item: px(0.),
+                        });
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left(px(12.))
+                        .h_full()
+                        .w(px(1.))
+                        .bg(border.opacity(0.15)),
+                )
+                .children(strips)
+                .children(card)
+                .into_any_element(),
+        )
     }
 
     /// One row in the web's 720px column: the user's words in a bubble on the right, the
@@ -2570,7 +2767,7 @@ impl Render for MainView {
                     .when(docked, |row| {
                         row.child(self.sidebar(sidebar_width, window, cx))
                     })
-                    .child(self.main_area(cx)),
+                    .child(self.main_area(f32::from(window.viewport_size().height), cx)),
             )
             .when(docked, |root| {
                 root.child(self.sidebar_rail(sidebar_width, cx))
