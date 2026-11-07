@@ -1,11 +1,12 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
+use crate::branch_picker::{self, BranchPicker};
 use crate::connection::{Action, ActionSender, new_project_id};
 use crate::details::{self, VcsStatus};
 use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, NewProject, ProjectEntry};
-use crate::providers::{Catalog, Mark, Trigger};
+use crate::providers::{Catalog, Mark, Pick, Trigger};
 use crate::slow_requests;
 use crate::status::{
     LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
@@ -194,6 +195,18 @@ pub struct MainView {
     /// Hover styles cannot change layout, so the send button's hover growth is view state.
     send_hovered: bool,
     permissions_open: bool,
+    workspace_open: bool,
+    /// The workspace mode the user picked for a draft, by project id.
+    env_modes: HashMap<String, EnvMode>,
+    /// The ref a new worktree will start from, by project id.
+    draft_bases: HashMap<String, Branch>,
+    branch_picker: Entity<BranchPicker>,
+    model_open: bool,
+    /// The provider instance the model picker's sidebar shows.
+    model_instance: Option<String>,
+    model_search: Entity<InputState>,
+    /// The model picked in each composer (an open thread or a project's draft), by details key.
+    model_picks: HashMap<String, Pick>,
     selected_thread: Option<String>,
     transcript: Option<Transcript>,
     transcript_list: ListState,
@@ -298,6 +311,18 @@ impl MainView {
             selected: RuntimeMode::FullAccess,
             preview: None,
         });
+        let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search models..."));
+        cx.subscribe(&model_search, |_, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        let branch_picker = cx.new(|cx| BranchPicker::new(actions.clone(), window, cx));
+        cx.subscribe(&branch_picker, |this, _, event: &branch_picker::Event, cx| {
+            this.on_branch_event(event, cx)
+        })
+        .detach();
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
             .detach();
@@ -317,6 +342,14 @@ impl MainView {
             reserved_composer_height: Cell::new(0.),
             send_hovered: false,
             permissions_open: false,
+            workspace_open: false,
+            env_modes: HashMap::new(),
+            draft_bases: HashMap::new(),
+            branch_picker,
+            model_open: false,
+            model_instance: None,
+            model_search,
+            model_picks: HashMap::new(),
             selected_thread: None,
             transcript: None,
             // Overdraw keeps a screenful of rows measured beyond each edge.
@@ -445,6 +478,11 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= branch_picker::TOKEN_BASE {
+                self.branch_picker
+                    .update(cx, |picker, cx| picker.on_call(token, event, cx));
+                return;
+            }
             self.card
                 .update(cx, |card, cx| card.on_call(token, event, cx));
             return;
@@ -2862,7 +2900,11 @@ impl MainView {
     }
 
     /// The web's `ComposerSurface.ContextStrip` under the composer; none for the scratch project.
-    fn context_strip(&self, project: &ProjectEntry, cx: &App) -> Option<impl IntoElement> {
+    fn context_strip(
+        &self,
+        project: &ProjectEntry,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let Status::Connected { label, machine, .. } = &self.status else {
             return None;
         };
@@ -2874,19 +2916,27 @@ impl MainView {
             |c| c.defaults(Some(&project.id)),
         );
         let environment = strip::environment_label(label);
-        let branch = self
-            .branches
-            .get(&project.root)
-            .and_then(Option::as_ref)
-            .map(|branch| {
-                let label = branch.label(defaults.env_mode, defaults.start_from_origin);
-                // The branch is the one label that gives way in a narrow window.
-                strip_control("branch", Icons::GitBranch, label.clone(), label, cx)
-                    .flex_shrink(1.)
-                    .min_w_0()
-            });
-        let is_repo = branch.is_some();
-        let workspace = defaults.env_mode;
+        let workspace = self
+            .env_modes
+            .get(&project.id)
+            .copied()
+            .unwrap_or(defaults.env_mode);
+        let current = self.branches.get(&project.root).and_then(Option::as_ref);
+        let is_repo = current.is_some();
+        let shown = strip::shown_branch(workspace, current, self.draft_bases.get(&project.id));
+        let branch_label =
+            shown.map(|branch| branch.label(workspace, defaults.start_from_origin));
+        self.branch_picker
+            .update(cx, |picker, _| picker.sync(&project.root, workspace));
+        let branch = match branch_label.filter(|_| is_repo) {
+            Some(label) => Some(self.branch_popover(label, cx)),
+            None => None,
+        };
+        let workspace_control = if is_repo {
+            Some(self.workspace_popover(&project.id, workspace, cx))
+        } else {
+            None
+        };
         let runtime_mode = self.runtime_mode.unwrap_or(defaults.runtime_mode);
         Some(
             h_flex()
@@ -2895,27 +2945,123 @@ impl MainView {
                 .gap_1()
                 .px_2()
                 .pt_2()
-                .child(strip_control(
-                    "host",
-                    machine_icon(*machine),
-                    environment.clone(),
-                    strip::tooltip_text(&environment, Some(HOST_SHORTCUT)),
-                    cx,
-                ))
-                .children(is_repo.then(|| strip_separator(cx)))
-                .children(is_repo.then(|| {
+                .child(
+                    // One environment is the only one a draft can run on, so the host is a label.
                     strip_control(
-                        "workspace",
-                        workspace_icon(workspace),
-                        workspace.label().to_owned(),
-                        strip::tooltip_text(workspace.label(), Some(WORKSPACE_SHORTCUT)),
+                        "host",
+                        machine_icon(*machine),
+                        environment.clone(),
+                        strip::tooltip_text(&environment, Some(HOST_SHORTCUT)),
+                        false,
                         cx,
-                    )
-                }))
+                    ),
+                )
+                .children(is_repo.then(|| strip_separator(cx)))
+                .children(workspace_control)
                 .child(div().flex_1())
                 .children(branch)
                 .child(self.permissions_popover(runtime_mode, cx)),
         )
+    }
+
+    /// The web's `BranchToolbarEnvModeSelector`: a menu of the two workspace modes.
+    fn workspace_popover(
+        &self,
+        project_id: &str,
+        mode: EnvMode,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let view = cx.entity();
+        let project_id = project_id.to_owned();
+        Popover::new("workspace")
+            .anchor(Anchor::BottomLeft)
+            .open(self.workspace_open)
+            .p_0()
+            .on_open_change({
+                let view = view.clone();
+                move |open, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.workspace_open = *open;
+                        cx.notify();
+                    });
+                }
+            })
+            .trigger(StripTrigger {
+                id: "workspace",
+                icon: workspace_icon(mode),
+                label: mode.label().to_owned(),
+                tip: strip::tooltip_text(mode.label(), Some(WORKSPACE_SHORTCUT)),
+                shrink: false,
+                open: false,
+            })
+            .content(move |_, _, cx| {
+                let theme = cx.theme();
+                let (muted, hover, selected) =
+                    (theme.muted_foreground, theme.list_hover, theme.list_active);
+                let rows = EnvMode::ALL.into_iter().map(|choice| {
+                    let (view, project_id) = (view.clone(), project_id.clone());
+                    h_flex()
+                        .id(("workspace-mode", choice as usize))
+                        .gap(px(6.))
+                        .px_2()
+                        .py_1p5()
+                        .items_center()
+                        .rounded_md()
+                        .text_sm()
+                        .cursor_pointer()
+                        .when(choice == mode, |row| row.bg(selected))
+                        .hover(move |style| style.bg(hover))
+                        .child(Icon::new(workspace_icon(choice)).size(px(12.)))
+                        .child(div().flex_1().child(choice.label()))
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.env_modes.insert(project_id.clone(), choice);
+                                this.workspace_open = false;
+                                cx.notify();
+                            });
+                        })
+                });
+                v_flex()
+                    .w(px(224.))
+                    .p_1()
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(muted)
+                            .child("Workspace"),
+                    )
+                    .children(rows)
+            })
+            .into_any_element()
+    }
+
+    /// The web's `BranchToolbarBranchSelector` in the composer strip.
+    fn branch_popover(&self, label: String, cx: &mut Context<Self>) -> AnyElement {
+        let picker = self.branch_picker.clone();
+        let menu = picker.read(cx).menu(&picker);
+        Popover::new("branch")
+            .anchor(Anchor::BottomRight)
+            .open(picker.read(cx).is_open())
+            .p_0()
+            .on_open_change({
+                let picker = picker.clone();
+                move |open, window, cx| {
+                    picker.update(cx, |picker, cx| picker.set_open(*open, window, cx));
+                }
+            })
+            .trigger(StripTrigger {
+                id: "branch",
+                icon: Icons::GitBranch,
+                tip: label.clone(),
+                label,
+                shrink: true,
+                open: false,
+            })
+            .content(move |_, window, cx| menu.render(window, cx))
+            .into_any_element()
     }
 
     /// The web's `ComposerContextPermissions` menu: opens above the chip, aligned to its end.
@@ -2940,6 +3086,62 @@ impl MainView {
                 content_panel.update(cx, |panel, _| panel.selected = mode);
                 content_panel.clone()
             })
+    }
+
+    fn on_branch_event(&mut self, event: &branch_picker::Event, cx: &mut Context<Self>) {
+        match event {
+            branch_picker::Event::Base(branch) => {
+                if let Some(id) = self.draft_project().map(|entry| entry.id.clone()) {
+                    self.draft_bases.insert(id, branch.clone());
+                }
+            }
+            branch_picker::Event::Switched => {
+                if let Some(root) = self.draft_project().map(|entry| entry.root.clone()) {
+                    self.branches_requested.remove(&root);
+                    self.request_branch();
+                }
+            }
+            branch_picker::Event::Failed { title, message } => {
+                let toast = Toast::new(*title)
+                    .kind(ToastKind::Error)
+                    .description(message.clone());
+                self.toasts.update(cx, |toasts, cx| {
+                    toasts.add(toast, cx);
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// The project the composer's draft belongs to.
+    fn draft_project(&self) -> Option<&ProjectEntry> {
+        active_project(self.selected_project.as_deref(), self.shell()?)
+    }
+
+    /// The model picked for the composer in view, when it still resolves.
+    fn model_pick(&self, key: Option<&str>) -> Option<&Pick> {
+        self.model_picks.get(key?)
+    }
+
+    fn pick_model(&mut self, instance_id: &str, slug: &str, cx: &mut Context<Self>) {
+        let project = self.selected_project.clone().filter(|id| !id.is_empty());
+        let picked = self
+            .providers
+            .as_ref()
+            .and_then(|catalog| catalog.pick(project.as_deref(), instance_id, slug));
+        self.model_open = false;
+        match (picked, self.details_key()) {
+            (Some(pick), Some(key)) => {
+                self.model_picks.insert(key, pick);
+            }
+            _ => {
+                let toast = Toast::new("That model is no longer available.").kind(ToastKind::Error);
+                self.toasts.update(cx, |toasts, cx| {
+                    toasts.add(toast, cx);
+                });
+            }
+        }
+        cx.notify();
     }
 
     fn open_permissions(&mut self, cx: &mut Context<Self>) {
@@ -3015,6 +3217,7 @@ fn strip_control(
     icon: Icons,
     label: String,
     tip: String,
+    interactive: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
@@ -3030,8 +3233,11 @@ fn strip_control(
         .rounded(px(8.))
         .text_xs()
         .text_color(muted)
-        .cursor_pointer()
-        .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
+        .when(interactive, |control| {
+            control
+                .cursor_pointer()
+                .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
+        })
         .tooltip(tooltip(tip))
         .child(Icon::new(icon).size(px(12.)))
         .child(
@@ -3043,6 +3249,48 @@ fn strip_control(
                 .text_ellipsis()
                 .child(label),
         )
+}
+
+/// A strip control as a popover trigger.
+#[derive(IntoElement)]
+struct StripTrigger {
+    id: &'static str,
+    icon: Icons,
+    label: String,
+    tip: String,
+    shrink: bool,
+    open: bool,
+}
+
+impl Selectable for StripTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for StripTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tip = if self.open { String::new() } else { self.tip };
+        let foreground = cx.theme().foreground;
+        strip_control(self.id, self.icon, self.label, tip, true, cx)
+            .when(self.shrink, |control| control.flex_shrink(1.).min_w_0())
+            .when(self.open, move |control| {
+                control.bg(foreground.opacity(0.06)).text_color(foreground)
+            })
+    }
 }
 
 /// The permissions chip as a popover trigger.
@@ -3083,6 +3331,7 @@ impl RenderOnce for PermissionsTrigger {
             runtime_icon(self.mode),
             self.mode.label().to_owned(),
             tip,
+            true,
             cx,
         );
         let foreground = cx.theme().foreground;
