@@ -441,6 +441,7 @@ impl Catalog {
     }
 
     /// The trigger a fresh draft in `project` shows; `None` when no provider is selectable.
+    #[cfg(test)]
     pub fn trigger(&self, project: Option<&str>) -> Option<Trigger> {
         self.trigger_for(project, None)
     }
@@ -617,7 +618,7 @@ pub fn rank_models<'a>(
                 ranked.push((0, order, instance, model));
                 continue;
             }
-            if fields[..2].iter().any(|field| *field == normalized) {
+            if fields[..2].contains(&normalized) {
                 ranked.push((-1000, order, instance, model));
                 continue;
             }

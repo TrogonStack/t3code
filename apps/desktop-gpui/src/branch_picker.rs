@@ -7,9 +7,7 @@ use crate::ref_picker::RefMenu;
 use crate::refs::Page;
 use crate::status::CallEvent;
 use crate::strip::{Branch, EnvMode};
-use gpui::{
-    AppContext as _, Context, Entity, EventEmitter, ScrollHandle, Window,
-};
+use gpui::{AppContext as _, Context, Entity, EventEmitter, ScrollHandle, Window};
 use gpui_component::input::{InputEvent, InputState};
 use serde_json::{Value, json};
 use std::{collections::HashMap, rc::Rc};
@@ -24,7 +22,10 @@ pub enum Event {
     Base(Branch),
     /// The checkout of `cwd` moved to another ref.
     Switched,
-    Failed { title: &'static str, message: String },
+    Failed {
+        title: &'static str,
+        message: String,
+    },
 }
 
 impl EventEmitter<Event> for BranchPicker {}

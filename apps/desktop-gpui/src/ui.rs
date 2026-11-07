@@ -6,7 +6,7 @@ use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, NewProject, ProjectEntry};
-use crate::providers::{Catalog, Mark, Pick, Trigger};
+use crate::providers::{self, Catalog, Mark, Pick, Trigger};
 use crate::slow_requests;
 use crate::status::{
     LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
@@ -319,9 +319,10 @@ impl MainView {
         })
         .detach();
         let branch_picker = cx.new(|cx| BranchPicker::new(actions.clone(), window, cx));
-        cx.subscribe(&branch_picker, |this, _, event: &branch_picker::Event, cx| {
-            this.on_branch_event(event, cx)
-        })
+        cx.subscribe(
+            &branch_picker,
+            |this, _, event: &branch_picker::Event, cx| this.on_branch_event(event, cx),
+        )
         .detach();
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
@@ -2924,14 +2925,12 @@ impl MainView {
         let current = self.branches.get(&project.root).and_then(Option::as_ref);
         let is_repo = current.is_some();
         let shown = strip::shown_branch(workspace, current, self.draft_bases.get(&project.id));
-        let branch_label =
-            shown.map(|branch| branch.label(workspace, defaults.start_from_origin));
+        let branch_label = shown.map(|branch| branch.label(workspace, defaults.start_from_origin));
         self.branch_picker
             .update(cx, |picker, _| picker.sync(&project.root, workspace));
-        let branch = match branch_label.filter(|_| is_repo) {
-            Some(label) => Some(self.branch_popover(label, cx)),
-            None => None,
-        };
+        let branch = branch_label
+            .filter(|_| is_repo)
+            .map(|label| self.branch_popover(label, cx));
         let workspace_control = if is_repo {
             Some(self.workspace_popover(&project.id, workspace, cx))
         } else {
@@ -3152,11 +3151,184 @@ impl MainView {
         cx.notify();
     }
 
+    /// The web's `ProviderModelPicker`: instances in a sidebar, a search, and the model list.
+    fn model_popover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let catalog = self.providers.as_ref()?;
+        let project = self.selected_project.clone().filter(|id| !id.is_empty());
+        let key = self.details_key();
+        let trigger = catalog.trigger_for(project.as_deref(), self.model_pick(key.as_deref()))?;
+        let instances = catalog.picker(project.as_deref());
+        let (view, search) = (cx.entity(), self.model_search.clone());
+        let shown = self
+            .model_instance
+            .clone()
+            .unwrap_or_else(|| trigger.instance_id.clone());
+        let current = (trigger.instance_id.clone(), trigger.slug.clone());
+        Some(
+            Popover::new("model-picker")
+                .anchor(Anchor::BottomRight)
+                .open(self.model_open)
+                .track_focus(&search.focus_handle(cx))
+                .p_0()
+                .on_open_change({
+                    let (view, search) = (view.clone(), search.clone());
+                    move |open, window, cx| {
+                        search.update(cx, |state, cx| state.set_value("", window, cx));
+                        view.update(cx, |this, cx| {
+                            this.model_open = *open;
+                            this.model_instance = None;
+                            cx.notify();
+                        });
+                    }
+                })
+                .trigger(ModelTrigger {
+                    trigger,
+                    open: self.model_open,
+                })
+                .content(move |_, _, cx| {
+                    let query = search.read(cx).value();
+                    let theme = cx.theme();
+                    let (muted, hover, selected) =
+                        (theme.muted_foreground, theme.list_hover, theme.list_active);
+                    let (border, foreground) = (theme.border, theme.foreground);
+                    let searching = !query.trim().is_empty();
+                    let listed: Vec<_> = if searching {
+                        providers::rank_models(&instances, &query)
+                    } else {
+                        instances
+                            .iter()
+                            .filter(|instance| instance.instance_id == shown)
+                            .flat_map(|instance| instance.models.iter().map(move |m| (instance, m)))
+                            .collect()
+                    };
+                    let sidebar = instances.iter().enumerate().map(|(index, instance)| {
+                        let (view, id) = (view.clone(), instance.instance_id.clone());
+                        let usable = instance.unavailable.is_none();
+                        let active = !searching && instance.instance_id == shown;
+                        let note = instance.unavailable.clone();
+                        div()
+                            .id(("model-instance", index))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(32.))
+                            .rounded_md()
+                            .when(active, |item| item.bg(selected))
+                            .when(usable, |item| {
+                                item.cursor_pointer().hover(move |style| style.bg(hover))
+                            })
+                            .when(!usable, |item| item.opacity(0.45))
+                            .tooltip(tooltip(note.unwrap_or_else(|| instance.name.clone())))
+                            .child(provider_mark(&instance.mark, 1., cx))
+                            .when(usable, |item| {
+                                item.on_click(move |_, _, cx| {
+                                    view.update(cx, |this, cx| {
+                                        this.model_instance = Some(id.clone());
+                                        cx.notify();
+                                    });
+                                })
+                            })
+                    });
+                    let rows = listed.iter().enumerate().map(|(index, (instance, model))| {
+                        let (view, id, slug) = (
+                            view.clone(),
+                            instance.instance_id.clone(),
+                            model.slug.clone(),
+                        );
+                        let chosen = (id.as_str(), slug.as_str())
+                            == (current.0.as_str(), current.1.as_str());
+                        let usable = instance.unavailable.is_none();
+                        h_flex()
+                            .id(("model-row", index))
+                            .gap_2()
+                            .px_2()
+                            .py_1p5()
+                            .items_center()
+                            .rounded_md()
+                            .text_sm()
+                            .when(usable, |row| {
+                                row.cursor_pointer().hover(move |style| style.bg(hover))
+                            })
+                            .when(!usable, |row| row.opacity(0.45))
+                            .tooltip(tooltip(model.title.clone()))
+                            .when(searching, |row| {
+                                row.child(provider_mark(&instance.mark, 1., cx))
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(model.label.clone()),
+                            )
+                            .when(chosen, |row| {
+                                row.child(Icon::new(IconName::Check).small().text_color(foreground))
+                            })
+                            .when(usable, |row| {
+                                row.on_click(move |_, _, cx| {
+                                    view.update(cx, |this, cx| this.pick_model(&id, &slug, cx));
+                                })
+                            })
+                    });
+                    h_flex()
+                        .w(px(448.))
+                        .h(px(320.))
+                        .child(
+                            v_flex()
+                                .gap_1()
+                                .p_1()
+                                .border_r_1()
+                                .border_color(border.opacity(0.7))
+                                .children(sidebar),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div().px_3().pt(px(10.)).child(
+                                        h_flex()
+                                            .pb(px(6.))
+                                            .border_b_1()
+                                            .border_color(border.opacity(0.7))
+                                            .child(
+                                                Input::new(&search)
+                                                    .appearance(false)
+                                                    .h(px(26.))
+                                                    .px_0()
+                                                    .prefix(
+                                                        Icon::new(IconName::Search)
+                                                            .size_4()
+                                                            .text_color(muted.opacity(0.55)),
+                                                    ),
+                                            ),
+                                    ),
+                                )
+                                .child(
+                                    v_flex()
+                                        .id("model-list")
+                                        .flex_1()
+                                        .overflow_y_scroll()
+                                        .p_1()
+                                        .children(rows)
+                                        .when(listed.is_empty(), |list| {
+                                            list.child(
+                                                div()
+                                                    .p_2()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("No matching models."),
+                                            )
+                                        }),
+                                ),
+                        )
+                })
+                .into_any_element(),
+        )
+    }
+
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let trigger = self.providers.as_ref().and_then(|catalog| {
-            let project = self.selected_project.as_deref();
-            catalog.trigger(project.filter(|id| !id.is_empty()))
-        });
+        let model_picker = self.model_popover(cx);
         v_flex()
             .w(px(720.))
             .max_w_full()
@@ -3190,22 +3362,19 @@ impl MainView {
                         cx,
                     ))
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .children(trigger.map(|trigger| model_trigger(&trigger, cx)))
-                            .child(
-                                send_button(
-                                    !self.composer.read(cx).value().trim().is_empty(),
-                                    self.send_hovered,
-                                    cx,
-                                )
-                                .on_hover(cx.listener(
-                                    |this, hovered: &bool, _, cx| {
-                                        this.send_hovered = *hovered;
-                                        cx.notify();
-                                    },
-                                )),
-                            ),
+                        h_flex().gap_2().children(model_picker).child(
+                            send_button(
+                                !self.composer.read(cx).value().trim().is_empty(),
+                                self.send_hovered,
+                                cx,
+                            )
+                            .on_hover(cx.listener(
+                                |this, hovered: &bool, _, cx| {
+                                    this.send_hovered = *hovered;
+                                    cx.notify();
+                                },
+                            )),
+                        ),
                     ),
             )
     }
@@ -3466,7 +3635,42 @@ fn runtime_icon(mode: RuntimeMode) -> Icons {
 }
 
 /// The web's `ProviderModelPicker` trigger, a `ComposerControl` at `sm`. Clicking does nothing yet.
-fn model_trigger(trigger: &Trigger, cx: &App) -> gpui::Stateful<gpui::Div> {
+/// The model chip as a popover trigger.
+#[derive(IntoElement)]
+struct ModelTrigger {
+    trigger: Trigger,
+    open: bool,
+}
+
+impl Selectable for ModelTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for ModelTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let foreground = cx.theme().foreground;
+        model_trigger(&self.trigger, self.open, cx).when(self.open, move |chip| {
+            chip.bg(foreground.opacity(0.06)).text_color(foreground)
+        })
+    }
+}
+
+fn model_trigger(trigger: &Trigger, open: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
     let (foreground, muted) = (theme.foreground, theme.muted_foreground);
     div()
@@ -3484,8 +3688,7 @@ fn model_trigger(trigger: &Trigger, cx: &App) -> gpui::Stateful<gpui::Div> {
         .text_color(foreground.opacity(0.8))
         .cursor_pointer()
         .hover(move |style| style.bg(foreground.opacity(0.06)).text_color(foreground))
-        .tooltip(tooltip(trigger.title.clone()))
-        .on_click(|_, _, _| {})
+        .when(!open, |chip| chip.tooltip(tooltip(trigger.title.clone())))
         .child(provider_mark(&trigger.mark, 1., cx))
         .child(
             div()

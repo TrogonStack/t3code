@@ -16,6 +16,9 @@ use gpui_component::{
 use gpui_kit_assets::IconName as Icons;
 use std::rc::Rc;
 
+type PickHandler = Rc<dyn Fn(String, bool, &mut App)>;
+type CreateHandler = Rc<dyn Fn(String, &mut App)>;
+
 /// What a ref picker's popover draws, snapshotted at each render of its owner. The owner decides
 /// what picking, creating and paging do.
 pub struct RefMenu {
@@ -30,8 +33,8 @@ pub struct RefMenu {
     /// Whether a typed name offers to create a ref.
     pub can_create: bool,
     /// A row was clicked: its name and whether it is the current ref.
-    pub on_pick: Rc<dyn Fn(String, bool, &mut App)>,
-    pub on_create: Rc<dyn Fn(String, &mut App)>,
+    pub on_pick: PickHandler,
+    pub on_create: CreateHandler,
     /// The list scrolled near its end with more refs to load.
     pub on_more: Rc<dyn Fn(&mut App)>,
 }

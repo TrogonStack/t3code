@@ -1,6 +1,6 @@
 mod assets;
-mod branch_picker;
 mod auth;
+mod branch_picker;
 mod catalog;
 mod config;
 mod connection;
