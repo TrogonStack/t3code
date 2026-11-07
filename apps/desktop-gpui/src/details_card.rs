@@ -589,7 +589,9 @@ fn now_ms() -> i64 {
         .map_or(0, |elapsed| elapsed.as_millis() as i64)
 }
 
-fn tip(text: impl Into<gpui::SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView {
+pub(crate) fn tip(
+    text: impl Into<gpui::SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView {
     let text = text.into();
     move |window, cx| {
         Tooltip::new(text.clone())
