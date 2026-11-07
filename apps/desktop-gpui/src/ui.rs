@@ -2095,10 +2095,8 @@ impl MainView {
             .p_px()
             .rounded(px(16.))
             .border_1()
-            // The web's dark `--chat-composer-outline`.
-            .border_color(gpui::white().opacity(0.05))
-            // The web's glass surface at `--glass-opacity`; GPUI has no backdrop blur.
-            .bg(cx.theme().secondary.opacity(0.8))
+            .border_color(composer_outline(cx.theme().is_dark()))
+            .bg(composer_surface(cx.theme().is_dark()))
             .child(
                 // The web's `px-4 pt-4 pb-2` body; the negative margin cancels the textarea's own padding.
                 div().px_4().pt_4().pb_2().child(
@@ -3535,6 +3533,26 @@ impl Render for MainView {
             .when(overlay, |root| {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
+    }
+}
+
+/// The web's `--chat-composer-outline`: white at 5% in dark, black at 8% in light.
+fn composer_outline(dark: bool) -> Hsla {
+    if dark {
+        gpui::white().opacity(0.05)
+    } else {
+        gpui::black().opacity(0.08)
+    }
+}
+
+/// The web's `--chat-composer-glass-surface` (`--surface-raised` in dark, neutral-950 mixed 97% with
+/// white; `--card` in light), painted opaque as the web does where backdrop blur is unsupported,
+/// since GPUI has no per-element backdrop blur and 80% over the timeline leaves text legible.
+fn composer_surface(dark: bool) -> Hsla {
+    if dark {
+        gpui::rgb(0x111111).into()
+    } else {
+        gpui::white()
     }
 }
 
