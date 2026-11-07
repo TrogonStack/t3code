@@ -66,11 +66,22 @@ vp lint --report-unused-disable-directives
 
 Fix fallout on the sync branch before opening the PR. If upstream bumped a dependency that has a vendored subtree, confirm `.repos/` was synced in the same change.
 
+### Pin GitHub Actions
+
+The TrogonStack org requires every action to be pinned to a full commit SHA. Upstream does not, so any tag ref it adds (`actions/cache@v6`) makes the whole workflow fail at startup with zero jobs, and CI silently never runs. After the merge, list offenders:
+
+```
+git grep -nE "uses: [^.][^@ ]*@" -- .github | grep -vE "@[0-9a-f]{40}"
+```
+
+Pin each one to the SHA its tag points at, keeping the tag as a trailing comment (`uses: actions/cache@<sha> # v6.1.0`). Reuse a SHA already pinned elsewhere in the repo for the same action and major version. Resolve new ones with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` and dereference annotated tags through `git/tags/<sha>`. Commit the pins separately as `ci: pin GitHub Actions to commit SHAs`. Third-party actions must also match the org allowlist (`gh api repos/TrogonStack/t3code/actions/permissions/selected-actions`).
+
 ## 5. Open and merge the PR
 
 1. Commit with DCO sign-off (`git commit -s`). Conflict resolutions belong in the merge commit; follow-up fixes go in separate conventional commits on the branch.
 2. Push the branch and open a PR against `main`:
    - Title: `chore: sync with upstream pingdotgg/t3code main`
    - Body: bullets only, each explaining the why of a nontrivial resolution decision (what was kept, dropped, or renumbered, and why). No file lists, no test plan section.
-3. Merge the PR with a **merge commit**, never squash. Squashing would drop the `upstream/main` merge parent, so the next sync would re-conflict on everything already resolved.
-4. Share the PR link, then remove the worktree from the main checkout (`git worktree remove ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}`) and delete the sync branch.
+3. Wait for CI on the PR and merge only when it is green. A CI run that ends in `startup_failure` with no jobs is a workflow file problem (usually an unpinned action), not a pass. DCO fails on every sync because upstream commits carry no sign-off; that check alone does not block.
+4. Merge the PR with a **merge commit**, never squash. Squashing would drop the `upstream/main` merge parent, so the next sync would re-conflict on everything already resolved.
+5. Share the PR link, then remove the worktree from the main checkout (`git worktree remove ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}`) and delete the sync branch.
