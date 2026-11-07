@@ -1,4 +1,5 @@
 mod assets;
+mod branch_picker;
 mod auth;
 mod catalog;
 mod config;

@@ -22,6 +22,9 @@ pub enum EnvMode {
 }
 
 impl EnvMode {
+    /// The workspace menu's rows, in the web's order.
+    pub const ALL: [Self; 2] = [Self::Local, Self::Worktree];
+
     fn parse(text: &str) -> Option<Self> {
         match text {
             "local" => Some(Self::Local),
@@ -156,6 +159,19 @@ impl Branch {
     }
 }
 
+/// The ref the branch control names: a new worktree starts from the ref picked as its base, else
+/// from the checked-out one; the current checkout always shows the checked-out ref.
+pub fn shown_branch<'a>(
+    mode: EnvMode,
+    current: Option<&'a Branch>,
+    base: Option<&'a Branch>,
+) -> Option<&'a Branch> {
+    match mode {
+        EnvMode::Worktree => base.or(current),
+        EnvMode::Local => current,
+    }
+}
+
 /// `resolveEnvironmentOptionLabel` for the primary environment: a generic name reads as "This device".
 pub fn environment_label(label: &str) -> String {
     let label = label.trim();
@@ -200,6 +216,16 @@ mod tests {
             branch(None, None).label(EnvMode::Worktree, true),
             "Select ref"
         );
+    }
+
+    #[test]
+    fn a_picked_base_only_applies_to_a_new_worktree() {
+        let current = branch(Some("main"), Some(false));
+        let base = branch(Some("dev"), Some(false));
+        let shown = |mode, base| shown_branch(mode, Some(&current), base).cloned();
+        assert_eq!(shown(EnvMode::Worktree, Some(&base)), Some(base.clone()));
+        assert_eq!(shown(EnvMode::Worktree, None), Some(current.clone()));
+        assert_eq!(shown(EnvMode::Local, Some(&base)), Some(current));
     }
 
     #[test]
