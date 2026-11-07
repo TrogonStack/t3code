@@ -320,7 +320,7 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
             state: only
                 .snapshot
                 .as_ref()
-                .map_or(PrState::Pending, |_| state_of(&only)),
+                .map_or(PrState::Pending, |_| state_of(only)),
             stack: false,
             text: only.number.to_string(),
         });

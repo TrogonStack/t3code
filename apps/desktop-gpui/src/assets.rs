@@ -48,7 +48,9 @@ gpui_kit_assets::icon_assets!(
         FileDiff,
         CloudUpload,
         GitBranchPlus,
-        GitCommitHorizontal
+        GitCommitHorizontal,
+        CloudDownload,
+        Info
     ]
 );
 
@@ -279,6 +281,8 @@ mod tests {
             IconName::CloudUpload,
             IconName::GitBranchPlus,
             IconName::GitCommitHorizontal,
+            IconName::CloudDownload,
+            IconName::Info,
         ] {
             let loaded = AppAssets.load(&icon.path()).ok().flatten();
             assert!(loaded.is_some(), "{} is not embedded", icon.path());
@@ -296,9 +300,20 @@ mod tests {
     fn editor_icons_resolve_and_load() {
         assert_eq!(editor_icon("zed", true), Some("editors/zed-dark.svg"));
         assert_eq!(editor_icon("zed", false), Some("editors/zed-light.svg"));
-        assert_eq!(editor_icon("cursor", true), Some("providers/cursor-dark.svg"));
+        assert_eq!(
+            editor_icon("cursor", true),
+            Some("providers/cursor-dark.svg")
+        );
         assert_eq!(editor_icon("trae", true), None);
-        for id in ["cursor", "kiro", "vscode", "zed", "antigravity", "idea", "file-manager"] {
+        for id in [
+            "cursor",
+            "kiro",
+            "vscode",
+            "zed",
+            "antigravity",
+            "idea",
+            "file-manager",
+        ] {
             for dark in [true, false] {
                 let path = editor_icon(id, dark).expect(id);
                 assert!(AppAssets.load(path).ok().flatten().is_some(), "{path}");

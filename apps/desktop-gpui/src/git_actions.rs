@@ -412,7 +412,11 @@ mod tests {
     fn progress_follows_the_stream() {
         let mut progress = Progress::default();
         assert_eq!(progress.label(), Progress::STARTING);
-        assert!(progress.apply(&json!({"kind": "phase_started", "label": "Pushing..."})).is_none());
+        assert!(
+            progress
+                .apply(&json!({"kind": "phase_started", "label": "Pushing..."}))
+                .is_none()
+        );
         assert_eq!(progress.label(), "Pushing...");
         progress.apply(&json!({"kind": "hook_started", "hookName": "pre-push"}));
         assert_eq!(progress.label(), "Running pre-push...");
@@ -442,7 +446,9 @@ mod tests {
     fn elapsed_and_pull_wording() {
         assert_eq!(format_elapsed(9), "9s");
         assert_eq!(format_elapsed(75), "1m 15s");
-        let pulled = pull_outcome(&json!({"status": "pulled", "refName": "main", "upstreamRef": "origin/main"}));
+        let pulled = pull_outcome(
+            &json!({"status": "pulled", "refName": "main", "upstreamRef": "origin/main"}),
+        );
         assert_eq!(
             pulled,
             Outcome::Success {

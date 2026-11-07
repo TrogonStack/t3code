@@ -486,9 +486,7 @@ mod tests {
         assert!(!show(Density::Essential, |_| {}).open_in);
         assert!(!show(Density::Full, |i| i.has_editors = false).open_in);
         let not_repo = show(Density::Full, |i| i.is_repo = false);
-        assert!(
-            not_repo.open_in && !not_repo.branch && !not_repo.git_actions && !not_repo.changes
-        );
+        assert!(not_repo.open_in && !not_repo.branch && !not_repo.git_actions && !not_repo.changes);
         let quiet = show(Density::Full, |i| i.quiet_empty_draft = true);
         assert!(quiet.branch && quiet.git_actions && !quiet.changes);
         assert!(show(Density::Full, |i| i.has_cwd = false).is_empty());

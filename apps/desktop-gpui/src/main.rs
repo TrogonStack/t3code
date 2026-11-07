@@ -4,6 +4,7 @@ mod catalog;
 mod config;
 mod connection;
 mod details;
+mod details_card;
 mod diff;
 mod electron_dpop;
 mod environments;
