@@ -2,13 +2,14 @@
 //! `packages/client-runtime/src/state/shellReducer.ts` for what this client shows.
 
 use crate::projects;
-use crate::status::{PrBadge, PrState, Section, ShellView, ThreadRow, TopStatus};
+use crate::status::{LastError, PrBadge, PrState, Section, ShellView, ThreadRow, TopStatus};
+use crate::thread_card;
 use crate::wire::generated::{
     LineageRelationshipToParent as LineageRelationship, PullRequestsItem,
     PullRequestsItemSource as LinkSource, SnapshotState as PrSnapshotState,
     ThreadsEntryActivityRunStatus as Activity, ThreadsEntryInteractionMode as InteractionMode,
-    ThreadsEntryPendingRuntimeRequestKind as RequestKind, ThreadsEntrySettledOverride as Override,
-    ThreadsEntryStatus as RunStatus,
+    ThreadsEntryLastErrorClass, ThreadsEntryPendingRuntimeRequestKind as RequestKind,
+    ThreadsEntrySettledOverride as Override, ThreadsEntryStatus as RunStatus,
 };
 use crate::wire::generated::{
     OrchestrationSubscribeShellSuccess as Item,
@@ -21,7 +22,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Epoch milliseconds of an RFC 3339 timestamp, as `Date.parse` reads the server's.
-fn timestamp_ms(text: &str) -> Option<i64> {
+pub(crate) fn timestamp_ms(text: &str) -> Option<i64> {
     let bytes = text.as_bytes();
     let number = |from: usize, len: usize| -> Option<i64> {
         let digits = text.get(from..from + len)?;
@@ -420,6 +421,25 @@ impl ShellState {
             ),
             pr: pr_badge(thread),
             section,
+            model: thread
+                .model_selection
+                .model
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            instance_history: thread.provider_instance_history.clone().unwrap_or_default(),
+            pr_lines: thread
+                .pull_requests
+                .as_ref()
+                .map_or_else(Vec::new, |links| thread_card::pr_lines(&links.0)),
+            last_error: thread
+                .last_error
+                .as_deref()
+                .filter(|error| !error.is_empty())
+                .map(|_| match thread.last_error_class {
+                    Some(ThreadsEntryLastErrorClass::UsageLimit) => LastError::UsageLimit,
+                    _ => LastError::Other,
+                }),
         };
         let rows = SECTION_ORDER
             .into_iter()

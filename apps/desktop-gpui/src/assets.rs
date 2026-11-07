@@ -39,7 +39,8 @@ gpui_kit_assets::icon_assets!(
         GitPullRequestDraft,
         GitPullRequestClosed,
         GitMerge,
-        Layers
+        Layers,
+        ArrowRightLeft
     ]
 );
 
@@ -217,6 +218,7 @@ mod tests {
             IconName::GitPullRequestClosed,
             IconName::GitMerge,
             IconName::Layers,
+            IconName::ArrowRightLeft,
             IconName::Computer,
         ] {
             let loaded = AppAssets.load(&icon.path()).ok().flatten();

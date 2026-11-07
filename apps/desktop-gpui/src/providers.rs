@@ -324,6 +324,18 @@ impl Catalog {
         Some(mark(&entries, entry))
     }
 
+    /// The model as the sidebar card names it: the instance's short name for the slug, else the slug.
+    pub fn model_label(&self, instance_id: &str, slug: &str) -> String {
+        self.providers
+            .iter()
+            .find(|provider| provider.instance_id == instance_id)
+            .and_then(|provider| {
+                let model = provider.models.iter().find(|model| model.slug == slug)?;
+                Some(trigger_model_name(model, &provider.driver))
+            })
+            .unwrap_or_else(|| slug.to_owned())
+    }
+
     /// The trigger a fresh draft in `project` shows; `None` when no provider is selectable.
     pub fn trigger(&self, project: Option<&str>) -> Option<Trigger> {
         let entries = self.entries(project);

@@ -4,12 +4,15 @@ use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::{Catalog, Mark, Trigger};
-use crate::status::{PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus};
+use crate::status::{
+    LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
+};
 use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
     WORKSPACE_SHORTCUT,
 };
 use crate::thread::{Entry, Kind};
+use crate::thread_card::{self, ChainKind, PrLine};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
@@ -742,14 +745,33 @@ impl MainView {
             .providers
             .as_ref()
             .and_then(|catalog| catalog.instance(&row.provider_instance));
+        let anchor = Rc::new(Cell::new(Bounds::default()));
+        let card = ThreadCard::new(
+            row,
+            project,
+            provider.as_ref(),
+            self.providers.as_ref(),
+            match &self.status {
+                Status::Connected { label, machine, .. } => {
+                    Some((strip::environment_label(label), *machine))
+                }
+                _ => None,
+            },
+        );
         thread_row(
             row,
             project,
             provider,
             selected,
             self.rendered_sidebar_width.get(),
+            anchor.clone(),
             cx,
         )
+        .tooltip(move |window, cx| {
+            let card = card.clone();
+            let place = card_offset(anchor.get(), window.mouse_position());
+            cx.new(|_| ThreadHoverCard { card, place }).into()
+        })
         .on_click(cx.listener(move |this, _, _, cx| this.open_thread(Some(id.clone()), cx)))
     }
 
@@ -2574,12 +2596,19 @@ fn pr_color(state: PrState, dark: bool) -> Option<Hsla> {
 }
 
 fn pr_icon(badge: &PrBadge) -> Icons {
-    match (badge.stack, badge.state) {
-        (true, _) => Icons::Layers,
-        (false, PrState::Draft) => Icons::GitPullRequestDraft,
-        (false, PrState::Closed) => Icons::GitPullRequestClosed,
-        (false, PrState::Merged) => Icons::GitMerge,
-        (false, _) => Icons::GitPullRequestArrow,
+    if badge.stack {
+        Icons::Layers
+    } else {
+        pr_state_icon(badge.state)
+    }
+}
+
+fn pr_state_icon(state: PrState) -> Icons {
+    match state {
+        PrState::Draft => Icons::GitPullRequestDraft,
+        PrState::Closed => Icons::GitPullRequestClosed,
+        PrState::Merged => Icons::GitMerge,
+        PrState::Pending | PrState::Open => Icons::GitPullRequestArrow,
     }
 }
 
@@ -2639,6 +2668,229 @@ fn card_action(
         .tooltip(tooltip(label))
 }
 
+/// What `SidebarThreadTooltip` shows for one thread, resolved when the row is built.
+#[derive(Clone)]
+struct ThreadCard {
+    title: String,
+    project: Option<(Option<ProjectEntry>, String)>,
+    environment: Option<(String, MachineKind)>,
+    branch: Option<String>,
+    provider: Option<CardProvider>,
+    handed_off_from: Vec<String>,
+    last_error: Option<LastError>,
+    pr_lines: Vec<PrLine>,
+}
+
+#[derive(Clone)]
+struct CardProvider {
+    /// Without the chip unless the instance has an accent color, like `showBadge` on the web.
+    mark: Mark,
+    label: String,
+}
+
+impl ThreadCard {
+    fn new(
+        row: &ThreadRow,
+        project: Option<&ProjectEntry>,
+        provider: Option<&Mark>,
+        catalog: Option<&Catalog>,
+        environment: Option<(String, MachineKind)>,
+    ) -> Self {
+        let name = project_name(row, project);
+        let model = catalog.map(|catalog| catalog.model_label(&row.provider_instance, &row.model));
+        let provider = provider.zip(model).map(|(mark, model)| CardProvider {
+            label: match &mark.badge {
+                Some(_) => format!("{model} \u{b7} {}", mark.display_name),
+                None => model,
+            },
+            mark: Mark {
+                badge: mark.badge.clone().filter(|badge| badge.accent.is_some()),
+                ..mark.clone()
+            },
+        });
+        Self {
+            title: row.title.clone(),
+            project: (!name.is_empty()).then(|| (project.cloned(), name.to_owned())),
+            environment,
+            branch: row.branch.clone().filter(|branch| !branch.is_empty()),
+            provider,
+            handed_off_from: thread_card::previous_providers(
+                &row.instance_history,
+                &row.provider_instance,
+                |id| {
+                    catalog
+                        .and_then(|catalog| catalog.instance(id))
+                        .map(|mark| mark.display_name)
+                },
+            ),
+            last_error: row.last_error,
+            pr_lines: row.pr_lines.clone(),
+        }
+    }
+}
+
+/// GPUI places a tooltip at the pointer, so the card shifts itself to the trigger's right edge
+/// (`side="right" align="start" sideOffset={4}`).
+fn card_offset(anchor: Bounds<Pixels>, mouse: gpui::Point<Pixels>) -> gpui::Point<Pixels> {
+    gpui::point(
+        anchor.right() + px(4.) - (mouse.x + px(1.)),
+        anchor.top() - (mouse.y + px(1.)),
+    )
+}
+
+/// The web's `ThreadHoverCard` in a `ThreadHoverCardPopup`.
+struct ThreadHoverCard {
+    card: ThreadCard,
+    place: gpui::Point<Pixels>,
+}
+
+impl Render for ThreadHoverCard {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let dark = theme.is_dark();
+        let (muted, foreground) = (theme.muted_foreground, theme.foreground);
+        let text = foreground.opacity(0.75);
+        let card = &self.card;
+        let row = |icon: AnyElement, label: AnyElement| {
+            h_flex()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .child(icon)
+                .child(label)
+        };
+        let label = |text_color: Hsla, content: String| {
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(text_color)
+                .child(content)
+                .into_any_element()
+        };
+        let glyph = |icon: Icons, color: Hsla| {
+            Icon::new(icon)
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(color)
+                .into_any_element()
+        };
+        let mut rows = v_flex().gap(px(6.)).pl(px(2.)).text_xs().text_color(muted);
+        if let Some((entry, name)) = &card.project {
+            rows = rows.child(row(
+                project_badge(entry.as_ref(), dark, theme.mono_font_family.clone())
+                    .size(px(12.))
+                    .into_any_element(),
+                label(text, name.clone()),
+            ));
+        }
+        if let Some((name, machine)) = &card.environment {
+            rows = rows.child(row(
+                glyph(machine_icon(*machine), muted),
+                label(text, name.clone()),
+            ));
+        }
+        if let Some(branch) = &card.branch {
+            rows = rows.child(row(
+                glyph(Icons::GitBranch, muted),
+                label(text, middle_truncate(branch, 40)),
+            ));
+        }
+        if let Some(provider) = &card.provider {
+            rows = rows.child(row(
+                provider_mark(&provider.mark, 0.6, cx).into_any_element(),
+                label(text, provider.label.clone()),
+            ));
+        }
+        if !card.handed_off_from.is_empty() {
+            rows = rows.child(row(
+                glyph(Icons::ArrowRightLeft, muted),
+                label(
+                    text,
+                    format!("Handed off from {}", card.handed_off_from.join(", ")),
+                ),
+            ));
+        }
+        if let Some(error) = card.last_error {
+            let (color, message) = match error {
+                LastError::UsageLimit => (
+                    rgb(if dark { 0xfbbf24 } else { 0xb45309 }),
+                    "Usage limit reached",
+                ),
+                LastError::Other => (
+                    rgb(if dark { 0xf87171 } else { 0xdc2626 }),
+                    "Error occurred",
+                ),
+            };
+            let color: Hsla = color.into();
+            rows = rows.child(row(
+                glyph(Icons::CircleAlert, color),
+                label(color, message.to_owned()),
+            ));
+        }
+        let footer = (!card.pr_lines.is_empty()).then(|| {
+            v_flex()
+                .gap_1()
+                .pt_2()
+                .pl(px(2.))
+                .border_t_1()
+                .border_color(theme.border.opacity(0.6))
+                .text_xs()
+                .text_color(muted)
+                .children(card.pr_lines.iter().map(|line| {
+                    let tone = pr_color(line.state, dark).unwrap_or(muted);
+                    h_flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .pl(px(line.depth.min(3) as f32 * 12.))
+                        .child(glyph(pr_state_icon(line.state), tone))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .font_family(theme.mono_font_family.clone())
+                                .child(format!("#{}", line.number)),
+                        )
+                        .child(label(text, line.title.clone()))
+                        .children(line.stack.map(|(kind, size)| {
+                            let word = match kind {
+                                ChainKind::Native => "stack",
+                                ChainKind::Derived => "chain",
+                            };
+                            div()
+                                .ml_auto()
+                                .flex_shrink_0()
+                                .pl_1()
+                                .text_size(px(10.))
+                                .child(format!("{word} \u{b7} {size}"))
+                        }))
+                }))
+        });
+        div().relative().left(self.place.x).top(self.place.y).child(
+            v_flex()
+                .max_w(px(320.))
+                .gap_2()
+                .px(px(10.))
+                .py(px(8.))
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .shadow_lg()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(foreground)
+                        .child(card.title.clone()),
+                )
+                .child(rows)
+                .children(footer),
+        )
+    }
+}
+
 /// The group's label, else the project's own title.
 fn project_name<'a>(row: &'a ThreadRow, entry: Option<&'a ProjectEntry>) -> &'a str {
     entry.map_or(row.project.as_str(), |entry| entry.title.as_str())
@@ -2652,6 +2904,7 @@ fn thread_row(
     provider: Option<Mark>,
     selected: bool,
     sidebar_width: f32,
+    anchor: Rc<Cell<Bounds<Pixels>>>,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
@@ -2705,6 +2958,12 @@ fn thread_row(
                 .when(!selected, |card| {
                     card.hover(|style| style.bg(theme.list_hover))
                 })
+                // Where the hover card anchors: the web's popup sits at this card's right edge.
+                .child(
+                    canvas(move |bounds, _, _| anchor.set(bounds), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
                 .child(
                     h_flex()
                         .h(px(20.))
@@ -2886,6 +3145,10 @@ mod tests {
             top: None,
             pr: None,
             section: Section::Active,
+            model: String::new(),
+            instance_history: Vec::new(),
+            pr_lines: Vec::new(),
+            last_error: None,
         }
     }
 

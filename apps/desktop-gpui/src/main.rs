@@ -15,6 +15,7 @@ mod shell;
 mod status;
 mod strip;
 mod thread;
+mod thread_card;
 mod ui;
 mod wire;
 

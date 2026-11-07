@@ -2,6 +2,7 @@ use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::strip::Branch;
 use crate::thread::Entry;
+use crate::thread_card::PrLine;
 use crate::wire::generated::{ThreadsEntryLastErrorClass, ThreadsEntryStatus};
 use std::fmt;
 
@@ -69,6 +70,18 @@ pub struct ThreadRow {
     pub top: Option<TopStatus>,
     pub pr: Option<PrBadge>,
     pub section: Section,
+    /// What the hover card adds: the stored model slug, past instances, pull requests, the error.
+    pub model: String,
+    pub instance_history: Vec<String>,
+    pub pr_lines: Vec<PrLine>,
+    pub last_error: Option<LastError>,
+}
+
+/// The card's error row: `usage_limit` is a warning, any other class an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastError {
+    UsageLimit,
+    Other,
 }
 
 /// A pull request's state as the badge tones it; `Pending` has no snapshot yet.
