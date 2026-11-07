@@ -1,11 +1,13 @@
 //! Effect RPC over the WebSocket in its JSON serialization: request, ack, and response frames.
 //! Shapes follow effect's `RpcMessage` (`FromClientEncoded`, `FromServerEncoded`).
 
+use crate::slow_requests::{SlowRequest, Tracker};
 use crate::wire;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::time::{Duration, Instant, SystemTime};
 
 /// RpcMessage.constPing in the JSON serialization.
 pub const PING_FRAME: &str = r#"{"_tag":"Ping"}"#;
@@ -13,6 +15,8 @@ pub const PING_FRAME: &str = r#"{"_tag":"Ping"}"#;
 /// One RPC method: its tag and the generated wire types for its payload and success.
 pub trait Method {
     const TAG: &'static str;
+    /// The call lives as long as its subscription, so it is never a slow request.
+    const STREAMING: bool = false;
     type Payload: Serialize;
     type Success: DeserializeOwned;
 }
@@ -22,6 +26,7 @@ pub struct SubscribeShell;
 
 impl Method for SubscribeShell {
     const TAG: &'static str = "orchestration.subscribeShell";
+    const STREAMING: bool = true;
     type Payload = wire::SubscribeShellPayload;
     type Success = wire::ShellItem;
 }
@@ -32,6 +37,7 @@ pub struct SubscribeThread;
 
 impl Method for SubscribeThread {
     const TAG: &'static str = "orchestration.subscribeThread";
+    const STREAMING: bool = true;
     type Payload = wire::SubscribeThreadPayload;
     type Success = Value;
 }
@@ -86,6 +92,7 @@ pub struct SubscribeVcsStatus;
 
 impl Method for SubscribeVcsStatus {
     const TAG: &'static str = "subscribeVcsStatus";
+    const STREAMING: bool = true;
     type Payload = Value;
     type Success = Value;
 }
@@ -96,6 +103,7 @@ pub struct TerminalAttach;
 
 impl Method for TerminalAttach {
     const TAG: &'static str = "terminal.attach";
+    const STREAMING: bool = true;
     type Payload = Value;
     type Success = Value;
 }
@@ -159,11 +167,15 @@ untyped_method!(
     VcsRefreshStatus,
     "vcs.refreshStatus"
 );
-untyped_method!(
-    /// `git.runStackedAction`, a stream of progress events ending with the action's result.
-    GitRunStackedAction,
-    "git.runStackedAction"
-);
+/// `git.runStackedAction`, a stream of progress events ending with the action's result.
+pub struct GitRunStackedAction;
+
+impl Method for GitRunStackedAction {
+    const TAG: &'static str = "git.runStackedAction";
+    const STREAMING: bool = true;
+    type Payload = Value;
+    type Success = Value;
+}
 
 /// Request ids are bigints on the wire, so they travel as strings.
 fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -247,6 +259,7 @@ pub struct Reaction {
 pub struct Session {
     next_id: u64,
     open: HashSet<String>,
+    slow: Tracker,
 }
 
 impl Session {
@@ -266,12 +279,27 @@ impl Session {
             "headers": [],
         });
         self.open.insert(id.clone());
+        if !M::STREAMING {
+            self.slow
+                .start(&id, M::TAG, Instant::now(), SystemTime::now());
+        }
         Ok((id, frame.to_string()))
+    }
+
+    /// The unary requests still waiting past their threshold, in the order they turned slow.
+    pub fn slow(&self, now: Instant) -> Vec<SlowRequest> {
+        self.slow.slow(now)
+    }
+
+    /// When the next waiting request turns slow.
+    pub fn next_slow(&self, now: Instant) -> Option<Duration> {
+        self.slow.next_slow(now)
     }
 
     /// The frame that stops a stream, as `Fiber.interrupt` does on the web client.
     pub fn interrupt(&mut self, id: &str) -> String {
         self.open.remove(id);
+        self.slow.finish(id);
         json!({ "_tag": "Interrupt", "requestId": id }).to_string()
     }
 
@@ -297,6 +325,7 @@ impl Session {
             }
             ServerFrame::Exit { request_id, exit } => {
                 self.open.remove(&request_id);
+                self.slow.finish(&request_id);
                 reaction.events.push(match exit {
                     ExitFrame::Success { value } => Event::Done { request_id, value },
                     ExitFrame::Failure { cause } => Event::Failed {

@@ -2,6 +2,7 @@ use crate::details::VcsStatus;
 use crate::diff;
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
+use crate::slow_requests::SlowRequest;
 use crate::strip::Branch;
 use crate::terminal;
 use crate::thread::Entry;
@@ -54,6 +55,12 @@ pub enum Status {
     Diff {
         cwd: String,
         diff: Result<diff::Preview, String>,
+    },
+    /// The primary connection's unary requests that have waited past their threshold, in the
+    /// order they turned slow; empty when none has, and when the socket is gone.
+    SlowRequests {
+        label: String,
+        requests: Vec<SlowRequest>,
     },
     /// The outcome of a request the details card made, by the token it was sent with.
     Call {
@@ -222,6 +229,7 @@ impl fmt::Display for Status {
             } => write!(f, "Terminal {terminal_id} of {thread_id}"),
             Self::Diff { cwd, .. } => write!(f, "Diff of {cwd}"),
             Self::Call { token, .. } => write!(f, "Call {token}"),
+            Self::SlowRequests { requests, .. } => write!(f, "SlowRequests {}", requests.len()),
         }
     }
 }

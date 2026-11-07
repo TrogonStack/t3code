@@ -273,14 +273,23 @@ pub async fn run(
                     },
                 );
                 backoff.reset();
-                serve(
+                let failure = serve(
                     socket,
                     environment,
                     actions,
                     (&mut selected, &mut watched, &mut terminal),
                     status,
                 )
-                .await
+                .await;
+                // The requests died with the socket.
+                publish(
+                    status,
+                    Status::SlowRequests {
+                        label: environment.label.clone(),
+                        requests: Vec::new(),
+                    },
+                );
+                failure
             }
             Err(message) => message,
         };
@@ -414,8 +423,24 @@ async fn serve(
     let mut ping = interval(PING_INTERVAL);
     ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut deadline = Instant::now() + PING_TIMEOUT;
+    let mut reported_slow = Vec::new();
     loop {
+        let now = std::time::Instant::now();
+        let slow = session.slow(now);
+        if slow != reported_slow {
+            publish(
+                status,
+                Status::SlowRequests {
+                    label: environment.label.clone(),
+                    requests: slow.clone(),
+                },
+            );
+            reported_slow = slow;
+        }
+        // Parked far out when nothing waits; any frame or action wakes the loop anyway.
+        let slow_wait = session.next_slow(now).unwrap_or(Duration::from_secs(3600));
         tokio::select! {
+            _ = sleep(slow_wait) => {}
             _ = ping.tick() => {
                 if let Err(error) = sink.send(Message::text(PING_FRAME)).await {
                     return error.to_string();

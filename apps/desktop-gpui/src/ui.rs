@@ -6,6 +6,7 @@ use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::{Catalog, Mark, Trigger};
+use crate::slow_requests;
 use crate::status::{
     LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
 };
@@ -18,6 +19,7 @@ use crate::terminal_state::{self, Placement, Terminals};
 use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
+use crate::toast::{ToastHost, ToastId};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
@@ -238,6 +240,9 @@ pub struct MainView {
     /// The terminals the connection was last asked to attach.
     terminal_attached: Vec<Target>,
     card: Entity<DetailsCard>,
+    toasts: Entity<ToastHost>,
+    /// The slow requests toast; kept after the user dismisses it, like the web coordinator.
+    slow_toast: Option<ToastId>,
     /// The main area's width at the last render, for fitting the details card.
     main_width: Cell<f32>,
     actions: ActionSender,
@@ -327,12 +332,40 @@ impl MainView {
             terminal_views: HashMap::new(),
             terminal_attached: Vec::new(),
             card,
+            toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
+            slow_toast: None,
             main_width: Cell::new(0.),
             actions,
         }
     }
 
+    /// `SlowRpcRequestToastCoordinator`: one toast for the list, shown, updated and closed with it.
+    fn sync_slow_toast(
+        &mut self,
+        label: &str,
+        requests: &[slow_requests::SlowRequest],
+        cx: &mut Context<Self>,
+    ) {
+        let toast = slow_requests::toast(label, requests);
+        self.toasts.update(cx, |toasts, cx| {
+            match (requests.is_empty(), self.slow_toast) {
+                (true, id) => {
+                    if let Some(id) = id {
+                        toasts.dismiss(id, cx);
+                    }
+                    self.slow_toast = None;
+                }
+                (false, None) => self.slow_toast = Some(toasts.add(toast, cx)),
+                (false, Some(id)) => toasts.update(id, toast, cx),
+            }
+        });
+    }
+
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
+        if let Status::SlowRequests { label, requests } = status {
+            self.sync_slow_toast(&label, &requests, cx);
+            return;
+        }
         if let Status::Environment(other) = status {
             match self.environments.iter_mut().find(|e| e.id == other.id) {
                 Some(known) => *known = other,
@@ -4048,6 +4081,7 @@ impl Render for MainView {
             .when(overlay, |root| {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
+            .child(self.toasts.clone())
     }
 }
 
