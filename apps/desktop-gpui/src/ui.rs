@@ -4197,12 +4197,13 @@ fn footer_button(
         .child(icon.size_4())
 }
 
-/// The web's idle `SidebarUpdatePill` with no update state: this build has no updater, so
-/// `getDesktopUpdateIdleTooltip(null)` and `canCheckForUpdate(null)` make it a dimmed, inert refresh.
+/// The web's idle `SidebarUpdatePill`. This build has no update feed, which the desktop reports as
+/// `status: "disabled"` (`resolveDisabledReason` in DesktopUpdates.ts): a dimmed, inert refresh.
 fn update_button(cx: &App) -> gpui::Stateful<gpui::Div> {
     use gpui_kit_assets::IconName as Icons;
     const TITLE: &str = "Updates unavailable";
-    const DETAIL: &str = "Automatic updates are not available in this build.";
+    const DETAIL: &str =
+        "Automatic updates are not available because no update feed is configured.";
     div()
         .id("update")
         .flex_shrink_0()
