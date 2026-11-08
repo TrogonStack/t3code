@@ -511,6 +511,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.diffFilesCollapsed !== DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed
       ? ["Default diff file state"]
       : []),
+    ...(settings.diffGeneratedFilesCollapsed !==
+    DEFAULT_UNIFIED_SETTINGS.diffGeneratedFilesCollapsed
+      ? ["Collapse generated files"]
+      : []),
     ...(settings.diffIgnoreWhitespace !== DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace
       ? ["Diff whitespace changes"]
       : []),
@@ -638,6 +642,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
       diffFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffFilesCollapsed,
+      diffGeneratedFilesCollapsed: DEFAULT_UNIFIED_SETTINGS.diffGeneratedFilesCollapsed,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       diffLayout: DEFAULT_UNIFIED_SETTINGS.diffLayout,
       proactivePanelsEnabled: DEFAULT_UNIFIED_SETTINGS.proactivePanelsEnabled,
@@ -1396,6 +1401,33 @@ export function DiffsSettingsPanel() {
                 </SelectItem>
               </SelectPopup>
             </Select>
+          }
+        />
+        <SettingsRow
+          {...searchableSetting("collapse-generated-files")}
+          description="Collapse files that .gitattributes marks as linguist-generated when opening a pull request's Code tab. Expanding one stays expanded."
+          resetAction={
+            settings.diffGeneratedFilesCollapsed !==
+            DEFAULT_UNIFIED_SETTINGS.diffGeneratedFilesCollapsed ? (
+              <SettingResetButton
+                label="collapse generated files"
+                onClick={() =>
+                  updateSettings({
+                    diffGeneratedFilesCollapsed:
+                      DEFAULT_UNIFIED_SETTINGS.diffGeneratedFilesCollapsed,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.diffGeneratedFilesCollapsed}
+              onCheckedChange={(checked) =>
+                updateSettings({ diffGeneratedFilesCollapsed: Boolean(checked) })
+              }
+              aria-label="Collapse generated files by default"
+            />
           }
         />
         <DiffColorsSettingsRow />

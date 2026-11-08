@@ -116,6 +116,7 @@ import {
 import { pullRequestCompletionScope } from "./PullRequestMarkdownTextarea";
 import {
   getFileViewedRange,
+  isFileCollapsedByDefault,
   isFileDiffCollapsed,
   isLineInFileDiff,
   foldFileDiffForViewed,
@@ -372,6 +373,7 @@ function PullRequestCodeTab({
   useDiffWorkerPool();
   const settings = useClientSettings((settings) => ({
     diffFilesCollapsed: settings.diffFilesCollapsed,
+    diffGeneratedFilesCollapsed: settings.diffGeneratedFilesCollapsed,
     diffIgnoreWhitespace: settings.diffIgnoreWhitespace,
     diffLayout: settings.diffLayout,
     wordWrap: settings.wordWrap,
@@ -591,6 +593,9 @@ function PullRequestCodeTab({
       slice.omittedFileStats.map((file) => [file.path, file] as const),
     ),
   );
+  const generatedPaths = new Set(
+    loadedSlices.flatMap((slice) => slice.source.generatedPaths ?? []),
+  );
   const fileTreeEntries = diffFileTreeEntries(files);
   const threadsByPath = reviewThreadsByPath(detail.reviewThreads);
   // File membership does not guarantee a rendered hunk for the thread.
@@ -718,7 +723,11 @@ function PullRequestCodeTab({
   const items: CodeViewDiffItem<ReviewAnnotationGroup>[] = annotatedFiles.map(
     ({ fileKey, path, fileDiff, annotations, annotationsVersion }) => {
       const collapsed = isFileDiffCollapsed(fileKey, foldOverride, foldChoices, {
-        defaultCollapsed: settings.diffFilesCollapsed,
+        defaultCollapsed: isFileCollapsedByDefault(
+          settings.diffFilesCollapsed,
+          settings.diffGeneratedFilesCollapsed,
+          generatedPaths.has(path),
+        ),
         viewed: isFileViewed(path),
       });
       const viewedMark = filesViewedEnabled
@@ -782,7 +791,11 @@ function PullRequestCodeTab({
             file.fileKey,
             viewed,
             foldOverride,
-            settings.diffFilesCollapsed,
+            isFileCollapsedByDefault(
+              settings.diffFilesCollapsed,
+              settings.diffGeneratedFilesCollapsed,
+              generatedPaths.has(file.path),
+            ),
           ),
         current,
       ),

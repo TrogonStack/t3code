@@ -696,6 +696,8 @@ export const PullRequestDiffResult = Schema.Struct({
   truncated: Schema.Boolean,
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
   omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
+  /** Paths in this slice that .gitattributes marks linguist-generated; absent when none. */
+  generatedPaths: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
