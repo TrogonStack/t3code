@@ -402,6 +402,20 @@ pub struct Item {
 }
 
 impl Item {
+    /// `fileContextReference` / `imageContextReference`: the id the message text refers to.
+    pub fn context_id(&self) -> String {
+        kind_scoped_context_id(self.kind.wire(), &self.id)
+    }
+
+    /// The inline reference this item is written as in the prompt.
+    pub fn reference(&self) -> String {
+        format_reference(
+            self.kind.wire(),
+            &self.context_id(),
+            &label(&self.name, self.kind),
+        )
+    }
+
     /// The id of the attachment on the server, once it has uploaded.
     pub fn attachment_id(&self) -> Option<&str> {
         match &self.upload {
@@ -426,6 +440,10 @@ pub fn block_reason(items: &[Item]) -> Option<&'static str> {
 
 /// `sanitizeComposerContextLabel`.
 fn label(name: &str, kind: Kind) -> String {
+    sanitize_label(name, kind.wire())
+}
+
+fn sanitize_label(name: &str, kind: &str) -> String {
     let spaced: String = name
         .chars()
         .map(|c| {
@@ -447,9 +465,321 @@ fn label(name: &str, kind: Kind) -> String {
         cleaned.push(c);
     }
     if cleaned.is_empty() {
-        kind.wire().to_owned()
+        kind.to_owned()
     } else {
         cleaned
+    }
+}
+
+const HREF_PREFIX: &str = "t3-context://v1/";
+const MAX_LINK_LABEL_UNITS: usize = 512;
+const MAX_HREF_UNITS: usize = 200;
+
+/// `fnv1a64` of `composerContextReferences.ts`, over UTF-16 units like `charCodeAt`.
+fn fnv1a64(value: &str) -> String {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    let (mut forward, mut reverse) = (0x811c_9dc5_u32, 0x9dc5_811c_u32);
+    for index in 0..units.len() {
+        forward ^= u32::from(units[index]);
+        forward = forward.wrapping_mul(0x0100_0193);
+        reverse ^= u32::from(units[units.len() - 1 - index]);
+        reverse = reverse.wrapping_mul(0x0100_0193);
+    }
+    format!("{forward:08x}{reverse:08x}")
+}
+
+fn is_context_id(value: &str) -> bool {
+    (1..=128).contains(&value.len())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn is_context_kind(value: &str) -> bool {
+    let mut chars = value.chars();
+    value.len() <= 40
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// `toComposerContextId`.
+pub fn to_context_id(producer: &str) -> String {
+    if is_context_id(producer) {
+        return producer.to_owned();
+    }
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for c in producer.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            if pending_dash {
+                slug.push('-');
+                pending_dash = false;
+            }
+            slug.push(c);
+        } else {
+            pending_dash = true;
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let slug: String = slug.chars().take(48).collect();
+    let slug = if slug.is_empty() { "ctx" } else { &slug };
+    format!("{slug}-{}", fnv1a64(producer))
+}
+
+/// `toKindScopedComposerContextId`.
+pub fn kind_scoped_context_id(kind: &str, producer: &str) -> String {
+    to_context_id(&format!("{kind}_{producer}"))
+}
+
+/// `formatComposerContextHref`.
+fn format_href(kind: &str, context_id: &str) -> String {
+    format!("{HREF_PREFIX}{kind}/{context_id}")
+}
+
+/// `parseComposerContextHref`: the kind and id of an href, or `None` when it is not exactly
+/// scheme, version, kind and id.
+fn parse_href(href: &str) -> Option<(&str, &str)> {
+    let (kind, id) = href.strip_prefix(HREF_PREFIX)?.split_once('/')?;
+    (is_context_kind(kind) && is_context_id(id)).then_some((kind, id))
+}
+
+/// `formatComposerContextReference`.
+pub fn format_reference(kind: &str, context_id: &str, label: &str) -> String {
+    let bang = if kind == "image" { "!" } else { "" };
+    format!("{bang}[{label}]({})", format_href(kind, context_id))
+}
+
+/// `ComposerContextReferenceOccurrence`, with byte offsets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub kind: String,
+    pub context_id: String,
+    pub label: String,
+    pub image: bool,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The reference link a `[` at `open` starts, as the `CONTEXT_LINK` pattern reads it: the end
+/// of the match, the label and the href.
+fn link_at(text: &str, open: usize) -> Option<(usize, &str, &str)> {
+    let body = &text[open + 1..];
+    let mut units = 0;
+    let mut close = None;
+    for (index, c) in body.char_indices() {
+        if c == ']' {
+            close = Some(index);
+            break;
+        }
+        units += c.len_utf16();
+        if c == '\n' || units > MAX_LINK_LABEL_UNITS {
+            return None;
+        }
+    }
+    let close = close?;
+    let label = &body[..close];
+    let after = body[close + 1..].strip_prefix('(')?;
+    if !after.starts_with(HREF_PREFIX) {
+        return None;
+    }
+    let tail = &after[HREF_PREFIX.len()..];
+    let run = tail
+        .find(|c: char| c.is_whitespace() || c == ')')
+        .unwrap_or(tail.len());
+    if run == 0
+        || tail[..run].encode_utf16().count() > MAX_HREF_UNITS
+        || !tail[run..].starts_with(')')
+    {
+        return None;
+    }
+    let href = &after[..HREF_PREFIX.len() + run];
+    let end = open + 1 + close + 1 + 1 + href.len() + 1;
+    Some((end, label, href))
+}
+
+/// `collectComposerContextReferences`.
+pub fn collect_references(text: &str) -> Vec<Reference> {
+    let mut found = Vec::new();
+    if !text.contains("](t3-context:") {
+        return found;
+    }
+    let mut cursor = 0;
+    for (open, _) in text.match_indices('[') {
+        if open < cursor {
+            continue;
+        }
+        let Some((end, raw_label, href)) = link_at(text, open) else {
+            continue;
+        };
+        let Some((kind, context_id)) = parse_href(href) else {
+            continue;
+        };
+        let image = open > cursor && text[..open].ends_with('!');
+        found.push(Reference {
+            kind: kind.to_owned(),
+            context_id: context_id.to_owned(),
+            label: sanitize_label(raw_label, kind),
+            image,
+            start: if image { open - 1 } else { open },
+            end,
+        });
+        cursor = end;
+    }
+    found
+}
+
+/// `stripInlineContextReferences`.
+pub fn strip_references(text: &str) -> String {
+    let mut result = String::new();
+    let mut cursor = 0;
+    for reference in collect_references(text) {
+        result.push_str(&text[cursor..reference.start]);
+        cursor = reference.end;
+    }
+    result.push_str(&text[cursor..]);
+    result
+}
+
+/// `removeInlineContextReference`: the edits, last first, that take every reference to
+/// `context_id` out of `text` together with one neighbouring space, then trim a tail the removal
+/// left at the end.
+pub fn removal_ranges(text: &str, context_id: &str) -> Vec<std::ops::Range<usize>> {
+    let mut result = text.to_owned();
+    let mut ranges = Vec::new();
+    let found: Vec<_> = collect_references(text)
+        .into_iter()
+        .filter(|reference| reference.context_id == context_id)
+        .collect();
+    let mut cursor = text.len();
+    for reference in found.iter().rev() {
+        let (mut start, mut end) = (reference.start, reference.end);
+        if result[end..].starts_with(' ') {
+            end += 1;
+        } else if result[..start].ends_with(' ') {
+            start -= 1;
+        }
+        result.replace_range(start..end, "");
+        ranges.push(start..end);
+        cursor = start;
+    }
+    if !ranges.is_empty() && cursor >= result.len() {
+        let kept = result.trim_end().len();
+        if kept < result.len() {
+            ranges.push(kept..result.len());
+        }
+    }
+    ranges
+}
+
+/// What attaching writes into the prompt around the references, per `inlineContextReferenceReplacement`
+/// and `insertComposerText`: each reference is followed by one space, and one more space leads
+/// the first unless the text before the cursor already ends in whitespace or starts there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Insertion {
+    pub leading_space: bool,
+    /// The text after the cursor already starts with a space, which the last reference reuses.
+    pub reuse_next_space: bool,
+}
+
+pub fn insertion(before: Option<char>, after: Option<char>) -> Insertion {
+    Insertion {
+        leading_space: before.is_some_and(|c| !c.is_whitespace()),
+        reuse_next_space: after == Some(' '),
+    }
+}
+
+/// `imageAttachmentsGetChips` without a drop selection: images only get a chip once the prompt
+/// has text of its own, or a pending question or project selection takes the attachment.
+pub fn images_get_chips(prompt: &str, question_or_project_pending: bool) -> bool {
+    question_or_project_pending || !strip_references(prompt).trim().is_empty()
+}
+
+/// `middleTruncateAttachmentName`.
+pub fn middle_truncate_name(name: &str, max_characters: usize) -> String {
+    let characters: Vec<char> = name.chars().collect();
+    if characters.len() <= max_characters {
+        return name.to_owned();
+    }
+    match max_characters {
+        0 => return String::new(),
+        1 => return "…".to_owned(),
+        _ => {}
+    }
+    let available = max_characters - 1;
+    let suffix_len = (available - 1).min(if available >= 18 {
+        14
+    } else {
+        available.div_ceil(2)
+    });
+    let prefix_len = available - suffix_len;
+    let prefix: String = characters[..prefix_len].iter().collect();
+    let suffix: String = characters[characters.len() - suffix_len..].iter().collect();
+    format!("{prefix}…{suffix}")
+}
+
+/// The `ContextChip` kinds an attachment takes (`FileChip`, `documentChipKindForFileName`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChipKind {
+    File,
+    Image,
+    Video,
+    Pdf,
+    Word,
+    Spreadsheet,
+    Slides,
+    Epub,
+}
+
+impl ChipKind {
+    /// `T3_PIERRE_ICONS.byFileExtension`'s document entries.
+    fn document(name: &str) -> Option<Self> {
+        Some(match extension(name, false)?.as_str() {
+            "pdf" => Self::Pdf,
+            "doc" | "docx" | "odt" | "rtf" => Self::Word,
+            "xls" | "xlsx" | "ods" | "csv" | "tsv" => Self::Spreadsheet,
+            "ppt" | "pptx" | "odp" => Self::Slides,
+            "epub" => Self::Epub,
+            _ => return None,
+        })
+    }
+
+    /// The chip of a reference found in the prompt text, which has no attachment record.
+    pub fn of_reference(kind: &str, name: &str) -> Self {
+        if kind == "image" {
+            Self::Image
+        } else {
+            Self::document(name).unwrap_or(Self::File)
+        }
+    }
+
+    pub fn of(item: &Item) -> Self {
+        if item.kind == Kind::Image {
+            Self::Image
+        } else if video_mime(&item.name, &item.mime).is_some() {
+            Self::Video
+        } else {
+            Self::document(&item.name).unwrap_or(Self::File)
+        }
+    }
+
+    /// The solved `--context-chip-accent` of the standard theme, as light and dark hex colors
+    /// (`contextChipVariables` over `getStandardPaintedThemeColors`).
+    pub fn accent(self, dark: bool) -> u32 {
+        let (light, night) = match self {
+            Self::File | Self::Image => (0x006a99, 0x0f96d3),
+            Self::Video => (0xa54800, 0xdd6e29),
+            Self::Pdf => (0xb33739, 0xe46561),
+            Self::Word => (0x0066ab, 0x3e92da),
+            Self::Spreadsheet => (0x11732f, 0x479e58),
+            Self::Slides => (0x9b4f00, 0xcd7833),
+            Self::Epub => (0x6b51bb, 0x937cea),
+        };
+        if dark { night } else { light }
+    }
+
+    /// The `--context-chip-invalid` of the standard theme.
+    pub fn invalid(dark: bool) -> u32 {
+        if dark { 0xff6467 } else { 0xc10007 }
     }
 }
 
@@ -485,7 +815,7 @@ pub fn context(items: &[Item]) -> Option<Value> {
             Some(json!({
                 "version": 1,
                 "kind": item.kind.wire(),
-                "contextId": format!("{}_{}", item.kind.wire(), item.id),
+                "contextId": item.context_id(),
                 "label": label(&item.name, item.kind),
                 "attachmentId": item.attachment_id()?,
                 "name": item.name,
@@ -794,5 +1124,174 @@ mod tests {
             Some("Attached images")
         );
         assert_eq!(title_seed(&[file]).as_deref(), Some("File: notes v2.txt"));
+    }
+
+    #[test]
+    fn hrefs_round_trip_and_reject_anything_else() {
+        let href = format_href("review-comment", "ctx_1");
+        assert_eq!(href, "t3-context://v1/review-comment/ctx_1");
+        assert_eq!(parse_href(&href), Some(("review-comment", "ctx_1")));
+        for bad in [
+            "t3-context://v2/image/ctx_1",
+            "t3-context://v1/image",
+            "t3-context://v1/image/ctx_1/extra",
+            "t3-context://v1/image/ctx_1?x=1",
+            "t3-context://v1/image/ctx_1#frag",
+            "t3-context://user@v1/image/ctx_1",
+            "t3-context://v1/Image/ctx_1",
+            "t3-context://v1/image/ctx 1",
+            "https://v1/image/ctx_1",
+            "t3-citation://v1/a/b/c",
+        ] {
+            assert_eq!(parse_href(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn labels_are_normalized_and_kept_in_the_source() {
+        let text = "[](t3-context://v1/file/ctx_1)";
+        assert_eq!(collect_references(text)[0].label, "file");
+        let long = format!("[{}](t3-context://v1/file/ctx_1)", "x".repeat(300));
+        assert_eq!(collect_references(&long)[0].label.len(), 200);
+        let pair = format!("[{}😀tail](t3-context://v1/file/ctx_1)", "x".repeat(199));
+        assert_eq!(collect_references(&pair)[0].label, "x".repeat(199));
+    }
+
+    #[test]
+    fn references_are_collected_in_order_with_offsets() {
+        let text = "See ![a.png](t3-context://v1/image/ctx_1) then [T1](t3-context://v1/terminal/ctx_2) and again [a](t3-context://v1/image/ctx_1).";
+        let found = collect_references(text);
+        let shape: Vec<_> = found
+            .iter()
+            .map(|r| {
+                (
+                    r.kind.as_str(),
+                    r.context_id.as_str(),
+                    r.label.as_str(),
+                    r.image,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("image", "ctx_1", "a.png", true),
+                ("terminal", "ctx_2", "T1", false),
+                ("image", "ctx_1", "a", false),
+            ]
+        );
+        assert_eq!(
+            &text[found[0].start..found[0].end],
+            "![a.png](t3-context://v1/image/ctx_1)"
+        );
+        assert_eq!(strip_references(text), "See  then  and again .");
+    }
+
+    #[test]
+    fn references_are_written_like_the_web() {
+        assert_eq!(
+            format_reference("image", "image_1", "a.png"),
+            "![a.png](t3-context://v1/image/image_1)"
+        );
+        let file = item("1", Kind::File, "my [draft].md", ready("a"));
+        assert_eq!(
+            file.reference(),
+            "[my draft .md](t3-context://v1/file/file_1)"
+        );
+        let found = collect_references(&file.reference());
+        assert_eq!(found[0].context_id, file.context_id());
+    }
+
+    #[test]
+    fn context_ids_are_scoped_and_folded() {
+        assert_eq!(kind_scoped_context_id("image", "x"), "image_x");
+        assert_eq!(kind_scoped_context_id("image", "image_x"), "image_image_x");
+        assert_eq!(to_context_id("file-comment-1700-1"), "file-comment-1700-1");
+        let folded = to_context_id("pull-request-selection:src/a.ts:4-9");
+        let (slug, digest) = folded.split_at(folded.len() - 16);
+        assert_eq!(slug, "pull-request-selection-src-a-ts-4-9-");
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(to_context_id("pull-request-selection:src/a.ts:4-9"), folded);
+        assert_ne!(to_context_id("pull-request-selection:src/b.ts:4-9"), folded);
+        let bare = to_context_id("::");
+        assert!(bare.starts_with("ctx-") && bare.len() == 20);
+        let shared = format!("pull-request-finding:{}", "a".repeat(60));
+        let (first, second) = (
+            to_context_id(&format!("{shared}:1")),
+            to_context_id(&format!("{shared}:2")),
+        );
+        assert_ne!(first, second);
+        assert!(first.len() <= 128);
+    }
+
+    #[test]
+    fn attaching_pads_the_references_with_single_spaces() {
+        let at_start = insertion(None, None);
+        assert!(!at_start.leading_space && !at_start.reuse_next_space);
+        assert!(insertion(Some('a'), None).leading_space);
+        assert!(!insertion(Some(' '), None).leading_space);
+        assert!(!insertion(Some('\n'), None).leading_space);
+        assert!(insertion(Some('a'), Some(' ')).reuse_next_space);
+        assert!(!insertion(Some('a'), Some('\n')).reuse_next_space);
+    }
+
+    #[test]
+    fn images_get_chips_only_beside_other_text() {
+        let image = "![a.png](t3-context://v1/image/image_1)";
+        assert!(!images_get_chips("", false));
+        assert!(!images_get_chips(&format!(" {image} "), false));
+        assert!(images_get_chips(&format!("{image} what is this?"), false));
+        assert!(images_get_chips("", true));
+    }
+
+    #[test]
+    fn long_names_are_truncated_in_the_middle() {
+        assert_eq!(middle_truncate_name("notes.md", 36), "notes.md");
+        let name = "a-very-long-attachment-name-that-keeps-going-and-going.final.pdf";
+        let short = middle_truncate_name(name, 36);
+        assert_eq!(short.chars().count(), 36);
+        assert_eq!(short, "a-very-long-attachmen…oing.final.pdf");
+        assert_eq!(middle_truncate_name("abc", 0), "");
+        assert_eq!(middle_truncate_name("abc", 1), "…");
+        assert_eq!(middle_truncate_name("abcdefghij", 4), "a…ij");
+    }
+
+    #[test]
+    fn chips_take_the_kind_of_their_file() {
+        let kind = |name: &str, mime: &str, kind: Kind| {
+            let mut file = item("1", kind, name, ready("a"));
+            file.mime = mime.to_owned();
+            ChipKind::of(&file)
+        };
+        assert_eq!(kind("a.PDF", "application/pdf", Kind::File), ChipKind::Pdf);
+        assert_eq!(kind("a.docx", "", Kind::File), ChipKind::Word);
+        assert_eq!(kind("a.csv", "text/csv", Kind::File), ChipKind::Spreadsheet);
+        assert_eq!(kind("a.pptx", "", Kind::File), ChipKind::Slides);
+        assert_eq!(kind("a.epub", "", Kind::File), ChipKind::Epub);
+        assert_eq!(kind("a.mp4", "video/mp4", Kind::File), ChipKind::Video);
+        assert_eq!(kind("a.mov", "", Kind::File), ChipKind::Video);
+        assert_eq!(kind("a.rs", "text/x-rust", Kind::File), ChipKind::File);
+        assert_eq!(kind(".pdf", "", Kind::File), ChipKind::File);
+        assert_eq!(kind("a.png", "image/png", Kind::Image), ChipKind::Image);
+    }
+
+    #[test]
+    fn removing_a_reference_takes_one_neighbouring_space() {
+        let apply = |text: &str, id: &str| {
+            let mut text = text.to_owned();
+            for range in removal_ranges(&text.clone(), id) {
+                text.replace_range(range, "");
+            }
+            text
+        };
+        let a = "[a](t3-context://v1/file/file_1)";
+        let b = "[b](t3-context://v1/file/file_2)";
+        assert_eq!(apply(&format!("see {a} now"), "file_1"), "see now");
+        assert_eq!(apply(&format!("see {a}"), "file_1"), "see");
+        assert_eq!(apply(&format!("{a} {b} "), "file_1"), format!("{b} "));
+        assert_eq!(apply(&format!("{a} {b} "), "file_2"), a.to_string());
+        assert_eq!(apply(&format!("{a} {a}"), "file_1"), "");
+        assert_eq!(apply("plain", "file_1"), "plain");
+        assert!(removal_ranges("plain", "file_1").is_empty());
     }
 }

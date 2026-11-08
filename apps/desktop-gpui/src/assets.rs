@@ -1,3 +1,4 @@
+use crate::attachments::ChipKind;
 use gpui::{AssetSource, Result, SharedString};
 use std::borrow::Cow;
 
@@ -209,6 +210,53 @@ pub fn editor_icon(editor: &str, dark: bool) -> Option<&'static str> {
     }
 }
 
+/// The lucide icons the web's `pierre-icons.ts` sprite draws for documents and video, plus the
+/// image icon of `ImageChipButton`.
+const CHIP_ICONS: &[(&str, &[u8])] = &[
+    (
+        "chip/pdf.svg",
+        include_bytes!("chip-icons/pdf.svg") as &[u8],
+    ),
+    (
+        "chip/word.svg",
+        include_bytes!("chip-icons/word.svg") as &[u8],
+    ),
+    (
+        "chip/spreadsheet.svg",
+        include_bytes!("chip-icons/spreadsheet.svg") as &[u8],
+    ),
+    (
+        "chip/slides.svg",
+        include_bytes!("chip-icons/slides.svg") as &[u8],
+    ),
+    (
+        "chip/epub.svg",
+        include_bytes!("chip-icons/epub.svg") as &[u8],
+    ),
+    (
+        "chip/video.svg",
+        include_bytes!("chip-icons/video.svg") as &[u8],
+    ),
+    (
+        "chip/image.svg",
+        include_bytes!("chip-icons/image.svg") as &[u8],
+    ),
+];
+
+/// The icon asset of a chip kind, or `None` for a file without a document icon.
+pub fn chip_icon(kind: ChipKind) -> Option<&'static str> {
+    Some(match kind {
+        ChipKind::File => return None,
+        ChipKind::Image => "chip/image.svg",
+        ChipKind::Video => "chip/video.svg",
+        ChipKind::Pdf => "chip/pdf.svg",
+        ChipKind::Word => "chip/word.svg",
+        ChipKind::Spreadsheet => "chip/spreadsheet.svg",
+        ChipKind::Slides => "chip/slides.svg",
+        ChipKind::Epub => "chip/epub.svg",
+    })
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -223,6 +271,9 @@ impl AssetSource for AppAssets {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev-button.svg"))));
         }
         if let Some((_, bytes)) = PROVIDER_ICONS.iter().find(|(known, _)| *known == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
+        if let Some((_, bytes)) = CHIP_ICONS.iter().find(|(known, _)| *known == path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         if let Some((_, bytes)) = EDITOR_ICONS.iter().find(|(known, _)| *known == path) {
@@ -250,9 +301,19 @@ mod tests {
     use gpui_kit_assets::IconName;
 
     #[test]
+    fn every_chip_icon_loads() {
+        for (path, _) in CHIP_ICONS {
+            assert!(AppAssets.load(path).unwrap().is_some(), "{path}");
+        }
+        assert!(chip_icon(ChipKind::File).is_none());
+        assert!(chip_icon(ChipKind::Pdf).is_some());
+    }
+
+    #[test]
     fn every_catalog_icon_the_app_uses_loads() {
         for icon in [
             IconName::Paperclip,
+            IconName::File,
             IconName::SquareMenu,
             IconName::PanelBottom,
             IconName::SquareSplitHorizontal,

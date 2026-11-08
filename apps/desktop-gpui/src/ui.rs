@@ -1,4 +1,4 @@
-use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
+use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, chip_icon, provider_icon};
 use crate::attachments::{self, Upload};
 use crate::branch_picker::{self, BranchPicker};
 use crate::connection::{Action, ActionSender, Call, command_id, new_project_id};
@@ -35,7 +35,9 @@ use gpui_component::{
     ActiveTheme, Icon, IconName, Selectable, Sizable, TitleBar,
     button::{Button, ButtonVariants},
     h_flex,
-    input::{Input, InputEvent, InputState, Textarea, TextareaState},
+    input::{
+        InlineToken, InlineTokenContext, Input, InputEvent, InputState, Textarea, TextareaState,
+    },
     kbd::Kbd,
     popover::Popover,
     tooltip::Tooltip,
@@ -673,17 +675,17 @@ impl MainView {
     }
 
     /// The attach button: the native picker stands in for the web's file input.
-    fn attach_files(&mut self, cx: &mut Context<Self>) {
+    fn attach_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
             prompt: Some("Attach files".into()),
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = picked.await;
-            this.update(cx, |this, cx| match result {
-                Ok(Ok(Some(paths))) => this.add_attachments(paths, cx),
+            this.update_in(cx, |this, window, cx| match result {
+                Ok(Ok(Some(paths))) => this.add_attachments(paths, window, cx),
                 Ok(Err(error)) => this.error_toast("Failed to attach files", error.to_string(), cx),
                 _ => {}
             })
@@ -693,7 +695,12 @@ impl MainView {
     }
 
     /// The web's `addComposerAttachments`: validate, stage and start uploading each file.
-    fn add_attachments(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+    fn add_attachments(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let picked: Vec<attachments::Picked> = paths
             .into_iter()
             .map(|path| attachments::Picked {
@@ -714,9 +721,17 @@ impl MainView {
         if let Some(message) = error {
             self.message_toast(message, cx);
         }
+        let no_project = self.selected_thread.is_none()
+            && self
+                .shell()
+                .and_then(|shell| active_project(self.selected_project.as_deref(), shell))
+                .is_none();
+        let images_chip =
+            attachments::images_get_chips(&self.composer.read(cx).value(), no_project);
+        let mut added = Vec::new();
         for file in accepted {
             let id = new_project_id();
-            self.attachments.push(attachments::Item {
+            let item = attachments::Item {
                 id: id.clone(),
                 path: file.path,
                 kind: file.kind,
@@ -724,10 +739,73 @@ impl MainView {
                 mime: file.mime,
                 size: file.size,
                 upload: Upload::Uploading { progress: 0. },
-            });
+            };
+            added.push(item.clone());
+            self.attachments.push(item);
             self.start_upload(&id, cx);
         }
+        added.sort_by_key(|item| item.kind == attachments::Kind::Image);
+        added.retain(|item| item.kind == attachments::Kind::File || images_chip);
+        self.insert_references(&added, window, cx);
         cx.notify();
+    }
+
+    /// The web's `insertAttachmentReferences`: one chip per item at the cursor, each followed by a
+    /// space, with a leading space unless the cursor follows whitespace.
+    fn insert_references(
+        &mut self,
+        items: &[attachments::Item],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if items.is_empty() {
+            return;
+        }
+        self.composer.update(cx, |composer, cx| {
+            let text = composer.value();
+            let cursor = composer.cursor().min(text.len());
+            let plan = attachments::insertion(
+                text[..cursor].chars().next_back(),
+                text[cursor..].chars().next(),
+            );
+            composer.set_selected_range(cursor..cursor, cx);
+            if plan.leading_space {
+                composer.insert(" ", window, cx);
+            }
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    composer.insert(" ", window, cx);
+                }
+                let reference = item.reference();
+                let token = InlineToken::new(item.context_id(), reference.clone());
+                if composer.replace_with_token(token, window, cx).is_err() {
+                    composer.insert(reference, window, cx);
+                }
+            }
+            if plan.reuse_next_space {
+                let end = composer.cursor() + 1;
+                composer.set_selected_range(end..end, cx);
+            } else {
+                composer.insert(" ", window, cx);
+            }
+            composer.focus(window, cx);
+        });
+    }
+
+    /// The web's `removeInlineContextReference`.
+    fn remove_inline_reference(
+        &mut self,
+        context_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer.update(cx, |composer, cx| {
+            let text = composer.value();
+            for range in attachments::removal_ranges(&text, context_id) {
+                composer.set_selected_range(range, cx);
+                composer.replace("", window, cx);
+            }
+        });
     }
 
     /// Asks the server for an upload URL; `on_attachment_call` posts the file once it answers.
@@ -872,11 +950,12 @@ impl MainView {
         self.submit(cx);
     }
 
-    fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn remove_attachment(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.attachments.iter().position(|item| item.id == id) else {
             return;
         };
         let item = self.attachments.remove(index);
+        self.remove_inline_reference(&item.context_id(), window, cx);
         if let Some(attachment_id) = item.attachment_id() {
             self.delete_attachment(attachment_id);
         }
@@ -893,7 +972,19 @@ impl MainView {
 
     /// The web's `ComposerAttachmentMediaRow` and `ComposerAttachmentFileList`.
     fn attachment_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.attachments.is_empty() {
+        let inline: HashSet<String> =
+            attachments::collect_references(&self.composer.read(cx).value())
+                .into_iter()
+                .map(|reference| reference.context_id)
+                .collect();
+        let shown: Vec<&attachments::Item> = self
+            .attachments
+            .iter()
+            .filter(|item| {
+                item.kind == attachments::Kind::Image || !inline.contains(&item.context_id())
+            })
+            .collect();
+        if shown.is_empty() {
             return None;
         }
         let theme = cx.theme();
@@ -910,7 +1001,7 @@ impl MainView {
         };
         let mut tiles = Vec::new();
         let mut rows = Vec::new();
-        for item in &self.attachments {
+        for item in shown {
             let remove_id = item.id.clone();
             let retry_id = item.id.clone();
             let progress = match &item.upload {
@@ -932,7 +1023,9 @@ impl MainView {
                     ghost
                 },
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.remove_attachment(&remove_id, cx)));
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.remove_attachment(&remove_id, window, cx)
+            }));
             let retry = failed.map(|reason| {
                 attachment_button(
                     format!("attachment-retry-{}", item.id),
@@ -4016,6 +4109,7 @@ impl MainView {
             &self.attachments,
             self.sending.is_some(),
         );
+        let chips = chip_infos(&self.attachments);
         v_flex()
             .w(px(720.))
             .max_w_full()
@@ -4038,7 +4132,8 @@ impl MainView {
                             .mx(px(-10.))
                             .my(px(-8.))
                             // The web's `leading-relaxed` at 14px.
-                            .line_height(px(22.75)),
+                            .line_height(px(22.75))
+                            .token(move |token, _, cx| composer_chip(token, &chips, cx)),
                     ),
             )
             .child(
@@ -4054,7 +4149,7 @@ impl MainView {
                             true,
                             cx,
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.attach_files(cx))),
+                        .on_click(cx.listener(|this, _, window, cx| this.attach_files(window, cx))),
                     )
                     .child(
                         h_flex().gap_2().children(model_picker).child(
@@ -4631,6 +4726,123 @@ fn scratch_entry(entries: &[ProjectEntry]) -> Option<&ProjectEntry> {
 }
 
 /// The web's `TooltipPopup` sizing: `text-xs`, `px-2 py-1`, `rounded-md`.
+/// What a chip shows beyond its reference text.
+struct ChipInfo {
+    name: String,
+    size: String,
+    kind: attachments::ChipKind,
+    progress: Option<String>,
+    failed: Option<String>,
+}
+
+fn chip_infos(items: &[attachments::Item]) -> Rc<HashMap<String, ChipInfo>> {
+    Rc::new(
+        items
+            .iter()
+            .map(|item| {
+                let info = ChipInfo {
+                    name: item.name.clone(),
+                    size: attachments::format_size(item.size),
+                    kind: attachments::ChipKind::of(item),
+                    progress: match &item.upload {
+                        Upload::Uploading { progress } => {
+                            Some(attachments::format_progress(*progress))
+                        }
+                        _ => None,
+                    },
+                    failed: match &item.upload {
+                        Upload::Failed { reason } => Some(reason.clone()),
+                        _ => None,
+                    },
+                };
+                (item.context_id(), info)
+            })
+            .collect(),
+    )
+}
+
+/// The web's `FileChipContent` / `ImageChipButton` as an inline chip (`ContextChip`).
+fn composer_chip(
+    token: &InlineTokenContext,
+    chips: &HashMap<String, ChipInfo>,
+    cx: &App,
+) -> AnyElement {
+    let theme = cx.theme();
+    let dark = theme.is_dark();
+    let info = chips.get(token.token().id().as_ref());
+    let reference = attachments::collect_references(token.token().text())
+        .into_iter()
+        .next();
+    let name = info
+        .map(|info| info.name.clone())
+        .or_else(|| reference.as_ref().map(|reference| reference.label.clone()))
+        .unwrap_or_default();
+    let kind = info.map(|info| info.kind).unwrap_or_else(|| {
+        let wire = reference
+            .as_ref()
+            .map_or("file", |reference| &reference.kind);
+        attachments::ChipKind::of_reference(wire, &name)
+    });
+    let failed = info.and_then(|info| info.failed.clone());
+    let color: Hsla = rgb(if failed.is_some() {
+        attachments::ChipKind::invalid(dark)
+    } else {
+        kind.accent(dark)
+    })
+    .into();
+    let size = info.map(|info| info.size.clone());
+    let mut hint = name.clone();
+    if let Some(size) = &size {
+        hint = format!("{hint}\n{size}");
+    }
+    if let Some(reason) = &failed {
+        hint = format!("{hint}\n{reason}");
+    } else if let Some(progress) = info.and_then(|info| info.progress.as_ref()) {
+        hint = format!("{hint}\nUploading {progress}");
+    }
+    let icon = match chip_icon(kind) {
+        Some(path) => Icon::empty().path(path),
+        None => Icon::new(Icons::File),
+    };
+    h_flex()
+        .id(("composer-chip", token.range().start))
+        .group("composer-chip")
+        .max_w_full()
+        .items_center()
+        .gap(px(2.8))
+        .rounded(px(4.))
+        .text_size(px(14.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color)
+        .when(token.is_selected(), |chip| chip.bg(theme.selection))
+        .tooltip(tooltip(hint))
+        .child(icon.size(px(14.)).flex_shrink_0().text_color(color))
+        .child(
+            h_flex()
+                .min_w_0()
+                .items_baseline()
+                .gap(px(4.62))
+                .group_hover("composer-chip", |label| label.underline())
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(px(288.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(attachments::middle_truncate_name(&name, 36)),
+                )
+                .children(size.map(|size| {
+                    div()
+                        .flex_shrink_0()
+                        .text_size(px(10.))
+                        .line_height(px(14.))
+                        .child(size)
+                })),
+        )
+        .into_any_element()
+}
+
 fn tooltip(
     text: impl Into<gpui::SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
