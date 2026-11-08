@@ -8,10 +8,11 @@ use crate::providers::Catalog;
 use crate::rpc::{
     AttachmentsCreateUploadUrl, AttachmentsDelete, Event, GitRunStackedAction,
     OrchestrationDispatchCommand, OrchestrationLaunchThread, PING_FRAME, ProjectsMutate,
-    ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary, ServerRefreshUsageRates,
-    ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell, SubscribeThread,
-    SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef,
-    VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    ProviderConsumeResetCredit, ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary,
+    ServerRefreshProviders, ServerRefreshUsageRates, ServerUpdateSettings, Session,
+    ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach,
+    TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull,
+    VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -127,6 +128,8 @@ pub enum Call {
     DeleteAttachment,
     GetUsageSummary,
     RefreshUsageRates,
+    RefreshProviders,
+    ConsumeResetCredit,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -169,6 +172,8 @@ impl Call {
             Self::DeleteAttachment => "delete the attachment",
             Self::GetUsageSummary => "load usage",
             Self::RefreshUsageRates => "refresh usage rates",
+            Self::RefreshProviders => "refresh the provider limits",
+            Self::ConsumeResetCredit => "use the reset credit",
         }
     }
 
@@ -191,6 +196,8 @@ impl Call {
             Self::DeleteAttachment => session.request::<AttachmentsDelete>(payload),
             Self::GetUsageSummary => session.request::<ServerGetUsageSummary>(payload),
             Self::RefreshUsageRates => session.request::<ServerRefreshUsageRates>(payload),
+            Self::RefreshProviders => session.request::<ServerRefreshProviders>(payload),
+            Self::ConsumeResetCredit => session.request::<ProviderConsumeResetCredit>(payload),
         }
     }
 }

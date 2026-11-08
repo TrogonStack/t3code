@@ -222,6 +222,16 @@ untyped_method!(
     ServerRefreshUsageRates,
     "server.refreshUsageRates"
 );
+untyped_method!(
+    /// `server.refreshProviders`: re-probes the providers and replies `{providers}`.
+    ServerRefreshProviders,
+    "server.refreshProviders"
+);
+untyped_method!(
+    /// `provider.consumeResetCredit`: spends one reset credit of an instance.
+    ProviderConsumeResetCredit,
+    "provider.consumeResetCredit"
+);
 /// `git.runStackedAction`, a stream of progress events ending with the action's result.
 pub struct GitRunStackedAction;
 

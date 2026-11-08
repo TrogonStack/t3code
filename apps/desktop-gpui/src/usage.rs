@@ -8,9 +8,41 @@ const MINUTE: i64 = 60_000;
 const HOUR: i64 = 60 * MINUTE;
 const DAY: i64 = 24 * HOUR;
 
+/// `ServerProviderUsageWindow.kind`; the declaration order is `WINDOW_KIND_ORDER`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    Session,
+    Weekly,
+    Monthly,
+    Other,
+}
+
+impl Kind {
+    fn decode(text: &str) -> Option<Self> {
+        Some(match text {
+            "session" => Self::Session,
+            "weekly" => Self::Weekly,
+            "monthly" => Self::Monthly,
+            "other" => Self::Other,
+            _ => return None,
+        })
+    }
+
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Weekly => "weekly",
+            Self::Monthly => "monthly",
+            Self::Other => "other",
+        }
+    }
+}
+
 /// `ServerProviderUsageWindow`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Window {
+    pub id: String,
+    pub kind: Kind,
     pub label: String,
     pub used_percent: f64,
     pub resets_at: Option<i64>,
@@ -23,11 +55,30 @@ pub enum Reason {
     ProbeFailed,
 }
 
+/// `ServerProviderResetCredits`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResetCredits {
+    pub available: i64,
+    pub next_expires_at: Option<i64>,
+}
+
+/// `ServerProviderUsageLimits.externalUsage`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct External {
+    pub label: String,
+    pub url: String,
+}
+
 /// `ServerProviderUsageLimits`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Limits {
     pub windows: Vec<Window>,
     pub unavailable: Option<(Reason, Option<String>)>,
+    /// `Date.parse(checkedAt)`: `None` stands for `NaN`, which compares false with everything.
+    pub checked_at: Option<i64>,
+    pub fingerprint: Option<String>,
+    pub reset_credits: Option<ResetCredits>,
+    pub external: Option<External>,
 }
 
 impl Limits {
@@ -42,6 +93,8 @@ impl Limits {
             .flatten()
             .filter_map(|window| {
                 Some(Window {
+                    id: window["id"].as_str()?.to_owned(),
+                    kind: Kind::decode(window["kind"].as_str()?)?,
                     label: window["label"].as_str()?.to_owned(),
                     used_percent: window["usedPercent"].as_f64()?,
                     resets_at: window["resetsAt"].as_str().and_then(parse_timestamp),
@@ -61,9 +114,28 @@ impl Limits {
                 .map(str::to_owned);
             Some((reason, message))
         });
+        let reset_credits = value["resetCredits"].as_object().and_then(|entry| {
+            Some(ResetCredits {
+                available: entry.get("availableCount")?.as_i64()?,
+                next_expires_at: entry
+                    .get("nextExpiresAt")
+                    .and_then(Value::as_str)
+                    .and_then(parse_timestamp),
+            })
+        });
+        let external = value["externalUsage"].as_object().and_then(|entry| {
+            Some(External {
+                label: entry.get("label")?.as_str()?.to_owned(),
+                url: entry.get("url")?.as_str()?.to_owned(),
+            })
+        });
         Some(Self {
             windows,
             unavailable,
+            checked_at: value["checkedAt"].as_str().and_then(parse_timestamp),
+            fingerprint: value["credentialFingerprint"].as_str().map(str::to_owned),
+            reset_credits,
+            external,
         })
     }
 
@@ -92,21 +164,35 @@ impl Window {
         (100. - self.used_percent.clamp(0., 100.)).round() as i64
     }
 
-    /// `paceOf`: `None` without a reset time and window length.
-    pub fn pace(&self, now: i64) -> Option<Pace> {
+    /// `elapsedShare`: `None` without a reset time and window length.
+    pub fn elapsed_share(&self, now: i64) -> Option<f64> {
         let resets_at = self.resets_at?;
-        let length = (self.duration_mins? * MINUTE as f64) as i64;
-        if length <= 0 {
+        let length = self.duration_mins? * MINUTE as f64;
+        if length <= 0. {
             return None;
         }
-        let elapsed = ((length - (resets_at - now)) as f64 / length as f64).clamp(0., 1.);
-        let gap = self.used_percent - elapsed * 100.;
-        Some(if gap > 5. {
-            Pace::Ahead
-        } else if gap < -5. {
-            Pace::Under
+        Some(((length - (resets_at - now) as f64) / length).clamp(0., 1.))
+    }
+
+    /// `paceRemainingPercent`: the share of the window still to come, where even spending would sit.
+    pub fn pace_remaining_percent(&self, now: i64) -> Option<i64> {
+        Some(((1. - self.elapsed_share(now)?) * 100.).round() as i64)
+    }
+
+    /// `paceOf`.
+    pub fn pace(&self, now: i64) -> Option<Pace> {
+        Some(Pace::of_shares(self.used_percent, self.elapsed_share(now)?))
+    }
+
+    /// `formatResetsIn`.
+    pub fn resets_in(&self, now: i64) -> Option<String> {
+        let at = self.resets_at?;
+        Some(if at <= now {
+            "resets now".to_owned()
+        } else if at - now < MINUTE {
+            "Resets momentarily".to_owned()
         } else {
-            Pace::On
+            format!("resets in {}", format_duration(at - now))
         })
     }
 
@@ -135,6 +221,27 @@ pub enum Pace {
 }
 
 impl Pace {
+    /// `paceOfShares`.
+    pub fn of_shares(used_percent: f64, elapsed: f64) -> Self {
+        let gap = used_percent - elapsed * 100.;
+        if gap > 5. {
+            Self::Ahead
+        } else if gap < -5. {
+            Self::Under
+        } else {
+            Self::On
+        }
+    }
+
+    /// `PACE[pace].label` of the usage page.
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Ahead => "Ahead of pace: spending faster than the window elapses",
+            Self::On => "On pace with the window",
+            Self::Under => "Under pace: headroom left for the rest of the window",
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Ahead => "Ahead of pace",
@@ -217,6 +324,8 @@ mod tests {
 
     fn window(used: f64, resets: Option<i64>, mins: Option<f64>) -> Window {
         Window {
+            id: "five_hour".to_owned(),
+            kind: Kind::Session,
             label: "5h".to_owned(),
             used_percent: used,
             resets_at: resets,

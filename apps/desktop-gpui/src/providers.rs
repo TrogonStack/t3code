@@ -5,6 +5,7 @@
 
 use crate::strip::Defaults;
 use crate::usage::Limits;
+use crate::usage_limits::Native;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -167,6 +168,12 @@ struct Provider {
     accent_color: Option<String>,
     status: String,
     #[serde(default)]
+    enabled: bool,
+    #[serde(default)]
+    installed: bool,
+    #[serde(default)]
+    auth: Auth,
+    #[serde(default)]
     availability: Option<String>,
     #[serde(default)]
     message: Option<String>,
@@ -175,6 +182,22 @@ struct Provider {
     /// Kept raw: `usage::Limits` decodes it for the details card.
     #[serde(default)]
     usage_limits: Option<Value>,
+}
+
+/// The slice of `ServerProviderAuth` the limits read.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct Auth {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    workspace_id: Option<String>,
+    #[serde(default)]
+    subscription_sharing: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -486,6 +509,18 @@ impl Catalog {
             .iter()
             .find(|provider| provider.instance_id == instance_id)
             .and_then(|provider| Limits::decode(provider.usage_limits.as_ref()?))
+    }
+
+    /// Each provider as the limits tab reads it.
+    pub fn natives(&self) -> Vec<Native> {
+        self.providers.iter().map(native).collect()
+    }
+
+    /// The Cursor enable prompt needs a ready Cursor instance to show beside.
+    pub fn cursor_ready(&self) -> bool {
+        self.providers
+            .iter()
+            .any(|provider| provider.driver == "cursor" && provider.status == "ready")
     }
 
     /// A provider instance's icon, for the sidebar's thread cards.
@@ -814,6 +849,45 @@ fn default_model(provider: &Provider) -> String {
         })
 }
 
+/// The providers of a `server.refreshProviders` reply, `{providers}`.
+pub fn natives_from_reply(value: Value) -> Option<Vec<Native>> {
+    #[derive(Deserialize)]
+    struct Reply {
+        #[serde(default, deserialize_with = "lenient")]
+        providers: Vec<Provider>,
+    }
+    let reply: Reply = serde_json::from_value(value).ok()?;
+    Some(reply.providers.iter().map(native).collect())
+}
+
+fn native(provider: &Provider) -> Native {
+    Native {
+        instance_id: provider.instance_id.clone(),
+        driver: provider.driver.clone(),
+        display_name: provider.display_name.clone(),
+        accent_color: provider.accent_color.clone(),
+        status: provider.status.clone(),
+        enabled: provider.enabled,
+        installed: provider.installed,
+        available: provider.availability.as_deref() != Some("unavailable"),
+        authenticated: provider.auth.status == "authenticated",
+        email: provider.auth.email.clone(),
+        plan: provider.auth.label.clone(),
+        workspace_id: provider.auth.workspace_id.clone(),
+        sharing: provider.auth.subscription_sharing == Some(true),
+        limits: provider.usage_limits.as_ref().and_then(Limits::decode),
+    }
+}
+
+/// The label of a driver this client knows, else the driver as reported.
+pub fn driver_label(driver: &str) -> String {
+    match driver {
+        "antigravity" | "codex" | "claudeAgent" | "cursor" | "grok" | "fx" | "kiro" | "muse"
+        | "acpRegistry" | "pi" | "opencode" => kind_label(driver),
+        other => other.to_owned(),
+    }
+}
+
 fn kind_label(driver: &str) -> String {
     match driver {
         "antigravity" => "Antigravity",
@@ -878,7 +952,12 @@ fn display_name(provider: &Provider) -> String {
 }
 
 fn accent(provider: &Provider) -> Option<u32> {
-    let color = provider.accent_color.as_deref()?.trim();
+    normalize_accent(provider.accent_color.as_deref()?)
+}
+
+/// `normalizeProviderAccentColor`: a trimmed `#RRGGBB`.
+pub fn normalize_accent(color: &str) -> Option<u32> {
+    let color = color.trim();
     let hex = color.strip_prefix('#')?;
     if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
@@ -926,9 +1005,13 @@ fn mark(entries: &[Entry], entry: &Entry) -> Mark {
 }
 
 fn badge(provider: &Provider, display_name: &str) -> Badge {
+    accent_badge(display_name, accent(provider))
+}
+
+pub fn accent_badge(display_name: &str, accent: Option<u32>) -> Badge {
     Badge {
         initials: initials(display_name),
-        accent: accent(provider).map(|color| (color, accent_foreground(color))),
+        accent: accent.map(|color| (color, accent_foreground(color))),
     }
 }
 
@@ -1509,6 +1592,9 @@ mod tests {
             display_name: display.map(str::to_owned),
             accent_color: None,
             status: "ready".into(),
+            enabled: true,
+            installed: true,
+            auth: Auth::default(),
             availability: None,
             message: None,
             models: Vec::new(),
@@ -1532,6 +1618,9 @@ mod tests {
                 display_name: None,
                 accent_color: None,
                 status: status.into(),
+                enabled: true,
+                installed: true,
+                auth: Auth::default(),
                 availability: None,
                 message: message.map(str::to_owned),
                 models: Vec::new(),

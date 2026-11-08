@@ -1,5 +1,7 @@
 //! The web's Usage page (`UsagePage.tsx`) as the `/usage` route modal (`AppRouteModal.tsx`).
 
+mod limits;
+
 use super::*;
 use crate::usage_data::{
     self as data, Merged, Metric, Prefs, Provider, Summary, Tint, Window as Span, Zone,
@@ -8,6 +10,7 @@ use gpui::{
     ClickEvent, ElementId, FocusHandle, KeyBinding, PathBuilder, ScrollHandle, Size, fill, point,
     radians, relative, size,
 };
+use limits::LimitsState;
 use serde_json::{Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -78,6 +81,11 @@ enum Pending {
     Rates {
         generation: u64,
     },
+    Limits,
+    Redeem {
+        key: (String, String),
+    },
+    EnableCursor,
 }
 
 struct Shown {
@@ -129,6 +137,7 @@ pub struct UsageDialog {
     scroll: ScrollHandle,
     next_token: u64,
     pending: HashMap<u64, Pending>,
+    limits: LimitsState,
 }
 
 fn now_ms() -> i64 {
@@ -163,6 +172,7 @@ impl UsageDialog {
             scroll: ScrollHandle::new(),
             next_token: TOKEN_BASE,
             pending: HashMap::new(),
+            limits: LimitsState::default(),
         }
     }
 
@@ -175,6 +185,7 @@ impl UsageDialog {
         self.span = self.make_span();
         self.hover = None;
         self.breakdown_time = false;
+        self.limits.now = now_ms();
         window.focus(&self.focus, cx);
         self.ensure_loaded();
         cx.notify();
@@ -232,7 +243,11 @@ impl UsageDialog {
 
     /// Fetches when nothing is shown, the shown window is another one, or the data is old.
     fn ensure_loaded(&mut self) {
-        if !self.can_read() || self.prefs.metric == Metric::Limits || self.stage != Stage::Idle {
+        if self.prefs.metric == Metric::Limits {
+            self.refresh_limits(true);
+            return;
+        }
+        if !self.can_read() || self.stage != Stage::Idle {
             return;
         }
         let fresh = self
@@ -268,6 +283,9 @@ impl UsageDialog {
             return;
         };
         match pending {
+            Pending::Limits => self.limits_settled(event),
+            Pending::Redeem { key } => self.redeem_settled(key, event),
+            Pending::EnableCursor => self.enable_settled(event),
             Pending::Rates { generation } => {
                 if generation == self.generation {
                     self.start_query();
@@ -331,12 +349,20 @@ impl UsageDialog {
         self.prefs.metric = metric;
         self.prefs.save();
         self.hover = None;
+        if metric == Metric::Limits {
+            self.limits.now = now_ms();
+        }
         self.ensure_loaded();
         cx.notify();
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.manual || !self.can_read() || self.prefs.metric == Metric::Limits {
+        if self.prefs.metric == Metric::Limits {
+            self.refresh_limits(false);
+            cx.notify();
+            return;
+        }
+        if self.manual || !self.can_read() {
             return;
         }
         self.manual = true;
@@ -543,6 +569,7 @@ impl Render for UsageDialog {
         let (border, background) = (theme.border, theme.background);
         let header = self.header(width, cx);
         let body = self.body(vw, cx);
+        let confirm = self.reset_credit_dialog(cx);
         div()
             .absolute()
             .inset_0()
@@ -600,6 +627,7 @@ impl Render for UsageDialog {
                             .child(body),
                     ),
             )
+            .children(confirm)
             .into_any_element()
     }
 }
@@ -641,8 +669,12 @@ impl UsageDialog {
                 cx,
             )
         }));
-        let refreshing = self.manual;
-        let can_refresh = !refreshing && (limits || self.can_read());
+        let refreshing = if limits {
+            self.limits.refreshing()
+        } else {
+            self.manual
+        };
+        let can_refresh = !refreshing && self.can_read();
         let icon = Icon::new(Icons::RefreshCw).size(px(14.));
         let spinner = if refreshing {
             icon.with_animation(
@@ -745,7 +777,7 @@ impl UsageDialog {
                 .child(format!("Connect an environment to see {noun}."))
                 .into_any_element()
         } else if limits {
-            self.limits_body(cx)
+            self.limits_body(vw, cx)
         } else if self.access == Access::Offline {
             div()
                 .py_12()
@@ -769,14 +801,6 @@ impl UsageDialog {
             .pt(px(24.))
             .pb(px(48.))
             .child(content)
-            .into_any_element()
-    }
-
-    fn limits_body(&self, cx: &App) -> AnyElement {
-        div()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child("Limits are not available here yet.")
             .into_any_element()
     }
 
@@ -995,101 +1019,116 @@ impl UsageDialog {
                 data::format_percent(merged.unpriced_share, 1)
             )
         });
-        let rows = active.iter().map(|provider| {
-            let provider = *provider;
-            let totals = merged.providers.iter().find(|t| t.provider == provider);
-            let share = totals.map_or(0.0, |t| {
-                if metric == Metric::Cost {
-                    t.cost_share
-                } else {
-                    t.token_share
-                }
-            });
-            let count = totals.map_or(0.0, |t| t.sessions);
-            let loading = dim.provider(provider);
-            let awaiting = loading && !with_data.contains(&provider);
-            let (cost, tokens) = totals.map_or((0.0, 0.0), |t| (t.cost, t.tokens));
-            let value = if awaiting {
-                "-".to_owned()
-            } else if metric == Metric::Cost {
-                data::format_usd(cost)
-            } else {
-                data::format_tokens(tokens)
-            };
-            let line = if metric == Metric::Cost {
-                format!(
-                    "{} of cost \u{b7} {} tokens",
-                    data::format_percent(share, 1),
-                    data::format_tokens(tokens)
-                )
-            } else {
-                format!(
-                    "{} of tokens \u{b7} {}",
-                    data::format_percent(share, 1),
+        let mut rows: Vec<AnyElement> = active
+            .iter()
+            .map(|provider| {
+                let provider = *provider;
+                let totals = merged.providers.iter().find(|t| t.provider == provider);
+                let share = totals.map_or(0.0, |t| {
+                    if metric == Metric::Cost {
+                        t.cost_share
+                    } else {
+                        t.token_share
+                    }
+                });
+                let count = totals.map_or(0.0, |t| t.sessions);
+                let loading = dim.provider(provider);
+                let awaiting = loading && !with_data.contains(&provider);
+                let (cost, tokens) = totals.map_or((0.0, 0.0), |t| (t.cost, t.tokens));
+                let value = if awaiting {
+                    "-".to_owned()
+                } else if metric == Metric::Cost {
                     data::format_usd(cost)
-                )
+                } else {
+                    data::format_tokens(tokens)
+                };
+                let line = if metric == Metric::Cost {
+                    format!(
+                        "{} of cost \u{b7} {} tokens",
+                        data::format_percent(share, 1),
+                        data::format_tokens(tokens)
+                    )
+                } else {
+                    format!(
+                        "{} of tokens \u{b7} {}",
+                        data::format_percent(share, 1),
+                        data::format_usd(cost)
+                    )
+                };
+                let noun = if count == 1.0 { "session" } else { "sessions" };
+                v_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .items_baseline()
+                            .justify_between()
+                            .gap_4()
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .items_center()
+                                    .gap_2()
+                                    .text_sm()
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(tint(provider, cx)),
+                                    )
+                                    .child(mark(provider, 16., cx))
+                                    .child(
+                                        h_flex()
+                                            .min_w_0()
+                                            .items_baseline()
+                                            .gap(px(6.))
+                                            .child(div().truncate().child(provider.label()))
+                                            .child(
+                                                div()
+                                                    .flex_shrink_0()
+                                                    .whitespace_nowrap()
+                                                    .text_size(px(11.))
+                                                    .text_color(muted)
+                                                    .opacity(dimmed(loading))
+                                                    .when(awaiting, |d| d.invisible())
+                                                    .child(format!(
+                                                        "{} {noun}",
+                                                        data::format_count(count)
+                                                    )),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .opacity(dimmed(loading))
+                                    .child(value),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .opacity(dimmed(loading))
+                            .when(awaiting, |d| d.invisible())
+                            .child(line),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        if let Some(row) = self.cursor_enable_row(cx) {
+            let at = |provider: Provider| {
+                active
+                    .iter()
+                    .position(|p| *p == provider)
+                    .map_or(-1, |i| i as isize)
             };
-            let noun = if count == 1.0 { "session" } else { "sessions" };
-            v_flex()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .items_baseline()
-                        .justify_between()
-                        .gap_4()
-                        .child(
-                            h_flex()
-                                .min_w_0()
-                                .items_center()
-                                .gap_2()
-                                .text_sm()
-                                .child(
-                                    div()
-                                        .size(px(8.))
-                                        .flex_shrink_0()
-                                        .rounded_full()
-                                        .bg(tint(provider, cx)),
-                                )
-                                .child(mark(provider, 16., cx))
-                                .child(
-                                    h_flex()
-                                        .min_w_0()
-                                        .items_baseline()
-                                        .gap(px(6.))
-                                        .child(div().truncate().child(provider.label()))
-                                        .child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .whitespace_nowrap()
-                                                .text_size(px(11.))
-                                                .text_color(muted)
-                                                .opacity(dimmed(loading))
-                                                .when(awaiting, |d| d.invisible())
-                                                .child(format!(
-                                                    "{} {noun}",
-                                                    data::format_count(count)
-                                                )),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .opacity(dimmed(loading))
-                                .child(value),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .opacity(dimmed(loading))
-                        .when(awaiting, |d| d.invisible())
-                        .child(line),
-                )
-        });
+            let index = (at(Provider::Codex).max(at(Provider::Claude)) + 1) as usize;
+            rows.insert(index.min(rows.len()), row);
+        }
+        let chatgpt = self.chatgpt_sharing().then(|| self.chatgpt_row(cx));
         let left = v_flex()
             .min_w_0()
             .gap(px(20.))
@@ -1125,6 +1164,7 @@ impl UsageDialog {
                             })),
                     ),
             )
+            .children(chatgpt)
             .children(rows);
 
         let hourly = span.hourly;

@@ -496,6 +496,8 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Providers(catalog) = status {
+            self.usage
+                .update(cx, |usage, cx| usage.set_providers(&catalog, cx));
             self.providers = Some(catalog);
             return cx.notify();
         }
@@ -571,8 +573,14 @@ impl MainView {
             Status::Failed(_) => usage_dialog::Access::Offline,
             _ => usage_dialog::Access::Ready,
         };
-        self.usage
-            .update(cx, |usage, cx| usage.set_access(access, cx));
+        let environment = match &status {
+            Status::Connected { label, .. } => strip::environment_label(label),
+            _ => String::new(),
+        };
+        self.usage.update(cx, |usage, cx| {
+            usage.set_environment(environment);
+            usage.set_access(access, cx);
+        });
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
         if self.selected_project.is_none() {

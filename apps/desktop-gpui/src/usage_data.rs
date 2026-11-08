@@ -984,21 +984,54 @@ impl Zone {
     fn civil(&self, instant_ms: i64) -> Civil {
         let local = instant_ms + self.offset_ms(instant_ms);
         let days = local.div_euclid(DAY_MS);
-        let (_, month, day) = civil_from_days(days);
+        let (year, month, day) = civil_from_days(days);
         Civil {
             days,
+            year,
             month,
             day,
             hour: local.rem_euclid(DAY_MS) / HOUR_MS,
+            minute: local.rem_euclid(HOUR_MS) / 60_000,
         }
     }
 }
 
 struct Civil {
     days: i64,
+    year: i64,
     month: i64,
     day: i64,
     hour: i64,
+    minute: i64,
+}
+
+/// `formatUpcomingTimestamp` for the `en-US` locale at its default 12-hour clock.
+pub fn format_upcoming(at: i64, now: i64, zone: &Zone) -> String {
+    let (target, today) = (zone.civil(at), zone.civil(now));
+    let twelve = if target.hour % 12 == 0 {
+        12
+    } else {
+        target.hour % 12
+    };
+    let time = format!(
+        "{twelve}:{:02}\u{202f}{}",
+        target.minute,
+        if target.hour < 12 { "AM" } else { "PM" }
+    );
+    let ahead = target.days - today.days;
+    let numeric = || {
+        if target.year == today.year {
+            format!("{}/{}", target.month, target.day)
+        } else {
+            format!("{}/{}/{}", target.month, target.day, target.year)
+        }
+    };
+    match ahead {
+        0 => time,
+        1 => format!("tomorrow at {time}"),
+        -1 => format!("yesterday at {time}"),
+        _ => format!("{} {time}", numeric()),
+    }
 }
 
 fn hour_label(hour: i64) -> String {
