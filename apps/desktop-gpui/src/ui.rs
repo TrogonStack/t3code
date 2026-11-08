@@ -57,6 +57,9 @@ const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod model_popover;
 mod right_panel;
+mod usage_dialog;
+
+pub use usage_dialog::bindings as usage_bindings;
 
 /// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
 const SIDEBAR_DEFAULT_WIDTH: f32 = 256.;
@@ -92,7 +95,8 @@ actions!(
         ToggleRightPanel,
         OpenFavoriteEditor,
         NewThread,
-        NewScratchThread
+        NewScratchThread,
+        OpenUsage
     ]
 );
 
@@ -269,6 +273,7 @@ pub struct MainView {
     terminal_attached: Vec<Target>,
     card: Entity<DetailsCard>,
     toasts: Entity<ToastHost>,
+    usage: Entity<usage_dialog::UsageDialog>,
     /// The slow requests toast; kept after the user dismisses it, like the web coordinator.
     slow_toast: Option<ToastId>,
     /// The main area's width at the last render, for fitting the details card.
@@ -434,6 +439,7 @@ impl MainView {
             terminal_attached: Vec::new(),
             card,
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
+            usage: cx.new(|cx| usage_dialog::UsageDialog::new(actions.clone(), cx)),
             slow_toast: None,
             main_width: Cell::new(0.),
             sending: None,
@@ -532,6 +538,11 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= usage_dialog::TOKEN_BASE {
+                self.usage
+                    .update(cx, |usage, cx| usage.on_call(token, event, cx));
+                return;
+            }
             if token >= ATTACH_TOKEN {
                 self.on_attachment_call(token, event, cx);
                 return;
@@ -554,6 +565,14 @@ impl MainView {
             self.vcs.clear();
             self.diffs_requested.clear();
         }
+        let access = match &status {
+            Status::NotConnected => usage_dialog::Access::Unavailable,
+            Status::Starting | Status::Connecting => usage_dialog::Access::Pending,
+            Status::Failed(_) => usage_dialog::Access::Offline,
+            _ => usage_dialog::Access::Ready,
+        };
+        self.usage
+            .update(cx, |usage, cx| usage.set_access(access, cx));
         self.status = status;
         // Thread activity reorders recency on every delta, so the default must not follow it.
         if self.selected_project.is_none() {
@@ -2277,7 +2296,7 @@ impl MainView {
     }
 
     /// The web's `SidebarChromeFooter`: utility buttons left, the update control right.
-    fn sidebar_footer(&self, cx: &App) -> impl IntoElement {
+    fn sidebar_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .pt_1()
             .gap_px()
@@ -2293,12 +2312,13 @@ impl MainView {
                 "Pull requests",
                 cx,
             ))
-            .child(footer_button(
-                "usage",
-                Icon::new(Icons::ChartNoAxesColumn),
-                "Usage",
-                cx,
-            ))
+            .child(
+                footer_button("usage", Icon::new(Icons::ChartNoAxesColumn), "Usage", cx).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.usage.update(cx, |usage, cx| usage.open(window, cx));
+                    }),
+                ),
+            )
             .child(div().flex_1())
             .child(update_button(cx))
     }
@@ -6108,6 +6128,9 @@ impl Render for MainView {
             )
             .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
+            .on_action(cx.listener(|this, _: &OpenUsage, window, cx| {
+                this.usage.update(cx, |usage, cx| usage.open(window, cx));
+            }))
             .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| this.toggle_right_panel(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleTerminal, window, cx| {
@@ -6158,6 +6181,7 @@ impl Render for MainView {
             .when(overlay, |root| {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
+            .child(self.usage.clone())
             .child(self.toasts.clone())
     }
 }

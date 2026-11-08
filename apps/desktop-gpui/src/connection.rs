@@ -8,10 +8,10 @@ use crate::providers::Catalog;
 use crate::rpc::{
     AttachmentsCreateUploadUrl, AttachmentsDelete, Event, GitRunStackedAction,
     OrchestrationDispatchCommand, OrchestrationLaunchThread, PING_FRAME, ProjectsMutate,
-    ReviewGetDiffPreview, ServerGetConfig, ServerUpdateSettings, Session, ShellOpenInEditor,
-    SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose,
-    TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus,
-    VcsSwitchRef,
+    ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary, ServerRefreshUsageRates,
+    ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell, SubscribeThread,
+    SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef,
+    VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -125,6 +125,8 @@ pub enum Call {
     RunStackedAction,
     CreateUploadUrl,
     DeleteAttachment,
+    GetUsageSummary,
+    RefreshUsageRates,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -165,6 +167,8 @@ impl Call {
             Self::RunStackedAction => "run the action",
             Self::CreateUploadUrl => "prepare the upload",
             Self::DeleteAttachment => "delete the attachment",
+            Self::GetUsageSummary => "load usage",
+            Self::RefreshUsageRates => "refresh usage rates",
         }
     }
 
@@ -185,6 +189,8 @@ impl Call {
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
             Self::CreateUploadUrl => session.request::<AttachmentsCreateUploadUrl>(payload),
             Self::DeleteAttachment => session.request::<AttachmentsDelete>(payload),
+            Self::GetUsageSummary => session.request::<ServerGetUsageSummary>(payload),
+            Self::RefreshUsageRates => session.request::<ServerRefreshUsageRates>(payload),
         }
     }
 }

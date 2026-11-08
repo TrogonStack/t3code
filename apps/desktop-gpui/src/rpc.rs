@@ -212,6 +212,16 @@ untyped_method!(
     VcsRefreshStatus,
     "vcs.refreshStatus"
 );
+untyped_method!(
+    /// `server.getUsageSummary`: token and cost buckets for a day window.
+    ServerGetUsageSummary,
+    "server.getUsageSummary"
+);
+untyped_method!(
+    /// `server.refreshUsageRates`: refetches the price table.
+    ServerRefreshUsageRates,
+    "server.refreshUsageRates"
+);
 /// `git.runStackedAction`, a stream of progress events ending with the action's result.
 pub struct GitRunStackedAction;
 
