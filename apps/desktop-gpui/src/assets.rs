@@ -62,7 +62,10 @@ gpui_kit_assets::icon_assets!(
         Trash,
         Square,
         SquareTerminal,
-        X
+        X,
+        Star,
+        StarFill,
+        Zap
     ]
 );
 

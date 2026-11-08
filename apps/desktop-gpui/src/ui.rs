@@ -5,6 +5,7 @@ use crate::details::{self, VcsStatus};
 use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
 use crate::minimap;
+use crate::model_picker;
 use crate::projects::{self, EnvironmentProjects, MachineKind, NewProject, ProjectEntry};
 use crate::providers::{self, Catalog, Mark, Pick, Trigger};
 use crate::send::{self, Primary};
@@ -51,6 +52,7 @@ use std::{
 const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
+mod model_popover;
 mod right_panel;
 
 /// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
@@ -203,11 +205,12 @@ pub struct MainView {
     draft_bases: HashMap<String, Branch>,
     branch_picker: Entity<BranchPicker>,
     model_open: bool,
-    /// The provider instance the model picker's sidebar shows.
-    model_instance: Option<String>,
     model_search: Entity<InputState>,
     /// The model picked in each composer (an open thread or a project's draft), by details key.
     model_picks: HashMap<String, Pick>,
+    model_ui: model_picker::State,
+    /// Routes the picker's keys while it is open; they never reach the search input otherwise.
+    model_keys: Option<gpui::Subscription>,
     selected_thread: Option<String>,
     transcript: Option<Transcript>,
     transcript_list: ListState,
@@ -285,6 +288,7 @@ struct Sending {
 /// Send and stop calls, above the branch picker's range.
 const SEND_TOKEN: u64 = 1 << 41;
 const STOP_TOKEN: u64 = SEND_TOKEN + 1;
+const FAVORITE_TOKEN: u64 = SEND_TOKEN + 2;
 
 impl MainView {
     pub fn new(
@@ -331,8 +335,10 @@ impl MainView {
             preview: None,
         });
         let model_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search models..."));
-        cx.subscribe(&model_search, |_, _, event: &InputEvent, cx| {
+        cx.subscribe(&model_search, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
+                this.model_ui.highlight = 0;
+                this.model_ui.focus = model_picker::Focus::List;
                 cx.notify();
             }
         })
@@ -367,9 +373,10 @@ impl MainView {
             draft_bases: HashMap::new(),
             branch_picker,
             model_open: false,
-            model_instance: None,
             model_search,
             model_picks: HashMap::new(),
+            model_ui: model_picker::State::default(),
+            model_keys: None,
             selected_thread: None,
             transcript: None,
             // Overdraw keeps a screenful of rows measured beyond each edge.
@@ -575,6 +582,7 @@ impl MainView {
                 model: trigger.as_ref().map(|trigger| send::Model {
                     instance_id: &trigger.instance_id,
                     slug: &trigger.slug,
+                    options: &trigger.options,
                 }),
                 picked: pick.is_some(),
                 runtime_mode: self.runtime_mode.unwrap_or(defaults.runtime_mode),
@@ -646,6 +654,12 @@ impl MainView {
         if token == STOP_TOKEN {
             if let Some(error) = failed {
                 self.error_toast("Failed to stop the turn", error, cx);
+            }
+            return;
+        }
+        if token == FAVORITE_TOKEN {
+            if let Some(error) = failed {
+                self.error_toast("Failed to update favorites", error, cx);
             }
             return;
         }
@@ -3126,7 +3140,16 @@ impl MainView {
                 .children(workspace_control)
                 .child(div().flex_1())
                 .children(branch)
-                .child(self.permissions_popover(runtime_mode, cx)),
+                .child(permissions_popover(
+                    &self.permissions,
+                    self.permissions_open,
+                    runtime_mode,
+                    PermissionsTrigger {
+                        mode: runtime_mode,
+                        open: false,
+                    },
+                    cx,
+                )),
         )
     }
 
@@ -3230,30 +3253,6 @@ impl MainView {
             .into_any_element()
     }
 
-    /// The web's `ComposerContextPermissions` menu: opens above the chip, aligned to its end.
-    fn permissions_popover(&self, mode: RuntimeMode, cx: &App) -> impl IntoElement {
-        let view = self.permissions.read(cx).view.clone();
-        let panel = self.permissions.clone();
-        let content_panel = panel.clone();
-        Popover::new("permissions")
-            .anchor(Anchor::BottomRight)
-            .open(self.permissions_open)
-            .p_0()
-            .on_open_change(move |open, _, cx| {
-                panel.update(cx, |panel, _| panel.preview = None);
-                view.update(cx, |this, cx| {
-                    this.permissions_open = *open;
-                    cx.notify();
-                })
-                .ok();
-            })
-            .trigger(PermissionsTrigger { mode, open: false })
-            .content(move |_, _, cx| {
-                content_panel.update(cx, |panel, _| panel.selected = mode);
-                content_panel.clone()
-            })
-    }
-
     fn on_branch_event(&mut self, event: &branch_picker::Event, cx: &mut Context<Self>) {
         match event {
             branch_picker::Event::Base(branch) => {
@@ -3289,14 +3288,27 @@ impl MainView {
         self.model_picks.get(key?)
     }
 
-    fn pick_model(&mut self, instance_id: &str, slug: &str, cx: &mut Context<Self>) {
+    pub(crate) fn pick_model(&mut self, instance_id: &str, slug: &str, cx: &mut Context<Self>) {
         let project = self.selected_project.clone().filter(|id| !id.is_empty());
+        self.model_ui.origin = Some(if self.model_ui.tab == Some(model_picker::Tab::Favorites) {
+            model_picker::Origin::Favorites
+        } else {
+            model_picker::Origin::Instance
+        });
+        self.model_open = false;
+        let key = self.details_key();
+        let kept = key
+            .as_deref()
+            .and_then(|key| self.model_pick(Some(key)))
+            .is_some_and(|pick| pick.instance_id == instance_id && pick.model == slug);
+        if kept {
+            return cx.notify();
+        }
         let picked = self
             .providers
             .as_ref()
             .and_then(|catalog| catalog.pick(project.as_deref(), instance_id, slug));
-        self.model_open = false;
-        match (picked, self.details_key()) {
+        match (picked, key) {
             (Some(pick), Some(key)) => {
                 self.model_picks.insert(key, pick);
             }
@@ -3310,6 +3322,222 @@ impl MainView {
         cx.notify();
     }
 
+    /// The picker's instances and the trigger of the model in view.
+    fn picker_context(&self) -> Option<(Vec<providers::PickerInstance>, Trigger)> {
+        let catalog = self.providers.as_ref()?;
+        let project = self.selected_project.clone().filter(|id| !id.is_empty());
+        let key = self.details_key();
+        let trigger = catalog.trigger_for(project.as_deref(), self.model_pick(key.as_deref()))?;
+        Some((catalog.picker(project.as_deref()), trigger))
+    }
+
+    /// Opens on the active model's rail entry, or on Favorites (`initialModelPickerProvider`).
+    fn picker_opened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((instances, trigger)) = self.picker_context() else {
+            return;
+        };
+        let visible = instances
+            .iter()
+            .any(|i| i.instance_id == trigger.instance_id && i.unavailable.is_none());
+        let has_favorites = self.providers.as_ref().is_some_and(Catalog::has_favorites);
+        let tab = model_picker::initial_tab(
+            &trigger.instance_id,
+            visible,
+            has_favorites,
+            self.model_ui.origin,
+        );
+        let expanded =
+            model_picker::starts_expanded(&instances, &trigger.instance_id, &trigger.slug);
+        let listing = model_picker::listing(&instances, &tab, "", expanded);
+        let highlight = listing
+            .rows
+            .iter()
+            .position(|row| {
+                row.instance.instance_id == trigger.instance_id && row.model.slug == trigger.slug
+            })
+            .unwrap_or(0);
+        self.model_ui = model_picker::State {
+            tab: Some(tab),
+            expanded,
+            highlight,
+            origin: self.model_ui.origin,
+            ..model_picker::State::default()
+        };
+        let view = cx.weak_entity();
+        self.model_keys = Some(cx.intercept_keystrokes(move |event, window, cx| {
+            let handled = view
+                .update(cx, |this, cx| this.picker_key(&event.keystroke, window, cx))
+                .unwrap_or(false);
+            if handled {
+                cx.stop_propagation();
+            }
+        }));
+        window.focus(&self.model_search.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    fn picker_closed(&mut self) {
+        self.model_keys = None;
+    }
+
+    pub(crate) fn picker_select_tab(
+        &mut self,
+        tab: model_picker::Tab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.model_search
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.model_ui.tab = Some(tab);
+        self.model_ui.expanded = false;
+        self.model_ui.highlight = 0;
+        self.model_ui.focus = model_picker::Focus::List;
+        cx.notify();
+    }
+
+    pub(crate) fn picker_toggle_older(&mut self, cx: &mut Context<Self>) {
+        self.model_ui.expanded = !self.model_ui.expanded;
+        cx.notify();
+    }
+
+    /// Writes one option of the model in view into the composer's pick, so the next turn sends it.
+    pub(crate) fn picker_set_option(
+        &mut self,
+        id: &str,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some((_, trigger)), Some(key)) = (self.picker_context(), self.details_key()) else {
+            return;
+        };
+        let options = providers::with_option(&trigger.options, id, value);
+        self.model_picks.insert(
+            key,
+            Pick {
+                instance_id: trigger.instance_id,
+                model: trigger.slug,
+                options,
+            },
+        );
+        cx.notify();
+    }
+
+    /// Stars or unstars a model: the local copy now, the server's `setModelFavorites` behind it.
+    pub(crate) fn picker_toggle_favorite(
+        &mut self,
+        instance_id: &str,
+        slug: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(catalog) = self.providers.as_mut() else {
+            return;
+        };
+        let favorite = !catalog.is_favorite(instance_id, slug);
+        catalog.set_favorite(instance_id, slug, favorite);
+        let action = Action::Call {
+            token: FAVORITE_TOKEN,
+            call: crate::connection::Call::UpdateSettings,
+            payload: send::favorite_payload(instance_id, slug, favorite),
+        };
+        if self.actions.try_send(action).is_err() {
+            self.error_toast(
+                "Failed to update favorites",
+                "The connection is not ready.".to_owned(),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    /// The picker's keyboard: Cmd+1..9 jump, arrows move within the focused column, Left and Right
+    /// cross columns at the search's edges. Returns whether the key was taken.
+    fn picker_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use model_picker::Focus;
+        if !self.model_open || self.permissions_open {
+            return false;
+        }
+        let Some((instances, trigger)) = self.picker_context() else {
+            return false;
+        };
+        let modifiers = keystroke.modifiers;
+        let tab = self
+            .model_ui
+            .tab
+            .clone()
+            .unwrap_or_else(|| model_picker::Tab::Instance(trigger.instance_id.clone()));
+        let search = self.model_search.read(cx);
+        let (query, cursor) = (search.value(), search.cursor());
+        let listing = model_picker::listing(&instances, &tab, &query, self.model_ui.expanded);
+        let key = keystroke.key.as_str();
+        if modifiers.platform && !modifiers.alt && !modifiers.control {
+            let Some(number) = key.parse::<usize>().ok().filter(|n| (1..=9).contains(n)) else {
+                return false;
+            };
+            if let Some(&at) = listing.jump_rows().get(number - 1) {
+                let row = listing.rows[at];
+                let (instance, slug) = (row.instance.instance_id.clone(), row.model.slug.clone());
+                self.pick_model(&instance, &slug, cx);
+            }
+            return true;
+        }
+        if modifiers.platform || modifiers.control || modifiers.alt || modifiers.shift {
+            return false;
+        }
+        let delta = match key {
+            "down" => 1,
+            "up" => -1,
+            _ => 0,
+        };
+        let actions = trigger.controls.actions();
+        match (self.model_ui.focus, key) {
+            (Focus::List, "down" | "up") => {
+                let at = model_picker::step(self.model_ui.highlight, listing.items(), delta);
+                self.model_ui.highlight = at;
+            }
+            (Focus::List, "enter") => {
+                let at = self.model_ui.highlight;
+                if let Some(row) = listing.rows.get(at) {
+                    if row.usable() {
+                        let (instance, slug) =
+                            (row.instance.instance_id.clone(), row.model.slug.clone());
+                        self.pick_model(&instance, &slug, cx);
+                    }
+                } else if listing.older.is_some() {
+                    self.model_ui.expanded = !self.model_ui.expanded;
+                }
+            }
+            (Focus::List, "left") if cursor == 0 => self.model_ui.focus = Focus::Sidebar,
+            (Focus::List, "right") if cursor >= query.len() && !actions.is_empty() => {
+                self.model_ui.focus = Focus::Effort;
+                self.model_ui.effort = 0;
+            }
+            (Focus::Sidebar, "down" | "up") => {
+                let next = model_picker::adjacent_tab(&instances, &tab, delta);
+                self.picker_select_tab(next, window, cx);
+                self.model_ui.focus = Focus::Sidebar;
+            }
+            (Focus::Sidebar, "right" | "enter") => self.model_ui.focus = Focus::List,
+            (Focus::Effort, "down" | "up") => {
+                self.model_ui.effort =
+                    model_picker::step(self.model_ui.effort, actions.len(), delta);
+            }
+            (Focus::Effort, "enter") => {
+                if let Some((id, value)) = actions.get(self.model_ui.effort) {
+                    self.picker_set_option(id, value.clone(), cx);
+                }
+            }
+            (Focus::Effort, "left") => self.model_ui.focus = Focus::List,
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
     fn open_permissions(&mut self, cx: &mut Context<Self>) {
         let strip = self.shell().is_some_and(|shell| {
             active_project(self.selected_project.as_deref(), shell).is_some_and(|e| !e.scratch)
@@ -3318,178 +3546,59 @@ impl MainView {
         cx.notify();
     }
 
-    /// The web's `ProviderModelPicker`: instances in a sidebar, a search, and the model list.
+    /// The web's `ProviderModelPicker`: the chip, and the popover opening above it.
     fn model_popover(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let catalog = self.providers.as_ref()?;
+        let (instances, trigger) = self.picker_context()?;
         let project = self.selected_project.clone().filter(|id| !id.is_empty());
-        let key = self.details_key();
-        let trigger = catalog.trigger_for(project.as_deref(), self.model_pick(key.as_deref()))?;
-        let instances = catalog.picker(project.as_deref());
+        let mode = self.runtime_mode.unwrap_or_else(|| {
+            self.providers
+                .as_ref()
+                .map_or(RuntimeMode::FullAccess, |catalog| {
+                    catalog.defaults(project.as_deref()).runtime_mode
+                })
+        });
         let (view, search) = (cx.entity(), self.model_search.clone());
-        let shown = self
-            .model_instance
-            .clone()
-            .unwrap_or_else(|| trigger.instance_id.clone());
-        let current = (trigger.instance_id.clone(), trigger.slug.clone());
+        let panel = model_popover::Panel {
+            view: view.clone(),
+            search: search.clone(),
+            tab: self
+                .model_ui
+                .tab
+                .clone()
+                .unwrap_or_else(|| model_picker::Tab::Instance(trigger.instance_id.clone())),
+            expanded: self.model_ui.expanded,
+            highlight: self.model_ui.highlight,
+            focus: self.model_ui.focus,
+            effort: self.model_ui.effort,
+            permissions: self.permissions.clone(),
+            permissions_open: self.permissions_open,
+            mode,
+            instances,
+            trigger: trigger.clone(),
+        };
         Some(
             Popover::new("model-picker")
                 .anchor(Anchor::BottomRight)
                 .open(self.model_open)
                 .track_focus(&search.focus_handle(cx))
                 .p_0()
-                .on_open_change({
-                    let (view, search) = (view.clone(), search.clone());
-                    move |open, window, cx| {
-                        search.update(cx, |state, cx| state.set_value("", window, cx));
-                        view.update(cx, |this, cx| {
-                            this.model_open = *open;
-                            this.model_instance = None;
-                            cx.notify();
-                        });
-                    }
+                .on_open_change(move |open, window, cx| {
+                    search.update(cx, |state, cx| state.set_value("", window, cx));
+                    view.update(cx, |this, cx| {
+                        this.model_open = *open;
+                        if *open {
+                            this.picker_opened(window, cx);
+                        } else {
+                            this.picker_closed();
+                        }
+                        cx.notify();
+                    });
                 })
                 .trigger(ModelTrigger {
                     trigger,
                     open: self.model_open,
                 })
-                .content(move |_, _, cx| {
-                    let query = search.read(cx).value();
-                    let theme = cx.theme();
-                    let (muted, hover, selected) =
-                        (theme.muted_foreground, theme.list_hover, theme.list_active);
-                    let (border, foreground) = (theme.border, theme.foreground);
-                    let searching = !query.trim().is_empty();
-                    let listed: Vec<_> = if searching {
-                        providers::rank_models(&instances, &query)
-                    } else {
-                        instances
-                            .iter()
-                            .filter(|instance| instance.instance_id == shown)
-                            .flat_map(|instance| instance.models.iter().map(move |m| (instance, m)))
-                            .collect()
-                    };
-                    let sidebar = instances.iter().enumerate().map(|(index, instance)| {
-                        let (view, id) = (view.clone(), instance.instance_id.clone());
-                        let usable = instance.unavailable.is_none();
-                        let active = !searching && instance.instance_id == shown;
-                        let note = instance.unavailable.clone();
-                        div()
-                            .id(("model-instance", index))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(32.))
-                            .rounded_md()
-                            .when(active, |item| item.bg(selected))
-                            .when(usable, |item| {
-                                item.cursor_pointer().hover(move |style| style.bg(hover))
-                            })
-                            .when(!usable, |item| item.opacity(0.45))
-                            .tooltip(tooltip(note.unwrap_or_else(|| instance.name.clone())))
-                            .child(provider_mark(&instance.mark, 1., cx))
-                            .when(usable, |item| {
-                                item.on_click(move |_, _, cx| {
-                                    view.update(cx, |this, cx| {
-                                        this.model_instance = Some(id.clone());
-                                        cx.notify();
-                                    });
-                                })
-                            })
-                    });
-                    let rows = listed.iter().enumerate().map(|(index, (instance, model))| {
-                        let (view, id, slug) = (
-                            view.clone(),
-                            instance.instance_id.clone(),
-                            model.slug.clone(),
-                        );
-                        let chosen = (id.as_str(), slug.as_str())
-                            == (current.0.as_str(), current.1.as_str());
-                        let usable = instance.unavailable.is_none();
-                        h_flex()
-                            .id(("model-row", index))
-                            .gap_2()
-                            .px_2()
-                            .py_1p5()
-                            .items_center()
-                            .rounded_md()
-                            .text_sm()
-                            .when(usable, |row| {
-                                row.cursor_pointer().hover(move |style| style.bg(hover))
-                            })
-                            .when(!usable, |row| row.opacity(0.45))
-                            .tooltip(tooltip(model.title.clone()))
-                            .when(searching, |row| {
-                                row.child(provider_mark(&instance.mark, 1., cx))
-                            })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .child(model.label.clone()),
-                            )
-                            .when(chosen, |row| {
-                                row.child(Icon::new(IconName::Check).small().text_color(foreground))
-                            })
-                            .when(usable, |row| {
-                                row.on_click(move |_, _, cx| {
-                                    view.update(cx, |this, cx| this.pick_model(&id, &slug, cx));
-                                })
-                            })
-                    });
-                    h_flex()
-                        .w(px(448.))
-                        .h(px(320.))
-                        .child(
-                            v_flex()
-                                .gap_1()
-                                .p_1()
-                                .border_r_1()
-                                .border_color(border.opacity(0.7))
-                                .children(sidebar),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .child(
-                                    div().px_3().pt(px(10.)).child(
-                                        h_flex()
-                                            .pb(px(6.))
-                                            .border_b_1()
-                                            .border_color(border.opacity(0.7))
-                                            .child(
-                                                Input::new(&search)
-                                                    .appearance(false)
-                                                    .h(px(26.))
-                                                    .px_0()
-                                                    .prefix(
-                                                        Icon::new(IconName::Search)
-                                                            .size_4()
-                                                            .text_color(muted.opacity(0.55)),
-                                                    ),
-                                            ),
-                                    ),
-                                )
-                                .child(
-                                    v_flex()
-                                        .id("model-list")
-                                        .flex_1()
-                                        .overflow_y_scroll()
-                                        .p_1()
-                                        .children(rows)
-                                        .when(listed.is_empty(), |list| {
-                                            list.child(
-                                                div()
-                                                    .p_2()
-                                                    .text_sm()
-                                                    .text_color(muted)
-                                                    .child("No matching models."),
-                                            )
-                                        }),
-                                ),
-                        )
-                })
+                .content(move |_, window, cx| panel.render(window, cx))
                 .into_any_element(),
         )
     }
@@ -3630,6 +3739,35 @@ impl RenderOnce for StripTrigger {
                 control.bg(foreground.opacity(0.06)).text_color(foreground)
             })
     }
+}
+
+/// The web's `ComposerContextPermissions` menu: opens above its trigger, aligned to the end.
+fn permissions_popover(
+    panel: &Entity<PermissionsPanel>,
+    open: bool,
+    mode: RuntimeMode,
+    trigger: impl Selectable + IntoElement + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let view = panel.read(cx).view.clone();
+    let (panel, content_panel) = (panel.clone(), panel.clone());
+    Popover::new("permissions")
+        .anchor(Anchor::BottomRight)
+        .open(open)
+        .p_0()
+        .on_open_change(move |open, _, cx| {
+            panel.update(cx, |panel, _| panel.preview = None);
+            view.update(cx, |this, cx| {
+                this.permissions_open = *open;
+                cx.notify();
+            })
+            .ok();
+        })
+        .trigger(trigger)
+        .content(move |_, _, cx| {
+            content_panel.update(cx, |panel, _| panel.selected = mode);
+            content_panel.clone()
+        })
 }
 
 /// The permissions chip as a popover trigger.
@@ -3868,6 +4006,12 @@ fn model_trigger(trigger: &Trigger, open: bool, cx: &App) -> gpui::Stateful<gpui
                 .text_ellipsis()
                 .child(trigger.model.clone()),
         )
+        .children(trigger.fast.then(|| {
+            div()
+                .text_color(muted)
+                .group_hover("model-trigger", move |style| style.text_color(foreground))
+                .child(Icon::new(Icons::Zap).size(px(12.)))
+        }))
         .children(trigger.effort.clone().map(|effort| {
             div()
                 .ml(px(-2.))
@@ -3884,6 +4028,17 @@ fn model_trigger(trigger: &Trigger, open: bool, cx: &App) -> gpui::Stateful<gpui
 /// The web's `ProviderInstanceIcon` at `size-4`: the driver's art, or its initials, with the
 /// instance chip at the bottom-right. `icon_opacity` dims the art only, like `iconClassName`.
 fn provider_mark(mark: &Mark, icon_opacity: f32, cx: &App) -> gpui::Div {
+    provider_mark_at(mark, 16., 16., icon_opacity, cx)
+}
+
+/// The mark in a `frame` square with its art at `art`: the picker's rail uses `size-6` around `size-5`.
+fn provider_mark_at(
+    mark: &Mark,
+    frame: f32,
+    art_size: f32,
+    icon_opacity: f32,
+    cx: &App,
+) -> gpui::Div {
     let theme = cx.theme();
     let art = match provider_icon(&mark.driver, theme.is_dark()) {
         Some(path) => img(path).size_full().into_any_element(),
@@ -3899,9 +4054,12 @@ fn provider_mark(mark: &Mark, icon_opacity: f32, cx: &App) -> gpui::Div {
     };
     div()
         .relative()
+        .flex()
         .flex_shrink_0()
-        .size_4()
-        .child(div().size_full().opacity(icon_opacity).child(art))
+        .items_center()
+        .justify_center()
+        .size(px(frame))
+        .child(div().size(px(art_size)).opacity(icon_opacity).child(art))
         .children(mark.badge.as_ref().map(|badge| {
             let (bg, fg) = match badge.accent {
                 Some((bg, fg)) => (rgb(bg).into(), rgb(fg).into()),
