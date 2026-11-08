@@ -41,6 +41,7 @@ struct Palette {
     warning: Hsla,
     fill: Hsla,
     hover: Hsla,
+    accent: Hsla,
     track: Hsla,
     selected: Hsla,
 }
@@ -56,6 +57,7 @@ impl Palette {
             warning: theme.warning,
             fill: theme.muted.opacity(0.4),
             hover: theme.foreground.opacity(0.09),
+            accent: theme.accent,
             track: theme.input.opacity(0.4),
             selected: theme.input.opacity(0.72),
         }
@@ -167,12 +169,12 @@ impl Panel {
             .justify_center()
             .size(px(RAIL_WIDTH - 8.))
             .rounded_md()
-            .when(focused, |item| item.bg(palette.hover))
+            .when(focused, |item| item.bg(palette.foreground.opacity(0.1)))
             .when(usable, |item| {
                 item.cursor_pointer()
                     .hover(move |style| style.bg(palette.foreground.opacity(0.1)))
             })
-            .when(!usable, |item| item.opacity(0.45))
+            .when(!usable, |item| item.opacity(0.5).cursor_not_allowed())
             .tooltip(tooltip(note))
             .child(icon)
             .when(current, |item| {
@@ -352,7 +354,7 @@ impl Panel {
                     star.opacity(0.)
                         .group_hover(group.clone(), |style| style.opacity(1.))
                 })
-                .hover(move |style| style.bg(palette.hover).text_color(palette.foreground))
+                .hover(move |style| style.bg(palette.accent).text_color(palette.foreground))
                 .tooltip(tooltip(tip))
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
@@ -389,7 +391,6 @@ impl Panel {
                     .hover(move |style| style.bg(palette.hover))
             })
             .when(!usable, |row| row.opacity(0.45))
-            .tooltip(tooltip(model.title.clone()))
             .when(show_provider, |row| {
                 row.child(provider_mark(&instance.mark, 1., cx))
             })
@@ -549,6 +550,9 @@ impl Panel {
             .cursor_pointer()
             .when(highlighted, |row| row.bg(palette.hover))
             .hover(move |style| style.bg(palette.hover))
+            .when_some(level.description.clone(), |row, tip| {
+                row.tooltip(tooltip(tip))
+            })
             .on_click(move |_, _, cx| {
                 view.update(cx, |this, cx| {
                     this.picker_set_option(&id, value.clone(), cx)
@@ -638,9 +642,6 @@ impl Panel {
                     })
                     .hover(move |style| style.text_color(palette.foreground))
                     .when_some(level.description.clone(), |s, tip| s.tooltip(tooltip(tip)))
-                    .when(level.description.is_none() && bolt, |s| {
-                        s.tooltip(tooltip("2x speed, increased usage"))
-                    })
                     .on_click(move |_, _, cx| {
                         view.update(cx, |this, cx| {
                             this.picker_set_option(&id, value.clone(), cx)

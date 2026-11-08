@@ -159,6 +159,8 @@ struct Provider {
     status: String,
     #[serde(default)]
     availability: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
     #[serde(default, deserialize_with = "lenient")]
     models: Vec<Model>,
     /// Kept raw: `usage::Limits` decodes it for the details card.
@@ -475,7 +477,7 @@ impl Catalog {
                 PickerInstance {
                     instance_id: provider.instance_id.clone(),
                     name: mark.display_name.clone(),
-                    unavailable: (!entry.available() || provider.status == "error")
+                    unavailable: (!entry.available() || provider.status != "ready")
                         .then(|| unavailable_note(&mark.display_name, provider)),
                     models: provider
                         .models
@@ -673,12 +675,18 @@ impl Catalog {
 
 /// `describeUnavailableInstance` for an instance the picker cannot select.
 fn unavailable_note(name: &str, provider: &Provider) -> String {
-    let kind = if provider.status == "error" {
-        "Unavailable"
-    } else {
-        "Not ready"
+    if provider.status == "disabled" {
+        return format!("{name}: Disabled in settings.");
+    }
+    let kind = match provider.status.as_str() {
+        "error" => "Unavailable",
+        "warning" => "Limited",
+        _ => "Not ready",
     };
-    format!("{name}: {kind}.")
+    match provider.message.as_deref().map(str::trim) {
+        Some(message) if !message.is_empty() => format!("{name}: {kind}. {message}"),
+        _ => format!("{name}: {kind}."),
+    }
 }
 
 fn config_enabled(config: &InstanceConfig, driver: &str) -> bool {
@@ -1447,6 +1455,7 @@ mod tests {
             accent_color: None,
             status: "ready".into(),
             availability: None,
+            message: None,
             models: Vec::new(),
             usage_limits: None,
         };
@@ -1457,6 +1466,34 @@ mod tests {
         );
         assert_eq!(display_name(&named("codex_work", Some("Hub"))), "Hub");
         assert_eq!(humanize("claudeAgent"), "Claude Agent");
+    }
+
+    #[test]
+    fn unavailable_notes_follow_describe_unavailable_instance() {
+        let note = |status: &str, message: Option<&str>| {
+            let provider = Provider {
+                instance_id: "claudeAgent".into(),
+                driver: "claudeAgent".into(),
+                display_name: None,
+                accent_color: None,
+                status: status.into(),
+                availability: None,
+                message: message.map(str::to_owned),
+                models: Vec::new(),
+                usage_limits: None,
+            };
+            unavailable_note("Claude", &provider)
+        };
+        assert_eq!(
+            note("disabled", Some("ignored")),
+            "Claude: Disabled in settings."
+        );
+        assert_eq!(note("error", None), "Claude: Unavailable.");
+        assert_eq!(
+            note("warning", Some(" Rate limited ")),
+            "Claude: Limited. Rate limited"
+        );
+        assert_eq!(note("pending", Some("  ")), "Claude: Not ready.");
     }
 
     #[test]
