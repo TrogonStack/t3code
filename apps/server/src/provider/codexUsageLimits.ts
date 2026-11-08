@@ -152,9 +152,15 @@ export function codexRateLimitsToUpdate(
   return windows.length > 0 ? { windows } : undefined;
 }
 
+export const CODEX_NOT_AUTHENTICATED_MESSAGE =
+  "Codex CLI is not authenticated. Run `codex login` and try again.";
+
 export function codexRateLimitsFailureMessage(error: CodexErrors.CodexAppServerError): string {
   switch (error._tag) {
     case "CodexAppServerRequestError":
+      if (/authentication required/i.test(error.errorMessage)) {
+        return CODEX_NOT_AUTHENTICATED_MESSAGE;
+      }
       return `Codex could not read usage (JSON-RPC ${error.code}).`;
     case "CodexAppServerSpawnError":
       return "Codex could not be started to read usage.";

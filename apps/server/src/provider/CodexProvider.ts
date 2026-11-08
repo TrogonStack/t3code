@@ -47,6 +47,7 @@ import {
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { makeUnavailableUsageLimits } from "@t3tools/provider-core/server/usageLimits";
 import {
+  CODEX_NOT_AUTHENTICATED_MESSAGE,
   codexRateLimitsFailureMessage,
   codexRateLimitsToLimits,
   type CodexRateLimitSnapshot,
@@ -725,7 +726,7 @@ function accountProbeStatus({ account, rateLimits }: CodexAppServerProviderSnaps
     return {
       status: "error",
       auth: { status: "unauthenticated" },
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: CODEX_NOT_AUTHENTICATED_MESSAGE,
     };
   }
 

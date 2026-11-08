@@ -208,6 +208,17 @@ describe("codexRateLimitsFailureMessage", () => {
       ),
     ).toBe("Codex could not read usage (JSON-RPC -32603).");
   });
+
+  it("tells the user to sign in when Codex is not authenticated", () => {
+    expect(
+      codexRateLimitsFailureMessage(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32600,
+          errorMessage: "codex account authentication required to read rate limits",
+        }),
+      ),
+    ).toBe("Codex CLI is not authenticated. Run `codex login` and try again.");
+  });
 });
 
 describe("mergeCodexRateLimits", () => {
