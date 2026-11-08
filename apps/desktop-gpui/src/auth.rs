@@ -2,13 +2,10 @@
 //! Mirrors packages/shared/src/desktopBootstrapToken.ts and
 //! packages/client-runtime/src/authorization/remote.ts.
 
-use crate::electron_dpop;
 use hmac::{Hmac, KeyInit, Mac};
-use p256::ecdsa::SigningKey;
 use serde::Deserialize;
 use sha2::Sha256;
 use std::fmt::Write;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const TOKEN_WINDOW_MS: u64 = 12 * 60 * 60 * 1000;
@@ -75,6 +72,14 @@ impl From<reqwest::Error> for AuthError {
 #[derive(Deserialize)]
 struct AccessTokenResult {
     access_token: String,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+/// A bearer session and how long the server says it lasts.
+pub struct Session {
+    pub token: String,
+    pub expires_in_secs: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -82,39 +87,50 @@ struct TicketResult {
     ticket: String,
 }
 
-/// What the app proves itself with: the secret it handed a server it spawned,
-/// a pairing token minted by `t3 pair` for a server it attaches to, or a bearer
-/// session another client already saved for it (the Electron app's catalog).
+/// What the app proves itself with: the secret it handed a server it spawned, a pairing token
+/// minted by `t3 pair` for a server it attaches to, or the bearer session that pairing yielded
+/// and the Keychain kept (`credentials`).
 pub enum Credential {
     DesktopSecret(String),
     Pairing(String),
     Bearer(String),
-    // TODO(gpui-credentials): HACK. Reads Electron's private IndexedDB and non-extractable DPoP key. Replace with GPUI's own pairing + Keychain before shipping.
-    /// A DPoP-bound access token and the proof key it is bound to (`Authorization: DPoP`).
-    Dpop {
-        token: String,
-        key: Arc<SigningKey>,
-    },
 }
 
 impl Credential {
     fn subject_token(&self) -> String {
         match self {
             Self::DesktopSecret(secret) => bootstrap_token(secret, now_ms()),
-            Self::Pairing(token) | Self::Bearer(token) | Self::Dpop { token, .. } => token.clone(),
+            Self::Pairing(token) | Self::Bearer(token) => token.clone(),
         }
     }
 }
 
-/// RFC 8693 exchange of a bootstrap credential for a bearer session.
-pub async fn exchange_bearer(
+/// The token from what a user pastes: a bare token, or the `/pair#token=...` link `t3` prints.
+pub fn pairing_token(input: &str) -> String {
+    let input = input.trim();
+    input
+        .split_once('#')
+        .and_then(|(_, fragment)| {
+            fragment
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("token="))
+        })
+        .unwrap_or(input)
+        .to_owned()
+}
+
+/// RFC 8693 exchange of a bootstrap credential for a bearer session. A saved bearer is already
+/// the session, so there is nothing to exchange and no expiry to report.
+pub async fn exchange_session(
     client: &reqwest::Client,
     http_base: &str,
     credential: &Credential,
-) -> Result<String, AuthError> {
-    // A saved bearer or DPoP access token is already the session; there is nothing to exchange.
-    if let Credential::Bearer(token) | Credential::Dpop { token, .. } = credential {
-        return Ok(token.clone());
+) -> Result<Session, AuthError> {
+    if let Credential::Bearer(token) = credential {
+        return Ok(Session {
+            token: token.clone(),
+            expires_in_secs: None,
+        });
     }
     let credential = credential.subject_token();
     let response = client
@@ -134,32 +150,37 @@ pub async fn exchange_bearer(
         return Err(AuthError::Rejected(status.as_u16()));
     }
     let result: AccessTokenResult = response.error_for_status()?.json().await?;
-    Ok(result.access_token)
+    Ok(Session {
+        token: result.access_token,
+        expires_in_secs: result.expires_in,
+    })
 }
 
-/// Mints an RPC WebSocket ticket. A server without audience routes answers 404
-/// for `/:use`, and its bare-path tickets are valid for RPC. A DPoP credential signs a proof for
-/// each path it tries (packages/client-runtime/src/authorization/remote.ts).
-pub async fn issue_ws_ticket(
+pub async fn exchange_bearer(
     client: &reqwest::Client,
     http_base: &str,
     credential: &Credential,
+) -> Result<String, AuthError> {
+    exchange_session(client, http_base, credential)
+        .await
+        .map(|session| session.token)
+}
+
+/// Mints an RPC WebSocket ticket. A server without audience routes answers 404
+/// for `/:use`, and its bare-path tickets are valid for RPC
+/// (packages/client-runtime/src/authorization/remote.ts).
+pub async fn issue_ws_ticket(
+    client: &reqwest::Client,
+    http_base: &str,
     bearer: &str,
 ) -> Result<String, AuthError> {
     let mint = |path: &'static str| async move {
-        let url = format!("{http_base}{path}");
-        let request = client.post(&url);
-        let request = match credential {
-            Credential::Dpop { key, .. } => {
-                let proof = electron_dpop::create_proof(key, "POST", &url, Some(bearer), now_ms())
-                    .map_err(AuthError::Failed)?;
-                request
-                    .header("authorization", format!("DPoP {bearer}"))
-                    .header("dpop", proof)
-            }
-            _ => request.bearer_auth(bearer),
-        };
-        request.send().await.map_err(AuthError::from)
+        client
+            .post(format!("{http_base}{path}"))
+            .bearer_auth(bearer)
+            .send()
+            .await
+            .map_err(AuthError::from)
     };
     let mut response = mint("/api/auth/websocket-ticket/rpc").await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
@@ -212,6 +233,20 @@ mod tests {
         assert_ne!(
             bootstrap_token("s", start),
             bootstrap_token("s", start + TOKEN_WINDOW_MS)
+        );
+    }
+
+    #[test]
+    fn pairing_input_may_be_a_token_or_the_printed_link() {
+        assert_eq!(pairing_token("  abc123 "), "abc123");
+        assert_eq!(
+            pairing_token("http://localhost:3773/pair#token=abc123"),
+            "abc123"
+        );
+        assert_eq!(pairing_token("https://h/pair#a=1&token=xyz"), "xyz");
+        assert_eq!(
+            pairing_token("https://h/pair#nothing"),
+            "https://h/pair#nothing"
         );
     }
 

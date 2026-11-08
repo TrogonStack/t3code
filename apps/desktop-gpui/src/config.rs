@@ -6,29 +6,14 @@ pub const ENV_COMMAND: &str = "T3CODE_GPUI_SERVER_COMMAND";
 pub const ENV_ENTRY: &str = "T3CODE_GPUI_SERVER_ENTRY";
 pub const ENV_ATTACH_URL: &str = "T3CODE_GPUI_SERVER_URL";
 pub const ENV_PAIRING_TOKEN: &str = "T3CODE_GPUI_PAIRING_TOKEN";
-pub const ENV_CONNECTION_CATALOG: &str = "T3CODE_GPUI_CONNECTION_CATALOG";
-
-/// The Electron app's saved connections: the override, else the catalog inside the T3 home.
-pub fn connection_catalog_path() -> Option<std::path::PathBuf> {
-    catalog_path_from(|name| std::env::var(name).ok())
-}
-
-fn catalog_path_from(get: impl Fn(&str) -> Option<String>) -> Option<std::path::PathBuf> {
-    let non_empty = |name| get(name).filter(|value| !value.trim().is_empty());
-    non_empty(ENV_CONNECTION_CATALOG)
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            non_empty(ENV_HOME)
-                .map(|home| std::path::Path::new(&home).join(crate::catalog::CATALOG_FILE))
-        })
-}
 
 /// A server someone else runs (a dev server, `npx t3`, a remote host), reached
-/// with a pairing token instead of being spawned.
+/// with the session saved from an earlier pairing, or a pairing token for the first time.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attach {
     pub http_base: String,
-    pub pairing_token: String,
+    /// A bare token or the `/pair#token=...` link; absent once the app is paired.
+    pub pairing_token: Option<String>,
 }
 
 impl Attach {
@@ -44,7 +29,8 @@ impl Attach {
         };
         Some(Self {
             http_base: non_empty(ENV_ATTACH_URL)?.trim_end_matches('/').to_owned(),
-            pairing_token: non_empty(ENV_PAIRING_TOKEN)?,
+            pairing_token: non_empty(ENV_PAIRING_TOKEN)
+                .map(|input| crate::auth::pairing_token(&input)),
         })
     }
 }
@@ -129,33 +115,25 @@ mod tests {
     }
 
     #[test]
-    fn attach_needs_url_and_token() {
+    fn attach_needs_a_url_and_the_token_is_optional() {
         let attach = Attach::from_lookup(lookup(&[
             (ENV_ATTACH_URL, "http://127.0.0.1:13773/"),
             (ENV_PAIRING_TOKEN, "tok"),
         ]))
         .expect("attach");
         assert_eq!(attach.http_base, "http://127.0.0.1:13773");
+        assert_eq!(attach.pairing_token.as_deref(), Some("tok"));
+        let paired = Attach::from_lookup(lookup(&[(ENV_ATTACH_URL, "http://h")])).expect("attach");
+        assert_eq!(paired.pairing_token, None);
         assert_eq!(
-            Attach::from_lookup(lookup(&[(ENV_ATTACH_URL, "http://h")])),
+            Attach::from_lookup(lookup(&[(ENV_PAIRING_TOKEN, "tok")])),
             None
         );
-    }
-
-    #[test]
-    fn catalog_path_prefers_the_override_then_the_t3_home() {
-        let path = |pairs| catalog_path_from(lookup(pairs));
-        assert_eq!(
-            path(&[
-                (ENV_CONNECTION_CATALOG, "/c/catalog.json"),
-                (ENV_HOME, "/h")
-            ]),
-            Some("/c/catalog.json".into())
-        );
-        assert_eq!(
-            path(&[(ENV_HOME, "/h")]),
-            Some("/h/connection-catalog.json".into())
-        );
-        assert_eq!(path(&[]), None);
+        let link = Attach::from_lookup(lookup(&[
+            (ENV_ATTACH_URL, "http://h"),
+            (ENV_PAIRING_TOKEN, "http://h/pair#token=abc"),
+        ]))
+        .expect("attach");
+        assert_eq!(link.pairing_token.as_deref(), Some("abc"));
     }
 }

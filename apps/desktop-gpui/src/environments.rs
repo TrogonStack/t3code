@@ -1,41 +1,35 @@
-//! The user's other saved environments (the Electron app's catalog): one connection each, whose
-//! projects the picker uses to show where else a project lives.
-
-use crate::auth;
-use crate::catalog::{self, SavedEnvironment};
-use crate::connection;
+use crate::auth::{self, Credential};
+use crate::connection::{self, Ended};
+use crate::credentials::{CredentialStore, StoredCredential};
+use crate::pairing;
 use crate::projects::EnvironmentProjects;
 use crate::server;
 use crate::status::{Status, StatusSender, publish};
-use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::time::sleep;
 
-/// Loads the catalog and keeps a connection to each reachable environment other than `primary_id`.
-/// Any failure costs only the badges, and is logged once.
-pub async fn run(primary_id: String, path: PathBuf, status: StatusSender) {
-    let loaded = tokio::task::spawn_blocking(move || catalog::load(&path)).await;
-    let catalog = match loaded {
-        Ok(Ok(catalog)) => catalog,
+/// Lists what the Keychain holds for environments other than `primary_id` and keeps a connection
+/// to each reachable one. Any failure costs only the badges, and is logged once.
+pub async fn run(primary_id: String, store: Arc<dyn CredentialStore>, status: StatusSender) {
+    let listed = {
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || store.list()).await
+    };
+    let saved = match listed {
+        Ok(Ok(saved)) => saved,
         Ok(Err(message)) => return eprintln!("[environments] no environment badges: {message}"),
         Err(error) => return eprintln!("[environments] no environment badges: {error}"),
     };
-    for (label, kind) in &catalog.skipped {
-        eprintln!("[environments] skipping {label}: {kind} connections are not supported");
-    }
-    for notice in &catalog.notices {
-        eprintln!("[environments] {notice}");
-    }
-    for saved in catalog
-        .environments
+    for saved in saved
         .into_iter()
         .filter(|saved| saved.environment_id != primary_id)
     {
-        tokio::spawn(follow(saved, status.clone()));
+        tokio::spawn(follow(store.clone(), saved, status.clone()));
     }
 }
 
 /// Mirrors one environment's projects into `status` for as long as the app runs.
-async fn follow(saved: SavedEnvironment, status: StatusSender) {
+async fn follow(store: Arc<dyn CredentialStore>, saved: StoredCredential, status: StatusSender) {
     let client = auth::http_client();
     let (own_tx, own_rx) = async_channel::unbounded();
     // The connection ends its session when the action channel closes, so keep the sender here.
@@ -81,12 +75,25 @@ async fn follow(saved: SavedEnvironment, status: StatusSender) {
             }
         }
     };
-    let session = connection::run(
-        &saved.http_base,
-        &saved.credential,
-        &connection,
-        &actions_rx,
-        &own_tx,
-    );
+    let session = async {
+        let credential = Credential::Bearer(saved.token.clone());
+        let ended = connection::run(
+            &saved.http_base,
+            &credential,
+            &connection,
+            &actions_rx,
+            &own_tx,
+        )
+        .await;
+        let Ended::SessionRejected = ended;
+        // The session is dead for good, so forget it; it shows again once paired.
+        let _ = pairing::forget(&store, &saved.environment_id).await;
+        eprintln!(
+            "[environments] {} rejected its saved pairing; forgot it",
+            saved.label
+        );
+        // Close the channel so `forward` ends and the badges clear.
+        own_tx.close();
+    };
     tokio::join!(forward, session);
 }

@@ -23,21 +23,16 @@ The app reads these variables, which the dev runner sets. Without them it shows 
 | `T3CODE_GPUI_SERVER_COMMAND` | Program that starts the server (`node` in dev, `t3` once packaged). |
 | `T3CODE_GPUI_SERVER_ENTRY`   | Optional first argument, the server entry script in dev.            |
 
-To see real data, attach to a server that is already running (for example your `vp run dev:desktop`) instead of starting one. That server keeps sole ownership of its database. Mint a one-time pairing token with `node apps/server/src/bin.ts pair --base-dir <its T3 home>`, then run the app with:
+To see real data, attach to a server that is already running (for example your `vp run dev:desktop`) instead of starting one. That server keeps sole ownership of its database. The app pairs once and stays paired across launches.
 
-| Variable                    | Meaning                                                   |
-| --------------------------- | --------------------------------------------------------- |
-| `T3CODE_GPUI_SERVER_URL`    | HTTP origin of the running server. Takes precedence.      |
-| `T3CODE_GPUI_PAIRING_TOKEN` | The `Token:` value printed by `pair`. It works only once. |
+| Variable                    | Meaning                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `T3CODE_GPUI_SERVER_URL`    | HTTP origin of the running server. Takes precedence.                                                   |
+| `T3CODE_GPUI_PAIRING_TOKEN` | Only for the first launch: the `Token:` value or `/pair#token=...` link from `t3 pair`. It works once. |
 
-When attached, the project picker also shows the Electron app's environment badge ("Also on <environment>") for projects that exist on your other saved environments. It reads the Electron app's `connection-catalog.json`, decrypting it with the safeStorage key from the macOS Keychain (the OS may ask for access once). Only direct `http` environments with a saved bearer token are used; relay, T3 Connect, SSH and `https` entries are skipped with a log line.
+Mint a token with `node apps/server/src/bin.ts pair --base-dir <its T3 home>` and launch with both variables. The server answers with a bearer session (30 days), which the app keeps in the macOS Keychain (service `T3 Code (GPUI) Environment Sessions`, one item per environment id). Later launches need only `T3CODE_GPUI_SERVER_URL`. When the server rejects the saved session (revoked in Settings or expired), the app deletes it and shows how to pair again. To forget a pairing yourself, launch once with `--unpair` (for example `cargo run -- --unpair`) against that server. Nothing is read from the Electron app.
 
-| Variable                         | Meaning                                                                              |
-| -------------------------------- | ------------------------------------------------------------------------------------ |
-| `T3CODE_GPUI_CONNECTION_CATALOG` | Catalog path. Defaults to `connection-catalog.json` in `T3CODE_GPUI_HOME`.           |
-| `T3CODE_GPUI_ELECTRON_IDB`       | Electron IndexedDB LevelDB directory (DPoP key). Defaults to the `t3code-dev` app's. |
-
-TODO(gpui-credentials): HACK. Saved T3 Connect tokens (`remoteDpopTokens`) are used by reading the Electron app's private IndexedDB for its non-extractable DPoP key (`src/electron_dpop.rs`). Replace with GPUI's own pairing + Keychain before shipping.
+When attached, the project picker also shows an environment badge ("Also on <environment>") for projects that exist on the other environments this app is paired with. Pairing with several servers over time (one launch each) is what fills that list.
 
 Other scripts:
 

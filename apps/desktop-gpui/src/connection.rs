@@ -3,7 +3,6 @@
 use crate::auth::{self, AuthError, Credential};
 use crate::details::VcsStatus;
 use crate::diff;
-use crate::electron_dpop;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
@@ -254,32 +253,22 @@ fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
     .map_err(|error| error.to_string())
 }
 
-/// The HTTP request a WebSocket upgrade is, for the proof's `htu`: scheme swapped, no query.
-fn upgrade_htu(url: &reqwest::Url) -> String {
-    let scheme = if url.scheme() == "wss" {
-        "https"
-    } else {
-        "http"
-    };
-    let port = url
-        .port()
-        .map(|port| format!(":{port}"))
-        .unwrap_or_default();
-    format!(
-        "{scheme}://{}{port}{}",
-        url.host_str().unwrap_or_default(),
-        url.path()
-    )
+/// Why `run` stopped: only a saved session the server no longer honors ends it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Ended {
+    /// The server answered 401 to a saved session (revoked or expired); pairing again is the fix.
+    SessionRejected,
 }
 
-/// Connects and stays connected until cancelled, reporting through `status`.
+/// Connects and stays connected until cancelled, reporting through `status`. A saved
+/// (`Credential::Bearer`) session that the server rejects ends it instead of retrying forever.
 pub async fn run(
     http_base: &str,
     credential: &Credential,
     environment: &Environment,
     actions: &ActionReceiver,
     status: &StatusSender,
-) {
+) -> Ended {
     let client = auth::http_client();
     let mut bearer: Option<String> = None;
     // Outlives a socket: a reconnect subscribes to the thread again.
@@ -319,7 +308,8 @@ pub async fn run(
                 );
                 failure
             }
-            Err(message) => message,
+            Err(ConnectError::SessionRejected) => return Ended::SessionRejected,
+            Err(ConnectError::Failed(message)) => message,
         };
         publish(status, Status::Failed(format!("Reconnecting: {failure}")));
         sleep(backoff.next_delay()).await;
@@ -329,12 +319,23 @@ pub async fn run(
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+enum ConnectError {
+    SessionRejected,
+    Failed(String),
+}
+
+impl From<String> for ConnectError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
 async fn connect(
     client: &reqwest::Client,
     http_base: &str,
     credential: &Credential,
     bearer: &mut Option<String>,
-) -> Result<Socket, String> {
+) -> Result<Socket, ConnectError> {
     let token = match bearer {
         Some(token) => token.clone(),
         None => {
@@ -345,29 +346,20 @@ async fn connect(
             token
         }
     };
-    let ticket = match auth::issue_ws_ticket(client, http_base, credential, &token).await {
+    let ticket = match auth::issue_ws_ticket(client, http_base, &token).await {
         Ok(ticket) => ticket,
         Err(error) => {
             if matches!(error, AuthError::Rejected(_)) {
                 *bearer = None;
             }
-            return Err(error.to_string());
+            let saved = matches!(credential, Credential::Bearer(_));
+            if saved && matches!(error, AuthError::Rejected(401)) {
+                return Err(ConnectError::SessionRejected);
+            }
+            return Err(ConnectError::Failed(error.to_string()));
         }
     };
-    let mut url = socket_url(http_base, &ticket)?;
-    // TODO(gpui-credentials): HACK. Reads Electron's private IndexedDB and non-extractable DPoP key. Replace with GPUI's own pairing + Keychain before shipping.
-    if let Credential::Dpop { key, .. } = credential {
-        // A DPoP ticket is key-bound: the upgrade carries a proof for the socket URL in `dpop`,
-        // with the ticket as the token it hashes (remote.ts resolveRemoteDpopWebSocketConnectionUrl).
-        let proof = electron_dpop::create_proof(
-            key,
-            "GET",
-            &upgrade_htu(&url),
-            Some(&ticket),
-            auth::now_ms(),
-        )?;
-        url.query_pairs_mut().append_pair("dpop", &proof);
-    }
+    let url = socket_url(http_base, &ticket)?;
     // Browsers cap neither frames nor messages, and shell snapshots outgrow tungstenite's 16 MiB default.
     let config = WebSocketConfig::default()
         .max_frame_size(None)
@@ -375,7 +367,7 @@ async fn connect(
     let (socket, _) =
         tokio_tungstenite::connect_async_with_config(url.as_str(), Some(config), false)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ConnectError::Failed(error.to_string()))?;
     Ok(socket)
 }
 

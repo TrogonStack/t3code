@@ -1,17 +1,17 @@
 mod assets;
 mod auth;
 mod branch_picker;
-mod catalog;
 mod config;
 mod connection;
+mod credentials;
 mod details;
 mod details_card;
 mod diff;
-mod electron_dpop;
 mod environments;
 mod git_actions;
 mod history;
 mod minimap;
+mod pairing;
 mod projects;
 mod providers;
 mod ref_picker;
@@ -44,6 +44,7 @@ use gpui_platform::application;
 use server::Supervisor;
 use status::Status;
 use std::rc::Rc;
+use std::sync::Arc;
 use ui::MainView;
 
 fn main() {
@@ -72,23 +73,16 @@ fn main() {
             let client = auth::http_client();
             match server::wait_until_ready(&client, &attach.http_base).await {
                 Ok(environment) => {
-                    // Only an attached server shares the Electron app's home, hence its catalog.
-                    if let Some(path) = config::connection_catalog_path() {
-                        tokio::spawn(environments::run(
-                            environment.id.clone(),
-                            path,
-                            status_tx.clone(),
-                        ));
-                    }
-                    let credential = auth::Credential::Pairing(attach.pairing_token);
-                    connection::run(
-                        &attach.http_base,
-                        &credential,
-                        &environment,
-                        &action_rx,
-                        &status_tx,
-                    )
-                    .await;
+                    let store: Arc<dyn credentials::CredentialStore> =
+                        Arc::new(credentials::Keychain);
+                    // The badges follow the other environments this app has paired with.
+                    tokio::spawn(environments::run(
+                        environment.id.clone(),
+                        store.clone(),
+                        status_tx.clone(),
+                    ));
+                    let unpair = std::env::args().any(|arg| arg == "--unpair");
+                    pairing::run(store, attach, &environment, unpair, &action_rx, &status_tx).await;
                 }
                 Err(message) => status::publish(&status_tx, Status::Failed(message)),
             }

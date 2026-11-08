@@ -6,10 +6,8 @@ license = "MIT"
 publish = false
 
 [dependencies]
-aes = "0.8.4"
 alacritty_terminal = "=0.26.0"
 async-channel = "2.5.0"
-cbc = { version = "0.1.2", features = ["alloc"] }
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 gpui = { package = "gpui-pre", version = "=0.3.11" }
@@ -20,11 +18,9 @@ hex = "0.4.3"
 hmac = "0.13.0"
 libc = "0.2.191"
 markdown = "1.0.0"
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["form", "json", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-sha1 = "0.11.0"
 sha2 = "0.11.1"
 snap = "1"
 tokio = { version = "1.54.1", features = [
