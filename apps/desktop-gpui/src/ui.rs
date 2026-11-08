@@ -1,15 +1,16 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
 use crate::branch_picker::{self, BranchPicker};
-use crate::connection::{Action, ActionSender, new_project_id};
+use crate::connection::{Action, ActionSender, command_id, new_project_id};
 use crate::details::{self, VcsStatus};
 use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
 use crate::minimap;
 use crate::projects::{self, EnvironmentProjects, MachineKind, NewProject, ProjectEntry};
 use crate::providers::{self, Catalog, Mark, Pick, Trigger};
+use crate::send::{self, Primary};
 use crate::slow_requests;
 use crate::status::{
-    LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
+    CallEvent, LastError, PrBadge, PrState, Section, ShellView, Status, ThreadRow, TopStatus,
 };
 use crate::strip::{
     self, Branch, Defaults, EnvMode, HOST_SHORTCUT, PERMISSIONS_SHORTCUT, RuntimeMode,
@@ -266,8 +267,24 @@ pub struct MainView {
     slow_toast: Option<ToastId>,
     /// The main area's width at the last render, for fitting the details card.
     main_width: Cell<f32>,
+    /// The send on its way to the server, which keeps the composer's text until it answers.
+    sending: Option<Sending>,
+    /// Set when a send succeeded; the next render empties the composer, which needs a window.
+    clear_composer: bool,
     actions: ActionSender,
 }
+
+/// What a successful send changes in the window.
+struct Sending {
+    /// The thread a draft became.
+    opens: Option<String>,
+    /// The draft's details key, whose model pick the new thread inherits.
+    from_key: Option<String>,
+}
+
+/// Send and stop calls, above the branch picker's range.
+const SEND_TOKEN: u64 = 1 << 41;
+const STOP_TOKEN: u64 = SEND_TOKEN + 1;
 
 impl MainView {
     pub fn new(
@@ -297,12 +314,14 @@ impl MainView {
                 .placeholder("Ask anything. @ files, $ skills, / commands")
                 // The web's `min-h-[2lh]` and `max-h-52`.
                 .auto_grow(2, 9)
+                // Enter sends; Shift+Enter inserts a newline.
+                .submit_on_enter(true)
         });
         // The send button enables with content.
-        cx.subscribe(&composer, |_, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
+        cx.subscribe(&composer, |this, _, event: &InputEvent, cx| match event {
+            InputEvent::Change => cx.notify(),
+            InputEvent::PressEnter { shift: false, .. } => this.submit(cx),
+            _ => {}
         })
         .detach();
         let view = cx.weak_entity();
@@ -389,6 +408,8 @@ impl MainView {
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
             slow_toast: None,
             main_width: Cell::new(0.),
+            sending: None,
+            clear_composer: false,
             actions,
         }
     }
@@ -479,6 +500,10 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= SEND_TOKEN {
+                self.on_send_call(token, event, cx);
+                return;
+            }
             if token >= branch_picker::TOKEN_BASE {
                 self.branch_picker
                     .update(cx, |picker, cx| picker.on_call(token, event, cx));
@@ -513,6 +538,143 @@ impl MainView {
         self.sync_terminal(cx);
         self.sync_diff();
         cx.notify();
+    }
+
+    /// Sends the composer: a draft launches its thread, an open thread takes a message.
+    fn submit(&mut self, cx: &mut Context<Self>) {
+        let text = self.composer.read(cx).value().to_string();
+        if !send::can_send(&text, self.sending.is_some()) {
+            return;
+        }
+        let planned = {
+            let project = self
+                .shell()
+                .and_then(|shell| active_project(self.selected_project.as_deref(), shell));
+            let project_id = project.map(|entry| entry.id.as_str());
+            let defaults = self.providers.as_ref().map_or_else(
+                || Defaults::resolve(None, None, None),
+                |catalog| catalog.defaults(project_id),
+            );
+            let key = self.details_key();
+            let pick = self.model_pick(key.as_deref());
+            let trigger = self
+                .providers
+                .as_ref()
+                .and_then(|catalog| catalog.trigger_for(project_id, pick));
+            let mode = project
+                .and_then(|entry| self.env_modes.get(&entry.id).copied())
+                .unwrap_or(defaults.env_mode);
+            let current = project
+                .and_then(|entry| self.branches.get(&entry.root))
+                .and_then(Option::as_ref);
+            let base = project.and_then(|entry| self.draft_bases.get(&entry.id));
+            let composer = send::Composer {
+                thread: self.selected_thread.as_deref(),
+                project: project_id,
+                text: &text,
+                model: trigger.as_ref().map(|trigger| send::Model {
+                    instance_id: &trigger.instance_id,
+                    slug: &trigger.slug,
+                }),
+                picked: pick.is_some(),
+                runtime_mode: self.runtime_mode.unwrap_or(defaults.runtime_mode),
+                workspace: send::Workspace::resolve(
+                    mode,
+                    strip::shown_branch(mode, current, base),
+                    defaults.start_from_origin,
+                ),
+                running: self.thread_running(),
+            };
+            send::plan(
+                &composer,
+                send::Ids {
+                    command: command_id(),
+                    thread: new_project_id(),
+                    message: new_project_id(),
+                },
+            )
+            .map(|plan| (plan, key))
+        };
+        let (plan, from_key) = match planned {
+            Ok(planned) => planned,
+            Err(message) => return self.error_toast("Could not send the message", message, cx),
+        };
+        let action = Action::Call {
+            token: SEND_TOKEN,
+            call: plan.call,
+            payload: plan.payload,
+        };
+        if self.actions.try_send(action).is_err() {
+            return self.error_toast(
+                "Could not send the message",
+                "The connection is not ready.".to_owned(),
+                cx,
+            );
+        }
+        self.sending = Some(Sending {
+            opens: plan.opens,
+            from_key,
+        });
+        cx.notify();
+    }
+
+    /// The web's stop button: `thread.stop` for the open thread.
+    fn stop(&mut self, cx: &mut Context<Self>) {
+        let Some(thread) = self.selected_thread.clone() else {
+            return;
+        };
+        let action = Action::Call {
+            token: STOP_TOKEN,
+            call: crate::connection::Call::DispatchCommand,
+            payload: send::stop_payload(&command_id(), &thread),
+        };
+        if self.actions.try_send(action).is_err() {
+            self.error_toast(
+                "Failed to stop the turn",
+                "The connection is not ready.".to_owned(),
+                cx,
+            );
+        }
+    }
+
+    fn on_send_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
+        let failed = match event {
+            CallEvent::Progress(_) => return,
+            CallEvent::Done(_) => None,
+            CallEvent::Failed(error) => Some(error),
+        };
+        if token == STOP_TOKEN {
+            if let Some(error) = failed {
+                self.error_toast("Failed to stop the turn", error, cx);
+            }
+            return;
+        }
+        let Some(sent) = self.sending.take() else {
+            return;
+        };
+        if let Some(error) = failed {
+            self.error_toast("Could not send the message", error, cx);
+            return cx.notify();
+        }
+        self.clear_composer = true;
+        if let Some(thread) = sent.opens {
+            if let Some(pick) = sent.from_key.and_then(|key| self.model_picks.remove(&key)) {
+                self.model_picks.insert(thread.clone(), pick);
+            }
+            self.open_thread(Some(thread), cx);
+        }
+        cx.notify();
+    }
+
+    /// Whether the open thread is mid-turn, which turns Stop on and makes a message steer.
+    fn thread_running(&self) -> bool {
+        let id = self.selected_thread.as_deref();
+        self.shell().is_some_and(|shell| {
+            shell
+                .rows
+                .iter()
+                .any(|row| Some(row.id.as_str()) == id && row.top == Some(TopStatus::Working))
+        })
     }
 
     fn error_toast(&mut self, title: &str, description: String, cx: &mut Context<Self>) {
@@ -3329,6 +3491,11 @@ impl MainView {
 
     fn composer_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let model_picker = self.model_popover(cx);
+        let primary = send::primary(
+            self.thread_running(),
+            &self.composer.read(cx).value(),
+            self.sending.is_some(),
+        );
         v_flex()
             .w(px(720.))
             .max_w_full()
@@ -3363,17 +3530,15 @@ impl MainView {
                     ))
                     .child(
                         h_flex().gap_2().children(model_picker).child(
-                            send_button(
-                                !self.composer.read(cx).value().trim().is_empty(),
-                                self.send_hovered,
-                                cx,
-                            )
-                            .on_hover(cx.listener(
-                                |this, hovered: &bool, _, cx| {
+                            send_button(primary, self.send_hovered, cx)
+                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                                     this.send_hovered = *hovered;
                                     cx.notify();
-                                },
-                            )),
+                                }))
+                                .on_click(cx.listener(move |this, _, _, cx| match primary {
+                                    Primary::Stop => this.stop(cx),
+                                    Primary::Send { .. } => this.submit(cx),
+                                })),
                         ),
                     ),
             )
@@ -4030,7 +4195,9 @@ fn footer_button(
 }
 
 /// The web's `ComposerPrimaryActions` send button: stage art in dev builds, else `message-action`.
-fn send_button(enabled: bool, hovered: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+fn send_button(primary: Primary, hovered: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let enabled = !matches!(primary, Primary::Send { enabled: false });
+    let stop = primary == Primary::Stop;
     let theme = cx.theme();
     let (bg, hover_bg, fg) = if STAGE_BACKDROP {
         (
@@ -4056,7 +4223,11 @@ fn send_button(enabled: bool, hovered: bool, cx: &App) -> gpui::Stateful<gpui::D
         .flex_shrink_0()
         .size(px(32.))
         .when(enabled, |slot| {
-            slot.cursor_pointer().tooltip(tooltip("Submit message"))
+            slot.cursor_pointer().tooltip(tooltip(if stop {
+                "Stop generation"
+            } else {
+                "Submit message"
+            }))
         })
         .child(
             div()
@@ -4087,7 +4258,16 @@ fn send_button(enabled: bool, hovered: bool, cx: &App) -> gpui::Stateful<gpui::D
                         .when(enabled, |face| {
                             face.group_hover("send", move |style| style.bg(hover_bg))
                         })
-                        .child(Icon::new(IconName::ArrowUp).size_4()),
+                        .child(if stop {
+                            // The web's `size-3 rounded-[2px] bg-current` stop square.
+                            div()
+                                .size(px(12.))
+                                .rounded(px(2.))
+                                .bg(fg)
+                                .into_any_element()
+                        } else {
+                            Icon::new(IconName::ArrowUp).size_4().into_any_element()
+                        }),
                 )
                 .with_animation(
                     ("send-grow", usize::from(grown)),
@@ -4866,6 +5046,10 @@ fn thread_row(
 
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.clear_composer) {
+            self.composer
+                .update(cx, |composer, cx| composer.set_value("", window, cx));
+        }
         let width = f32::from(window.viewport_size().width);
         let narrow = is_narrow(width);
         let docked = self.sidebar_open && !narrow;

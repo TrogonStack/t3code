@@ -3,9 +3,6 @@
 //! `orchestration.launchThread` with its first message, and a message in an open thread is a
 //! `message.dispatch` command. The payloads are untyped JSON like the other unary calls; the
 //! tests check them against `rpc.schema.json`.
-//!
-//! The first caller lands in the next commit.
-#![allow(dead_code)]
 
 use crate::connection::Call;
 use crate::strip::{Branch, EnvMode, RuntimeMode};
