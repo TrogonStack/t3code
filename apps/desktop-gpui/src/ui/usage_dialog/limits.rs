@@ -7,7 +7,7 @@ use crate::usage_limits::{
     self as limits, Account, CHATGPT_USAGE_URL, Link, Native, Pool, PoolWindow,
     cursor_window_details,
 };
-use gpui::{Anchor, StyleRefinement, WeakEntity, pattern_slash};
+use gpui::{Anchor, StyleRefinement, WeakEntity, canvas, fill, pattern_slash};
 use gpui_component::hover_card::HoverCard;
 
 /// `CURSOR_KEYCHAIN_COPY`.
@@ -28,7 +28,7 @@ pub(super) struct Target {
 #[derive(Default)]
 pub(super) struct LimitsState {
     natives: Vec<Native>,
-    environment: String,
+    pub(super) environment: String,
     cursor_ready: bool,
     pub(super) now: i64,
     pending: bool,
@@ -39,6 +39,8 @@ pub(super) struct LimitsState {
     busy: Option<(String, String)>,
     status: HashMap<(String, String), String>,
     enabling: bool,
+    /// The segment whose popover is open, for the trigger ring.
+    open_segment: Option<usize>,
 }
 
 impl LimitsState {
@@ -61,6 +63,7 @@ impl UsageDialog {
     pub fn set_providers(&mut self, catalog: &Catalog, cx: &mut Context<Self>) {
         self.limits.natives = catalog.natives();
         self.limits.cursor_ready = catalog.cursor_ready();
+        self.price_store.refresh(catalog.usage_prices());
         if self.open && self.prefs.metric == Metric::Limits {
             self.limits.now = now_ms();
         }
@@ -169,16 +172,41 @@ impl UsageDialog {
         let Some(shown) = &self.shown else {
             return false;
         };
-        let sources = &shown.summary.sources;
+        if self.prefs.hidden.contains(Provider::Cursor) {
+            return false;
+        }
+        let sources: Vec<_> = shown
+            .summary
+            .sources
+            .iter()
+            .filter(|source| !self.prefs.hidden.contains(source.provider))
+            .collect();
         let has_account = sources
             .iter()
             .any(|source| source.provider == Provider::Cursor && source.host_id == "cursor.com");
         !has_account && self.limits.cursor_ready && sources.iter().any(|source| source.has_action)
     }
 
+    /// The natives of the providers the breadcrumb has not hidden.
+    fn shown_natives(&self) -> Vec<Native> {
+        let hidden: Vec<&str> = Provider::ORDER
+            .iter()
+            .filter(|provider| self.prefs.hidden.contains(**provider))
+            .map(|provider| provider.driver_kind())
+            .collect();
+        self.limits
+            .natives
+            .iter()
+            .filter(|native| !hidden.contains(&native.driver.as_str()))
+            .cloned()
+            .collect()
+    }
+
     /// The overview's `showChatGptSharing`.
     pub(super) fn chatgpt_sharing(&self) -> bool {
-        self.limits.natives.iter().any(Native::uses_chatgpt_sharing)
+        self.shown_natives()
+            .iter()
+            .any(Native::uses_chatgpt_sharing)
     }
 
     pub(super) fn cursor_enable_row(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -194,7 +222,8 @@ impl UsageDialog {
                 .items_baseline()
                 .justify_between()
                 .gap_4()
-                .text_sm()
+                .text_size(px(14.))
+                .line_height(px(20.))
                 .child(
                     h_flex()
                         .min_w_0()
@@ -228,7 +257,8 @@ impl UsageDialog {
             .items_center()
             .justify_between()
             .gap_2()
-            .text_xs()
+            .text_size(px(12.))
+            .line_height(px(16.))
             .text_color(theme.muted_foreground)
             .child("ChatGPT shared usage")
             .child(manage_usage_button(
@@ -242,10 +272,11 @@ impl UsageDialog {
     pub(super) fn limits_body(&self, vw: f32, cx: &mut Context<Self>) -> AnyElement {
         let st = &self.limits;
         let now = st.now;
-        let accounts = limits::collect_accounts(&st.natives);
+        let natives = self.shown_natives();
+        let accounts = limits::collect_accounts(&natives);
         let pools = limits::collect_pools(&accounts, now);
-        let notices = limits::collect_notices(&st.natives);
-        let links = limits::collect_external_links(&st.natives, &st.environment);
+        let notices = limits::collect_notices(&natives);
+        let links = limits::collect_external_links(&natives, &st.environment);
         let prompt = self.cursor_prompt_needed();
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -274,10 +305,13 @@ impl UsageDialog {
 
         let mut page = v_flex().gap_8();
         if pools.is_empty() && notices.is_empty() && !prompt && links.is_empty() {
-            page =
-                page.child(div().text_sm().text_color(muted).child(
-                    "No provider on the selected environments reports subscription limits.",
-                ));
+            page = page.child(
+                div()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
+                    .text_color(muted)
+                    .child("No provider on the selected environments reports subscription limits."),
+            );
         }
         let weak = cx.weak_entity();
         for (index, pool) in pools.iter().enumerate() {
@@ -308,7 +342,8 @@ impl UsageDialog {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .text_sm()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(provider_mark_at(
                         &Mark {
@@ -333,7 +368,8 @@ impl UsageDialog {
                     .p_4()
                     .child(
                         div()
-                            .text_xs()
+                            .text_size(px(12.))
+                            .line_height(px(16.))
                             .text_color(theme.muted_foreground)
                             .child(CURSOR_KEYCHAIN_COPY),
                     )
@@ -347,7 +383,8 @@ impl UsageDialog {
                             .rounded(px(6.))
                             .border_1()
                             .border_color(theme.border)
-                            .text_sm()
+                            .text_size(px(14.))
+                            .line_height(px(20.))
                             .font_weight(FontWeight::MEDIUM)
                             .when(enabling, |button| button.opacity(0.64))
                             .when(!enabling, |button| {
@@ -377,7 +414,8 @@ impl UsageDialog {
         let heading = h_flex()
             .items_center()
             .gap_2()
-            .text_sm()
+            .text_size(px(14.))
+            .line_height(px(20.))
             .font_weight(FontWeight::MEDIUM)
             .child(provider_mark_at(
                 &Mark {
@@ -434,7 +472,7 @@ impl UsageDialog {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let (muted, foreground, border) = (theme.muted_foreground, theme.foreground, theme.border);
+        let (muted, border) = (theme.muted_foreground, theme.border);
         let cursor = if pool.driver == "cursor" {
             cursor_window_details(&window.id)
         } else {
@@ -465,14 +503,15 @@ impl UsageDialog {
             .gap_1()
             .child(
                 div()
-                    .text_sm()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.to_owned()),
             )
             .child(
                 h_flex()
                     .items_baseline()
-                    .gap_1()
+                    .gap_2()
                     .child(
                         div()
                             .text_size(px(30.))
@@ -480,12 +519,21 @@ impl UsageDialog {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(format!("{}%", window.remaining_percent)),
                     )
-                    .child(div().text_sm().text_color(muted).child("left"))
-                    .children(pace),
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(14.))
+                            .line_height(px(20.))
+                            .text_color(muted)
+                            .child("left")
+                            .children(pace),
+                    ),
             )
             .children(next_refill.filter(|_| columns > 1).map(|percent| {
                 div()
-                    .text_xs()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(format!("\u{21bb} +{percent}%"))
             }));
@@ -500,7 +548,9 @@ impl UsageDialog {
             .child(
                 div()
                     .flex()
-                    .when(two_columns, |row| row.flex_row().gap(px(24.)))
+                    .when(two_columns, |row| {
+                        row.flex_row().items_center().gap(px(24.))
+                    })
                     .when(!two_columns, |row| row.flex_col().gap_3())
                     .child(
                         div()
@@ -509,8 +559,13 @@ impl UsageDialog {
                     )
                     .child(div().flex_1().min_w_0().child(bar)),
             )
-            .children(description.map(|text| div().text_xs().text_color(muted).child(text)))
-            .children(self.redeem_statuses(pool, window, foreground))
+            .children(description.map(|text| {
+                div()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .text_color(muted)
+                    .child(text)
+            }))
             .into_any_element()
     }
 
@@ -518,8 +573,9 @@ impl UsageDialog {
         &self,
         pool: &Pool,
         window: &PoolWindow,
-        foreground: Hsla,
+        theme: &gpui_component::Theme,
     ) -> Vec<AnyElement> {
+        let (foreground, muted) = (theme.foreground, theme.muted_foreground);
         let mut rows = Vec::new();
         for member in &window.members {
             let account = &pool.accounts[member.account];
@@ -532,13 +588,18 @@ impl UsageDialog {
             };
             if let Some(text) = text {
                 rows.push(
-                    div()
-                        .text_xs()
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(4.))
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .text_color(muted)
                         .child(
                             div()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(foreground)
-                                .child(format!("{} ", account_name_text(account, &pool.driver))),
+                                .child(account_name_for_status(account, &pool.driver)),
                         )
                         .child(text)
                         .into_any_element(),
@@ -562,18 +623,20 @@ impl UsageDialog {
         let columns = window.columns.len();
         let wide = env.bar_width >= WIDE_BAR;
         let show_name = columns > 1;
-        let mut present = 0usize;
+        let segment_width = segment_width(env.bar_width, columns);
         let mut cells: Vec<AnyElement> = Vec::new();
         let mut legend: Vec<AnyElement> = Vec::new();
         for (column, slot) in window.columns.iter().enumerate() {
             let Some(member_index) = *slot else {
                 cells.push(div().flex_1().min_w_0().into_any_element());
+                if !wide {
+                    legend.push(div().h_0().into_any_element());
+                }
                 continue;
             };
-            present += 1;
             let part = Segment::new(
                 pool_index * 1_000_000 + window_index * 1_000 + column,
-                present,
+                column + 1,
                 pool,
                 window,
                 member_index,
@@ -586,17 +649,18 @@ impl UsageDialog {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .child(part.bar(wide, show_name, env.bar_width / columns as f32, cx))
+                    .child(part.bar(wide, show_name, segment_width, cx))
                     .into_any_element(),
             );
             if !wide {
-                legend.push(part.legend_row(show_name, cx));
+                legend.push(part.legend_row(cx));
             }
         }
         v_flex()
             .gap_1()
             .child(h_flex().gap_1().children(cells))
-            .children((!legend.is_empty()).then(|| v_flex().gap_0p5().children(legend)))
+            .children(legend)
+            .children(self.redeem_statuses(pool, window, cx.theme()))
             .into_any_element()
     }
 
@@ -615,7 +679,8 @@ impl UsageDialog {
             .rounded(px(6.))
             .border_1()
             .border_color(border)
-            .text_sm()
+            .text_size(px(14.))
+            .line_height(px(20.))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .hover(|style| style.bg(theme.foreground.opacity(0.06)))
@@ -633,7 +698,8 @@ impl UsageDialog {
             .rounded(px(6.))
             .bg(theme.primary)
             .text_color(theme.primary_foreground)
-            .text_sm()
+            .text_size(px(14.))
+            .line_height(px(20.))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .on_click(cx.listener(|this, _, _, cx| this.redeem(cx)))
@@ -682,7 +748,7 @@ impl UsageDialog {
                                                 .font_weight(FontWeight::SEMIBOLD)
                                                 .child("Use a reset credit?"),
                                         )
-                                        .child(div().text_sm().text_color(muted).child(
+                                        .child(div().text_size(px(14.)).line_height(px(20.)).text_color(muted).child(
                                             "This redeems one credit on your account and clears the current rate-limit windows. It cannot be undone.",
                                         )),
                                 )
@@ -724,6 +790,59 @@ fn account_name_text(account: &Account, driver: &str) -> String {
         return limits::account_initials(email);
     }
     driver_label(driver)
+}
+
+/// Tracks which segment's popover is open.
+fn open_change(
+    weak: WeakEntity<UsageDialog>,
+    id: usize,
+) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+    move |open, _, cx| {
+        weak.update(cx, |this, cx| {
+            let state = &mut this.limits.open_segment;
+            if *open {
+                *state = Some(id);
+            } else if *state == Some(id) {
+                *state = None;
+            }
+            cx.notify();
+        })
+        .ok();
+    }
+}
+
+/// `AccountName` in a status line: the name, or the email chip.
+fn account_name_for_status(account: &Account, driver: &str) -> AnyElement {
+    account_name(account, driver)
+}
+
+/// Pixel width of one segment: columns share the bar minus a 4px gap between each.
+fn segment_width(bar_width: f32, columns: usize) -> f32 {
+    let columns = columns.max(1) as f32;
+    (bar_width - 4. * (columns - 1.)) / columns
+}
+
+/// Center of the pace tick in px: `clamp(3px, T%, 100% - 3px)` of the segment.
+fn pace_mark_center(left_percent: i64, width: f32) -> f32 {
+    (left_percent as f32 / 100. * width).clamp(3., (width - 3.).max(3.))
+}
+
+/// `repeating-linear-gradient(135deg, c 0 1px, transparent 1px 5px)`: the shader's
+/// stripe sizes are device pixels, so scale a 1px stripe on a 5px period by the display scale.
+fn hatch_pattern(color: Hsla) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let scale = window.scale_factor();
+            let period = 5.0_f32 * scale;
+            let thickness = 1.0_f32 * scale;
+            let diagonal = std::f32::consts::SQRT_2;
+            let width = thickness * diagonal;
+            let interval = (period - thickness) * diagonal;
+            window.paint_quad(fill(bounds, pattern_slash(color, width, interval)));
+        },
+    )
+    .size_full()
 }
 
 /// `oklch(l c h)` as an sRGB color.
@@ -835,6 +954,7 @@ struct Segment {
     reveal: bool,
     key: (String, String),
     busy: bool,
+    open: bool,
     weak: WeakEntity<UsageDialog>,
 }
 
@@ -860,9 +980,9 @@ impl Segment {
             .and_then(normalize_accent)
             .map_or(pool_color, |accent| rgb(accent).into());
         let credits = account
-            .redeem
+            .limits
+            .reset_credits
             .as_ref()
-            .and(account.limits.reset_credits.as_ref())
             .map_or(0, |credits| credits.available);
         let key = (account.key.clone(), member.window.id.clone());
         Self {
@@ -882,6 +1002,7 @@ impl Segment {
             environment: env.environment.clone(),
             reveal: env.reveal,
             busy: dialog.limits.busy.as_ref() == Some(&key),
+            open: dialog.limits.open_segment == Some(id),
             key,
             weak: env.weak.clone(),
             account,
@@ -917,6 +1038,10 @@ impl Segment {
         self.resets_in
             .as_ref()
             .map(|text| text.replace("resets in ", "\u{21bb} "))
+    }
+
+    fn has_chip(&self) -> bool {
+        self.resets_in.is_some() || self.credits > 0
     }
 
     fn bar(&self, wide: bool, show_name: bool, width: f32, cx: &App) -> AnyElement {
@@ -956,35 +1081,29 @@ impl Segment {
                     .bottom_0()
                     .right_0()
                     .w(relative(share))
-                    .bg(pattern_slash(self.color.opacity(0.2), 1., 5.)),
+                    .child(hatch_pattern(self.color.opacity(0.2))),
             );
         }
         if let Some(left) = self.time_left.filter(|_| width >= 6.) {
-            let at = (left as f32 / 100.).clamp(0., 1.);
+            let at = px(pace_mark_center(left, width));
             track = track
                 .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left(relative(at))
-                        .w_0()
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .bottom_0()
-                                .left(px(-3.))
-                                .w(px(6.))
-                                .bg(background),
-                        ),
+                    div().absolute().top_0().bottom_0().left(at).w_0().child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px(-3.))
+                            .w(px(6.))
+                            .bg(background),
+                    ),
                 )
                 .child(
                     div()
                         .absolute()
                         .top(px(2.))
                         .bottom(px(2.))
-                        .left(relative(at))
+                        .left(at)
                         .w_0()
                         .child(
                             div()
@@ -999,42 +1118,47 @@ impl Segment {
                 );
         }
         if wide {
-            let chip = self.chip_text().map(|text| {
+            let chip = self.has_chip().then(|| {
                 h_flex()
                     .flex_shrink_0()
                     .items_center()
-                    .gap_1()
+                    .gap(px(6.))
                     .rounded(px(4.))
                     .bg(background.opacity(0.85))
                     .px(px(6.))
                     .py(px(2.))
                     .text_size(px(11.))
-                    .child(text)
+                    .line_height(px(16.))
+                    .children(self.chip_text())
                     .when(self.credits > 0, |chip| {
-                        chip.child(div().text_color(muted).child("\u{b7}"))
-                            .child(Icon::new(Icons::Ticket).size(px(12.)))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(self.credits.to_string()),
-                            )
+                        chip.children(
+                            self.resets_in
+                                .is_some()
+                                .then(|| div().text_color(muted).child("\u{b7}")),
+                        )
+                        .child(
+                            h_flex()
+                                .items_center()
+                                .gap_0p5()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(Icon::new(Icons::Ticket).size(px(12.)))
+                                .child(self.credits.to_string()),
+                        )
                     })
             });
-            track = track.child(
-                h_flex()
-                    .absolute()
-                    .inset_0()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .px_2()
-                    .text_xs()
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .items_center()
-                            .gap_1()
-                            .when(show_name, |row| {
+            track =
+                track.child(
+                    h_flex()
+                        .absolute()
+                        .inset_0()
+                        .items_center()
+                        .gap(px(6.))
+                        .px_2()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
+                        .child(h_flex().min_w_0().items_center().gap(px(6.)).when(
+                            show_name,
+                            |row| {
                                 row.child(
                                     div()
                                         .min_w_0()
@@ -1047,10 +1171,11 @@ impl Segment {
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .child(format!("{}%", self.remaining)),
                                 )
-                            }),
-                    )
-                    .children(chip),
-            );
+                            },
+                        ))
+                        .child(div().flex_1())
+                        .children(chip),
+                );
         } else {
             track = track.child(
                 div()
@@ -1065,8 +1190,22 @@ impl Segment {
                     .child(self.position.to_string()),
             );
         }
+        if self.open {
+            track = track.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(theme.border),
+            );
+        }
         let popover = self.popover();
         HoverCard::new(("usage-limit-popover", self.id))
+            .on_open_change(open_change(self.weak.clone(), self.id))
+            .appearance(true)
+            .px_4()
+            .py_4()
             .anchor(Anchor::BottomCenter)
             .open_delay(Duration::from_millis(150))
             .trigger_style(StyleRefinement::default().w_full())
@@ -1075,74 +1214,81 @@ impl Segment {
             .into_any_element()
     }
 
-    fn legend_row(&self, show_name: bool, cx: &App) -> AnyElement {
+    fn legend_row(&self, cx: &App) -> AnyElement {
         let theme = cx.theme();
         let (muted, foreground) = (theme.muted_foreground, theme.foreground);
-        let right = self.chip_text().map(|text| {
+        let right = self.has_chip().then(|| {
             h_flex()
                 .flex_shrink_0()
                 .items_center()
-                .gap_1()
+                .gap(px(6.))
                 .text_size(px(11.))
+                .line_height(px(16.))
                 .text_color(muted)
-                .child(text)
+                .children(self.chip_text())
                 .when(self.credits > 0, |row| {
-                    row.child("\u{b7}")
-                        .child(Icon::new(Icons::Ticket).size(px(12.)))
+                    row.children(self.resets_in.is_some().then_some("\u{b7}"))
                         .child(
-                            div()
+                            h_flex()
+                                .items_center()
+                                .gap_0p5()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(foreground)
+                                .child(Icon::new(Icons::Ticket).size(px(12.)))
                                 .child(self.credits.to_string()),
                         )
                 })
         });
+        let accent = foreground.opacity(0.06);
+        let open = self.open;
         let row = h_flex()
             .id(("usage-limit-legend", self.id))
             .w_full()
-            .h(px(24.))
+            .h(px(28.))
             .items_center()
-            .justify_between()
-            .gap_2()
-            .px_1()
+            .gap_1()
+            .px(px(8.))
             .rounded(px(6.))
-            .text_xs()
-            .hover(|style| style.bg(foreground.opacity(0.06)))
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_pointer()
+            .when(open, |row| row.bg(accent))
+            .hover(move |style| style.bg(accent))
             .child(
-                h_flex()
-                    .min_w_0()
+                div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .flex()
                     .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.))
-                            .bg(self.color.opacity(0.35))
-                            .text_size(px(10.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.position.to_string()),
-                    )
-                    .when(show_name, |row| {
-                        row.child(
-                            div()
-                                .min_w_0()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(account_name(&self.account, &self.driver)),
-                        )
-                    })
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{}%", self.remaining)),
-                    ),
+                    .justify_center()
+                    .rounded(px(4.))
+                    .bg(self.color.opacity(0.35))
+                    .text_size(px(10.))
+                    .line_height(px(14.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(foreground.opacity(0.8))
+                    .child(self.position.to_string()),
             )
+            .child(
+                div()
+                    .min_w_0()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(account_name(&self.account, &self.driver)),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("{}%", self.remaining)),
+            )
+            .child(div().flex_1())
             .children(right);
         let popover = self.popover();
         HoverCard::new(("usage-limit-legend-popover", self.id))
+            .on_open_change(open_change(self.weak.clone(), self.id))
+            .px_4()
+            .py_4()
             .anchor(Anchor::BottomCenter)
             .open_delay(Duration::from_millis(150))
             .trigger_style(StyleRefinement::default().w_full())
@@ -1259,7 +1405,8 @@ impl Popover {
                 h_flex()
                     .items_center()
                     .gap_2()
-                    .text_sm()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(account_avatar(account, &self.driver, cx))
                     .child(div().truncate().child(title)),
@@ -1270,14 +1417,11 @@ impl Popover {
             .border_t_1()
             .border_color(border)
             .pt(px(10.));
-        let mut rows = 0;
         if let Some(plan) = account.plan.as_ref().filter(|plan| !plan.is_empty()) {
             identity = identity.child(Self::row("Plan", plan.clone(), cx));
-            rows += 1;
         }
         if !self.environment.is_empty() {
             identity = identity.child(Self::row("Signed in", self.environment.clone(), cx));
-            rows += 1;
         }
         let mut figures = v_flex()
             .gap_1()
@@ -1340,7 +1484,8 @@ impl Popover {
                         .border_1()
                         .border_color(theme.border)
                         .text_color(foreground)
-                        .text_xs()
+                        .text_size(px(12.))
+                        .line_height(px(16.))
                         .font_weight(FontWeight::MEDIUM)
                         .when(busy, |button| button.opacity(0.64))
                         .when(!busy, |button| {
@@ -1356,13 +1501,13 @@ impl Popover {
                         .child(if busy { "Using\u{2026}" } else { "Use reset" }),
                 )
         });
-        let _ = rows;
         v_flex()
             .w(px(288.))
             .gap(px(10.))
-            .text_xs()
+            .text_size(px(12.))
+            .line_height(px(16.))
             .child(header)
-            .children((rows > 0).then_some(identity))
+            .child(identity)
             .child(figures)
             .children(credit_section)
             .into_any_element()
@@ -1422,7 +1567,8 @@ fn manage_usage_button(id: &'static str, url: &'static str, cx: &App) -> gpui::S
         .gap_1()
         .items_center()
         .rounded(px(6.))
-        .text_xs()
+        .text_size(px(12.))
+        .line_height(px(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(muted)
         .cursor_pointer()
@@ -1445,7 +1591,8 @@ fn link_card(index: usize, link: &Link, cx: &App) -> AnyElement {
         .gap_1()
         .items_center()
         .rounded(px(6.))
-        .text_xs()
+        .text_size(px(12.))
+        .line_height(px(16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(muted)
         .cursor_pointer()
@@ -1490,20 +1637,23 @@ fn link_card(index: usize, link: &Link, cx: &App) -> AnyElement {
                         .gap_1()
                         .child(
                             div()
-                                .text_sm()
+                                .text_size(px(14.))
+                                .line_height(px(20.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(link.label.clone()),
                         )
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(px(12.))
+                                .line_height(px(16.))
                                 .text_color(muted)
                                 .child(link.accounts.join(", ")),
                         )
                         .when(chatgpt, |column| {
                             column.child(
                                 div()
-                                    .text_xs()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
                                     .text_color(muted)
                                     .child("View usage in ChatGPT with your connected account."),
                             )
@@ -1512,7 +1662,8 @@ fn link_card(index: usize, link: &Link, cx: &App) -> AnyElement {
                             column.children(link.message.as_ref().map(|message| {
                                 div()
                                     .max_w(px(576.))
-                                    .text_xs()
+                                    .text_size(px(12.))
+                                    .line_height(px(16.))
                                     .text_color(muted)
                                     .child(message.clone())
                             }))
@@ -1526,27 +1677,60 @@ fn link_card(index: usize, link: &Link, cx: &App) -> AnyElement {
 /// `LimitNotices`: a warning alert with one title per notice.
 fn notice_alert(notices: &[String], cx: &App) -> AnyElement {
     let theme = cx.theme();
+    let dark = theme.is_dark();
+    let text_color: Hsla = rgb(if dark { 0xfbbf24 } else { 0xb45309 }).into();
     h_flex()
         .items_start()
-        .gap_3()
-        .rounded(px(8.))
+        .gap_2()
+        .rounded(px(12.))
         .border_1()
         .border_color(theme.warning.opacity(0.32))
-        .bg(theme.warning.opacity(0.04))
-        .px_4()
+        .bg(theme.warning.opacity(if dark { 0.16 } else { 0.08 }))
+        .px(px(14.))
         .py_3()
+        .text_size(px(14.))
+        .line_height(px(20.))
+        .text_color(text_color)
         .child(
-            Icon::new(Icons::TriangleAlert)
-                .size(px(16.))
-                .text_color(theme.warning),
+            div()
+                .h(px(20.))
+                .w(px(16.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .child(
+                    Icon::new(Icons::TriangleAlert)
+                        .size(px(16.))
+                        .text_color(theme.warning),
+                ),
         )
         .child(
             v_flex()
                 .min_w_0()
-                .gap_1()
-                .text_sm()
+                .flex_1()
+                .gap_0p5()
                 .font_weight(FontWeight::MEDIUM)
                 .children(notices.iter().map(|notice| div().child(notice.clone()))),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segment_width_subtracts_gaps() {
+        assert_eq!(segment_width(400., 1), 400.);
+        assert_eq!(segment_width(404., 2), 200.);
+        assert_eq!(segment_width(408., 3), 400. / 3.);
+    }
+
+    #[test]
+    fn pace_mark_clamps_to_three_px_from_edges() {
+        assert_eq!(pace_mark_center(0, 200.), 3.);
+        assert_eq!(pace_mark_center(50, 200.), 100.);
+        assert_eq!(pace_mark_center(100, 200.), 197.);
+        assert_eq!(pace_mark_center(1, 200.), 3.);
+    }
 }

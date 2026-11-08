@@ -1118,7 +1118,7 @@ fn publish_diff(cwd: String, event: Event, status: &StatusSender) {
 fn publish_catalog(event: Event, status: &StatusSender) {
     match event {
         Event::Done { value, .. } => match Catalog::decode(value) {
-            Ok(catalog) => publish(status, Status::Providers(catalog)),
+            Ok(catalog) => publish(status, Status::Providers(Box::new(catalog))),
             Err(error) => eprintln!("[rpc] unreadable provider config: {error}"),
         },
         Event::Failed { message, .. } => eprintln!("[rpc] could not load providers: {message}"),

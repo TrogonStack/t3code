@@ -51,6 +51,19 @@ impl Provider {
         Self::ORDER.iter().position(|p| *p == self).unwrap_or(0)
     }
 
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::Grok => "grok",
+            Self::Cursor => "cursor",
+            Self::OpenCode => "opencode",
+            Self::Antigravity => "antigravity",
+            Self::Pi => "pi",
+            Self::Muse => "muse",
+        }
+    }
+
     fn from_wire(value: &str) -> Option<Self> {
         Some(match value {
             "codex" => Self::Codex,
@@ -1383,10 +1396,79 @@ pub fn build_chart(
 // Preferences, usagePagePreferences.ts. The web keeps them in localStorage; this app has no
 // such store, so they live in a small JSON file under the app's home directory.
 
+/// `hiddenProviders`: the providers the breadcrumb's picker turned off, one bit per `Provider::slot`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hidden(u8);
+
+impl Hidden {
+    pub fn contains(self, provider: Provider) -> bool {
+        self.0 & (1 << provider.slot()) != 0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// `PROVIDER_ORDER.filter((provider) => !hiddenProviders.has(provider))`.
+    pub fn visible(self) -> Vec<Provider> {
+        Provider::ORDER
+            .into_iter()
+            .filter(|provider| !self.contains(*provider))
+            .collect()
+    }
+
+    pub fn all() -> Self {
+        Self(((1u16 << Provider::ORDER.len()) - 1) as u8)
+    }
+
+    /// The picker's `onCheckedChange` for one provider row.
+    pub fn with(self, provider: Provider, visible: bool) -> Self {
+        let bit = 1 << provider.slot();
+        Self(if visible { self.0 & !bit } else { self.0 | bit })
+    }
+
+    /// The trigger label (`UsageProviderFilter`).
+    pub fn label(self) -> String {
+        let visible = self.visible();
+        match visible.len() {
+            n if n == Provider::ORDER.len() => "All providers".to_owned(),
+            0 => "No providers".to_owned(),
+            1 => visible[0].label().to_owned(),
+            n => format!("{n} providers"),
+        }
+    }
+}
+
+impl Summary {
+    /// `withoutProviders`: buckets and sources of hidden providers never reach the merge.
+    pub fn without(&self, hidden: Hidden) -> Self {
+        if hidden.is_empty() {
+            return self.clone();
+        }
+        Self {
+            contract_version: self.contract_version,
+            time_zone: self.time_zone.clone(),
+            buckets: self
+                .buckets
+                .iter()
+                .filter(|bucket| !hidden.contains(bucket.provider))
+                .cloned()
+                .collect(),
+            sources: self
+                .sources
+                .iter()
+                .filter(|source| !hidden.contains(source.provider))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Prefs {
     pub metric: Metric,
     pub window_days: u32,
+    pub hidden: Hidden,
 }
 
 impl Default for Prefs {
@@ -1394,6 +1476,7 @@ impl Default for Prefs {
         Self {
             metric: Metric::Limits,
             window_days: 30,
+            hidden: Hidden::default(),
         }
     }
 }
@@ -1413,22 +1496,38 @@ impl Prefs {
             n @ (1 | 7 | 30 | 90) => n as u32,
             _ => return None,
         };
+        let mut hidden = Hidden::default();
+        // The web's schema rejects the whole record when an entry is not a provider kind.
+        if let Some(list) = value.get("hiddenProviders") {
+            for entry in list.as_array()? {
+                hidden = hidden.with(Provider::from_wire(entry.as_str()?)?, false);
+            }
+        }
         Some(Self {
             metric,
             window_days,
+            hidden,
         })
     }
 
     pub fn to_json(self) -> String {
-        json!({
+        let hidden: Vec<&str> = Provider::ORDER
+            .into_iter()
+            .filter(|provider| self.hidden.contains(*provider))
+            .map(Provider::wire)
+            .collect();
+        let mut value = json!({
             "metric": match self.metric {
                 Metric::Cost => "cost",
                 Metric::Tokens => "tokens",
                 Metric::Limits => "limits",
             },
             "windowDays": self.window_days,
-        })
-        .to_string()
+        });
+        if !hidden.is_empty() {
+            value["hiddenProviders"] = json!(hidden);
+        }
+        value.to_string()
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -2092,17 +2191,56 @@ mod tests {
             Prefs::default(),
             Prefs {
                 metric: Metric::Limits,
-                window_days: 30
+                window_days: 30,
+                hidden: Hidden::default(),
             }
         );
         let saved = Prefs {
             metric: Metric::Cost,
             window_days: 7,
+            hidden: Hidden::default()
+                .with(Provider::Claude, false)
+                .with(Provider::Muse, false),
         };
         assert_eq!(Prefs::parse(&saved.to_json()), Some(saved));
+        assert!(
+            saved
+                .to_json()
+                .contains(r#""hiddenProviders":["claude","muse"]"#)
+        );
+        assert!(!Prefs::default().to_json().contains("hiddenProviders"));
+        assert_eq!(
+            Prefs::parse(r#"{"metric":"cost","windowDays":7,"hiddenProviders":["codex"]}"#)
+                .map(|prefs| prefs.hidden.visible().len()),
+            Some(7)
+        );
+        assert_eq!(
+            Prefs::parse(r#"{"metric":"cost","windowDays":7,"hiddenProviders":["nope"]}"#),
+            None
+        );
         assert_eq!(Prefs::parse(r#"{"metric":"cost","windowDays":14}"#), None);
         assert_eq!(Prefs::parse(r#"{"metric":"nope","windowDays":7}"#), None);
         assert_eq!(Prefs::parse("not json"), None);
+    }
+
+    #[test]
+    fn hidden_providers_leave_the_merge_and_label_the_picker() {
+        let value = summary(
+            vec![bucket(|_| {}), bucket(|b| b["provider"] = json!("codex"))],
+            vec![("claude", "/a", 1), ("codex", "/b", 1)],
+            6,
+        );
+        let decoded = Summary::decode(&value).expect("decodes");
+        let hidden = Hidden::default().with(Provider::Codex, false);
+        let filtered = decoded.without(hidden);
+        assert_eq!(filtered.buckets.len(), 1);
+        assert_eq!(filtered.sources.len(), 1);
+        assert_eq!(active_providers(&merge(&filtered)), [Provider::Claude]);
+        assert_eq!(decoded.without(Hidden::default()), decoded);
+        assert_eq!(Hidden::default().label(), "All providers");
+        assert_eq!(hidden.label(), "7 providers");
+        assert_eq!(Hidden::all().label(), "No providers");
+        assert_eq!(Hidden::all().with(Provider::Pi, true).label(), "Pi");
     }
 
     #[test]

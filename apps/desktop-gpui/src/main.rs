@@ -37,6 +37,7 @@ mod upload;
 mod usage;
 mod usage_data;
 mod usage_limits;
+mod usage_prices;
 mod wire;
 
 use assets::AppAssets;

@@ -28,7 +28,7 @@ pub enum Status {
     /// Another saved environment's projects; says nothing about the primary connection.
     Environment(EnvironmentProjects),
     /// The primary connection's provider instances, for the composer's model picker.
-    Providers(Catalog),
+    Providers(Box<Catalog>),
     /// The selected thread's transcript, or why it could not be loaded.
     Thread {
         id: String,

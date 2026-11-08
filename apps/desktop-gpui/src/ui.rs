@@ -498,7 +498,7 @@ impl MainView {
         if let Status::Providers(catalog) = status {
             self.usage
                 .update(cx, |usage, cx| usage.set_providers(&catalog, cx));
-            self.providers = Some(catalog);
+            self.providers = Some(*catalog);
             return cx.notify();
         }
         if let Status::Thread { id, transcript } = status {

@@ -6,10 +6,11 @@
 use crate::strip::Defaults;
 use crate::usage::Limits;
 use crate::usage_limits::Native;
+use crate::usage_prices::{Price, Snapshot};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 const DEFAULT_ENABLED_OFF_DRIVERS: &[&str] = &[
     "cursor",
@@ -302,6 +303,11 @@ struct Settings {
     default_thread_env_mode: Option<String>,
     #[serde(default)]
     new_worktrees_start_from_origin: Option<bool>,
+    /// `usagePriceOverrides`; `None` on servers that do not send it.
+    #[serde(default, deserialize_with = "lenient_option")]
+    usage_price_overrides: Option<BTreeMap<String, Price>>,
+    #[serde(default, deserialize_with = "lenient_option")]
+    usage_model_aliases: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Deserialize)]
@@ -330,6 +336,8 @@ struct EnvironmentCapabilities {
         deserialize_with = "lenient_option"
     )]
     file_attachments: Option<FileAttachments>,
+    #[serde(default, rename = "usageModelAliases")]
+    usage_model_aliases: bool,
 }
 
 #[derive(Deserialize)]
@@ -346,6 +354,8 @@ pub struct Catalog {
     available_editors: Vec<String>,
     /// `environment.capabilities.fileAttachments.maxUploadBytes`.
     max_file_upload_bytes: Option<u64>,
+    /// `environment.capabilities.usageModelAliases`.
+    usage_model_aliases: bool,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -442,10 +452,26 @@ impl Catalog {
             providers,
             settings,
             available_editors,
+            usage_model_aliases: environment
+                .as_ref()
+                .is_some_and(|environment| environment.capabilities.usage_model_aliases),
             max_file_upload_bytes: environment
                 .and_then(|environment| environment.capabilities.file_attachments)
                 .map(|files| files.max_upload_bytes),
         })
+    }
+
+    /// The environment's prices and mappings as the prices dialog reads them
+    /// (`priceTargetsAtom`): mappings only count when the server advertises them.
+    pub fn usage_prices(&self) -> Snapshot {
+        (
+            self.settings.usage_price_overrides.clone(),
+            if self.usage_model_aliases {
+                self.settings.usage_model_aliases.clone()
+            } else {
+                None
+            },
+        )
     }
 
     /// What the server advertises for file attachments, as `attachments::staging_limit` takes it.

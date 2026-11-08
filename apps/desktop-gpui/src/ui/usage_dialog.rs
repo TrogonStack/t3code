@@ -1,11 +1,14 @@
 //! The web's Usage page (`UsagePage.tsx`) as the `/usage` route modal (`AppRouteModal.tsx`).
 
 mod limits;
+mod pickers;
+mod prices;
 
 use super::*;
 use crate::usage_data::{
     self as data, Merged, Metric, Prefs, Provider, Summary, Tint, Window as Span, Zone,
 };
+use crate::usage_prices::Change;
 use gpui::{
     ClickEvent, ElementId, FocusHandle, KeyBinding, PathBuilder, ScrollHandle, Size, fill, point,
     radians, relative, size,
@@ -86,6 +89,9 @@ enum Pending {
         key: (String, String),
     },
     EnableCursor,
+    Prices {
+        changes: Vec<Change>,
+    },
 }
 
 struct Shown {
@@ -138,6 +144,11 @@ pub struct UsageDialog {
     next_token: u64,
     pending: HashMap<u64, Pending>,
     limits: LimitsState,
+    /// `selectedIds`: false once the one paired environment is unchecked.
+    env_selected: bool,
+    menu: Option<pickers::Menu>,
+    prices: Option<prices::Prices>,
+    price_store: prices::PriceStore,
 }
 
 fn now_ms() -> i64 {
@@ -173,6 +184,10 @@ impl UsageDialog {
             next_token: TOKEN_BASE,
             pending: HashMap::new(),
             limits: LimitsState::default(),
+            env_selected: true,
+            menu: None,
+            prices: None,
+            price_store: prices::PriceStore::default(),
         }
     }
 
@@ -286,6 +301,7 @@ impl UsageDialog {
             Pending::Limits => self.limits_settled(event),
             Pending::Redeem { key } => self.redeem_settled(key, event),
             Pending::EnableCursor => self.enable_settled(event),
+            Pending::Prices { changes } => self.prices_settled(changes, event),
             Pending::Rates { generation } => {
                 if generation == self.generation {
                     self.start_query();
@@ -305,7 +321,7 @@ impl UsageDialog {
                 };
                 match summary {
                     Some(summary) => {
-                        let merged = data::merge(&summary);
+                        let merged = data::merge(&summary.without(self.prefs.hidden));
                         let again = !awaiting && summary.refreshing();
                         self.shown = Some(Shown {
                             span,
@@ -333,6 +349,17 @@ impl UsageDialog {
             }
         }
         cx.notify();
+    }
+
+    fn close_or_prices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.prices.is_some() {
+            self.close_prices(cx);
+        } else if self.menu.is_some() {
+            self.menu = None;
+            cx.notify();
+        } else {
+            self.close(window, cx);
+        }
     }
 
     fn select_window(&mut self, days: u32, cx: &mut Context<Self>) {
@@ -395,13 +422,19 @@ impl UsageDialog {
             Stage::First => Dim::All,
             Stage::Awaiting => {
                 let mut providers: Vec<Provider> = Vec::new();
+                let mut any = false;
                 for source in shown.summary.sources.iter().filter(|s| s.refreshing) {
-                    if !providers.contains(&source.provider) {
+                    any = true;
+                    if !self.prefs.hidden.contains(source.provider)
+                        && !providers.contains(&source.provider)
+                    {
                         providers.push(source.provider);
                     }
                 }
-                if providers.is_empty() {
+                if !any {
                     Dim::All
+                } else if providers.is_empty() {
+                    Dim::None
                 } else {
                     Dim::Providers(providers)
                 }
@@ -478,28 +511,6 @@ fn toggle_group(cx: &App) -> gpui::Div {
         .bg(cx.theme().input.opacity(0.4))
 }
 
-/// The breadcrumb's picker triggers: label plus a `size-3.5` chevron.
-fn filter_label(label: &'static str, alert: bool, cx: &App) -> gpui::Div {
-    let theme = cx.theme();
-    h_flex()
-        .gap_1()
-        .items_center()
-        .text_color(theme.foreground)
-        .when(alert, |row| {
-            row.child(
-                Icon::new(Icons::CircleAlert)
-                    .size(px(14.))
-                    .text_color(theme.warning),
-            )
-        })
-        .child(label)
-        .child(
-            Icon::new(Icons::ChevronDown)
-                .size(px(14.))
-                .text_color(theme.muted_foreground),
-        )
-}
-
 /// `Button` `ghost` `icon-sm` without a tooltip, which the web's refresh button does not have.
 fn plain_icon_button(
     id: &'static str,
@@ -567,6 +578,7 @@ impl Render for UsageDialog {
             .background
             .opacity(if theme.is_dark() { 0.64 } else { 0.6 });
         let (border, background) = (theme.border, theme.background);
+        let prices = self.prices_dialog(window, cx);
         let header = self.header(width, cx);
         let body = self.body(vw, cx);
         let confirm = self.reset_credit_dialog(cx);
@@ -575,7 +587,9 @@ impl Render for UsageDialog {
             .inset_0()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &CloseUsage, window, cx| this.close(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CloseUsage, window, cx| this.close_or_prices(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ShowCost, _, cx| this.select_metric(Metric::Cost, cx)),
             )
@@ -628,6 +642,7 @@ impl Render for UsageDialog {
                     ),
             )
             .children(confirm)
+            .children(prices)
             .into_any_element()
     }
 }
@@ -637,7 +652,6 @@ impl UsageDialog {
         let theme = cx.theme();
         let (muted, border) = (theme.muted_foreground, theme.border);
         let limits = self.prefs.metric == Metric::Limits;
-        let alert = !limits && self.failed && self.shown.is_none();
         let windows: [(u32, &'static str, &'static str); 4] = [
             (1, "Past 24h", "\u{21e7}\u{2318}1"),
             (7, "7 days", "\u{21e7}\u{2318}2"),
@@ -740,9 +754,9 @@ impl UsageDialog {
                             .font_weight(FontWeight::MEDIUM)
                             .child(div().text_color(muted).child("Usage"))
                             .child(div().text_color(muted).child("/"))
-                            .child(filter_label("All environments", alert, cx))
+                            .child(self.environment_picker(cx))
                             .child(div().text_color(muted).child("/"))
-                            .child(filter_label("All providers", false, cx)),
+                            .child(self.provider_picker(cx)),
                     )
                     .children(window_label.map(|label| {
                         div()
@@ -775,6 +789,12 @@ impl UsageDialog {
                 .text_sm()
                 .text_color(muted)
                 .child(format!("Connect an environment to see {noun}."))
+                .into_any_element()
+        } else if !self.env_selected {
+            div()
+                .text_sm()
+                .text_color(muted)
+                .child(format!("Select an environment to see {noun}."))
                 .into_any_element()
         } else if limits {
             self.limits_body(vw, cx)
@@ -996,7 +1016,12 @@ impl UsageDialog {
         let (muted, foreground) = (theme.muted_foreground, theme.foreground);
         let wide = vw >= 1024.;
 
-        let mut notes = data::source_messages(sources);
+        let visible: Vec<_> = sources
+            .iter()
+            .filter(|source| !self.prefs.hidden.contains(source.provider))
+            .cloned()
+            .collect();
+        let mut notes = data::source_messages(&visible);
         if let Some(mismatch) = merged.mismatch {
             notes.push(data::contract_mismatch_message(
                 "This environment",

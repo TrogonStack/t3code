@@ -65,6 +65,8 @@ gpui_kit_assets::icon_assets!(
         SquareSplitHorizontal,
         SquareSplitVertical,
         Plus,
+        SlidersHorizontal,
+        RotateCcw,
         Trash,
         Square,
         SquareTerminal,

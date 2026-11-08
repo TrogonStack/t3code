@@ -158,10 +158,15 @@ impl Limits {
     }
 }
 
+/// `Math.round`: halves round toward positive infinity, so -0.5 is 0 and 2.5 is 3.
+pub fn js_round(value: f64) -> i64 {
+    (value + 0.5).floor() as i64
+}
+
 impl Window {
     /// `remainingPercent`.
     pub fn remaining_percent(&self) -> i64 {
-        (100. - self.used_percent.clamp(0., 100.)).round() as i64
+        js_round(100. - self.used_percent.clamp(0., 100.))
     }
 
     /// `elapsedShare`: `None` without a reset time and window length.
@@ -176,7 +181,7 @@ impl Window {
 
     /// `paceRemainingPercent`: the share of the window still to come, where even spending would sit.
     pub fn pace_remaining_percent(&self, now: i64) -> Option<i64> {
-        Some(((1. - self.elapsed_share(now)?) * 100.).round() as i64)
+        Some(js_round((1. - self.elapsed_share(now)?) * 100.))
     }
 
     /// `paceOf`.
@@ -321,6 +326,15 @@ pub fn parse_timestamp(text: &str) -> Option<i64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn js_round_rounds_halves_toward_positive_infinity() {
+        assert_eq!(js_round(-0.5), 0);
+        assert_eq!(js_round(2.5), 3);
+        assert_eq!(js_round(-1.5), -1);
+        assert_eq!(js_round(2.4), 2);
+        assert_eq!(js_round(-2.6), -3);
+    }
 
     fn window(used: f64, resets: Option<i64>, mins: Option<f64>) -> Window {
         Window {

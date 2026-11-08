@@ -507,7 +507,7 @@ fn pool_windows(accounts: &[Account], now: i64) -> Vec<PoolWindow> {
                     Some(Reset {
                         member,
                         at: reset_millis(&entry.window)?,
-                        restores_percent: (entry.refill_percent / count).round() as i64,
+                        restores_percent: crate::usage::js_round(entry.refill_percent / count),
                     })
                 })
                 .collect();
@@ -523,8 +523,8 @@ fn pool_windows(accounts: &[Account], now: i64) -> Vec<PoolWindow> {
                 columns: (0..accounts.len())
                     .map(|account| slots.get(&account).copied())
                     .collect(),
-                used_percent: used.round() as i64,
-                remaining_percent: (100. - used).round() as i64,
+                used_percent: crate::usage::js_round(used),
+                remaining_percent: crate::usage::js_round(100. - used),
                 pace,
                 resets,
                 members,
