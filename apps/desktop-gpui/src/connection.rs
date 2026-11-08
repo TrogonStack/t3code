@@ -7,10 +7,10 @@ use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
     Event, GitRunStackedAction, OrchestrationDispatchCommand, OrchestrationLaunchThread,
-    PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, Session, ShellOpenInEditor,
-    SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose,
-    TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus,
-    VcsSwitchRef,
+    PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, ServerUpdateSettings,
+    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
+    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
+    VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -110,6 +110,7 @@ pub enum Call {
     RefreshStatus,
     LaunchThread,
     DispatchCommand,
+    UpdateSettings,
     /// A stream: progress events, then the result.
     RunStackedAction,
 }
@@ -147,6 +148,7 @@ impl Call {
             Self::RefreshStatus => "refresh the status",
             Self::LaunchThread => "start the thread",
             Self::DispatchCommand => "send the command",
+            Self::UpdateSettings => "update the settings",
             Self::RunStackedAction => "run the action",
         }
     }
@@ -164,6 +166,7 @@ impl Call {
             Self::RefreshStatus => session.request::<VcsRefreshStatus>(payload),
             Self::LaunchThread => session.request::<OrchestrationLaunchThread>(payload),
             Self::DispatchCommand => session.request::<OrchestrationDispatchCommand>(payload),
+            Self::UpdateSettings => session.request::<ServerUpdateSettings>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
         }
     }

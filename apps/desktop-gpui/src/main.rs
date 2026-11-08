@@ -11,6 +11,7 @@ mod environments;
 mod git_actions;
 mod history;
 mod minimap;
+mod model_picker;
 mod pairing;
 mod projects;
 mod providers;

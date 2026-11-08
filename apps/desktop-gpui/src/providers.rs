@@ -85,6 +85,8 @@ struct Choice {
     label: String,
     #[serde(default)]
     is_default: bool,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -97,11 +99,15 @@ enum Descriptor {
     Select {
         id: String,
         #[serde(default)]
+        label: String,
+        #[serde(default)]
         options: Vec<Choice>,
         #[serde(default)]
         current_value: Option<String>,
         #[serde(default)]
         role: Option<String>,
+        #[serde(default)]
+        prompt_injected_values: Vec<String>,
     },
     Boolean {
         id: String,
@@ -133,6 +139,10 @@ struct Model {
     is_custom: bool,
     #[serde(default)]
     is_default: bool,
+    #[serde(default)]
+    badge: Option<String>,
+    #[serde(default)]
+    is_legacy: bool,
     #[serde(default)]
     capabilities: Option<Capabilities>,
 }
@@ -204,6 +214,18 @@ impl Selection {
         self.instance_id.as_deref().or(self.provider.as_deref())
     }
 
+    /// The `{id, value}` selections, from the array form or the legacy object form.
+    fn explicit(&self) -> Vec<Value> {
+        match &self.options {
+            Value::Array(items) => items.clone(),
+            Value::Object(map) => map
+                .iter()
+                .map(|(id, value)| serde_json::json!({"id": id, "value": value}))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Option values by id, from the array form or the legacy object form.
     fn option(&self, id: &str) -> Option<String> {
         let text = |value: &Value| match value {
@@ -222,9 +244,18 @@ impl Selection {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct Favorite {
+    provider: String,
+    model: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct Settings {
+    /// `None` on servers that predate server-side favorites.
+    #[serde(default)]
+    favorites: Option<Vec<Favorite>>,
     #[serde(default)]
     provider_instances: HashMap<String, InstanceConfig>,
     #[serde(default)]
@@ -278,6 +309,8 @@ pub struct Mark {
 pub struct Pick {
     pub instance_id: String,
     pub model: String,
+    /// The `{id, value}` option selections the user set, as `modelSelection.options` carries them.
+    pub options: Vec<Value>,
 }
 
 /// One model row of the picker.
@@ -287,7 +320,14 @@ pub struct PickerModel {
     pub label: String,
     /// The model's full name, for the tooltip.
     pub title: String,
+    /// The provider's raw name and short name, which search matches.
+    pub name: String,
+    pub short_name: Option<String>,
     pub sub_provider: Option<String>,
+    pub favorite: bool,
+    /// Older models sit behind the list's "Show more" unless starred.
+    pub legacy: bool,
+    pub new: bool,
 }
 
 /// One provider instance of the picker's sidebar, with its models.
@@ -299,7 +339,7 @@ pub struct PickerInstance {
     /// What the sidebar says when the instance cannot take a turn.
     pub unavailable: Option<String>,
     pub models: Vec<PickerModel>,
-    driver: String,
+    pub driver: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,6 +349,12 @@ pub struct Trigger {
     pub mark: Mark,
     pub model: String,
     pub effort: Option<String>,
+    /// Whether the speed control is on a fast tier, which the chip marks with a bolt.
+    pub fast: bool,
+    /// The effort column and speed control of the model.
+    pub controls: Controls,
+    /// The `modelSelection.options` a turn on this model sends.
+    pub options: Vec<Value>,
     /// The model's full name, for the tooltip.
     pub title: String,
 }
@@ -336,6 +382,34 @@ impl Catalog {
             settings,
             available_editors,
         })
+    }
+
+    /// Whether `model` on `instance_id` is starred.
+    pub fn is_favorite(&self, instance_id: &str, model: &str) -> bool {
+        self.settings.favorites.as_ref().is_some_and(|favorites| {
+            favorites
+                .iter()
+                .any(|fav| fav.provider == instance_id && fav.model == model)
+        })
+    }
+
+    pub fn has_favorites(&self) -> bool {
+        self.settings
+            .favorites
+            .as_ref()
+            .is_some_and(|favorites| !favorites.is_empty())
+    }
+
+    /// Stars or unstars a model in the local copy, like the server's `setModelFavorites` reducer.
+    pub fn set_favorite(&mut self, instance_id: &str, model: &str, favorite: bool) {
+        let favorites = self.settings.favorites.get_or_insert_with(Vec::new);
+        favorites.retain(|fav| !(fav.provider == instance_id && fav.model == model));
+        if favorite {
+            favorites.push(Favorite {
+                provider: instance_id.to_owned(),
+                model: model.to_owned(),
+            });
+        }
     }
 
     /// The editor ids the server found on its machine (`server.getConfig` `availableEditors`).
@@ -410,7 +484,12 @@ impl Catalog {
                             slug: model.slug.clone(),
                             label: trigger_model_name(model, &provider.driver),
                             title: display_model_name(&model.name, model.sub_provider.as_deref()),
+                            name: model.name.clone(),
+                            short_name: model.short_name.clone(),
                             sub_provider: model.sub_provider.clone(),
+                            favorite: self.is_favorite(&provider.instance_id, &model.slug),
+                            legacy: model.is_legacy,
+                            new: model.badge.as_deref() == Some("new"),
                         })
                         .collect(),
                     driver: provider.driver.clone(),
@@ -437,6 +516,7 @@ impl Catalog {
             .then(|| Pick {
                 instance_id: instance_id.to_owned(),
                 model: slug.to_owned(),
+                options: Vec::new(),
             })
     }
 
@@ -458,7 +538,7 @@ impl Catalog {
                 instance_id: Some(pick.instance_id.clone()),
                 provider: None,
                 model: pick.model.clone(),
-                options: Value::Null,
+                options: Value::Array(pick.options.clone()),
             };
             Some((entry, selection))
         });
@@ -483,11 +563,16 @@ impl Catalog {
                 "opencode" | "antigravity" => None,
                 _ => provider.models.first(),
             });
-        let (model, title, effort) = match shown {
+        let requested = requested.filter(|selection| {
+            resolve_model(&provider.models, &selection.model).map(|model| &model.slug)
+                == Some(&slug)
+        });
+        let (model, title, effort, controls) = match shown {
             Some(model) => (
                 trigger_model_name(model, &provider.driver),
                 display_model_name(&model.name, model.sub_provider.as_deref()),
                 effort_word(model, &provider.driver, requested),
+                Controls::of(model, &provider.driver, requested),
             ),
             None => {
                 let label = if slug.is_empty() {
@@ -495,15 +580,21 @@ impl Catalog {
                 } else {
                     slug.clone()
                 };
-                (label.clone(), label, None)
+                (label.clone(), label, None, Controls::default())
             }
         };
+        let options = shown
+            .map(|model| sent_options(model, requested))
+            .unwrap_or_default();
         Some(Trigger {
             instance_id: provider.instance_id.clone(),
             slug,
             mark: mark(&entries, entry),
             model,
             effort,
+            fast: controls.fast(),
+            controls,
+            options,
             title,
         })
     }
@@ -588,85 +679,6 @@ fn unavailable_note(name: &str, provider: &Provider) -> String {
         "Not ready"
     };
     format!("{name}: {kind}.")
-}
-
-/// The picker's search: every token must match a field; exact names first, then the tightest
-/// matches in list order (`modelPickerSearch.ts` without its fuzzy tier).
-pub fn rank_models<'a>(
-    instances: &'a [PickerInstance],
-    query: &str,
-) -> Vec<(&'a PickerInstance, &'a PickerModel)> {
-    let tokens: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    let normalized = tokens.join(" ");
-    let mut ranked: Vec<(i32, usize, &PickerInstance, &PickerModel)> = Vec::new();
-    let mut order = 0;
-    for instance in instances {
-        for model in &instance.models {
-            order += 1;
-            let fields = [
-                model.title.to_lowercase(),
-                model.label.to_lowercase(),
-                model
-                    .sub_provider
-                    .clone()
-                    .unwrap_or_default()
-                    .to_lowercase(),
-                instance.driver.to_lowercase(),
-                instance.name.to_lowercase(),
-            ];
-            if tokens.is_empty() {
-                ranked.push((0, order, instance, model));
-                continue;
-            }
-            if fields[..2].contains(&normalized) {
-                ranked.push((-1000, order, instance, model));
-                continue;
-            }
-            let mut score = 0;
-            let mut matched = true;
-            for token in &tokens {
-                match fields
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, field)| {
-                        token_score(field, token).map(|tier| index as i32 * 10 + tier)
-                    })
-                    .min()
-                {
-                    Some(best) => score += best,
-                    None => {
-                        matched = false;
-                        break;
-                    }
-                }
-            }
-            if matched {
-                ranked.push((score, order, instance, model));
-            }
-        }
-    }
-    ranked.sort_by_key(|(score, order, ..)| (*score, *order));
-    ranked
-        .into_iter()
-        .map(|(_, _, instance, model)| (instance, model))
-        .collect()
-}
-
-fn token_score(field: &str, token: &str) -> Option<i32> {
-    if field == token {
-        Some(0)
-    } else if field.starts_with(token) {
-        Some(2)
-    } else if field
-        .split(|ch: char| !ch.is_alphanumeric())
-        .any(|word| word.starts_with(token))
-    {
-        Some(4)
-    } else if field.contains(token) {
-        Some(6)
-    } else {
-        None
-    }
 }
 
 fn config_enabled(config: &InstanceConfig, driver: &str) -> bool {
@@ -1101,6 +1113,235 @@ fn effort_word(model: &Model, driver: &str, selection: Option<&Selection>) -> Op
             Some(format!("{label} {}", if on { "On" } else { "Off" }))
         }
     }
+}
+
+/// One row of the effort column, or one segment of the speed control.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Level {
+    /// What `modelSelection.options` carries for this level: a choice id or a flag.
+    pub value: Value,
+    pub label: String,
+    pub is_default: bool,
+    pub selected: bool,
+    pub description: Option<String>,
+}
+
+/// A model option the picker edits: a select's choices, or a flag as Off and On.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Control {
+    pub id: String,
+    pub label: String,
+    pub flag: bool,
+    pub levels: Vec<Level>,
+}
+
+impl Control {
+    pub fn current(&self) -> Option<&Level> {
+        self.levels.iter().find(|level| level.selected)
+    }
+
+    /// The level after the selected one, wrapping: what clicking a menu-less option row picks.
+    pub fn next(&self) -> Option<&Level> {
+        let at = self.levels.iter().position(|level| level.selected);
+        self.levels
+            .get(at.map_or(0, |index| (index + 1) % self.levels.len()))
+    }
+}
+
+/// What the picker's effort column and footer offer for the selected model
+/// (`ComposerModelEffort.tsx`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Controls {
+    /// The reasoning control, listed under the column header.
+    pub effort: Option<Control>,
+    /// The remaining options, one row each below the levels.
+    pub others: Vec<Control>,
+    /// The footer's speed segments: a service tier, or Standard and Fast.
+    pub speed: Option<Control>,
+}
+
+impl Controls {
+    fn of(model: &Model, driver: &str, selection: Option<&Selection>) -> Self {
+        let Some(capabilities) = &model.capabilities else {
+            return Self::default();
+        };
+        let descriptors = &capabilities.option_descriptors;
+        let selects = descriptors
+            .iter()
+            .filter(|descriptor| matches!(descriptor, Descriptor::Select { .. }));
+        let flags = descriptors
+            .iter()
+            .filter(|descriptor| matches!(descriptor, Descriptor::Boolean { .. }));
+        let (speeds, column): (Vec<&Descriptor>, Vec<&Descriptor>) = selects
+            .chain(flags)
+            .partition(|descriptor| is_speed_control(descriptor, driver));
+        let effort_at = column
+            .iter()
+            .position(|descriptor| is_reasoning(descriptor));
+        let mut controls: Vec<Option<Control>> = column
+            .iter()
+            .map(|descriptor| control(descriptor, selection, false))
+            .collect();
+        let effort = effort_at.and_then(|index| controls[index].take());
+        Self {
+            effort,
+            others: controls.into_iter().flatten().collect(),
+            speed: speeds
+                .first()
+                .and_then(|descriptor| control(descriptor, selection, true)),
+        }
+    }
+
+    /// Whether the speed control sits on a fast tier.
+    fn fast(&self) -> bool {
+        self.speed
+            .as_ref()
+            .and_then(Control::current)
+            .is_some_and(|level| is_fast_label(&level.label))
+    }
+
+    /// What each row of the effort column sets, in order: an option id and its value.
+    pub fn actions(&self) -> Vec<(String, Value)> {
+        let effort = self.effort.iter().flat_map(|control| {
+            control
+                .levels
+                .iter()
+                .map(|level| (control.id.clone(), level.value.clone()))
+        });
+        let others = self.others.iter().filter_map(|control| {
+            control
+                .next()
+                .map(|level| (control.id.clone(), level.value.clone()))
+        });
+        effort.chain(others).collect()
+    }
+
+    /// The column header: the effort control's name, else "Options", else "Effort".
+    pub fn title(&self) -> String {
+        match &self.effort {
+            Some(effort) if !effort.label.is_empty() => effort.label.clone(),
+            None if !self.others.is_empty() => "Options".to_owned(),
+            _ => "Effort".to_owned(),
+        }
+    }
+}
+
+pub fn is_fast_label(label: &str) -> bool {
+    label == "Fast" || label == "Ultrafast"
+}
+
+/// A select's choices (minus the ones a prompt prefix selects) or a flag, with the current one marked.
+fn control(descriptor: &Descriptor, selection: Option<&Selection>, speed: bool) -> Option<Control> {
+    match descriptor {
+        Descriptor::Select {
+            id,
+            label,
+            options,
+            current_value,
+            prompt_injected_values,
+            ..
+        } => {
+            let current = selection
+                .and_then(|selection| selection.option(id))
+                .or_else(|| current_value.clone())
+                .or_else(|| {
+                    options
+                        .iter()
+                        .find(|option| option.is_default)
+                        .map(|option| option.id.clone())
+                });
+            let levels: Vec<Level> = options
+                .iter()
+                .filter(|option| !prompt_injected_values.contains(&option.id))
+                .map(|option| Level {
+                    value: Value::String(option.id.clone()),
+                    label: option.label.clone(),
+                    is_default: option.is_default,
+                    selected: current.as_deref() == Some(option.id.as_str()),
+                    description: option.description.clone().filter(|text| !text.is_empty()),
+                })
+                .collect();
+            (!levels.is_empty()).then(|| Control {
+                id: id.clone(),
+                label: label.clone(),
+                flag: false,
+                levels,
+            })
+        }
+        Descriptor::Boolean {
+            id,
+            label,
+            current_value,
+        } => {
+            let on = selection
+                .and_then(|selection| selection.option(id))
+                .map(|value| value == "true")
+                .or(*current_value)
+                == Some(true);
+            let names = if speed {
+                [(false, "Standard"), (true, "Fast")]
+            } else {
+                [(true, "On"), (false, "Off")]
+            };
+            Some(Control {
+                id: id.clone(),
+                label: label.clone(),
+                flag: true,
+                levels: names
+                    .into_iter()
+                    .map(|(value, name)| Level {
+                        value: Value::Bool(value),
+                        label: name.to_owned(),
+                        is_default: false,
+                        selected: on == value,
+                        description: None,
+                    })
+                    .collect(),
+            })
+        }
+    }
+}
+
+/// `options` with `id` set to `value`: the option selections after the user picks a level.
+pub fn with_option(options: &[Value], id: &str, value: Value) -> Vec<Value> {
+    let entry = serde_json::json!({"id": id, "value": value});
+    let mut next: Vec<Value> = options
+        .iter()
+        .filter(|option| option["id"] != id)
+        .cloned()
+        .collect();
+    next.push(entry);
+    next
+}
+
+/// The options a turn sends: the user's selections for this model's options, plus Fast mode off
+/// when the model has that flag and nothing set it (`withImplicitFastModeDefault`).
+fn sent_options(model: &Model, selection: Option<&Selection>) -> Vec<Value> {
+    let descriptors = model
+        .capabilities
+        .as_ref()
+        .map(|capabilities| capabilities.option_descriptors.as_slice())
+        .unwrap_or_default();
+    let known = |id: &str| {
+        descriptors.iter().any(|descriptor| match descriptor {
+            Descriptor::Select { id: known, .. } | Descriptor::Boolean { id: known, .. } => {
+                known == id
+            }
+        })
+    };
+    let mut options: Vec<Value> = selection
+        .map(Selection::explicit)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|option| option["id"].as_str().is_some_and(known))
+        .collect();
+    let has_fast_flag = descriptors
+        .iter()
+        .any(|descriptor| matches!(descriptor, Descriptor::Boolean { id, .. } if id == "fastMode"));
+    if has_fast_flag && !options.iter().any(|option| option["id"] == "fastMode") {
+        options.push(serde_json::json!({"id": "fastMode", "value": false}));
+    }
+    options
 }
 
 #[cfg(test)]
@@ -1549,6 +1790,7 @@ mod tests {
         let stale = Pick {
             instance_id: "ghost".to_owned(),
             model: "x".to_owned(),
+            options: Vec::new(),
         };
         assert_eq!(
             catalog.trigger_for(None, Some(&stale)),
@@ -1556,21 +1798,154 @@ mod tests {
         );
     }
 
+    fn reasoning_model() -> Value {
+        json!({
+            "slug": "gpt-6", "name": "GPT-6", "isCustom": false, "isDefault": true,
+            "capabilities": {"optionDescriptors": [
+                {"id": "reasoningEffort", "label": "Reasoning", "type": "select", "options": [
+                    {"id": "low", "label": "Low"},
+                    {"id": "medium", "label": "Medium", "isDefault": true},
+                    {"id": "high", "label": "High"},
+                    {"id": "ultrathink", "label": "Ultrathink"},
+                ], "promptInjectedValues": ["ultrathink"]},
+                {"id": "fastMode", "label": "Fast Mode", "type": "boolean"},
+                {"id": "contextWindow", "label": "Context", "type": "select", "options": [
+                    {"id": "200k", "label": "200k", "isDefault": true},
+                    {"id": "1m", "label": "1M"},
+                ]},
+            ]},
+        })
+    }
+
+    fn reasoning_catalog(favorites: Value) -> Catalog {
+        catalog(
+            vec![provider("codex", "codex", "ready", vec![reasoning_model()])],
+            json!({"favorites": favorites}),
+        )
+    }
+
     #[test]
-    fn search_ranks_exact_names_first_and_requires_every_token() {
-        let catalog = two_instances();
-        let instances = catalog.picker(None);
-        assert_eq!(instances.len(), 2);
-        let slugs = |query: &str| -> Vec<String> {
-            rank_models(&instances, query)
-                .iter()
-                .map(|(_, model)| model.slug.clone())
-                .collect()
+    fn the_effort_column_lists_levels_and_marks_the_default_and_selection() {
+        let trigger = reasoning_catalog(json!([])).trigger(None).unwrap();
+        let effort = trigger.controls.effort.as_ref().unwrap();
+        assert_eq!(trigger.controls.title(), "Reasoning");
+        let levels: Vec<_> = effort
+            .levels
+            .iter()
+            .map(|level| (level.label.as_str(), level.is_default, level.selected))
+            .collect();
+        assert_eq!(
+            levels,
+            [
+                ("Low", false, false),
+                ("Medium", true, true),
+                ("High", false, false)
+            ]
+        );
+        assert_eq!(trigger.effort.as_deref(), Some("Medium"));
+        assert_eq!(trigger.controls.others.len(), 1);
+        assert_eq!(trigger.controls.others[0].id, "contextWindow");
+        let actions = trigger.controls.actions();
+        assert_eq!(actions.len(), 3 + trigger.controls.others.len());
+        assert_eq!(actions[0].1, effort.levels[0].value);
+        let other = &trigger.controls.others[0];
+        assert_eq!(
+            actions[3],
+            (other.id.clone(), other.next().unwrap().value.clone())
+        );
+    }
+
+    #[test]
+    fn fast_mode_is_a_footer_toggle_and_defaults_off_on_the_wire() {
+        let catalog = reasoning_catalog(json!([]));
+        let trigger = catalog.trigger(None).unwrap();
+        let speed = trigger.controls.speed.as_ref().unwrap();
+        let labels: Vec<_> = speed
+            .levels
+            .iter()
+            .map(|level| level.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Standard", "Fast"]);
+        assert!(!trigger.fast);
+        assert_eq!(trigger.options, [json!({"id": "fastMode", "value": false})]);
+
+        let options = with_option(&trigger.options, "fastMode", json!(true));
+        let pick = Pick {
+            options: with_option(&options, "reasoningEffort", json!("high")),
+            ..catalog.pick(None, "codex", "gpt-6").unwrap()
         };
-        assert_eq!(slugs(""), ["gpt-5", "gpt-5-mini", "opus"]);
-        assert_eq!(slugs("gpt-5"), ["gpt-5", "gpt-5-mini"]);
-        assert_eq!(slugs("mini gpt"), ["gpt-5-mini"]);
-        assert_eq!(slugs("claude"), ["opus"]);
-        assert!(slugs("zzz").is_empty());
+        let picked = catalog.trigger_for(None, Some(&pick)).unwrap();
+        assert!(picked.fast);
+        assert_eq!(picked.effort.as_deref(), Some("High"));
+        assert_eq!(
+            picked.options,
+            [
+                json!({"id": "fastMode", "value": true}),
+                json!({"id": "reasoningEffort", "value": "high"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_codex_service_tier_is_the_speed_control_and_a_bolt_marks_fast() {
+        let tiers = json!({
+            "slug": "gpt-6", "name": "GPT-6", "isCustom": false, "isDefault": true,
+            "capabilities": {"optionDescriptors": [
+                {"id": "serviceTier", "label": "Speed", "type": "select", "options": [
+                    {"id": "default", "label": "Standard", "isDefault": true},
+                    {"id": "fast", "label": "Fast", "description": "2x speed, increased usage"},
+                ]},
+            ]},
+        });
+        let catalog = catalog(
+            vec![provider("codex", "codex", "ready", vec![tiers])],
+            json!({}),
+        );
+        let trigger = catalog.trigger(None).unwrap();
+        let speed = trigger.controls.speed.as_ref().unwrap();
+        assert_eq!(
+            speed.levels[1].description.as_deref(),
+            Some("2x speed, increased usage")
+        );
+        assert!(trigger.controls.effort.is_none());
+        assert_eq!(trigger.controls.title(), "Effort");
+        let pick = Pick {
+            options: with_option(&[], "serviceTier", json!("fast")),
+            ..catalog.pick(None, "codex", "gpt-6").unwrap()
+        };
+        assert!(catalog.trigger_for(None, Some(&pick)).unwrap().fast);
+    }
+
+    #[test]
+    fn options_a_model_does_not_have_are_not_sent() {
+        let catalog = reasoning_catalog(json!([]));
+        let pick = Pick {
+            options: with_option(&[], "other", json!("x")),
+            ..catalog.pick(None, "codex", "gpt-6").unwrap()
+        };
+        let sent = catalog.trigger_for(None, Some(&pick)).unwrap().options;
+        assert!(sent.iter().all(|option| option["id"] != "other"));
+    }
+
+    #[test]
+    fn a_model_without_options_has_empty_controls() {
+        let trigger = two_instances().trigger(None).unwrap();
+        assert_eq!(trigger.controls, Controls::default());
+        assert!(trigger.options.is_empty());
+        assert_eq!(trigger.controls.title(), "Effort");
+    }
+
+    #[test]
+    fn favorites_come_from_the_server_settings_and_toggle_locally() {
+        let mut starred = reasoning_catalog(json!([{"provider": "codex", "model": "gpt-6"}]));
+        assert!(starred.has_favorites());
+        assert!(starred.picker(None)[0].models[0].favorite);
+        starred.set_favorite("codex", "gpt-6", false);
+        assert!(!starred.is_favorite("codex", "gpt-6"));
+        assert!(!starred.has_favorites());
+        starred.set_favorite("codex", "gpt-6", true);
+        starred.set_favorite("codex", "gpt-6", true);
+        assert_eq!(starred.settings.favorites.as_ref().unwrap().len(), 1);
+        assert!(!catalog(vec![], json!({})).has_favorites());
     }
 }

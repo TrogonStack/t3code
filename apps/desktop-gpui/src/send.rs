@@ -57,11 +57,17 @@ pub fn title_seed(text: &str) -> String {
 pub struct Model<'a> {
     pub instance_id: &'a str,
     pub slug: &'a str,
+    /// The `{id, value}` option selections, such as the effort and Fast mode.
+    pub options: &'a [Value],
 }
 
 impl Model<'_> {
     fn selection(self) -> Value {
-        json!({"instanceId": self.instance_id, "model": self.slug})
+        let mut selection = json!({"instanceId": self.instance_id, "model": self.slug});
+        if !self.options.is_empty() {
+            selection["options"] = Value::Array(self.options.to_vec());
+        }
+        selection
     }
 }
 
@@ -266,6 +272,13 @@ pub fn stop_payload(command_id: &str, thread_id: &str) -> Value {
     json!({"type": "thread.stop", "commandId": command_id, "threadId": thread_id})
 }
 
+/// `server.updateSettings` starring or unstarring one model, as the web's `setModelFavorites`.
+pub fn favorite_payload(instance_id: &str, slug: &str, favorite: bool) -> Value {
+    json!({"patch": {"setModelFavorites": [
+        {"provider": instance_id, "model": slug, "favorite": favorite}
+    ]}})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,6 +295,7 @@ mod tests {
     const MODEL: Model = Model {
         instance_id: "codex",
         slug: "gpt-5",
+        options: &[],
     };
 
     fn branch(name: &str) -> Branch {
@@ -381,6 +395,27 @@ mod tests {
             })
         );
         assert_matches_contract("orchestration.launchThread", &plan.payload);
+    }
+
+    #[test]
+    fn the_picked_options_ride_in_the_model_selection() {
+        let options = [
+            json!({"id": "reasoningEffort", "value": "high"}),
+            json!({"id": "fastMode", "value": true}),
+        ];
+        let model = Model {
+            options: &options,
+            ..MODEL
+        };
+        let root = Workspace::Root { branch: None };
+        let mut draft = composer("go", Ok(root));
+        draft.model = Some(model);
+        let launch = plan(&draft, ids()).unwrap().payload;
+        assert_eq!(launch["modelSelection"]["options"], json!(options));
+        assert_matches_contract("orchestration.launchThread", &launch);
+        let dispatch = dispatch_payload("c", "t", "m", "go", Some(model), Delivery::Auto);
+        assert_eq!(dispatch["modelSelection"]["options"], json!(options));
+        assert_matches_contract("orchestration.dispatchCommand", &dispatch);
     }
 
     #[test]
@@ -544,5 +579,15 @@ mod tests {
         // Characters, not bytes.
         let wide = "\u{e9}".repeat(51);
         assert_eq!(title_seed(&wide), format!("{}...", "\u{e9}".repeat(50)));
+    }
+
+    #[test]
+    fn a_favorite_toggle_matches_the_settings_contract() {
+        let payload = favorite_payload("codex", "gpt-5", true);
+        assert_matches_contract("server.updateSettings", &payload);
+        assert_eq!(
+            payload["patch"]["setModelFavorites"][0],
+            json!({"provider": "codex", "model": "gpt-5", "favorite": true})
+        );
     }
 }

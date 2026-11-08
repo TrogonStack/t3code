@@ -69,6 +69,15 @@ impl Method for OrchestrationDispatchCommand {
     type Success = Value;
 }
 
+/// `server.updateSettings`, a unary call that carries a settings patch.
+pub struct ServerUpdateSettings;
+
+impl Method for ServerUpdateSettings {
+    const TAG: &'static str = "server.updateSettings";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `server.getConfig`, a unary call. The wire types are not generated; `providers::Catalog` decodes it.
 pub struct ServerGetConfig;
 
