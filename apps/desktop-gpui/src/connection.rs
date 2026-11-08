@@ -6,17 +6,19 @@ use crate::diff;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, GitRunStackedAction, OrchestrationDispatchCommand, OrchestrationLaunchThread,
-    PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, ServerUpdateSettings,
-    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
-    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
-    VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    AttachmentsCreateUploadUrl, AttachmentsDelete, Event, GitRunStackedAction,
+    OrchestrationDispatchCommand, OrchestrationLaunchThread, PING_FRAME, ProjectsMutate,
+    ReviewGetDiffPreview, ServerGetConfig, ServerUpdateSettings, Session, ShellOpenInEditor,
+    SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose,
+    TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus,
+    VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
 use crate::strip::{self, Branch};
 use crate::terminal::{self, Grid, Target};
 use crate::thread::ThreadState;
+use crate::upload::Uploader;
 use crate::wire::{
     ProjectMutation, ProjectMutationCreateType, ProjectMutationType, ShellItem,
     SubscribeShellPayload, SubscribeThreadPayload,
@@ -92,6 +94,14 @@ pub enum Action {
         thread_id: String,
         terminal_id: String,
     },
+    /// Posts a file to the signed URL `attachments.createUploadUrl` minted; progress and the
+    /// outcome come back as `Status::Call` with `token`.
+    Upload {
+        token: u64,
+        relative_url: String,
+        path: std::path::PathBuf,
+        mime: String,
+    },
     /// A request the details card makes; the outcome comes back as `Status::Call` with `token`.
     Call {
         token: u64,
@@ -113,6 +123,8 @@ pub enum Call {
     UpdateSettings,
     /// A stream: progress events, then the result.
     RunStackedAction,
+    CreateUploadUrl,
+    DeleteAttachment,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -133,6 +145,7 @@ impl Action {
             Self::TerminalWrite { .. } => "write to the terminal",
             Self::TerminalResize { .. } => "resize the terminal",
             Self::TerminalClose { .. } => "close the terminal",
+            Self::Upload { .. } => "upload the attachment",
             Self::Call { call, .. } => call.describe(),
         }
     }
@@ -150,6 +163,8 @@ impl Call {
             Self::DispatchCommand => "send the command",
             Self::UpdateSettings => "update the settings",
             Self::RunStackedAction => "run the action",
+            Self::CreateUploadUrl => "prepare the upload",
+            Self::DeleteAttachment => "delete the attachment",
         }
     }
 
@@ -168,6 +183,8 @@ impl Call {
             Self::DispatchCommand => session.request::<OrchestrationDispatchCommand>(payload),
             Self::UpdateSettings => session.request::<ServerUpdateSettings>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
+            Self::CreateUploadUrl => session.request::<AttachmentsCreateUploadUrl>(payload),
+            Self::DeleteAttachment => session.request::<AttachmentsDelete>(payload),
         }
     }
 }
@@ -280,6 +297,7 @@ pub async fn run(
     status: &StatusSender,
 ) -> Ended {
     let client = auth::http_client();
+    let uploader = Uploader::new(client.clone(), http_base);
     let mut bearer: Option<String> = None;
     // Outlives a socket: a reconnect subscribes to the thread again.
     let mut selected: Option<String> = None;
@@ -303,6 +321,7 @@ pub async fn run(
                 let failure = serve(
                     socket,
                     environment,
+                    &uploader,
                     actions,
                     (&mut selected, &mut watched, &mut terminal),
                     status,
@@ -385,6 +404,7 @@ async fn connect(
 async fn serve(
     socket: Socket,
     environment: &Environment,
+    uploader: &Uploader,
     actions: &ActionReceiver,
     (selected, watched, wanted_terminal): (
         &mut Option<String>,
@@ -498,6 +518,10 @@ async fn serve(
                     continue;
                 }
                 let request = match &action {
+                    Action::Upload { token, relative_url, path, mime } => {
+                        uploader.start(*token, relative_url, path.clone(), mime.clone(), status);
+                        continue;
+                    }
                     Action::SelectThread(id) => {
                         *selected = id.clone();
                         if let Err(error) =

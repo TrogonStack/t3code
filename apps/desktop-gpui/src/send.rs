@@ -4,6 +4,7 @@
 //! `message.dispatch` command. The payloads are untyped JSON like the other unary calls; the
 //! tests check them against `rpc.schema.json`.
 
+use crate::attachments::{self, Item};
 use crate::connection::Call;
 use crate::strip::{Branch, EnvMode, RuntimeMode};
 use serde_json::{Value, json};
@@ -14,9 +15,12 @@ const NEW_THREAD_TITLE: &str = "New thread";
 /// Both the web and the desktop shell it wraps report the web as the creation source.
 const CREATION_SOURCE: &str = "web";
 
-/// Whether the send button is live: text to send and no send already waiting on the server.
-pub fn can_send(text: &str, in_flight: bool) -> bool {
-    !in_flight && !text.trim().is_empty()
+/// `hasSendableContent`: text or an attachment to send. Send waits while an attachment uploads
+/// (`attachmentUploadBlockReason`) and while a send is already waiting on the server.
+pub fn can_send(text: &str, items: &[Item], in_flight: bool) -> bool {
+    !in_flight
+        && attachments::block_reason(items).is_none()
+        && (!text.trim().is_empty() || !items.is_empty())
 }
 
 /// What the primary button does, as `ComposerPrimaryActions` picks it: a running turn with
@@ -27,19 +31,24 @@ pub enum Primary {
     Stop,
 }
 
-pub fn primary(running: bool, text: &str, in_flight: bool) -> Primary {
-    if running && text.trim().is_empty() {
+pub fn primary(running: bool, text: &str, items: &[Item], in_flight: bool) -> Primary {
+    if running && text.trim().is_empty() && items.is_empty() {
         Primary::Stop
     } else {
         Primary::Send {
-            enabled: can_send(text, in_flight),
+            enabled: can_send(text, items, in_flight),
         }
     }
 }
 
-/// `deriveThreadTitleSeed` for a text-only message: whitespace collapsed, cut at 50 characters.
-pub fn title_seed(text: &str) -> String {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+/// `deriveThreadTitleSeed`: the text, else what the attachments say, whitespace collapsed and
+/// cut at 50 characters.
+pub fn title_seed(text: &str, items: &[Item]) -> String {
+    let collapse = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut normalized = collapse(text);
+    if normalized.is_empty() {
+        normalized = collapse(&attachments::title_seed(items).unwrap_or_default());
+    }
     if normalized.is_empty() {
         return NEW_THREAD_TITLE.to_owned();
     }
@@ -140,6 +149,51 @@ impl Delivery {
     }
 }
 
+/// What the message says and carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Message {
+    pub text: String,
+    pub title: String,
+    /// The turn's attachments, each bound to its upload.
+    pub attachments: Vec<Value>,
+    /// The message's `context` records, which the contract omits when there are none.
+    pub context: Option<Value>,
+}
+
+impl Message {
+    pub fn build(text: &str, items: &[Item]) -> Result<Self, String> {
+        if text.trim().is_empty() && items.is_empty() {
+            return Err("There is nothing to send.".to_owned());
+        }
+        let Some(attachments) = attachments::turn_attachments(items) else {
+            let pending = items.iter().find(|item| item.attachment_id().is_none());
+            return Err(format!(
+                "Attachment '{}' did not finish uploading.",
+                pending.map_or("", |item| item.name.as_str())
+            ));
+        };
+        Ok(Self {
+            text: attachments::message_text(text).to_owned(),
+            title: title_seed(text, items),
+            attachments,
+            context: attachments::context(items),
+        })
+    }
+
+    /// The `{messageId, text, attachments, context}` of `orchestration.launchThread`.
+    fn initial(&self, message_id: &str) -> Value {
+        let mut message = json!({
+            "messageId": message_id,
+            "text": self.text,
+            "attachments": self.attachments,
+        });
+        if let Some(context) = &self.context {
+            message["context"] = context.clone();
+        }
+        message
+    }
+}
+
 /// The ids a send mints; the caller supplies them so the plan stays deterministic.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ids {
@@ -155,6 +209,7 @@ pub struct Composer<'a> {
     /// The draft's project.
     pub project: Option<&'a str>,
     pub text: &'a str,
+    pub attachments: &'a [Item],
     /// The model the trigger shows.
     pub model: Option<Model<'a>>,
     /// Whether the user picked it, so an open thread keeps its own model otherwise.
@@ -174,10 +229,7 @@ pub struct Plan {
 
 /// The first send of a draft launches its thread with the message; every later one dispatches.
 pub fn plan(composer: &Composer, ids: Ids) -> Result<Plan, String> {
-    let text = composer.text.trim();
-    if text.is_empty() {
-        return Err("There is nothing to send.".to_owned());
-    }
+    let message = Message::build(composer.text, composer.attachments)?;
     match composer.thread {
         Some(thread) => Ok(Plan {
             call: Call::DispatchCommand,
@@ -185,7 +237,7 @@ pub fn plan(composer: &Composer, ids: Ids) -> Result<Plan, String> {
                 &ids.command,
                 thread,
                 &ids.message,
-                text,
+                &message,
                 composer.model.filter(|_| composer.picked),
                 Delivery::of(composer.running),
             ),
@@ -200,7 +252,7 @@ pub fn plan(composer: &Composer, ids: Ids) -> Result<Plan, String> {
                 payload: launch_payload(
                     &ids,
                     project,
-                    text,
+                    &message,
                     model,
                     composer.runtime_mode,
                     workspace,
@@ -215,7 +267,7 @@ pub fn plan(composer: &Composer, ids: Ids) -> Result<Plan, String> {
 pub fn launch_payload(
     ids: &Ids,
     project_id: &str,
-    text: &str,
+    message: &Message,
     model: Model,
     runtime_mode: RuntimeMode,
     workspace: Workspace,
@@ -225,17 +277,13 @@ pub fn launch_payload(
         "creationSource": CREATION_SOURCE,
         "threadId": ids.thread,
         "projectId": project_id,
-        "title": title_seed(text),
+        "title": message.title,
         "generateTitle": true,
         "modelSelection": model.selection(),
         "runtimeMode": runtime_mode.wire(),
         "interactionMode": "default",
         "workspaceStrategy": workspace.strategy(),
-        "initialMessage": {
-            "messageId": ids.message,
-            "text": text,
-            "attachments": [],
-        },
+        "initialMessage": message.initial(&ids.message),
     })
 }
 
@@ -244,7 +292,7 @@ pub fn dispatch_payload(
     command_id: &str,
     thread_id: &str,
     message_id: &str,
-    text: &str,
+    message: &Message,
     model: Option<Model>,
     delivery: Delivery,
 ) -> Value {
@@ -255,12 +303,15 @@ pub fn dispatch_payload(
         "creationSource": CREATION_SOURCE,
         "threadId": thread_id,
         "messageId": message_id,
-        "text": text,
-        "attachments": [],
-        "titleSeed": title_seed(text),
+        "text": message.text,
+        "attachments": message.attachments,
+        "titleSeed": message.title,
         "deliveryIntent": delivery.intent(),
         "dispatchMode": {"type": "start_immediately"},
     });
+    if let Some(context) = &message.context {
+        command["context"] = context.clone();
+    }
     if let Some(model) = model {
         command["modelSelection"] = model.selection();
     }
@@ -282,6 +333,7 @@ pub fn favorite_payload(instance_id: &str, slug: &str, favorite: bool) -> Value 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::attachments::{Kind, Upload};
     use std::collections::BTreeSet;
 
     fn ids() -> Ids {
@@ -310,6 +362,7 @@ mod tests {
             thread: None,
             project: Some("project-1"),
             text,
+            attachments: &[],
             model: Some(MODEL),
             picked: false,
             runtime_mode: RuntimeMode::FullAccess,
@@ -413,7 +466,8 @@ mod tests {
         let launch = plan(&draft, ids()).unwrap().payload;
         assert_eq!(launch["modelSelection"]["options"], json!(options));
         assert_matches_contract("orchestration.launchThread", &launch);
-        let dispatch = dispatch_payload("c", "t", "m", "go", Some(model), Delivery::Auto);
+        let message = Message::build("go", &[]).unwrap();
+        let dispatch = dispatch_payload("c", "t", "m", &message, Some(model), Delivery::Auto);
         assert_eq!(dispatch["modelSelection"]["options"], json!(options));
         assert_matches_contract("orchestration.dispatchCommand", &dispatch);
     }
@@ -550,35 +604,150 @@ mod tests {
         assert_matches_contract("orchestration.dispatchCommand", &payload);
     }
 
+    fn attached(id: &str, upload: Upload) -> Item {
+        Item {
+            id: id.to_owned(),
+            path: "/tmp/notes.txt".into(),
+            kind: Kind::File,
+            name: "notes.txt".to_owned(),
+            mime: "text/plain".to_owned(),
+            size: 12,
+            upload,
+        }
+    }
+
+    fn uploaded(id: &str) -> Item {
+        attached(
+            id,
+            Upload::Ready {
+                attachment_id: format!("up-{id}"),
+            },
+        )
+    }
+
     #[test]
     fn send_is_enabled_by_text_and_blocked_while_in_flight() {
-        assert!(can_send("hi", false));
-        assert!(!can_send(" \n", false));
-        assert!(!can_send("hi", true));
+        assert!(can_send("hi", &[], false));
+        assert!(!can_send(" \n", &[], false));
+        assert!(!can_send("hi", &[], true));
+    }
+
+    #[test]
+    fn an_attachment_alone_is_sendable_once_it_has_uploaded() {
+        let uploading = attached("1", Upload::Uploading { progress: 0.2 });
+        let failed = attached(
+            "2",
+            Upload::Failed {
+                reason: "Upload failed".to_owned(),
+            },
+        );
+        assert!(can_send("", &[uploaded("3")], false));
+        assert!(!can_send("hi", &[uploading], false));
+        assert!(
+            can_send("", &[failed], false),
+            "send retries a failed upload"
+        );
     }
 
     #[test]
     fn a_running_turn_with_an_empty_composer_offers_stop() {
-        assert_eq!(primary(true, "", false), Primary::Stop);
-        assert_eq!(primary(true, "  ", true), Primary::Stop);
+        assert_eq!(primary(true, "", &[], false), Primary::Stop);
+        assert_eq!(primary(true, "  ", &[], true), Primary::Stop);
         assert_eq!(
-            primary(true, "more", false),
+            primary(true, "more", &[], false),
             Primary::Send { enabled: true }
         );
-        assert_eq!(primary(false, "", false), Primary::Send { enabled: false });
-        assert_eq!(primary(false, "hi", true), Primary::Send { enabled: false });
+        assert_eq!(
+            primary(true, "", &[uploaded("1")], false),
+            Primary::Send { enabled: true }
+        );
+        assert_eq!(
+            primary(false, "", &[], false),
+            Primary::Send { enabled: false }
+        );
+        assert_eq!(
+            primary(false, "hi", &[], true),
+            Primary::Send { enabled: false }
+        );
+    }
+
+    #[test]
+    fn attachments_ride_in_the_message_and_its_context() {
+        let items = [uploaded("1")];
+        let mut open = composer("", Ok(Workspace::Root { branch: None }));
+        open.thread = Some("thread-9");
+        open.attachments = &items;
+        let dispatch = plan(&open, ids()).unwrap().payload;
+        assert_eq!(dispatch["text"], attachments::BOOTSTRAP_PROMPT);
+        assert_eq!(dispatch["titleSeed"], "File: notes.txt");
+        assert_eq!(
+            dispatch["attachments"],
+            json!([{
+                "type": "file",
+                "id": "up-1",
+                "name": "notes.txt",
+                "mimeType": "text/plain",
+                "sizeBytes": 12,
+            }])
+        );
+        assert_eq!(dispatch["context"]["records"][0]["attachmentId"], "up-1");
+        assert_matches_contract("orchestration.dispatchCommand", &dispatch);
+
+        let mut draft = composer("look", Ok(Workspace::Root { branch: None }));
+        draft.attachments = &items;
+        let launch = plan(&draft, ids()).unwrap().payload;
+        assert_eq!(launch["title"], "look");
+        assert_eq!(launch["initialMessage"]["text"], "look");
+        assert_eq!(
+            launch["initialMessage"]["context"]["records"][0]["contextId"],
+            "file_1"
+        );
+        assert_matches_contract("orchestration.launchThread", &launch);
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/contracts/schema/rpc.schema.json"
+        );
+        let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let initial = &definition(&schema, "orchestration.launchThread", &launch)["properties"]["initialMessage"]
+            ["anyOf"][0];
+        for key in launch["initialMessage"].as_object().unwrap().keys() {
+            assert!(initial["properties"].get(key).is_some(), "unknown {key}");
+        }
+    }
+
+    #[test]
+    fn a_message_without_attachments_has_no_context() {
+        let payload = plan(&composer("go", Ok(Workspace::Root { branch: None })), ids())
+            .unwrap()
+            .payload;
+        assert!(payload["initialMessage"].get("context").is_none());
+    }
+
+    #[test]
+    fn an_attachment_that_has_not_uploaded_does_not_send() {
+        let items = [attached("1", Upload::Uploading { progress: 0.5 })];
+        let mut draft = composer("go", Ok(Workspace::Root { branch: None }));
+        draft.attachments = &items;
+        assert_eq!(
+            plan(&draft, ids()).unwrap_err(),
+            "Attachment 'notes.txt' did not finish uploading."
+        );
     }
 
     #[test]
     fn titles_collapse_whitespace_and_cut_at_fifty_characters() {
-        assert_eq!(title_seed("  a \n\t b  "), "a b");
-        assert_eq!(title_seed(""), "New thread");
+        assert_eq!(title_seed("  a \n\t b  ", &[]), "a b");
+        assert_eq!(title_seed("", &[]), "New thread");
         let fifty = "x".repeat(50);
-        assert_eq!(title_seed(&fifty), fifty);
-        assert_eq!(title_seed(&format!("{fifty}y")), format!("{fifty}..."));
+        assert_eq!(title_seed(&fifty, &[]), fifty);
+        assert_eq!(title_seed(&format!("{fifty}y"), &[]), format!("{fifty}..."));
         // Characters, not bytes.
         let wide = "\u{e9}".repeat(51);
-        assert_eq!(title_seed(&wide), format!("{}...", "\u{e9}".repeat(50)));
+        assert_eq!(
+            title_seed(&wide, &[]),
+            format!("{}...", "\u{e9}".repeat(50))
+        );
+        assert_eq!(title_seed("", &[uploaded("1")]), "File: notes.txt");
     }
 
     #[test]

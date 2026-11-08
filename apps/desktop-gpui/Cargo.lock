@@ -6258,6 +6258,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
+ "bytes",
  "futures-util",
  "getrandom 0.4.3",
  "gpui-component",
@@ -6266,6 +6267,8 @@ dependencies = [
  "gpui-pre-platform",
  "hex",
  "hmac 0.13.0",
+ "http-body",
+ "http-body-util",
  "libc",
  "markdown",
  "prettyplease",

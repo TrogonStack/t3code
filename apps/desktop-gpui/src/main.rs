@@ -1,4 +1,5 @@
 mod assets;
+mod attachments;
 mod auth;
 mod branch_picker;
 mod config;
@@ -32,6 +33,7 @@ mod thread;
 mod thread_card;
 mod toast;
 mod ui;
+mod upload;
 mod usage;
 mod wire;
 

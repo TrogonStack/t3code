@@ -1,6 +1,7 @@
 use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, provider_icon};
+use crate::attachments::{self, Upload};
 use crate::branch_picker::{self, BranchPicker};
-use crate::connection::{Action, ActionSender, command_id, new_project_id};
+use crate::connection::{Action, ActionSender, Call, command_id, new_project_id};
 use crate::details::{self, VcsStatus};
 use crate::details_card::{DetailsCard, OpenDiff, Props};
 use crate::history::History;
@@ -274,7 +275,20 @@ pub struct MainView {
     sending: Option<Sending>,
     /// Set when a send succeeded; the next render empties the composer, which needs a window.
     clear_composer: bool,
+    /// The files attached to the composer, in the order they were picked.
+    attachments: Vec<attachments::Item>,
+    /// The mint and upload calls in flight, by token.
+    attachment_calls: HashMap<u64, AttachmentCall>,
+    attachment_token: u64,
+    /// Set when Send found failed uploads: they retry, and the send resumes once all settle.
+    resume_send: bool,
     actions: ActionSender,
+}
+
+/// An attachment's call in flight: first the server mints the upload URL, then the file posts to it.
+struct AttachmentCall {
+    item: String,
+    minted: Option<String>,
 }
 
 /// What a successful send changes in the window.
@@ -283,12 +297,17 @@ struct Sending {
     opens: Option<String>,
     /// The draft's details key, whose model pick the new thread inherits.
     from_key: Option<String>,
+    /// The attachments the message carries, which leave the composer with it.
+    attachments: Vec<String>,
 }
 
 /// Send and stop calls, above the branch picker's range.
 const SEND_TOKEN: u64 = 1 << 41;
 const STOP_TOKEN: u64 = SEND_TOKEN + 1;
 const FAVORITE_TOKEN: u64 = SEND_TOKEN + 2;
+const DELETE_ATTACHMENT_TOKEN: u64 = SEND_TOKEN + 3;
+/// Attachment mint and upload calls, one token each, above the send calls.
+const ATTACH_TOKEN: u64 = 1 << 42;
 
 impl MainView {
     pub fn new(
@@ -417,6 +436,10 @@ impl MainView {
             main_width: Cell::new(0.),
             sending: None,
             clear_composer: false,
+            attachments: Vec::new(),
+            attachment_calls: HashMap::new(),
+            attachment_token: ATTACH_TOKEN,
+            resume_send: false,
             actions,
         }
     }
@@ -507,6 +530,10 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= ATTACH_TOKEN {
+                self.on_attachment_call(token, event, cx);
+                return;
+            }
             if token >= SEND_TOKEN {
                 self.on_send_call(token, event, cx);
                 return;
@@ -550,8 +577,21 @@ impl MainView {
     /// Sends the composer: a draft launches its thread, an open thread takes a message.
     fn submit(&mut self, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).value().to_string();
-        if !send::can_send(&text, self.sending.is_some()) {
+        if !send::can_send(&text, &self.attachments, self.sending.is_some()) {
             return;
+        }
+        let failed: Vec<String> = self
+            .attachments
+            .iter()
+            .filter(|item| matches!(item.upload, Upload::Failed { .. }))
+            .map(|item| item.id.clone())
+            .collect();
+        if !failed.is_empty() {
+            for id in &failed {
+                self.start_upload(id, cx);
+            }
+            self.resume_send = true;
+            return cx.notify();
         }
         let planned = {
             let project = self
@@ -592,6 +632,7 @@ impl MainView {
                     defaults.start_from_origin,
                 ),
                 running: self.thread_running(),
+                attachments: &self.attachments,
             };
             send::plan(
                 &composer,
@@ -622,8 +663,367 @@ impl MainView {
         self.sending = Some(Sending {
             opens: plan.opens,
             from_key,
+            attachments: self
+                .attachments
+                .iter()
+                .map(|item| item.id.clone())
+                .collect(),
         });
         cx.notify();
+    }
+
+    /// The attach button: the native picker stands in for the web's file input.
+    fn attach_files(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach files".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picked.await;
+            this.update(cx, |this, cx| match result {
+                Ok(Ok(Some(paths))) => this.add_attachments(paths, cx),
+                Ok(Err(error)) => this.error_toast("Failed to attach files", error.to_string(), cx),
+                _ => {}
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The web's `addComposerAttachments`: validate, stage and start uploading each file.
+    fn add_attachments(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let picked: Vec<attachments::Picked> = paths
+            .into_iter()
+            .map(|path| attachments::Picked {
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                size: std::fs::metadata(&path).map_or(0, |meta| meta.len()),
+                path,
+            })
+            .collect();
+        let limit = attachments::staging_limit(
+            self.providers
+                .as_ref()
+                .map(|catalog| catalog.file_upload_limit()),
+        );
+        let (accepted, error) = attachments::intake(&picked, self.attachments.len(), limit);
+        if let Some(message) = error {
+            self.message_toast(message, cx);
+        }
+        for file in accepted {
+            let id = new_project_id();
+            self.attachments.push(attachments::Item {
+                id: id.clone(),
+                path: file.path,
+                kind: file.kind,
+                name: file.name,
+                mime: file.mime,
+                size: file.size,
+                upload: Upload::Uploading { progress: 0. },
+            });
+            self.start_upload(&id, cx);
+        }
+        cx.notify();
+    }
+
+    /// Asks the server for an upload URL; `on_attachment_call` posts the file once it answers.
+    fn start_upload(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(item) = self.attachments.iter_mut().find(|item| item.id == id) else {
+            return;
+        };
+        item.upload = Upload::Uploading { progress: 0. };
+        let mut payload = serde_json::json!({
+            "name": item.name,
+            "mimeType": item.mime,
+            "sizeBytes": item.size,
+        });
+        if item.kind == attachments::Kind::File {
+            payload["type"] = "file".into();
+        }
+        self.attachment_token += 1;
+        let token = self.attachment_token;
+        let sent = self.actions.try_send(Action::Call {
+            token,
+            call: Call::CreateUploadUrl,
+            payload,
+        });
+        if sent.is_ok() {
+            self.attachment_calls.insert(
+                token,
+                AttachmentCall {
+                    item: id.to_owned(),
+                    minted: None,
+                },
+            );
+        } else {
+            self.fail_upload(id, "Upload could not start".to_owned());
+        }
+        cx.notify();
+    }
+
+    fn fail_upload(&mut self, id: &str, reason: String) {
+        if let Some(item) = self.attachments.iter_mut().find(|item| item.id == id) {
+            item.upload = Upload::Failed { reason };
+        }
+    }
+
+    fn delete_attachment(&mut self, attachment_id: &str) {
+        self.actions
+            .try_send(Action::Call {
+                token: DELETE_ATTACHMENT_TOKEN,
+                call: Call::DeleteAttachment,
+                payload: serde_json::json!({ "attachmentId": attachment_id }),
+            })
+            .ok();
+    }
+
+    fn on_attachment_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
+        let Some(call) = self.attachment_calls.get(&token) else {
+            return;
+        };
+        let (item, minted) = (call.item.clone(), call.minted.clone());
+        let result = match event {
+            CallEvent::Progress(progress) => {
+                let fraction = progress.as_f64().unwrap_or_default() as f32;
+                if let Some(entry) = self.attachments.iter_mut().find(|entry| entry.id == item) {
+                    entry.upload = Upload::Uploading { progress: fraction };
+                }
+                return cx.notify();
+            }
+            CallEvent::Done(value) => Ok(value),
+            CallEvent::Failed(reason) => Err(reason),
+        };
+        self.attachment_calls.remove(&token);
+        let present = self.attachments.iter().any(|entry| entry.id == item);
+        match (minted, result) {
+            (None, Ok(value)) => {
+                let url = value.get("relativeUrl").and_then(|url| url.as_str());
+                let id = value.get("attachmentId").and_then(|id| id.as_str());
+                let entry = self.attachments.iter().find(|entry| entry.id == item);
+                match (url, id, entry) {
+                    (Some(url), Some(id), Some(entry)) => {
+                        let action = Action::Upload {
+                            token,
+                            relative_url: url.to_owned(),
+                            path: entry.path.clone(),
+                            mime: entry.mime.clone(),
+                        };
+                        if self.actions.try_send(action).is_ok() {
+                            self.attachment_calls.insert(
+                                token,
+                                AttachmentCall {
+                                    item,
+                                    minted: Some(id.to_owned()),
+                                },
+                            );
+                        } else {
+                            self.fail_upload(&item, "Upload could not start".to_owned());
+                        }
+                    }
+                    (_, _, None) => {}
+                    _ => self.fail_upload(&item, "Upload could not start".to_owned()),
+                }
+            }
+            (None, Err(_)) => self.fail_upload(&item, "Upload could not start".to_owned()),
+            (Some(attachment_id), Ok(_)) => {
+                if present {
+                    if let Some(entry) = self.attachments.iter_mut().find(|entry| entry.id == item)
+                    {
+                        entry.upload = Upload::Ready { attachment_id };
+                    }
+                } else {
+                    self.delete_attachment(&attachment_id);
+                }
+            }
+            (Some(attachment_id), Err(reason)) => {
+                self.delete_attachment(&attachment_id);
+                self.fail_upload(&item, reason);
+            }
+        }
+        self.resume_pending_send(cx);
+        cx.notify();
+    }
+
+    /// Resumes a send that retried failed uploads once none is still uploading.
+    fn resume_pending_send(&mut self, cx: &mut Context<Self>) {
+        if !self.resume_send
+            || self
+                .attachments
+                .iter()
+                .any(|item| matches!(item.upload, Upload::Uploading { .. }))
+        {
+            return;
+        }
+        self.resume_send = false;
+        if self
+            .attachments
+            .iter()
+            .any(|item| matches!(item.upload, Upload::Failed { .. }))
+        {
+            return self.message_toast(
+                "Retry or remove failed uploads before sending.".to_owned(),
+                cx,
+            );
+        }
+        self.submit(cx);
+    }
+
+    fn remove_attachment(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(index) = self.attachments.iter().position(|item| item.id == id) else {
+            return;
+        };
+        let item = self.attachments.remove(index);
+        if let Some(attachment_id) = item.attachment_id() {
+            self.delete_attachment(attachment_id);
+        }
+        self.resume_pending_send(cx);
+        cx.notify();
+    }
+
+    fn message_toast(&mut self, message: String, cx: &mut Context<Self>) {
+        let toast = Toast::new(message).kind(ToastKind::Error);
+        self.toasts.update(cx, |toasts, cx| {
+            toasts.add(toast, cx);
+        });
+    }
+
+    /// The web's `ComposerAttachmentMediaRow` and `ComposerAttachmentFileList`.
+    fn attachment_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.attachments.is_empty() {
+            return None;
+        }
+        let theme = cx.theme();
+        let (border, background, foreground, muted, accent) = (
+            theme.border.opacity(0.8),
+            theme.background,
+            theme.foreground,
+            theme.muted_foreground,
+            theme.accent,
+        );
+        let ghost = StripButton::Ghost {
+            icon: muted,
+            hover: accent,
+        };
+        let mut tiles = Vec::new();
+        let mut rows = Vec::new();
+        for item in &self.attachments {
+            let remove_id = item.id.clone();
+            let retry_id = item.id.clone();
+            let progress = match &item.upload {
+                Upload::Uploading { progress } => Some(attachments::format_progress(*progress)),
+                _ => None,
+            };
+            let failed = match &item.upload {
+                Upload::Failed { reason } => Some(reason.clone()),
+                _ => None,
+            };
+            let image = item.kind == attachments::Kind::Image;
+            let remove = attachment_button(
+                format!("attachment-remove-{}", item.id),
+                Icons::X,
+                format!("Remove {}", item.name),
+                if image {
+                    StripButton::MediaClose
+                } else {
+                    ghost
+                },
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.remove_attachment(&remove_id, cx)));
+            let retry = failed.map(|reason| {
+                attachment_button(
+                    format!("attachment-retry-{}", item.id),
+                    Icons::RefreshCw,
+                    reason,
+                    if image { StripButton::Overlay } else { ghost },
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.start_upload(&retry_id, cx);
+                    this.resume_send = false;
+                }))
+            });
+            if image {
+                tiles.push(
+                    div()
+                        .id(SharedString::from(format!("attachment-{}", item.id)))
+                        .relative()
+                        .flex_shrink_0()
+                        .size(px(64.))
+                        .overflow_hidden()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(border)
+                        .bg(background)
+                        .child(
+                            img(item.path.clone())
+                                .size_full()
+                                .object_fit(ObjectFit::Cover),
+                        )
+                        .children(progress.map(|label| {
+                            div()
+                                .absolute()
+                                .bottom_0()
+                                .left_0()
+                                .right_0()
+                                .px_1()
+                                .text_center()
+                                .text_size(px(10.))
+                                .text_color(foreground)
+                                .bg(background.opacity(0.85))
+                                .child(label)
+                        }))
+                        .children(
+                            retry.map(|retry| div().absolute().bottom_1().left_1().child(retry)),
+                        )
+                        .child(div().absolute().top_1().right_1().child(remove))
+                        .into_any_element(),
+                );
+            } else {
+                let detail = progress.unwrap_or_else(|| attachments::format_size(item.size));
+                rows.push(
+                    h_flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .py_1()
+                        .text_sm()
+                        .text_color(foreground)
+                        .child(Icon::new(Icons::File).size_4().text_color(muted))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .child(item.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(detail),
+                        )
+                        .children(retry)
+                        .child(remove)
+                        .into_any_element(),
+                );
+            }
+        }
+        Some(
+            v_flex()
+                .mb_3()
+                .gap_1()
+                .when(!tiles.is_empty(), |strip| {
+                    strip.child(h_flex().flex_wrap().gap_2().children(tiles))
+                })
+                .children(rows)
+                .into_any_element(),
+        )
     }
 
     /// The web's stop button: `thread.stop` for the open thread.
@@ -663,6 +1063,9 @@ impl MainView {
             }
             return;
         }
+        if token == DELETE_ATTACHMENT_TOKEN {
+            return;
+        }
         let Some(sent) = self.sending.take() else {
             return;
         };
@@ -671,6 +1074,8 @@ impl MainView {
             return cx.notify();
         }
         self.clear_composer = true;
+        self.attachments
+            .retain(|item| !sent.attachments.contains(&item.id));
         if let Some(thread) = sent.opens {
             if let Some(pick) = sent.from_key.and_then(|key| self.model_picks.remove(&key)) {
                 self.model_picks.insert(thread.clone(), pick);
@@ -3608,6 +4013,7 @@ impl MainView {
         let primary = send::primary(
             self.thread_running(),
             &self.composer.read(cx).value(),
+            &self.attachments,
             self.sending.is_some(),
         );
         v_flex()
@@ -3620,28 +4026,36 @@ impl MainView {
             .bg(composer_surface(cx.theme().is_dark()))
             .child(
                 // The web's `px-4 pt-4 pb-2` body; the negative margin cancels the textarea's own padding.
-                div().px_4().pt_4().pb_2().child(
-                    Textarea::new(&self.composer)
-                        .appearance(false)
-                        .bordered(false)
-                        .mx(px(-10.))
-                        .my(px(-8.))
-                        // The web's `leading-relaxed` at 14px.
-                        .line_height(px(22.75)),
-                ),
+                div()
+                    .px_4()
+                    .pt_4()
+                    .pb_2()
+                    .children(self.attachment_strip(cx))
+                    .child(
+                        Textarea::new(&self.composer)
+                            .appearance(false)
+                            .bordered(false)
+                            .mx(px(-10.))
+                            .my(px(-8.))
+                            // The web's `leading-relaxed` at 14px.
+                            .line_height(px(22.75)),
+                    ),
             )
             .child(
                 h_flex()
                     .px_2()
                     .pb_2()
                     .justify_between()
-                    .child(header_icon_button(
-                        "attach",
-                        gpui_kit_assets::IconName::Paperclip,
-                        "Attach files".into(),
-                        true,
-                        cx,
-                    ))
+                    .child(
+                        header_icon_button(
+                            "attach",
+                            gpui_kit_assets::IconName::Paperclip,
+                            "Attach files".into(),
+                            true,
+                            cx,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.attach_files(cx))),
+                    )
                     .child(
                         h_flex().gap_2().children(model_picker).child(
                             send_button(primary, self.send_hovered, cx)
@@ -3657,6 +4071,52 @@ impl MainView {
                     ),
             )
     }
+}
+
+/// The strip's 20px remove and retry control.
+fn attachment_button(
+    id: String,
+    icon: Icons,
+    label: String,
+    look: StripButton,
+) -> gpui::Stateful<gpui::Div> {
+    let black = gpui::black();
+    let white = gpui::white();
+    let button = div()
+        .id(SharedString::from(id))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(24.))
+        .rounded(px(6.))
+        .border_1()
+        .cursor_pointer()
+        .tooltip(tooltip(label));
+    let button = match look {
+        StripButton::MediaClose => button
+            .border_color(white.opacity(0.2))
+            .bg(black.opacity(0.65))
+            .text_color(white)
+            .hover(move |style| style.bg(black.opacity(0.8))),
+        StripButton::Overlay => button
+            .border_color(gpui::transparent_black())
+            .bg(black.opacity(0.7))
+            .text_color(white.opacity(0.65))
+            .hover(move |style| style.bg(black.opacity(0.9))),
+        StripButton::Ghost { icon, hover } => button
+            .border_color(gpui::transparent_black())
+            .text_color(icon)
+            .hover(move |style| style.bg(hover)),
+    };
+    button.child(Icon::new(icon).size(px(14.)))
+}
+
+/// The web `Button` variants the attachment strip uses at `icon-xs`.
+#[derive(Clone, Copy)]
+enum StripButton {
+    MediaClose,
+    Overlay,
+    Ghost { icon: Hsla, hover: Hsla },
 }
 
 /// The web's `ComposerControl` at `xs`: a ghost button with a 12px icon and a 12px label.

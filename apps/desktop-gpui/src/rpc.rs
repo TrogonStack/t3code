@@ -78,6 +78,24 @@ impl Method for ServerUpdateSettings {
     type Success = Value;
 }
 
+/// `attachments.createUploadUrl`, which mints the signed URL an attachment is posted to.
+pub struct AttachmentsCreateUploadUrl;
+
+impl Method for AttachmentsCreateUploadUrl {
+    const TAG: &'static str = "attachments.createUploadUrl";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `attachments.delete`, which discards an uploaded attachment that no message took.
+pub struct AttachmentsDelete;
+
+impl Method for AttachmentsDelete {
+    const TAG: &'static str = "attachments.delete";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `server.getConfig`, a unary call. The wire types are not generated; `providers::Catalog` decodes it.
 pub struct ServerGetConfig;
 

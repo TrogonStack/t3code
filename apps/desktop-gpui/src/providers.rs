@@ -66,6 +66,15 @@ const VARIANT_WORDS: &[&str] = &[
 
 const FAMILY_PREFIXES: &[&str] = &["Claude ", "GPT-", "GPT ", "Gemini ", "Muse ", "Grok "];
 
+fn lenient_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?
+        .and_then(|value| serde_json::from_value(value).ok()))
+}
+
 fn lenient<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -280,6 +289,30 @@ struct Config {
     settings: Settings,
     #[serde(default, rename = "availableEditors", deserialize_with = "lenient")]
     available_editors: Vec<String>,
+    #[serde(default, deserialize_with = "lenient_option")]
+    environment: Option<EnvironmentConfig>,
+}
+
+#[derive(Default, Deserialize)]
+struct EnvironmentConfig {
+    #[serde(default)]
+    capabilities: EnvironmentCapabilities,
+}
+
+#[derive(Default, Deserialize)]
+struct EnvironmentCapabilities {
+    #[serde(
+        default,
+        rename = "fileAttachments",
+        deserialize_with = "lenient_option"
+    )]
+    file_attachments: Option<FileAttachments>,
+}
+
+#[derive(Deserialize)]
+struct FileAttachments {
+    #[serde(rename = "maxUploadBytes")]
+    max_upload_bytes: u64,
 }
 
 /// The provider snapshots and settings of one environment.
@@ -288,6 +321,8 @@ pub struct Catalog {
     providers: Vec<Provider>,
     settings: Settings,
     available_editors: Vec<String>,
+    /// `environment.capabilities.fileAttachments.maxUploadBytes`.
+    max_file_upload_bytes: Option<u64>,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -378,12 +413,21 @@ impl Catalog {
             providers,
             settings,
             available_editors,
+            environment,
         } = serde_json::from_value(value).map_err(|error| error.to_string())?;
         Ok(Self {
             providers,
             settings,
             available_editors,
+            max_file_upload_bytes: environment
+                .and_then(|environment| environment.capabilities.file_attachments)
+                .map(|files| files.max_upload_bytes),
         })
+    }
+
+    /// What the server advertises for file attachments, as `attachments::staging_limit` takes it.
+    pub fn file_upload_limit(&self) -> Option<u64> {
+        self.max_file_upload_bytes
     }
 
     /// Whether `model` on `instance_id` is starred.
@@ -1378,6 +1422,17 @@ mod tests {
         .unwrap();
         assert_eq!(with.available_editors(), ["zed", "file-manager"]);
         assert!(catalog(vec![], json!({})).available_editors().is_empty());
+    }
+
+    #[test]
+    fn the_advertised_file_upload_limit_is_read_when_present() {
+        let with = Catalog::decode(json!({
+            "providers": [], "settings": {},
+            "environment": {"capabilities": {"fileAttachments": {"maxUploadBytes": 1024}}},
+        }))
+        .unwrap();
+        assert_eq!(with.file_upload_limit(), Some(1024));
+        assert_eq!(catalog(vec![], json!({})).file_upload_limit(), None);
     }
 
     #[test]
