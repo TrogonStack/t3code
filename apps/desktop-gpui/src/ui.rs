@@ -1661,13 +1661,27 @@ impl MainView {
                 _ => None,
             },
         );
+        let theme = cx.theme();
+        let (muted, dark) = (theme.muted_foreground, theme.is_dark());
+        let pr_control = row.pr.as_ref().map(|badge| {
+            let weak = cx.weak_entity();
+            let list_id = row.id.clone();
+            pr_badge_control(row, badge, muted, dark, move |cx| {
+                let list_id = list_id.clone();
+                weak.update(cx, |this, cx| this.open_thread(Some(list_id), cx))
+                    .ok();
+            })
+        });
         thread_row(
             row,
             project,
             provider,
             selected,
             self.rendered_sidebar_width.get(),
-            anchor.clone(),
+            RowParts {
+                anchor: anchor.clone(),
+                pr_control,
+            },
             cx,
         )
         .tooltip(move |window, cx| {
@@ -4669,6 +4683,196 @@ fn card_action(
         .tooltip(tooltip(label))
 }
 
+/// One `ThreadPullRequestMiniListItem`: state glyph, `#number`, title and the chain tag.
+fn pr_line_row(
+    line: &PrLine,
+    mono: gpui::SharedString,
+    muted: Hsla,
+    foreground: Hsla,
+    dark: bool,
+) -> gpui::Div {
+    let tone = pr_color(line.state, dark).unwrap_or(muted);
+    h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_2()
+        .pl(px(line.depth.min(3) as f32 * 12.))
+        .child(
+            Icon::new(pr_state_icon(line.state))
+                .size(px(12.))
+                .flex_shrink_0()
+                .text_color(tone),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_family(mono)
+                .child(format!("#{}", line.number)),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_color(foreground.opacity(0.75))
+                .child(line.title.clone()),
+        )
+        .children(line.stack.map(|(kind, size)| {
+            let word = match kind {
+                ChainKind::Native => "stack",
+                ChainKind::Derived => "chain",
+            };
+            div()
+                .ml_auto()
+                .flex_shrink_0()
+                .pl_1()
+                .text_size(px(10.))
+                .child(format!("{word} \u{b7} {size}"))
+        }))
+}
+
+/// What the badge popup lists: the thread's links, else the one pull request the badge names.
+fn badge_lines(badge: &PrBadge, lines: &[PrLine]) -> Vec<PrLine> {
+    if !lines.is_empty() {
+        return lines.to_vec();
+    }
+    match (&badge.url, badge.text.parse::<u64>()) {
+        (Some(url), Ok(number)) => vec![PrLine {
+            number,
+            state: badge.state,
+            title: format!("Pull request #{number}"),
+            depth: 0,
+            url: url.clone(),
+            stack: None,
+        }],
+        _ => Vec::new(),
+    }
+}
+
+/// The web's `w-80` and the height of one `px-1 py-1` item at `text-xs`.
+const POPUP_WIDTH: f32 = 320.;
+const POPUP_ITEM_HEIGHT: f32 = 24.;
+
+/// The popup's height: the list's rows, capped at the room above the badge.
+fn popup_height(lines: usize, room: f32) -> f32 {
+    let rows = lines as f32 * POPUP_ITEM_HEIGHT + lines.saturating_sub(1) as f32 * 4.;
+    // The popup's own `p-1`, the border and the list's `-mx-1`.
+    (rows + 8. + 2.).min((room - 10.).max(POPUP_ITEM_HEIGHT))
+}
+
+/// GPUI places a tooltip at the pointer, so the popup moves itself to sit centred on top of the
+/// badge with no gap, which keeps the pointer inside the trigger or the popup while it travels
+/// (`side="top" sideOffset={0}`).
+fn popup_offset(
+    anchor: Bounds<Pixels>,
+    mouse: gpui::Point<Pixels>,
+    height: f32,
+) -> gpui::Point<Pixels> {
+    let left = (anchor.center().x - px(POPUP_WIDTH / 2.)).max(px(8.));
+    gpui::point(
+        left - (mouse.x + px(1.)),
+        anchor.top() - px(height) - (mouse.y + px(1.)),
+    )
+}
+
+/// The web's `PullRequestBadge` tooltip popup: a mini list whose items open their pull request.
+struct PrPopup {
+    lines: Vec<PrLine>,
+    place: gpui::Point<Pixels>,
+    height: f32,
+}
+
+impl Render for PrPopup {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, foreground, accent) = (theme.muted_foreground, theme.foreground, theme.accent);
+        let (dark, mono) = (theme.is_dark(), theme.mono_font_family.clone());
+        let items = self.lines.iter().enumerate().map(|(index, line)| {
+            let url = line.url.clone();
+            pr_line_row(line, mono.clone(), muted, foreground, dark)
+                .id(("pr-popup-item", index))
+                .px_1()
+                .py_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(move |style| style.bg(accent))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    cx.open_url(&url);
+                })
+        });
+        div().relative().left(self.place.x).top(self.place.y).child(
+            div()
+                .id("pr-popup")
+                .w(px(POPUP_WIDTH))
+                .max_h(px(self.height))
+                .p_1()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .shadow_lg()
+                .overflow_y_scroll()
+                .text_xs()
+                .text_color(muted)
+                .child(v_flex().gap_1().children(items)),
+        )
+    }
+}
+
+/// The badge in a row's meta line: a link for one pull request, else it opens the list. Hovering
+/// shows the popup. The web opens the right panel's pull requests view for a list; GPUI has
+/// none, so it activates the thread and the popup stays the list.
+fn pr_badge_control(
+    row: &ThreadRow,
+    badge: &PrBadge,
+    muted: Hsla,
+    dark: bool,
+    on_list: impl Fn(&mut App) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let tone = pr_color(badge.state, dark).unwrap_or(muted);
+    let anchor = Rc::new(Cell::new(Bounds::default()));
+    let lines = badge_lines(badge, &row.pr_lines);
+    let popup_anchor = anchor.clone();
+    let url = badge.url.clone().filter(|_| !badge.opens_list);
+    let control = h_flex()
+        .id(gpui::SharedString::from(format!("pr-badge-{}", row.id)))
+        .relative()
+        .flex_shrink_0()
+        .gap_1()
+        .cursor_pointer()
+        .child(
+            canvas(move |bounds, _, _| anchor.set(bounds), |_, _, _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .child(Icon::new(pr_icon(badge)).size(px(12.)).text_color(tone))
+        .child(div().text_color(muted).child(badge.text.clone()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            match &url {
+                Some(url) => cx.open_url(url),
+                None => on_list(cx),
+            }
+        });
+    if lines.is_empty() {
+        return control;
+    }
+    control.hoverable_tooltip(move |window, cx| {
+        let room = f32::from(popup_anchor.get().top());
+        let height = popup_height(lines.len(), room);
+        let place = popup_offset(popup_anchor.get(), window.mouse_position(), height);
+        let lines = lines.clone();
+        cx.new(|_| PrPopup {
+            lines,
+            place,
+            height,
+        })
+        .into()
+    })
+}
+
 /// What `SidebarThreadTooltip` shows for one thread, resolved when the row is built.
 #[derive(Clone)]
 struct ThreadCard {
@@ -4838,32 +5042,13 @@ impl Render for ThreadHoverCard {
                 .text_xs()
                 .text_color(muted)
                 .children(card.pr_lines.iter().map(|line| {
-                    let tone = pr_color(line.state, dark).unwrap_or(muted);
-                    h_flex()
-                        .min_w_0()
-                        .items_center()
-                        .gap_2()
-                        .pl(px(line.depth.min(3) as f32 * 12.))
-                        .child(glyph(pr_state_icon(line.state), tone))
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .font_family(theme.mono_font_family.clone())
-                                .child(format!("#{}", line.number)),
-                        )
-                        .child(label(text, line.title.clone()))
-                        .children(line.stack.map(|(kind, size)| {
-                            let word = match kind {
-                                ChainKind::Native => "stack",
-                                ChainKind::Derived => "chain",
-                            };
-                            div()
-                                .ml_auto()
-                                .flex_shrink_0()
-                                .pl_1()
-                                .text_size(px(10.))
-                                .child(format!("{word} \u{b7} {size}"))
-                        }))
+                    pr_line_row(
+                        line,
+                        theme.mono_font_family.clone(),
+                        muted,
+                        foreground,
+                        dark,
+                    )
                 }))
         });
         div().relative().left(self.place.x).top(self.place.y).child(
@@ -4897,6 +5082,12 @@ fn project_name<'a>(row: &'a ThreadRow, entry: Option<&'a ProjectEntry>) -> &'a 
     entry.map_or(row.project.as_str(), |entry| entry.title.as_str())
 }
 
+/// What a row takes from its owner: the hover card's anchor and the interactive PR badge.
+struct RowParts {
+    anchor: Rc<Cell<Bounds<Pixels>>>,
+    pr_control: Option<gpui::Stateful<gpui::Div>>,
+}
+
 /// The web's card `SidebarThreadRow`. Snooze and Settle appear on hover, as in the web, but do
 /// nothing yet.
 fn thread_row(
@@ -4905,9 +5096,10 @@ fn thread_row(
     provider: Option<Mark>,
     selected: bool,
     sidebar_width: f32,
-    anchor: Rc<Cell<Bounds<Pixels>>>,
+    parts: RowParts,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
+    let RowParts { anchor, pr_control } = parts;
     let theme = cx.theme();
     let dark = theme.is_dark();
     let (muted, foreground) = (theme.muted_foreground, theme.foreground);
@@ -5031,14 +5223,7 @@ fn thread_row(
                                 )
                             }),
                         ))
-                        .children(row.pr.as_ref().map(|badge| {
-                            let tone = pr_color(badge.state, dark).unwrap_or(muted);
-                            h_flex()
-                                .flex_shrink_0()
-                                .gap_1()
-                                .child(Icon::new(pr_icon(badge)).size(px(12.)).text_color(tone))
-                                .child(div().text_color(muted).child(badge.text.clone()))
-                        }))
+                        .children(pr_control)
                         .children(provider),
                 ),
         )
@@ -5233,6 +5418,8 @@ mod tests {
             state: PrState::Open,
             stack: false,
             text: "19".to_owned(),
+            url: None,
+            opens_list: false,
         };
         let plain = branch_budget(300., true, None, true);
         assert!(branch_budget(300., true, Some(&badge), true) < plain);

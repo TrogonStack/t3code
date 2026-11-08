@@ -304,6 +304,8 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
             state: PrState::Pending,
             stack: false,
             text: linked.number.to_string(),
+            url: Some(linked.url.clone()),
+            opens_list: false,
         });
     }
     let state_of = |link: &&PullRequestsItem| match link.snapshot.as_ref() {
@@ -323,6 +325,8 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
                 .map_or(PrState::Pending, |_| state_of(only)),
             stack: false,
             text: only.number.to_string(),
+            url: Some(only.url.clone()),
+            opens_list: false,
         });
     }
     let states: Vec<PrState> = visible.iter().map(state_of).collect();
@@ -343,6 +347,8 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
     Some(PrBadge {
         state,
         stack,
+        url: None,
+        opens_list: true,
         text: if stack {
             visible.len().to_string()
         } else {
@@ -769,16 +775,17 @@ mod tests {
         };
         let badge = |links: Vec<Value>| {
             pr_badge(&thread("t", |t| set(t, &[("pullRequests", links.into())])))
-                .map(|badge| (badge.state, badge.text))
+                .map(|badge| (badge.state, badge.text, badge.url, badge.opens_list))
         };
+        let url = |number: u64| Some(format!("https://github.com/o/r/pull/{number}"));
         assert_eq!(badge(vec![]), None);
         assert_eq!(
             badge(vec![link(7, "manual", None)]),
-            Some((PrState::Pending, "7".to_owned()))
+            Some((PrState::Pending, "7".to_owned(), url(7), false))
         );
         assert_eq!(
             badge(vec![link(7, "manual", Some("merged"))]),
-            Some((PrState::Merged, "7".to_owned()))
+            Some((PrState::Merged, "7".to_owned(), url(7), false))
         );
         assert_eq!(
             badge(vec![
@@ -786,7 +793,7 @@ mod tests {
                 link(2, "agent", Some("open")),
                 link(3, "stack-dismissed", Some("closed")),
             ]),
-            Some((PrState::Open, "+2".to_owned()))
+            Some((PrState::Open, "+2".to_owned(), None, true))
         );
     }
 

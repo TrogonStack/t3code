@@ -25,6 +25,7 @@ pub struct PrLine {
     /// The snapshot's title, else the repository.
     pub title: String,
     pub depth: usize,
+    pub url: String,
     /// On a chain's first line: its kind and how many pull requests it holds.
     pub stack: Option<(ChainKind, usize)>,
 }
@@ -218,6 +219,7 @@ pub fn pr_lines(links: &[PullRequestsItem]) -> Vec<PrLine> {
                         .as_ref()
                         .map_or_else(|| link.repository.clone(), |s| s.title.clone()),
                     depth: chain.depths[position],
+                    url: link.url.clone(),
                     stack: (position == 0 && chain.layers.len() > 1)
                         .then_some((chain.kind, chain.layers.len())),
                 }
@@ -317,6 +319,7 @@ mod tests {
         let result = lines(vec![bare]);
         assert_eq!(result[0].state, PrState::Pending);
         assert_eq!(result[0].title, "o/r");
+        assert_eq!(result[0].url, "https://github.com/o/r/pull/7");
     }
 
     #[test]

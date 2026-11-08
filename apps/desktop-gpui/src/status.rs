@@ -149,6 +149,10 @@ pub struct PrBadge {
     pub state: PrState,
     pub stack: bool,
     pub text: String,
+    /// The pull request a click opens, for a badge that is a link.
+    pub url: Option<String>,
+    /// `opensList`: a stack or several pull requests, so a click shows the list, not a link.
+    pub opens_list: bool,
 }
 
 /// The status the web's thread card shows at the top right (`topStatus` in `SidebarThreadRow`).
