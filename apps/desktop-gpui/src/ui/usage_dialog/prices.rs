@@ -5,7 +5,8 @@ use super::*;
 use crate::usage_prices::{
     self as price, Change, Draft, Field, Snapshot, Target as PriceTarget, Write,
 };
-use gpui::Anchor;
+use gpui::{Anchor, FocusHandle, ScrollHandle};
+use gpui_component::FocusTrapElement as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::popover::Popover;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -241,12 +242,76 @@ enum Variant {
     Ghost,
 }
 
+/// The tab stops of the dialog, in the web's DOM order (`dialog.tsx:117-157`).
+pub(super) struct Focus {
+    scope: FocusHandle,
+    panel: FocusHandle,
+    apply: FocusHandle,
+    add: FocusHandle,
+    discard: FocusHandle,
+    save: FocusHandle,
+    close: FocusHandle,
+    panel_scroll: ScrollHandle,
+    rows: HashMap<String, FocusHandle>,
+}
+
+impl Focus {
+    pub(super) fn new(cx: &mut App) -> Self {
+        let stop = |cx: &mut App| cx.focus_handle().tab_stop(true);
+        Self {
+            scope: cx.focus_handle(),
+            panel: stop(cx),
+            apply: stop(cx),
+            add: stop(cx),
+            discard: stop(cx),
+            save: stop(cx),
+            close: stop(cx),
+            panel_scroll: ScrollHandle::new(),
+            rows: HashMap::new(),
+        }
+    }
+}
+
+/// `focus-visible`: focused, and the last input was the keyboard.
+fn focus_visible(handle: &FocusHandle, window: &Window) -> bool {
+    handle.is_focused(window) && window.last_input_was_keyboard()
+}
+
+/// `focus-visible:ring-2 ring-inset ring-ring ring-offset-1 ring-offset-background`
+/// (`button.tsx:9`, `scroll-area.tsx:54`): an inset ring of 2px, under an offset line of 1px
+/// in the background color. `inset` is the border the ring sits inside of.
+fn focus_ring(radius: f32, inset: f32, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .absolute()
+        .top(px(inset))
+        .left(px(inset))
+        .right(px(inset))
+        .bottom(px(inset))
+        .rounded(px(radius))
+        .border_1()
+        .border_color(theme.background)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .rounded(px((radius - 1.).max(0.)))
+                .border_2()
+                .border_color(theme.ring),
+        )
+}
+
 /// A `size="default"` button: `h-8`, `text-sm`, `font-medium`.
 fn button(
     id: &'static str,
     label: &'static str,
     variant: Variant,
     enabled: bool,
+    handle: &FocusHandle,
+    window: &Window,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
@@ -256,8 +321,12 @@ fn button(
         theme.accent,
         theme.foreground,
     );
+    let handle = handle.clone().tab_stop(enabled);
+    let ring = enabled && focus_visible(&handle, window);
     div()
         .id(id)
+        .relative()
+        .track_focus(&handle)
         .h(px(32.))
         .px(px(12.))
         .flex()
@@ -286,35 +355,47 @@ fn button(
         .when(enabled, |button| button.cursor_pointer())
         .when(!enabled, |button| button.opacity(0.64))
         .child(label)
+        .when(ring, |button| button.child(focus_ring(7., 1., cx)))
 }
 
-/// A `size="icon-xs"` ghost button: `size-6`, 14px icon.
+/// A ghost icon button (`button.tsx:21-34`): `icon-xs` is `size-6`, `icon` is `size-8`.
+#[allow(clippy::too_many_arguments)]
 fn icon_button(
     id: impl Into<ElementId>,
     icon: impl IntoElement,
-    label: &'static str,
+    size: f32,
+    label: Option<&'static str>,
     enabled: bool,
+    handle: &FocusHandle,
+    window: &Window,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
     let (accent, foreground) = (theme.accent, theme.foreground);
+    let handle = handle.clone().tab_stop(enabled);
+    let ring = enabled && focus_visible(&handle, window);
     div()
         .id(id)
+        .relative()
+        .track_focus(&handle)
         .flex_shrink_0()
-        .size(px(24.))
+        .size(px(size))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(8.))
+        .border_1()
+        .border_color(gpui::transparent_black())
         .text_color(foreground)
         .when(enabled, |button| {
             button
                 .cursor_pointer()
                 .hover(move |style| style.bg(accent))
-                .tooltip(tooltip(label))
+                .when_some(label, |button, label| button.tooltip(tooltip(label)))
         })
         .when(!enabled, |button| button.opacity(0.64))
         .child(icon)
+        .when(ring, |button| button.child(focus_ring(7., 1., cx)))
 }
 
 /// `Button variant="outline" size="sm"` as the "Apply to" menu trigger.
@@ -323,6 +404,7 @@ struct ApplyTrigger {
     label: String,
     enabled: bool,
     open: bool,
+    ring: bool,
 }
 
 impl Selectable for ApplyTrigger {
@@ -363,8 +445,10 @@ impl RenderOnce for ApplyTrigger {
             theme.popover
         };
         let enabled = self.enabled;
+        let ring = self.ring;
         h_flex()
             .id("usage-prices-apply")
+            .relative()
             .min_w_0()
             .h(px(28.))
             .px(px(10.))
@@ -384,6 +468,7 @@ impl RenderOnce for ApplyTrigger {
             .when(!enabled, |button| button.opacity(0.64))
             .child(div().min_w_0().truncate().child(self.label))
             .child(Icon::new(Icons::ChevronDown).size(px(14.)).flex_shrink_0())
+            .when(ring, |button| button.child(focus_ring(7., 1., cx)))
     }
 }
 
@@ -424,9 +509,10 @@ impl UsageDialog {
         }
     }
 
-    pub(super) fn open_prices(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_prices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         self.prices = Some(Prices::new(self.env_selected));
+        window.focus(&self.price_focus.scope, cx);
         cx.notify();
     }
 
@@ -746,6 +832,28 @@ impl UsageDialog {
             destination.clone()
         };
 
+        let apply_focus = self.price_focus.apply.clone();
+        let add_focus = self.price_focus.add.clone();
+        let discard_focus = self.price_focus.discard.clone();
+        let save_focus = self.price_focus.save.clone();
+        let close_focus = self.price_focus.close.clone();
+        let panel_focus = self.price_focus.panel.clone();
+        let scope_focus = self.price_focus.scope.clone();
+        let panel_scroll = self.price_focus.panel_scroll.clone();
+        let overflows = f32::from(panel_scroll.max_offset().y) > 0.;
+        let panel_focus = panel_focus.tab_stop(overflows);
+        let panel_ring = overflows && focus_visible(&panel_focus, window);
+        let row_focus: Vec<FocusHandle> = all_rows
+            .iter()
+            .map(|row| {
+                self.price_focus
+                    .rows
+                    .entry(row.id.clone())
+                    .or_insert_with(|| cx.focus_handle().tab_stop(true))
+                    .clone()
+            })
+            .collect();
+
         let theme = cx.theme();
         let (border, background, muted, foreground, danger) = (
             theme.border,
@@ -769,6 +877,7 @@ impl UsageDialog {
             let label = environment.label.clone();
             let enabled = !(pending || has_changes);
             Popover::new("usage-prices-apply-menu")
+                .track_focus(&apply_focus)
                 .anchor(Anchor::TopLeft)
                 .open(self.menu == Some(Menu::Apply) && enabled)
                 .p_0()
@@ -783,6 +892,7 @@ impl UsageDialog {
                     label: selection_label,
                     enabled,
                     open: false,
+                    ring: enabled && focus_visible(&apply_focus, window),
                 })
                 .content(move |_, _, cx| {
                     let toggle = {
@@ -880,8 +990,11 @@ impl UsageDialog {
                         icon_button(
                             "usage-prices-add",
                             Icon::new(Icons::Plus).size(px(14.)),
-                            "Add model price",
+                            24.,
+                            None,
                             !locked,
+                            &add_focus,
+                            window,
                             cx,
                         )
                         .when(!locked, |button| {
@@ -1040,8 +1153,11 @@ impl UsageDialog {
                         icon_button(
                             ("usage-price-action", index),
                             icon.size(px(14.)),
-                            label,
+                            24.,
+                            Some(label),
                             !locked,
+                            &row_focus[index],
+                            window,
                             cx,
                         )
                         .when(!locked, |button| {
@@ -1147,8 +1263,9 @@ impl UsageDialog {
             );
         let panel = v_flex()
             .id("usage-prices-panel")
-            .flex_1()
-            .min_h_0()
+            .track_focus(&panel_focus)
+            .track_scroll(&panel_scroll)
+            .size_full()
             .overflow_y_scroll()
             .gap_4()
             .px_6()
@@ -1156,6 +1273,12 @@ impl UsageDialog {
             .child(top)
             .child(table)
             .children(status);
+        let panel = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(panel)
+            .when(panel_ring, |region| region.child(focus_ring(16., 0., cx)));
         let footer = h_flex()
             .flex_shrink_0()
             .items_center()
@@ -1178,6 +1301,8 @@ impl UsageDialog {
                                 discard_label,
                                 Variant::Ghost,
                                 !pending,
+                                &discard_focus,
+                                window,
                                 cx,
                             )
                             .when(!pending, |button| {
@@ -1192,6 +1317,8 @@ impl UsageDialog {
                             save_label,
                             Variant::Primary,
                             !save_disabled,
+                            &save_focus,
+                            window,
                             cx,
                         )
                         .when(!save_disabled, |button| {
@@ -1201,14 +1328,16 @@ impl UsageDialog {
                         }),
                     ),
             );
-        let close = ghost_icon_button(
+        let close = icon_button(
             "usage-prices-close",
             Icon::new(IconName::Close).size(px(16.)),
-            "Close".into(),
+            32.,
+            None,
             !pending,
+            &close_focus,
+            window,
             cx,
         )
-        .size(px(32.))
         .absolute()
         .right(px(8.))
         .top(px(8.))
@@ -1249,7 +1378,8 @@ impl UsageDialog {
                             .child(header)
                             .child(panel)
                             .child(footer)
-                            .child(close),
+                            .child(close)
+                            .focus_trap("usage-prices-trap", &scope_focus),
                     ),
             )
             .into_any_element()

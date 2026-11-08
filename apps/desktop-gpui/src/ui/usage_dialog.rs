@@ -149,6 +149,7 @@ pub struct UsageDialog {
     menu: Option<pickers::Menu>,
     prices: Option<prices::Prices>,
     price_store: prices::PriceStore,
+    price_focus: prices::Focus,
 }
 
 fn now_ms() -> i64 {
@@ -188,6 +189,7 @@ impl UsageDialog {
             menu: None,
             prices: None,
             price_store: prices::PriceStore::default(),
+            price_focus: prices::Focus::new(cx),
         }
     }
 
