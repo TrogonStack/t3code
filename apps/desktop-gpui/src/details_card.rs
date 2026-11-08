@@ -660,7 +660,11 @@ impl RenderOnce for Trigger {
 /// The chevron segment of a split button.
 fn chevron(id: &'static str, label: &'static str, open: bool, cx: &App) -> AnyElement {
     let theme = cx.theme();
-    let (muted, foreground) = (theme.muted_foreground, theme.foreground);
+    let (muted, foreground, fill) = (
+        theme.muted_foreground,
+        theme.foreground,
+        hover_fill(theme.is_dark()),
+    );
     div()
         .id(id)
         .flex()
@@ -669,18 +673,23 @@ fn chevron(id: &'static str, label: &'static str, open: bool, cx: &App) -> AnyEl
         .w_8()
         .h_full()
         .flex_shrink_0()
+        .rounded_r(px(8.))
         .cursor_pointer()
+        .hover(move |style| style.bg(fill))
+        .when(open, |chevron| chevron.bg(fill))
         .text_color(if open { foreground } else { muted })
         .tooltip(tip(label))
         .child(Icon::new(Icons::ChevronDown).size_4())
         .into_any_element()
 }
 
-/// A `h-8` panel row: the primary segment, a separator on hover, and the chevron.
+/// A `h-8` panel row: the primary segment, a separator on hover, and the chevron. Like the web,
+/// the row fills on hover and the hovered half stacks a second fill; an open menu keeps both.
 fn split_row(
     group: &'static str,
     primary: impl IntoElement,
     chevron: impl IntoElement,
+    open: bool,
     cx: &App,
 ) -> gpui::Div {
     let theme = cx.theme();
@@ -690,15 +699,18 @@ fn split_row(
         .h_8()
         .rounded(px(8.))
         .hover(move |style| style.bg(fill))
+        .when(open, |row| row.bg(fill))
         .child(primary)
         .child(
             div()
                 .w(px(1.))
                 .h_4()
                 .flex_shrink_0()
-                .bg(separator)
-                .opacity(0.)
-                .group_hover(group, |style| style.opacity(1.)),
+                .bg(separator.opacity(0.65))
+                .when(!open, |line| {
+                    line.opacity(0.)
+                        .group_hover(group, |style| style.opacity(1.))
+                }),
         )
         .child(chevron)
 }
@@ -710,7 +722,8 @@ fn primary_segment(
     label: String,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
-    let foreground = cx.theme().foreground;
+    let theme = cx.theme();
+    let (foreground, fill) = (theme.foreground, hover_fill(theme.is_dark()));
     h_flex()
         .id(id)
         .flex_1()
@@ -720,6 +733,7 @@ fn primary_segment(
         .gap(px(10.))
         .rounded_l(px(8.))
         .cursor_pointer()
+        .hover(move |style| style.bg(fill))
         .text_size(px(13.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(foreground.opacity(0.8))
@@ -821,7 +835,7 @@ impl DetailsCard {
                 let (foreground, muted, hover) =
                     (theme.foreground, theme.muted_foreground, theme.accent);
                 v_flex()
-                    .w(px(240.))
+                    .w(px(details::CARD_ROW_WIDTH))
                     .p_1()
                     .children(editors.iter().map(|&id| {
                         let view = view.clone();
@@ -841,6 +855,7 @@ impl DetailsCard {
                                 row.child(
                                     div()
                                         .text_xs()
+                                        .font_weight(FontWeight::MEDIUM)
                                         .text_color(muted)
                                         .child(details::OPEN_FAVORITE_SHORTCUT),
                                 )
@@ -848,12 +863,13 @@ impl DetailsCard {
                             .on_click(move |_, _, cx| {
                                 view.update(cx, |this, cx| {
                                     this.editor_open = false;
-                                    this.open_in_editor(id, cx);
+                                    this.pick = Some(id.to_owned());
+                                    cx.notify();
                                 });
                             })
                     }))
             });
-        split_row("open-in-split", primary, popover, cx)
+        split_row("open-in-split", primary, popover, open, cx)
     }
 
     fn branch_row(&self, status: &VcsStatus, cx: &mut Context<Self>) -> AnyElement {
@@ -1014,7 +1030,7 @@ impl DetailsCard {
         let icon = row_icon(quick_icon(quick.kind, &quick.label), cx);
         let mut primary = primary_segment("git-quick-action", icon, quick.label.clone(), cx);
         if disabled {
-            primary = primary.opacity(0.5).cursor_default();
+            primary = primary.opacity(0.5).cursor_default().hover(|style| style);
             if let Some(hint) = hint {
                 primary = primary.tooltip(tip(hint));
             }
@@ -1089,7 +1105,7 @@ impl DetailsCard {
                             .child(text)
                     }))
             });
-        split_row("git-split", primary, popover, cx).into_any_element()
+        split_row("git-split", primary, popover, self.git_open, cx).into_any_element()
     }
 
     fn changes_row(&self, status: &VcsStatus, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1109,22 +1125,7 @@ impl DetailsCard {
         panel_row("changes-row", cx)
             .when(opens_diff, |row| row.cursor_pointer().on_click(open_diff))
             .child(row_icon(Icons::FileDiff, cx))
-            .child(div().flex_shrink_0().child("Changes"))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(muted)
-                    .children(
-                        status
-                            .local
-                            .base_ref
-                            .as_ref()
-                            .map(|base| format!("vs {base}")),
-                    ),
-            )
+            .child(div().flex_1().min_w_0().truncate().child("Changes"))
             .child(
                 h_flex()
                     .flex_shrink_0()
@@ -1238,7 +1239,9 @@ impl Render for DetailsCard {
             has_cwd: true,
             is_repo: status.is_some_and(|status| status.local.is_repo),
             has_editors: !props.editors.is_empty(),
-            quiet_empty_draft: details::quiet_empty_draft(props.has_run, status),
+            quiet_empty_draft: self.run.is_none()
+                && details::quiet_empty_draft(props.has_run, status),
+            git_activity: self.run.is_some() || matches!(self.notice, Some(Notice::Success { .. })),
             usage_rows,
         };
         let density = details::density_for(props.max_height, inputs);

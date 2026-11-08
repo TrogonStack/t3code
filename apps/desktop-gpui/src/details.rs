@@ -11,6 +11,9 @@ pub const OPEN_FAVORITE_SHORTCUT: &str = "\u{2318}O";
 
 /// `THREAD_DETAILS_CARD_WIDTH` and `THREAD_DETAILS_CARD_GAP`.
 pub const CARD_WIDTH: f32 = 280.;
+/// A row inside the card: its width less the 1px border and `px-2` padding on each side, which
+/// the web's panel menus match with `w-(--anchor-width)`.
+pub const CARD_ROW_WIDTH: f32 = CARD_WIDTH - 2. - 16.;
 pub const CARD_GAP: f32 = 12.;
 /// `DETAILS_CARD_CLEARANCE`, and the chat lane's padding and minimum width (`canvasStore.ts`).
 const CARD_CLEARANCE: f32 = 32.;
@@ -62,6 +65,8 @@ pub struct Inputs {
     pub has_editors: bool,
     /// A fresh draft or a thread with no run, with nothing to commit or push.
     pub quiet_empty_draft: bool,
+    /// A git action in flight, or the notice its result left.
+    pub git_activity: bool,
     /// The rows the usage limits would take: one per window, or one for the notice; 0 for none.
     pub usage_rows: usize,
 }
@@ -82,7 +87,10 @@ impl Show {
         Self {
             open_in: inputs.has_cwd && inputs.has_editors && density != Density::Essential,
             branch: inputs.has_cwd && inputs.is_repo,
-            git_actions: inputs.has_cwd && inputs.is_repo,
+            git_actions: inputs.has_cwd
+                && inputs.is_repo
+                && !inputs.quiet_empty_draft
+                && (density == Density::Full || inputs.git_activity),
             changes: inputs.has_cwd && inputs.is_repo && !inputs.quiet_empty_draft,
             usage: inputs.usage_rows > 0 && density != Density::Essential,
         }
@@ -224,8 +232,6 @@ pub struct Local {
     pub has_working_tree_changes: bool,
     pub working_tree: Lines,
     pub branch_changes: Option<Lines>,
-    /// The base the branch totals compare against (`branchChanges.baseRef`).
-    pub base_ref: Option<String>,
     /// `workingTree.files`, which the commit dialog lists.
     pub files: Vec<ChangedFile>,
     /// `sourceControlProvider.kind`, which picks PR or MR wording.
@@ -288,9 +294,6 @@ impl Local {
                     })
                 })
                 .collect(),
-            base_ref: value["branchChanges"]["baseRef"]
-                .as_str()
-                .map(str::to_owned),
             provider_kind: value["sourceControlProvider"]["kind"]
                 .as_str()
                 .map(str::to_owned),
@@ -416,6 +419,7 @@ mod tests {
             is_repo: true,
             has_editors: true,
             quiet_empty_draft: false,
+            git_activity: false,
             usage_rows: 0,
         }
     }
@@ -488,7 +492,9 @@ mod tests {
         let not_repo = show(Density::Full, |i| i.is_repo = false);
         assert!(not_repo.open_in && !not_repo.branch && !not_repo.git_actions && !not_repo.changes);
         let quiet = show(Density::Full, |i| i.quiet_empty_draft = true);
-        assert!(quiet.branch && quiet.git_actions && !quiet.changes);
+        assert!(quiet.branch && !quiet.git_actions && !quiet.changes);
+        assert!(!show(Density::Compact, |_| {}).git_actions);
+        assert!(show(Density::Compact, |i| i.git_activity = true).git_actions);
         assert!(show(Density::Full, |i| i.has_cwd = false).is_empty());
     }
 
