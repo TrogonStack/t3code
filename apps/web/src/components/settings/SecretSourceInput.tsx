@@ -172,6 +172,7 @@ export function SecretSourceSelect(props: {
         className="w-auto min-w-0 shrink-0"
         aria-label={`${props.label} source`}
         title={title}
+        data-icon-only=""
       >
         <SelectValue>
           <SourceIcon
