@@ -1773,31 +1773,22 @@ impl MainView {
                 "settings",
                 Icon::new(IconName::Settings),
                 "Settings",
-                false,
                 cx,
             ))
             .child(footer_button(
                 "pull-requests",
                 Icon::new(Icons::GitPullRequest),
                 "Pull requests",
-                false,
                 cx,
             ))
             .child(footer_button(
                 "usage",
                 Icon::new(Icons::ChartNoAxesColumn),
                 "Usage",
-                false,
                 cx,
             ))
             .child(div().flex_1())
-            .child(footer_button(
-                "update",
-                Icon::new(Icons::CircleArrowUp),
-                "Update available",
-                true,
-                cx,
-            ))
+            .child(update_button(cx))
     }
 
     /// The web's `SidebarThreadHeader`: search, then the project filter, add project and new thread.
@@ -4182,12 +4173,11 @@ fn icon_button(
         .child(icon)
 }
 
-/// The sidebar footer's `size-8` menu button, `rounded-full` for the update control.
+/// The sidebar footer's `size-8` menu button.
 fn footer_button(
     id: &'static str,
     icon: Icon,
     label: &'static str,
-    round: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
@@ -4199,13 +4189,43 @@ fn footer_button(
         .flex()
         .items_center()
         .justify_center()
-        .when(round, |button| button.rounded_full())
-        .when(!round, |button| button.rounded(px(6.)))
+        .rounded(px(6.))
         .text_color(idle)
         .cursor_pointer()
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
         .tooltip(tooltip(label))
         .child(icon.size_4())
+}
+
+/// The web's idle `SidebarUpdatePill` with no update state: this build has no updater, so
+/// `getDesktopUpdateIdleTooltip(null)` and `canCheckForUpdate(null)` make it a dimmed, inert refresh.
+fn update_button(cx: &App) -> gpui::Stateful<gpui::Div> {
+    use gpui_kit_assets::IconName as Icons;
+    const TITLE: &str = "Updates unavailable";
+    const DETAIL: &str = "Automatic updates are not available in this build.";
+    div()
+        .id("update")
+        .flex_shrink_0()
+        .size_8()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .text_color(cx.theme().muted_foreground)
+        .opacity(0.6)
+        .cursor_not_allowed()
+        .tooltip(|window, cx| {
+            Tooltip::element(|_, cx| {
+                v_flex()
+                    .child(div().font_weight(FontWeight::MEDIUM).child(TITLE))
+                    .child(div().text_color(cx.theme().muted_foreground).child(DETAIL))
+            })
+            .text_xs()
+            .py_1()
+            .rounded(px(6.))
+            .build(window, cx)
+        })
+        .child(Icon::new(Icons::RefreshCw).size_4())
 }
 
 /// The web's `ComposerPrimaryActions` send button: stage art in dev builds, else `message-action`.
