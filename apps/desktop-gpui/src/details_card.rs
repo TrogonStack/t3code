@@ -720,6 +720,7 @@ fn primary_segment(
     id: &'static str,
     icon: impl IntoElement,
     label: String,
+    enabled: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = cx.theme();
@@ -732,8 +733,10 @@ fn primary_segment(
         .px(px(10.))
         .gap(px(10.))
         .rounded_l(px(8.))
-        .cursor_pointer()
-        .hover(move |style| style.bg(fill))
+        .when(enabled, |segment| {
+            segment.cursor_pointer().hover(move |style| style.bg(fill))
+        })
+        .when(!enabled, |segment| segment.opacity(0.5).cursor_default())
         .text_size(px(13.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(foreground.opacity(0.8))
@@ -810,7 +813,7 @@ impl DetailsCard {
             Some(id) => editor_mark(id, cx),
             None => row_icon(Icons::SquareArrowOutUpRight, cx).into_any_element(),
         };
-        let primary = primary_segment("open-in-editor", icon, label, cx)
+        let primary = primary_segment("open-in-editor", icon, label, true, cx)
             .on_click(cx.listener(|this, _, _, cx| this.open_favorite(cx)));
         let editors = editors.to_vec();
         let open = self.editor_open;
@@ -1028,9 +1031,9 @@ impl DetailsCard {
             quick.hint.clone()
         };
         let icon = row_icon(quick_icon(quick.kind, &quick.label), cx);
-        let mut primary = primary_segment("git-quick-action", icon, quick.label.clone(), cx);
+        let mut primary =
+            primary_segment("git-quick-action", icon, quick.label.clone(), !disabled, cx);
         if disabled {
-            primary = primary.opacity(0.5).cursor_default().hover(|style| style);
             if let Some(hint) = hint {
                 primary = primary.tooltip(tip(hint));
             }
