@@ -293,7 +293,7 @@ function ProviderEnvironmentFieldRow(props: {
       description={props.field.description}
       managed={props.managedReason}
       control={
-        <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
+        <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-80">
           {props.field.sensitive === false ? (
             <DraftInput
               id={inputId}
