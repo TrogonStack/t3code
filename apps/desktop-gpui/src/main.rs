@@ -17,6 +17,7 @@ mod providers;
 mod ref_picker;
 mod refs;
 mod rpc;
+mod send;
 mod server;
 mod shell;
 mod slow_requests;

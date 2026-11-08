@@ -6,10 +6,11 @@ use crate::diff;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    Event, GitRunStackedAction, PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig,
-    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
-    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
-    VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    Event, GitRunStackedAction, OrchestrationDispatchCommand, OrchestrationLaunchThread,
+    PING_FRAME, ProjectsMutate, ReviewGetDiffPreview, ServerGetConfig, Session, ShellOpenInEditor,
+    SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose,
+    TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus,
+    VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -107,6 +108,8 @@ pub enum Call {
     CreateRef,
     Pull,
     RefreshStatus,
+    LaunchThread,
+    DispatchCommand,
     /// A stream: progress events, then the result.
     RunStackedAction,
 }
@@ -142,6 +145,8 @@ impl Call {
             Self::CreateRef => "create the ref",
             Self::Pull => "pull",
             Self::RefreshStatus => "refresh the status",
+            Self::LaunchThread => "start the thread",
+            Self::DispatchCommand => "send the command",
             Self::RunStackedAction => "run the action",
         }
     }
@@ -157,6 +162,8 @@ impl Call {
             Self::CreateRef => session.request::<VcsCreateRef>(payload),
             Self::Pull => session.request::<VcsPull>(payload),
             Self::RefreshStatus => session.request::<VcsRefreshStatus>(payload),
+            Self::LaunchThread => session.request::<OrchestrationLaunchThread>(payload),
+            Self::DispatchCommand => session.request::<OrchestrationDispatchCommand>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
         }
     }
@@ -971,7 +978,7 @@ fn uuid_v4(mut bytes: [u8; 16]) -> String {
     )
 }
 
-fn command_id() -> String {
+pub fn command_id() -> String {
     let mut bytes = [0u8; 8];
     // A failed read leaves zeros, and the server rejects a repeated command id rather than applying it twice.
     let _ = getrandom::fill(&mut bytes);

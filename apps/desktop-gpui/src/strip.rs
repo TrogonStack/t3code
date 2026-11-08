@@ -52,13 +52,23 @@ pub enum RuntimeMode {
 }
 
 impl RuntimeMode {
-    fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         match text {
             "approval-required" => Some(Self::ApprovalRequired),
             "auto-accept-edits" => Some(Self::AutoAcceptEdits),
             "auto" => Some(Self::Auto),
             "full-access" => Some(Self::FullAccess),
             _ => None,
+        }
+    }
+
+    /// The contract's spelling, the inverse of `parse`.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::ApprovalRequired => "approval-required",
+            Self::AutoAcceptEdits => "auto-accept-edits",
+            Self::Auto => "auto",
+            Self::FullAccess => "full-access",
         }
     }
 

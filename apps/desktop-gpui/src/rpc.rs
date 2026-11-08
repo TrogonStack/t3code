@@ -51,6 +51,24 @@ impl Method for ProjectsMutate {
     type Success = wire::ProjectsMutateSuccess;
 }
 
+/// `orchestration.launchThread`, a unary call that creates a thread and starts its first turn.
+pub struct OrchestrationLaunchThread;
+
+impl Method for OrchestrationLaunchThread {
+    const TAG: &'static str = "orchestration.launchThread";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `orchestration.dispatchCommand`, a unary call that carries one thread command.
+pub struct OrchestrationDispatchCommand;
+
+impl Method for OrchestrationDispatchCommand {
+    const TAG: &'static str = "orchestration.dispatchCommand";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `server.getConfig`, a unary call. The wire types are not generated; `providers::Catalog` decodes it.
 pub struct ServerGetConfig;
 
