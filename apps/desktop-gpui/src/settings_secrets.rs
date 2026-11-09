@@ -703,7 +703,10 @@ pub fn uses(settings: &Value, id: &str) -> Vec<String> {
                 .flatten()
             {
                 let key = variable.get("name").and_then(Value::as_str).unwrap_or("");
-                if let Some(value) = variable.get("value") {
+                for value in ["value", "secret"]
+                    .into_iter()
+                    .filter_map(|field| variable.get(field))
+                {
                     let mut found = Vec::new();
                     references(value, id, "", &mut found);
                     uses.extend(found.into_iter().map(|_| format!("{name} \u{b7} {key}")));
@@ -1019,5 +1022,15 @@ mod tests {
             ]
         );
         assert!(uses(&settings, "other").is_empty());
+    }
+
+    #[test]
+    fn uses_read_the_secret_field_of_a_variable() {
+        let reference = json!({"provider": "vault", "reference": "path#field"});
+        let settings = json!({
+            "providerInstances": {"codex": {"driver": "codex", "displayName": "Codex",
+                "environment": [{"name": "API_KEY", "value": "", "secret": reference}]}},
+        });
+        assert_eq!(uses(&settings, "vault"), vec!["Codex \u{b7} API_KEY"]);
     }
 }

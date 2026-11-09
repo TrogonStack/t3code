@@ -1,10 +1,14 @@
 //! The Providers tab: `ProviderSettingsPanel.tsx` (the instance list beside the selected
 //! instance) and `ProviderInstanceCard.tsx` (Status, Display name and the Environment variables).
-//! Writes are optimistic and put back when the call fails. The driver Setup and Runtime forms,
-//! accent colour, models, usage and adding or removing an instance are not here.
+//! Writes are optimistic and put back when the call fails. Adding is one dialog (driver, label,
+//! instance ID) where the web has two steps. The Runtime form lists the fields of the drivers
+//! this client knows (Codex and Claude, as text fields); the driver Setup form, accent colour,
+//! models, usage and the ACP registry flow are not here.
 
-use super::components::{group, row, section, switch};
-use super::devices_panel::widgets::{Variant, button, icon_button, note};
+use super::components::{group, row, section, section_with_action, switch};
+use super::devices_panel::widgets::{
+    Variant, button, dialog_of, field, icon_button, labeled, note, problem,
+};
 use super::scope_pickers::ScopeBar;
 use super::secret_field::{Check, SecretEvent, SecretField, sm_field};
 use super::tokens::Tokens;
@@ -23,6 +27,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 const LIST_WIDTH: f32 = 272.;
+const DIALOG_WIDTH: f32 = 512.;
 const SENSITIVE_NOTE: &str =
     "Sensitive values are stored separately and never returned to the app.";
 const REDACTED_NOTE: &str = " Enter a new value to rename a saved one or make it plain text.";
@@ -34,6 +39,21 @@ struct Row {
     /// The row as last loaded or stored: edits are measured against it.
     base: Variable,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The Add provider dialog's state; the label and ID are inputs on the panel.
+struct AddDialog {
+    driver: &'static str,
+    id_edited: bool,
+    submitted: bool,
+    busy: bool,
+    error: Option<String>,
+}
+
+/// A removal or reset the confirmation asks about.
+struct Confirm {
+    id: String,
+    reset: bool,
 }
 
 /// What the scope bar says about the environment the tab manages.
@@ -63,6 +83,15 @@ pub struct ProvidersPanel {
     last: Vec<Variable>,
     reseed: bool,
     display_name: Entity<InputState>,
+    dialog: Option<AddDialog>,
+    confirm: Option<Confirm>,
+    add_label: Entity<InputState>,
+    add_id: Entity<InputState>,
+    /// The create call in flight, with the instance it adds.
+    creating: Option<(u64, String)>,
+    /// The Runtime inputs of the selected instance, by field key.
+    runtime: Vec<(&'static str, Entity<InputState>)>,
+    _runtime_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -74,8 +103,28 @@ impl ProvidersPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let display_name = cx.new(|cx| InputState::new(window, cx).placeholder("Instance label"));
+        let add_label = cx.new(|cx| InputState::new(window, cx).placeholder("Provider label"));
+        let add_id = cx.new(|cx| InputState::new(window, cx).placeholder("Instance ID"));
         let subscriptions = vec![
             cx.observe(&scope, |_, _, cx| cx.notify()),
+            cx.subscribe_in(
+                &add_label,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.label_changed(window, cx),
+                    InputEvent::PressEnter { .. } => this.submit(cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
+                &add_id,
+                window,
+                |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Change => this.id_changed(cx),
+                    InputEvent::PressEnter { .. } => this.submit(cx),
+                    _ => {}
+                },
+            ),
             cx.subscribe_in(
                 &display_name,
                 window,
@@ -102,6 +151,13 @@ impl ProvidersPanel {
             last: Vec::new(),
             reseed: false,
             display_name,
+            dialog: None,
+            confirm: None,
+            add_label,
+            add_id,
+            creating: None,
+            runtime: Vec::new(),
+            _runtime_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -143,12 +199,19 @@ impl ProvidersPanel {
 
     /// Starts from the stored rows, as the settings page opens.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.dialog = None;
+        self.confirm = None;
+        self.creating = None;
         self.reseed = true;
         cx.notify();
     }
 
     /// Closes a source menu; returns whether there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.dialog.take().is_some() || self.confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
         let mut closed = false;
         for row in &self.rows {
             closed |= row.field.update(cx, |field, cx| field.close_menu(cx));
@@ -229,6 +292,29 @@ impl ProvidersPanel {
             if let Some(row) = self.rows.iter().find(|r| r.id == row) {
                 row.field.update(cx, |field, cx| field.set_check(state, cx));
             }
+            return;
+        }
+        if self
+            .creating
+            .as_ref()
+            .is_some_and(|(sent, _)| *sent == token)
+        {
+            let Some((_, id)) = self.creating.take() else {
+                return;
+            };
+            match event {
+                CallEvent::Failed(message) => {
+                    if let Some(dialog) = &mut self.dialog {
+                        dialog.busy = false;
+                        dialog.error = Some(message);
+                    }
+                }
+                _ => {
+                    self.dialog = None;
+                    self.selected = Some(id);
+                }
+            }
+            cx.notify();
             return;
         }
         let Some(previous) = self.pending.remove(&token) else {
@@ -414,11 +500,13 @@ impl ProvidersPanel {
         };
         let stored_instance = self.base_of(&instance);
         let stored = model::decode(&stored_instance);
-        let stale = self.rows_for.as_deref() != Some(instance.id.as_str())
-            || self.reseed
-            || (self.pending.is_empty() && stored != self.last);
+        let switched = self.rows_for.as_deref() != Some(instance.id.as_str()) || self.reseed;
+        let stale = switched || (self.pending.is_empty() && stored != self.last);
         if !stale {
             return;
+        }
+        if switched {
+            self.make_runtime(&instance.driver, &stored_instance, window, cx);
         }
         self.reseed = false;
         self.rows_for = Some(instance.id.clone());
@@ -435,6 +523,163 @@ impl ProvidersPanel {
             .to_owned();
         self.display_name
             .update(cx, |state, cx| state.set_value(label, window, cx));
+    }
+
+    fn make_runtime(
+        &mut self,
+        driver: &str,
+        stored: &Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.runtime.clear();
+        let mut subscriptions = Vec::new();
+        for spec in model::runtime_fields(driver) {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder(spec.placeholder));
+            let value = model::runtime_value(stored, spec.key);
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+            let key = spec.key;
+            subscriptions.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, _, event: &InputEvent, _, cx| match event {
+                    InputEvent::Blur | InputEvent::PressEnter { .. } => {
+                        this.commit_runtime(key, cx)
+                    }
+                    _ => {}
+                },
+            ));
+            self.runtime.push((key, input));
+        }
+        self._runtime_subscriptions = subscriptions;
+    }
+
+    fn commit_runtime(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        let Some(instance) = self.selected_instance().cloned() else {
+            return;
+        };
+        let Some(input) = self
+            .runtime
+            .iter()
+            .find(|(field, _)| *field == key)
+            .map(|(_, input)| input.clone())
+        else {
+            return;
+        };
+        let typed = input.read(cx).value().trim().to_owned();
+        let stored = self.base_of(&instance);
+        if model::runtime_value(&stored, key) == typed {
+            return;
+        }
+        self.write(&instance.id, model::with_runtime(&stored, key, &typed), cx);
+    }
+
+    fn open_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let driver = model::DRIVERS[0];
+        self.dialog = Some(AddDialog {
+            driver,
+            id_edited: false,
+            submitted: false,
+            busy: false,
+            error: None,
+        });
+        self.pick_driver(driver, window, cx);
+    }
+
+    fn pick_driver(&mut self, driver: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = &mut self.dialog else {
+            return;
+        };
+        dialog.driver = driver;
+        dialog.id_edited = false;
+        dialog.error = None;
+        let label = crate::providers::driver_label(driver);
+        self.add_label
+            .update(cx, |state, cx| state.set_value(label, window, cx));
+        self.sync_id(window, cx);
+        cx.notify();
+    }
+
+    fn derived_id(&self, cx: &App) -> Option<String> {
+        let driver = self.dialog.as_ref()?.driver;
+        let label = self.add_label.read(cx).value().to_string();
+        Some(model::derive_instance_id(
+            driver,
+            &crate::providers::driver_label(driver),
+            &label,
+            &model::existing_ids(&self.settings),
+        ))
+    }
+
+    fn sync_id(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.derived_id(cx) {
+            self.add_id
+                .update(cx, |state, cx| state.set_value(id, window, cx));
+        }
+    }
+
+    fn label_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog.as_ref().is_some_and(|dialog| !dialog.id_edited) {
+            self.sync_id(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn id_changed(&mut self, cx: &mut Context<Self>) {
+        let typed = self.add_id.read(cx).value().to_string();
+        let derived = self.derived_id(cx);
+        if let Some(dialog) = &mut self.dialog
+            && derived.as_deref() != Some(typed.as_str())
+        {
+            dialog.id_edited = true;
+        }
+        cx.notify();
+    }
+
+    fn submit(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = &mut self.dialog else {
+            return;
+        };
+        if dialog.busy {
+            return;
+        }
+        dialog.submitted = true;
+        let driver = dialog.driver;
+        let id = self.add_id.read(cx).value().trim().to_owned();
+        if model::validate_instance_id(&id, &model::existing_ids(&self.settings)).is_some() {
+            cx.notify();
+            return;
+        }
+        let label = self.add_label.read(cx).value().to_string();
+        let payload = model::create_payload(&id, driver, &label);
+        let sent = self.send(Call::UpdateSettings, payload);
+        if let Some(dialog) = &mut self.dialog {
+            match sent {
+                Some(token) => {
+                    dialog.busy = true;
+                    dialog.error = None;
+                    self.creating = Some((token, id));
+                }
+                None => dialog.error = Some("Could not reach the server.".to_owned()),
+            }
+        }
+        cx.notify();
+    }
+
+    fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.confirm = None;
+        let previous = self.settings.clone();
+        model::forget_instance(&mut self.settings, id);
+        match self.send(Call::UpdateSettings, model::remove_payload(id)) {
+            Some(token) => {
+                self.pending.insert(token, previous);
+                if self.selected.as_deref() == Some(id) {
+                    self.selected = None;
+                }
+            }
+            None => self.settings = previous,
+        }
+        cx.notify();
     }
 
     fn select(&mut self, id: String, cx: &mut Context<Self>) {
@@ -783,11 +1028,260 @@ impl ProvidersPanel {
             cx,
         );
         let environment = group(vec![self.variables(editable, window, cx)], cx);
+        let default_slot = instance.id == instance.driver;
+        let stored = self
+            .settings
+            .get("providerInstances")
+            .and_then(|instances| instances.get(&instance.id))
+            .is_some();
+        let action = (!default_slot || stored).then(|| {
+            let id = instance.id.clone();
+            let view = cx.entity();
+            let (name, tip, icon, variant) = if default_slot {
+                (
+                    "provider-reset",
+                    "Reset provider settings".to_owned(),
+                    Icons::RotateCcw,
+                    Variant::GhostMuted,
+                )
+            } else {
+                (
+                    "provider-delete",
+                    format!("Delete instance {id}"),
+                    Icons::Trash,
+                    Variant::GhostDestructive,
+                )
+            };
+            icon_button(name, variant, editable, cx)
+                .size(px(20.))
+                .tooltip(tooltip(tip))
+                .child(Icon::new(icon).size(px(14.)))
+                .on_click(move |_, _, cx| {
+                    let id = id.clone();
+                    view.update(cx, |this, cx| {
+                        this.confirm = Some(Confirm {
+                            id,
+                            reset: default_slot,
+                        });
+                        cx.notify();
+                    })
+                })
+                .into_any_element()
+        });
+        let runtime = (!self.runtime.is_empty()).then(|| {
+            let fields = model::runtime_fields(&instance.driver)
+                .iter()
+                .filter_map(|spec| {
+                    let (_, input) = self.runtime.iter().find(|(key, _)| *key == spec.key)?;
+                    let control = div().w(px(224.)).child(sm_field(
+                        input,
+                        spec.key != "autoCompactWindow",
+                        false,
+                        !editable,
+                        window,
+                        cx,
+                    ));
+                    Some(
+                        row(
+                            spec.label,
+                            spec.description,
+                            None,
+                            control.into_any_element(),
+                            wide,
+                            cx,
+                        )
+                        .into_any_element(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            section("Runtime", group(fields, cx))
+        });
         v_flex()
             .gap_8()
-            .child(section(instance.mark.display_name.clone(), identity))
+            .child(section_with_action(
+                instance.mark.display_name.clone(),
+                action,
+                identity,
+            ))
+            .children(runtime)
             .child(section("Environment", environment))
             .into_any_element()
+    }
+}
+
+impl ProvidersPanel {
+    fn dialog_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Tokens::of(cx);
+        let view = cx.entity();
+        let Some(dialog) = &self.dialog else {
+            return div().into_any_element();
+        };
+        let (driver, busy, submitted, error) = (
+            dialog.driver,
+            dialog.busy,
+            dialog.submitted,
+            dialog.error.clone(),
+        );
+        let existing = model::existing_ids(&self.settings);
+        let typed = self.add_id.read(cx).value().to_string();
+        let id_error = model::validate_instance_id(&typed, &existing).filter(|_| submitted);
+        let chips = model::DRIVERS.iter().map(|choice| {
+            let chosen = *choice == driver;
+            let view = view.clone();
+            let choice = *choice;
+            button(
+                SharedString::from(format!("provider-driver-{choice}")),
+                if chosen {
+                    Variant::Primary
+                } else {
+                    Variant::Outline
+                },
+                !busy,
+                cx,
+            )
+            .child(crate::providers::driver_label(choice))
+            .on_click(move |_, window, cx| {
+                view.update(cx, |this, cx| this.pick_driver(choice, window, cx))
+            })
+        });
+        let body = vec![
+            labeled("Provider", h_flex().flex_wrap().gap_2().children(chips)).into_any_element(),
+            labeled(
+                "Label",
+                v_flex()
+                    .gap(px(6.))
+                    .child(field(&self.add_label, busy, window, cx))
+                    .child(note("Shown in the provider list.", cx)),
+            )
+            .into_any_element(),
+            labeled(
+                "Instance ID",
+                v_flex()
+                    .gap(px(6.))
+                    .child(field(&self.add_id, busy, window, cx))
+                    .children(id_error.map(|message| problem(message, cx)))
+                    .child(note(
+                        "Letters, digits, '-' and '_'. It cannot change later.",
+                        cx,
+                    )),
+            )
+            .into_any_element(),
+        ]
+        .into_iter()
+        .chain(error.map(|message| problem(message, cx).into_any_element()))
+        .collect();
+        let (cancel, create, dismiss) = (view.clone(), view.clone(), view.clone());
+        let footer = vec![
+            button("provider-add-cancel", Variant::Outline, !busy, cx)
+                .child("Cancel")
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |this, cx| {
+                        this.dialog = None;
+                        cx.notify();
+                    })
+                })
+                .into_any_element(),
+            button("provider-add-confirm", Variant::Primary, !busy, cx)
+                .child(if busy { "Adding..." } else { "Add instance" })
+                .on_click(move |_, _, cx| create.update(cx, |this, cx| this.submit(cx)))
+                .into_any_element(),
+        ];
+        let _ = theme;
+        dialog_of(
+            "provider-add",
+            DIALOG_WIDTH,
+            "Add provider",
+            "Add another instance of a provider, for example a second account.",
+            body,
+            footer,
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    if this.creating.is_none() {
+                        this.dialog = None;
+                        cx.notify();
+                    }
+                })
+            },
+            cx,
+        )
+    }
+
+    fn confirm_view(&self, view: &Entity<Self>, confirm: &Confirm, cx: &App) -> AnyElement {
+        let theme = Tokens::of(cx);
+        let view = view.clone();
+        let name = self
+            .instances
+            .iter()
+            .find(|instance| instance.id == confirm.id)
+            .map_or_else(|| confirm.id.clone(), |i| i.mark.display_name.clone());
+        let (title, action) = if confirm.reset {
+            (
+                format!("Reset the {name} provider to its defaults?"),
+                "Reset provider",
+            )
+        } else {
+            (
+                format!("Remove the {name} provider instance?"),
+                "Remove instance",
+            )
+        };
+        let id = confirm.id.clone();
+        let (cancel, go, dismiss) = (view.clone(), view.clone(), view);
+        let destructive = theme.destructive;
+        let footer = vec![
+            button("provider-remove-cancel", Variant::Outline, true, cx)
+                .child("Cancel")
+                .on_click(move |_, _, cx| {
+                    cancel.update(cx, |this, cx| {
+                        this.confirm = None;
+                        cx.notify();
+                    })
+                })
+                .into_any_element(),
+            button("provider-remove-confirm", Variant::Ghost, true, cx)
+                .bg(destructive)
+                .border_color(destructive)
+                .text_color(gpui::white())
+                .hover(move |style| style.bg(destructive.opacity(0.9)))
+                .child(action)
+                .on_click(move |_, _, cx| {
+                    let id = id.clone();
+                    go.update(cx, |this, cx| this.remove(&id, cx))
+                })
+                .into_any_element(),
+        ];
+        dialog_of(
+            "provider-remove",
+            DIALOG_WIDTH,
+            title,
+            "Its saved settings, including any custom binary path, will be removed.",
+            Vec::new(),
+            footer,
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    this.confirm = None;
+                    cx.notify();
+                })
+            },
+            cx,
+        )
+    }
+
+    /// The Add provider dialog or the removal confirmation, over a backdrop.
+    pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ctx = self.ctx(cx);
+        if !ctx.editable || ctx.in_project {
+            self.dialog = None;
+            self.confirm = None;
+            return None;
+        }
+        if let Some(confirm) = self.confirm.take() {
+            let element = self.confirm_view(&cx.entity(), &confirm, cx);
+            self.confirm = Some(confirm);
+            return Some(element);
+        }
+        self.dialog.as_ref()?;
+        Some(self.dialog_view(window, cx))
     }
 }
 
@@ -823,9 +1317,19 @@ impl Render for ProvidersPanel {
             ))
         });
         let wide = self.wide;
+        let add = button("provider-add", Variant::Outline, editable, cx)
+            .h(px(24.))
+            .px(px(7.))
+            .gap(px(4.))
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .child(Icon::new(Icons::Plus).size(px(12.)))
+            .child("Add provider")
+            .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx)));
         v_flex()
             .gap_4()
             .children(notice)
+            .child(h_flex().px_4().justify_end().child(add))
             .child(
                 div()
                     .flex()

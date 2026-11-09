@@ -630,6 +630,9 @@ impl Render for SettingsDialog {
         let secrets = self
             .secrets
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let providers = self
+            .providers
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -690,6 +693,7 @@ impl Render for SettingsDialog {
             .children(confirm)
             .children(devices)
             .children(secrets)
+            .children(providers)
             .into_any_element()
     }
 }
