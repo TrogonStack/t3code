@@ -73,6 +73,10 @@ pub struct RemoteMember {
 pub struct EnvironmentProjects {
     pub id: String,
     pub label: String,
+    /// The URL this app reaches it at (`displayUrl`).
+    pub url: String,
+    /// Whether its shell stream is up right now.
+    pub connected: bool,
     pub machine: MachineKind,
     pub projects: Vec<ProjectEntry>,
 }
@@ -969,6 +973,8 @@ mod tests {
         let other = |label: &str, machine, key: &str| EnvironmentProjects {
             id: label.to_owned(),
             label: label.to_owned(),
+            url: String::new(),
+            connected: true,
             machine,
             projects: build_entries(
                 &[project("r", "atlas", |p| {

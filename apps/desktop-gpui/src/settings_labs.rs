@@ -373,6 +373,8 @@ pub struct Environment {
     pub label: String,
     /// `host:port`, else the environment id (`settingsScopeEnvironmentAddress`).
     pub address: String,
+    /// The URL the address comes from; empty when none is known.
+    pub display_url: String,
     pub machine: MachineKind,
     pub connected: bool,
     /// Whether this app holds the connection that can write its server settings.
@@ -508,8 +510,39 @@ pub enum ChoiceIcon {
     Project { initials: String, color: usize },
 }
 
+/// `settingsScopeEnvironmentAddress`: the URL's host (`new URL(url).host`), else the URL as given,
+/// else the environment id.
+pub fn environment_address(display_url: &str, id: &str) -> String {
+    if display_url.is_empty() {
+        return id.to_owned();
+    }
+    let Some((scheme, rest)) = display_url.split_once("://") else {
+        return display_url.to_owned();
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    let default_port = match scheme.to_lowercase().as_str() {
+        "http" | "ws" => ":80",
+        "https" | "wss" => ":443",
+        _ => "",
+    };
+    let host = match host.strip_suffix(default_port) {
+        Some(bare) if !default_port.is_empty() => bare,
+        _ => &host,
+    };
+    if host.is_empty() {
+        display_url.to_owned()
+    } else {
+        host.to_owned()
+    }
+}
+
 /// `settingsScopeEnvironmentLabels`: the secondary text only for a label another environment
-/// shares.
+/// shares, the full URL when a duplicate also shares the address.
 fn environment_secondary(environment: &Environment, all: &[Environment]) -> String {
     let duplicates: Vec<&Environment> = all
         .iter()
@@ -517,6 +550,16 @@ fn environment_secondary(environment: &Environment, all: &[Environment]) -> Stri
         .collect();
     if duplicates.is_empty() {
         return String::new();
+    }
+    if duplicates
+        .iter()
+        .any(|other| other.address == environment.address)
+    {
+        return if environment.display_url.is_empty() {
+            environment.id.clone()
+        } else {
+            environment.display_url.clone()
+        };
     }
     environment.address.clone()
 }
@@ -693,6 +736,7 @@ pub fn search_hits(query: &str) -> Vec<&'static str> {
 pub fn scope_data(
     primary_label: &str,
     primary_machine: MachineKind,
+    primary_url: &str,
     primary: &[crate::projects::ProjectEntry],
     others: &[crate::projects::EnvironmentProjects],
 ) -> ScopeData {
@@ -701,7 +745,8 @@ pub fn scope_data(
     data.environments.push(Environment {
         id: PRIMARY.to_owned(),
         label: primary_label.to_owned(),
-        address: PRIMARY.to_owned(),
+        address: environment_address(primary_url, PRIMARY),
+        display_url: primary_url.to_owned(),
         machine: primary_machine,
         connected: true,
         writable: true,
@@ -738,9 +783,10 @@ pub fn scope_data(
         data.environments.push(Environment {
             id: other.id.clone(),
             label: other.label.clone(),
-            address: other.id.clone(),
+            address: environment_address(&other.url, &other.id),
+            display_url: other.url.clone(),
             machine: other.machine,
-            connected: !other.projects.is_empty(),
+            connected: other.connected,
             writable: false,
         });
     }
@@ -756,6 +802,7 @@ mod tests {
             id: id.to_owned(),
             label: label.to_owned(),
             address: format!("{id}.example:3773"),
+            display_url: format!("https://{id}.example:3773"),
             machine: MachineKind::Laptop,
             connected,
             writable,
@@ -1078,6 +1125,8 @@ mod tests {
         let other = crate::projects::EnvironmentProjects {
             id: "env-2".to_owned(),
             label: "Example Mac".to_owned(),
+            url: "http://mac.example.test:13774/".to_owned(),
+            connected: false,
             machine: MachineKind::Laptop,
             projects: vec![
                 entry("b", false, Some("repo")),
@@ -1087,6 +1136,7 @@ mod tests {
         let data = scope_data(
             "Example Server",
             MachineKind::Server,
+            "http://server.example.test:13773",
             &[
                 entry("a", false, Some("repo")),
                 entry("scratch", true, None),
@@ -1095,6 +1145,16 @@ mod tests {
         );
         assert_eq!(data.environments.len(), 2);
         assert!(data.environments[0].writable && !data.environments[1].writable);
+        assert_eq!(data.environments[0].address, "server.example.test:13773");
+        assert_eq!(data.environments[1].address, "mac.example.test:13774");
+        // The flag comes from the connection, not from whether projects arrived.
+        assert!(data.environments[0].connected && !data.environments[1].connected);
+        assert_eq!(environment_address("", "env-9"), "env-9");
+        assert_eq!(environment_address("not a url", "env-9"), "not a url");
+        assert_eq!(
+            environment_address("https://Example.test:443/p", "e"),
+            "example.test"
+        );
         let names: Vec<_> = data.projects.iter().map(|p| p.key.as_str()).collect();
         assert_eq!(names, ["repo", "only-b"]);
         assert_eq!(data.projects[0].environments, ["primary", "env-2"]);

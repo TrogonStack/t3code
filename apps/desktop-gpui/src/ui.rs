@@ -500,7 +500,13 @@ impl MainView {
             ),
             _ => return,
         };
-        let data = crate::settings_labs::scope_data(&label, machine, &entries, &self.environments);
+        let data = crate::settings_labs::scope_data(
+            &label,
+            machine,
+            &crate::config::primary_url(),
+            &entries,
+            &self.environments,
+        );
         let flags = self.providers.as_ref().map(|c| c.labs_flags());
         let devices = self.providers.as_ref().map(|c| {
             (

@@ -55,17 +55,19 @@ async fn follow(store: Arc<dyn CredentialStore>, saved: StoredCredential, status
     let forward = async {
         let mut last: Option<EnvironmentProjects> = None;
         while let Ok(update) = own_rx.recv().await {
-            let projects = match update {
+            let (projects, connected) = match update {
                 Status::Connected {
                     shell: Some(shell), ..
-                } => shell.project_entries,
+                } => (shell.project_entries, true),
                 Status::Connected { .. } => continue,
                 // A dropped socket must not leave a stale "Also on".
-                _ => Vec::new(),
+                _ => (Vec::new(), false),
             };
             let next = EnvironmentProjects {
                 id: saved.environment_id.clone(),
                 label: saved.label.clone(),
+                url: saved.http_base.clone(),
+                connected,
                 machine,
                 projects,
             };

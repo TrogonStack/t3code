@@ -35,6 +35,14 @@ impl Attach {
     }
 }
 
+/// The URL of the server this window shows: the attached one, else the one it manages.
+pub fn primary_url() -> String {
+    Attach::from_env()
+        .map(|attach| attach.http_base)
+        .or_else(|| Config::from_env().map(|config| config.http_base()))
+        .unwrap_or_default()
+}
+
 /// How to start the server. The command is data: dev runs `node <entry>`, a
 /// packaged build runs `t3` from PATH with no entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
