@@ -2,6 +2,8 @@
 //! panel sends and the way a failure is told apart.
 
 use crate::rpc::split_not_found;
+use crate::status::PrState;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// `PullRequestRef`: the project, the repository on its host and the number.
@@ -80,6 +82,151 @@ pub fn detail_failure(message: &str, number: u64) -> Unavailable {
     }
 }
 
+/// `PullRequestDetail`, the fields the panel shows. The server's other fields are left out.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Detail {
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub url: String,
+    #[serde(default)]
+    pub author: Option<Actor>,
+    pub state: State,
+    #[serde(default)]
+    pub is_draft: bool,
+    #[serde(default)]
+    pub mergeability: Option<String>,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub changed_files: u64,
+    pub head_branch: String,
+    pub base_branch: String,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub reviewers: Vec<Actor>,
+    #[serde(default)]
+    pub labels: Vec<Label>,
+    #[serde(default)]
+    pub checks: Vec<Check>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum State {
+    Open,
+    Closed,
+    Merged,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Actor {
+    pub login: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Label {
+    pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Check {
+    pub name: String,
+    pub status: CheckStatus,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CheckStatus {
+    Pending,
+    ActionRequired,
+    Success,
+    Failure,
+    Skipped,
+    Neutral,
+    Cancelled,
+}
+
+impl CheckStatus {
+    /// `CHECK_STATUS_PRESENTATION`'s labels.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "Running",
+            Self::ActionRequired => "Awaiting action",
+            Self::Success => "Passed",
+            Self::Failure => "Failed",
+            Self::Cancelled => "Cancelled",
+            Self::Skipped => "Skipped",
+            Self::Neutral => "Neutral",
+        }
+    }
+}
+
+impl Detail {
+    pub fn decode(value: &Value) -> Option<Self> {
+        Self::deserialize(value).ok()
+    }
+
+    /// `resolvePullRequestState`: an open draft is its own state.
+    pub fn badge_state(&self) -> PrState {
+        match (self.state, self.is_draft) {
+            (State::Open, true) => PrState::Draft,
+            (State::Open, false) => PrState::Open,
+            (State::Closed, _) => PrState::Closed,
+            (State::Merged, _) => PrState::Merged,
+        }
+    }
+
+    pub fn state_label(&self) -> &'static str {
+        match self.badge_state() {
+            PrState::Draft => "Draft",
+            PrState::Closed => "Closed",
+            PrState::Merged => "Merged",
+            PrState::Open | PrState::Pending => "Open",
+        }
+    }
+
+    /// `resolvePullRequestConflict`.
+    pub fn conflict(&self) -> Option<String> {
+        (self.state == State::Open
+            && !self.is_draft
+            && self.mergeability.as_deref() == Some("conflicting"))
+        .then(|| {
+            if self.base_branch.is_empty() {
+                "Has conflicts".to_owned()
+            } else {
+                format!("Conflicts with {}", self.base_branch)
+            }
+        })
+    }
+}
+
+/// How long ago `then` was, in the largest whole unit, for the "updated" meta.
+pub fn relative_age(then_ms: i64, now_ms: i64) -> String {
+    let seconds = ((now_ms - then_ms) / 1000).max(0);
+    let (count, unit) = match seconds {
+        0..=59 => return "just now".to_owned(),
+        60..=3599 => (seconds / 60, "minute"),
+        3600..=86399 => (seconds / 3600, "hour"),
+        86400..=2_591_999 => (seconds / 86400, "day"),
+        2_592_000..=31_535_999 => (seconds / 2_592_000, "month"),
+        _ => (seconds / 31_536_000, "year"),
+    };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
+}
+
 /// `openOnHostLabel` for the host a pull request URL names. The web resolves the provider
 /// from the repository identity; the URL's host stands in for it, so a self-hosted instance
 /// reads "Open on host".
@@ -148,5 +295,46 @@ mod tests {
         assert_eq!(open_label("https://www.gitlab.com/o/r"), "Open on GitLab");
         assert_eq!(open_label("https://git.example.test/o/r"), "Open on host");
         assert_eq!(open_label(""), "Open on host");
+    }
+
+    #[test]
+    fn the_detail_decodes_what_the_panel_shows() {
+        let detail = Detail::decode(&json!({
+            "title": "Fix it", "url": "https://github.com/o/r/pull/7", "state": "open",
+            "isDraft": true, "headBranch": "topic", "baseBranch": "main",
+            "mergeability": "conflicting", "additions": 3, "deletions": 1, "changedFiles": 2,
+            "author": {"login": "someone", "name": null, "avatarUrl": null},
+            "labels": [{"name": "bug", "color": null}],
+            "checks": [{"name": "ci", "status": "action-required", "description": null, "url": null}],
+            "provider": "github", "unknownField": 1,
+        }))
+        .expect("decodes");
+        assert_eq!(detail.badge_state(), PrState::Draft);
+        assert_eq!(detail.conflict(), None);
+        assert_eq!(detail.checks[0].status, CheckStatus::ActionRequired);
+        assert_eq!(detail.checks[0].status.label(), "Awaiting action");
+        assert_eq!(detail.author.expect("author").login, "someone");
+        assert!(Detail::decode(&json!({"title": "x"})).is_none());
+    }
+
+    #[test]
+    fn only_an_open_ready_pull_request_reports_conflicts() {
+        let mut detail = Detail::decode(&json!({
+            "title": "t", "url": "u", "state": "open", "headBranch": "h",
+            "baseBranch": "main", "mergeability": "conflicting",
+        }))
+        .expect("decodes");
+        assert_eq!(detail.conflict().as_deref(), Some("Conflicts with main"));
+        detail.state = State::Merged;
+        assert_eq!(detail.conflict(), None);
+    }
+
+    #[test]
+    fn ages_use_the_largest_whole_unit() {
+        assert_eq!(relative_age(0, 30_000), "just now");
+        assert_eq!(relative_age(0, 60_000), "1 minute ago");
+        assert_eq!(relative_age(0, 3 * 3_600_000), "3 hours ago");
+        assert_eq!(relative_age(0, 2 * 86_400_000), "2 days ago");
+        assert_eq!(relative_age(10, 0), "just now");
     }
 }

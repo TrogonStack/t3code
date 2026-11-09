@@ -293,7 +293,7 @@ impl DiffList {
 }
 
 /// The web's `DiffStatLabel`: `+N` and `-N`, each tinted while non-zero.
-fn stat(additions: u64, deletions: u64) -> impl IntoElement {
+pub(super) fn stat(additions: u64, deletions: u64) -> impl IntoElement {
     let count = |sign: char, count: u64, color: u32| {
         div()
             .font_family("monospace")

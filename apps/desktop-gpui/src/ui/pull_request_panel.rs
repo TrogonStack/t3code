@@ -3,10 +3,12 @@
 //! `PullRequestsUnavailableState`.
 
 use super::*;
-use crate::pull_request::{self, Reference};
+use crate::pull_request::{self, CheckStatus, Detail, Reference};
+use crate::shell::timestamp_ms;
 use crate::status::CallEvent;
 use gpui_component::Disableable as _;
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Call tokens, above every other range.
 pub const TOKEN_BASE: u64 = 1 << 48;
@@ -141,6 +143,216 @@ impl PullRequestPanel {
         cx.notify();
     }
 
+    fn section(title: &'static str, cx: &App) -> gpui::Div {
+        div()
+            .text_xs()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(cx.theme().muted_foreground)
+            .child(title)
+    }
+
+    /// `PullRequestDetailPanel`'s summary: the header, labels, reviewers, checks and description.
+    /// The web's Timeline, Code and Guide tabs, its actions and its composers are not here.
+    fn detail(detail: &Detail, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let (muted, foreground, dark) = (theme.muted_foreground, theme.foreground, theme.is_dark());
+        let state = detail.badge_state();
+        let tone = pr_color(state, dark).unwrap_or(muted);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as i64);
+        let updated = timestamp_ms(&detail.updated_at)
+            .map(|then| format!("updated {}", pull_request::relative_age(then, now)));
+        let author = detail.author.as_ref().map(|author| author.login.clone());
+        let meta = [author, updated].into_iter().flatten().collect::<Vec<_>>();
+        let url = detail.url.clone();
+        let header = v_flex()
+            .gap_2()
+            .px_4()
+            .pt_1()
+            .pb_4()
+            .child(
+                h_flex()
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(detail.title.clone()),
+                    )
+                    .child(
+                        ghost_icon_button(
+                            "pull-request-open-host",
+                            Icon::new(Icons::ExternalLink).size_4(),
+                            pull_request::open_label(&detail.url).into(),
+                            true,
+                            cx,
+                        )
+                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_x_2()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .text_color(tone)
+                            .child(Icon::new(pr_state_icon(state)).size(px(14.)))
+                            .child(detail.state_label()),
+                    )
+                    .child(meta.join(" \u{b7} ")),
+            )
+            .children(detail.conflict().map(|text| {
+                h_flex()
+                    .gap_1()
+                    .text_xs()
+                    .text_color(gpui::rgb(0xef4444))
+                    .child(Icon::new(Icons::CircleAlert).size(px(14.)))
+                    .child(text)
+            }))
+            .child(
+                h_flex()
+                    .mt_2()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .flex_1()
+                            .gap_1p5()
+                            .font_family(theme.mono_font_family.clone())
+                            .child(div().truncate().child(detail.base_branch.clone()))
+                            .child("\u{2190}")
+                            .child(div().truncate().child(detail.head_branch.clone())),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_2()
+                            .child(format!("{} files", detail.changed_files))
+                            .child(super::right_panel::stat(detail.additions, detail.deletions)),
+                    ),
+            );
+        let labels = (!detail.labels.is_empty()).then(|| {
+            v_flex().gap_1().child(Self::section("Labels", cx)).child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(detail.labels.iter().map(|label| {
+                        let color = label
+                            .color
+                            .as_deref()
+                            .and_then(|hex| {
+                                u32::from_str_radix(hex.trim_start_matches('#'), 16).ok()
+                            })
+                            .map(|hex| Hsla::from(gpui::rgb(hex)));
+                        div()
+                            .max_w(px(160.))
+                            .truncate()
+                            .px_1p5()
+                            .rounded_full()
+                            .border_1()
+                            .border_color(color.map_or(theme.border, |color| color.opacity(0.5)))
+                            .bg(color.map_or(foreground.opacity(0.06), |color| color.opacity(0.15)))
+                            .text_xs()
+                            .child(label.name.clone())
+                    })),
+            )
+        });
+        let reviewers = (!detail.reviewers.is_empty()).then(|| {
+            v_flex()
+                .gap_1()
+                .child(Self::section("Reviewers", cx))
+                .child(
+                    div().text_xs().child(
+                        detail
+                            .reviewers
+                            .iter()
+                            .map(|reviewer| reviewer.login.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                )
+        });
+        let checks = (!detail.checks.is_empty()).then(|| {
+            v_flex()
+                .gap_1()
+                .child(Self::section("Checks", cx))
+                .children(detail.checks.iter().enumerate().map(|(index, check)| {
+                    let (icon, tone) = match check.status {
+                        CheckStatus::Success => (Icons::CircleCheck, gpui::rgb(0x059669).into()),
+                        CheckStatus::Failure | CheckStatus::Cancelled => {
+                            (Icons::X, gpui::rgb(0xef4444).into())
+                        }
+                        CheckStatus::Pending | CheckStatus::ActionRequired => {
+                            (Icons::LoaderCircle, gpui::rgb(0xf59e0b).into())
+                        }
+                        CheckStatus::Skipped | CheckStatus::Neutral => (Icons::CircleDashed, muted),
+                    };
+                    let url = check.url.clone();
+                    h_flex()
+                        .id(("pull-request-check", index))
+                        .gap_2()
+                        .text_xs()
+                        .when(url.is_some(), |row| row.cursor_pointer())
+                        .child(
+                            Icon::new(icon)
+                                .size(px(14.))
+                                .flex_shrink_0()
+                                .text_color(tone),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .child(check.name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(muted)
+                                .child(check.status.label()),
+                        )
+                        .on_click(move |_, _, cx| {
+                            if let Some(url) = &url {
+                                cx.open_url(url);
+                            }
+                        })
+                }))
+        });
+        let description = (!detail.body.trim().is_empty()).then(|| {
+            v_flex()
+                .gap_1()
+                .child(Self::section("Description", cx))
+                .child(div().text_sm().child(detail.body.clone()))
+        });
+        v_flex()
+            .id("pull-request-detail")
+            .size_full()
+            .overflow_y_scroll()
+            .pt_3()
+            .child(header)
+            .child(
+                v_flex()
+                    .gap_4()
+                    .px_4()
+                    .pb_4()
+                    .children(labels)
+                    .children(reviewers)
+                    .children(checks)
+                    .children(description),
+            )
+    }
+
     fn note(text: &'static str, cx: &App) -> gpui::Div {
         div()
             .p_3()
@@ -242,20 +454,10 @@ impl Render for PullRequestPanel {
             }) => self
                 .unavailable(shown, message, *refreshing, cx)
                 .into_any_element(),
-            Some(Load::Loaded(detail)) => {
-                let title = detail["title"].as_str().unwrap_or_default().to_owned();
-                v_flex()
-                    .p_3()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("#{}", shown.reference.number)),
-                    )
-                    .child(div().text_sm().child(title))
-                    .into_any_element()
-            }
+            Some(Load::Loaded(value)) => match Detail::decode(value) {
+                Some(detail) => Self::detail(&detail, cx).into_any_element(),
+                None => Self::note("Could not read this pull request.", cx).into_any_element(),
+            },
         }
     }
 }
