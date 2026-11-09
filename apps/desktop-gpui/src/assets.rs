@@ -90,7 +90,9 @@ gpui_kit_assets::icon_assets!(
         FlaskConical,
         Archive,
         PanelsTopLeft,
-        Undo2
+        Undo2,
+        Apple,
+        Ellipsis
     ]
 );
 

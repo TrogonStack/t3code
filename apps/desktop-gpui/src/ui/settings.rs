@@ -2,8 +2,10 @@
 //! navigation (`SettingsSidebarNav.tsx`) and the General tab (`GeneralSettingsPanel`).
 
 mod components;
+mod devices_panel;
 mod diffs_panel;
 mod labs_panel;
+mod scope_inheritance;
 mod scope_pickers;
 mod tokens;
 
@@ -17,9 +19,11 @@ use components::{
     HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, disclosure,
     ghost_button, group, reset_button, row, section, select_menu, select_menu_checked, switch,
 };
+use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
+use scope_pickers::ScopeBar;
 use std::rc::Rc;
 use tokens::Tokens;
 
@@ -156,6 +160,8 @@ pub struct SettingsDialog {
     advanced_open: bool,
     diffs: Entity<DiffsPanel>,
     labs: Entity<LabsPanel>,
+    devices: Entity<DevicesPanel>,
+    scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
     _search_events: Subscription,
@@ -168,7 +174,9 @@ impl SettingsDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let labs = cx.new(|cx| LabsPanel::new(actions, window, cx));
+        let scope = cx.new(|cx| ScopeBar::new(window, cx));
+        let devices = cx.new(|cx| DevicesPanel::new(actions.clone(), scope.clone(), cx));
+        let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
             this.select_section(*section, cx);
@@ -198,6 +206,8 @@ impl SettingsDialog {
             advanced_open: false,
             diffs: cx.new(DiffsPanel::new),
             labs,
+            devices,
+            scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
             _search_events: events,
@@ -214,6 +224,7 @@ impl SettingsDialog {
         self.settings = DeviceSettings::load();
         self.diffs.update(cx, |panel, cx| panel.reload(cx));
         self.labs.update(cx, |panel, cx| panel.reload(cx));
+        self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -240,8 +251,10 @@ impl SettingsDialog {
         flags: Option<crate::settings_labs::ServerFlags>,
         cx: &mut Context<Self>,
     ) {
-        self.labs
-            .update(cx, |panel, cx| panel.set_data(data, flags, cx));
+        self.scope.update(cx, |bar, cx| bar.set_data(data, cx));
+        if let Some(flags) = flags {
+            self.labs.update(cx, |panel, cx| panel.set_flags(flags, cx));
+        }
     }
 
     pub fn on_labs_call(
@@ -251,6 +264,26 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.labs
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_devices_data(
+        &mut self,
+        config: crate::settings_devices::DeviceConfig,
+        projects: crate::settings_devices::ProjectIds,
+        cx: &mut Context<Self>,
+    ) {
+        self.devices
+            .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn on_devices_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.devices
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -311,8 +344,17 @@ impl SettingsDialog {
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scope.update(cx, |bar, cx| bar.close_menu(cx)) {
+            return;
+        }
         if self
             .labs
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .devices
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -445,6 +487,9 @@ impl Render for SettingsDialog {
         let header = self.header(cx);
         let body = self.body(width - NAV_WIDTH, window, cx);
         let confirm = self.restore_dialog(cx);
+        let devices = self
+            .devices
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -503,6 +548,7 @@ impl Render for SettingsDialog {
                     ),
             )
             .children(confirm)
+            .children(devices)
             .into_any_element()
     }
 }
@@ -984,9 +1030,15 @@ impl SettingsDialog {
         } else if self.section == Section::Labs {
             self.labs.update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.labs.clone().into_any_element()]
+        } else if self.section == Section::Devices {
+            self.devices
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.devices.clone().into_any_element()]
         } else {
             Vec::new()
         };
+        // The web hides the scope sentence on device-only tabs; the tabs that apply a scope list here.
+        let scoped = matches!(self.section, Section::Labs | Section::Devices);
         div()
             .w_full()
             .flex()
@@ -999,6 +1051,7 @@ impl SettingsDialog {
                     .px_6()
                     .pt_6()
                     .pb_12()
+                    .children(scoped.then(|| self.scope.clone().into_any_element()))
                     .children(panel),
             )
             .into_any_element()

@@ -22,6 +22,7 @@ mod rpc;
 mod send;
 mod server;
 mod settings;
+mod settings_devices;
 mod settings_diffs;
 mod settings_labs;
 mod shell;

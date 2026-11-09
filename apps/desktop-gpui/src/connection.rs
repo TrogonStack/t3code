@@ -6,13 +6,13 @@ use crate::diff;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    AttachmentsCreateUploadUrl, AttachmentsDelete, Event, GitRunStackedAction,
-    OrchestrationDispatchCommand, OrchestrationLaunchThread, PING_FRAME, ProjectsMutate,
-    ProviderConsumeResetCredit, ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary,
-    ServerRefreshProviders, ServerRefreshUsageRates, ServerUpdateSettings, Session,
-    ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach,
-    TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull,
-    VcsRefreshStatus, VcsSwitchRef,
+    AttachmentsCreateUploadUrl, AttachmentsDelete, DeviceConfigure, DeviceEasAccount, DeviceList,
+    DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
+    OrchestrationLaunchThread, PING_FRAME, ProjectsMutate, ProviderConsumeResetCredit,
+    ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary, ServerRefreshProviders,
+    ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
+    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
+    TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -130,6 +130,10 @@ pub enum Call {
     RefreshUsageRates,
     RefreshProviders,
     ConsumeResetCredit,
+    DeviceList,
+    DeviceConfigure,
+    DeviceTestHost,
+    DeviceEasAccount,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -174,6 +178,10 @@ impl Call {
             Self::RefreshUsageRates => "refresh usage rates",
             Self::RefreshProviders => "refresh the provider limits",
             Self::ConsumeResetCredit => "use the reset credit",
+            Self::DeviceList => "load the devices",
+            Self::DeviceConfigure => "update the device settings",
+            Self::DeviceTestHost => "test the connection",
+            Self::DeviceEasAccount => "check the Expo account",
         }
     }
 
@@ -198,6 +206,10 @@ impl Call {
             Self::RefreshUsageRates => session.request::<ServerRefreshUsageRates>(payload),
             Self::RefreshProviders => session.request::<ServerRefreshProviders>(payload),
             Self::ConsumeResetCredit => session.request::<ProviderConsumeResetCredit>(payload),
+            Self::DeviceList => session.request::<DeviceList>(payload),
+            Self::DeviceConfigure => session.request::<DeviceConfigure>(payload),
+            Self::DeviceTestHost => session.request::<DeviceTestHost>(payload),
+            Self::DeviceEasAccount => session.request::<DeviceEasAccount>(payload),
         }
     }
 }

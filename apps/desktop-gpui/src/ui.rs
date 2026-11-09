@@ -502,8 +502,18 @@ impl MainView {
         };
         let data = crate::settings_labs::scope_data(&label, machine, &entries, &self.environments);
         let flags = self.providers.as_ref().map(|c| c.labs_flags());
-        self.settings
-            .update(cx, |settings, cx| settings.set_labs_data(data, flags, cx));
+        let devices = self.providers.as_ref().map(|c| {
+            (
+                c.devices().clone(),
+                crate::settings_devices::project_ids(&entries),
+            )
+        });
+        self.settings.update(cx, |settings, cx| {
+            settings.set_labs_data(data, flags, cx);
+            if let Some((config, projects)) = devices {
+                settings.set_devices_data(config, projects, cx);
+            }
+        });
     }
 
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
@@ -574,6 +584,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_devices::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_devices_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_labs::TOKEN_BASE {
                 self.settings
                     .update(cx, |settings, cx| settings.on_labs_call(token, event, cx));

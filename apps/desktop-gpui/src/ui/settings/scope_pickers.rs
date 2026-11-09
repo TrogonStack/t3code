@@ -6,7 +6,7 @@
 use super::components::tab_stop;
 use super::tokens::Tokens;
 use super::*;
-use crate::settings_labs::{self as labs, Choice, ChoiceIcon};
+use crate::settings_labs::{self as labs, ALL, Choice, ChoiceIcon, ScopeData, ScopeSearch};
 use gpui::{BoxShadow, ElementId, FocusHandle, KeyDownEvent, point};
 use std::rc::Rc;
 
@@ -323,4 +323,222 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
                 )
         })
         .into_any_element()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axis {
+    Project,
+    Environment,
+}
+
+/// The settings scope sentence and its state, shared by every tab that applies a scope
+/// (`SettingsScopeContext`). The dialog owns one and draws it above the panel.
+pub(super) struct ScopeBar {
+    search: ScopeSearch,
+    data: ScopeData,
+    open: Option<Axis>,
+    project_search: Entity<InputState>,
+    environment_search: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ScopeBar {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let project_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search projects"));
+        let environment_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search environments"));
+        let subscriptions = [&project_search, &environment_search]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        cx.notify();
+                    }
+                })
+            })
+            .collect();
+        Self {
+            search: ScopeSearch::default(),
+            data: ScopeData::default(),
+            open: None,
+            project_search,
+            environment_search,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    pub fn search(&self) -> &ScopeSearch {
+        &self.search
+    }
+
+    pub fn data(&self) -> &ScopeData {
+        &self.data
+    }
+
+    pub fn set_data(&mut self, data: ScopeData, cx: &mut Context<Self>) {
+        if self.data != data {
+            self.data = data;
+            cx.notify();
+        }
+    }
+
+    /// Closes an open picker; returns whether there was one, so Escape stops there.
+    pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        let was = self.open.take().is_some();
+        if was {
+            cx.notify();
+        }
+        was
+    }
+
+    fn input(&self, axis: Axis) -> &Entity<InputState> {
+        match axis {
+            Axis::Project => &self.project_search,
+            Axis::Environment => &self.environment_search,
+        }
+    }
+
+    fn set_open(&mut self, axis: Axis, opened: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let input = self.input(axis).clone();
+        if opened {
+            self.open = Some(axis);
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+            let handle = input.focus_handle(cx);
+            window.focus(&handle, cx);
+        } else if self.open == Some(axis) {
+            self.open = None;
+        }
+        cx.notify();
+    }
+
+    fn pick(&mut self, axis: Axis, value: &str, cx: &mut Context<Self>) {
+        self.search = match axis {
+            Axis::Project => self.search.select_project(value),
+            Axis::Environment => self.search.select_environment(value),
+        };
+        self.open = None;
+        cx.notify();
+    }
+
+    fn project_picker(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        let selected = self
+            .search
+            .project
+            .as_ref()
+            .and_then(|key| self.data.projects.iter().find(|p| &p.key == key));
+        let spec = Picker {
+            id: "settings-scope-project",
+            label: labs::project_label(&self.search, &self.data),
+            icon: selected.map(|p| ChoiceIcon::Project {
+                initials: p.initials.clone(),
+                color: p.color,
+            }),
+            all: Some(Choice {
+                value: ALL.to_owned(),
+                label: "All projects".to_owned(),
+                secondary: String::new(),
+                offline: false,
+                icon: ChoiceIcon::None,
+            }),
+            choices: labs::project_choices(&self.search, &self.data),
+            selected: self
+                .search
+                .project
+                .clone()
+                .unwrap_or_else(|| ALL.to_owned()),
+            open: self.open == Some(Axis::Project),
+            search: self.project_search.clone(),
+            query: self.project_search.read(cx).value().to_string(),
+            on_open: {
+                let view = view.clone();
+                Rc::new(move |opened, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.set_open(Axis::Project, opened, window, cx)
+                    })
+                })
+            },
+            on_pick: Rc::new(move |value, _, cx| {
+                view.update(cx, |this, cx| this.pick(Axis::Project, &value, cx))
+            }),
+        };
+        picker(spec, window, cx)
+    }
+
+    fn environment_picker(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let view = cx.entity();
+        let selected = self
+            .search
+            .machine
+            .as_ref()
+            .and_then(|id| self.data.environments.iter().find(|e| &e.id == id));
+        let spec = Picker {
+            id: "settings-scope-environment",
+            label: labs::environment_trigger_label(&self.search, &self.data),
+            icon: selected.map(|e| ChoiceIcon::Machine(e.machine)),
+            all: Some(Choice {
+                value: ALL.to_owned(),
+                label: "All environments".to_owned(),
+                secondary: String::new(),
+                offline: false,
+                icon: ChoiceIcon::Layers,
+            }),
+            choices: labs::environment_choices(&self.search, &self.data),
+            selected: self
+                .search
+                .machine
+                .clone()
+                .unwrap_or_else(|| ALL.to_owned()),
+            open: self.open == Some(Axis::Environment),
+            search: self.environment_search.clone(),
+            query: self.environment_search.read(cx).value().to_string(),
+            on_open: {
+                let view = view.clone();
+                Rc::new(move |opened, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.set_open(Axis::Environment, opened, window, cx)
+                    })
+                })
+            },
+            on_pick: Rc::new(move |value, _, cx| {
+                view.update(cx, |this, cx| this.pick(Axis::Environment, &value, cx))
+            }),
+        };
+        picker(spec, window, cx)
+    }
+}
+
+impl Render for ScopeBar {
+    /// `SettingsScopeSentence`: `px-3 text-sm text-muted-foreground`, the two halves `gap-1.5`.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = Tokens::of(cx).muted_foreground;
+        let project = self.project_picker(window, cx);
+        let environment = self.environment_picker(window, cx);
+        h_flex()
+            .min_w_0()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(6.))
+            .gap_y(px(4.))
+            .px_3()
+            .text_sm()
+            .text_color(muted)
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().flex_shrink_0().child("Applying settings for"))
+                    .child(project),
+            )
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().flex_shrink_0().child(self.search.joiner()))
+                    .child(environment),
+            )
+    }
 }

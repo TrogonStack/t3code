@@ -363,6 +363,8 @@ pub struct Catalog {
     max_file_upload_bytes: Option<u64>,
     /// `environment.capabilities.usageModelAliases`.
     usage_model_aliases: bool,
+    /// The Devices tab's keys.
+    devices: crate::settings_devices::DeviceConfig,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -449,6 +451,7 @@ impl Entry<'_> {
 
 impl Catalog {
     pub fn decode(value: Value) -> Result<Self, String> {
+        let devices = crate::settings_devices::DeviceConfig::from_settings(&value["settings"]);
         let Config {
             providers,
             settings,
@@ -459,6 +462,7 @@ impl Catalog {
             providers,
             settings,
             available_editors,
+            devices,
             usage_model_aliases: environment
                 .as_ref()
                 .is_some_and(|environment| environment.capabilities.usage_model_aliases),
@@ -517,6 +521,11 @@ impl Catalog {
     /// The editor ids the server found on its machine (`server.getConfig` `availableEditors`).
     pub fn available_editors(&self) -> &[String] {
         &self.available_editors
+    }
+
+    /// The attached environment's device settings.
+    pub fn devices(&self) -> &crate::settings_devices::DeviceConfig {
+        &self.devices
     }
 
     /// The attached environment's Labs flags.

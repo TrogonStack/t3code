@@ -653,7 +653,7 @@ fn is_combining(ch: char) -> bool {
 }
 
 /// Every searchable setting of the tabs that have a panel, in the web's order
-/// (`settingsSearch.ts`): General, Labs, Diffs, then Chat.
+/// (`settingsSearch.ts`): General, Labs, Diffs, Chat, then Devices.
 pub fn searchable() -> &'static [SearchItem] {
     static ITEMS: std::sync::OnceLock<Vec<SearchItem>> = std::sync::OnceLock::new();
     ITEMS.get_or_init(|| {
@@ -662,6 +662,7 @@ pub fn searchable() -> &'static [SearchItem] {
             .chain(crate::settings_labs::LABS_ITEMS)
             .chain(crate::settings_diffs::DIFFS_ITEMS)
             .chain(CHAT_ITEMS)
+            .chain(crate::settings_devices::DEVICE_ITEMS)
             .copied()
             .collect()
     })

@@ -78,6 +78,42 @@ impl Method for ServerUpdateSettings {
     type Success = Value;
 }
 
+/// `device.list`, the Device panel's host and platform state.
+pub struct DeviceList;
+
+impl Method for DeviceList {
+    const TAG: &'static str = "device.list";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `device.configure`, the hub and agent-access switches.
+pub struct DeviceConfigure;
+
+impl Method for DeviceConfigure {
+    const TAG: &'static str = "device.configure";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `device.testHost`, a connection check of an SSH host.
+pub struct DeviceTestHost;
+
+impl Method for DeviceTestHost {
+    const TAG: &'static str = "device.testHost";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `device.easAccount`, the Expo account behind an EAS host.
+pub struct DeviceEasAccount;
+
+impl Method for DeviceEasAccount {
+    const TAG: &'static str = "device.easAccount";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `attachments.createUploadUrl`, which mints the signed URL an attachment is posted to.
 pub struct AttachmentsCreateUploadUrl;
 
