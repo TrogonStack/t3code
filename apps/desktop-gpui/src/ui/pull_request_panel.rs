@@ -361,7 +361,6 @@ impl PullRequestPanel {
             .child(text)
     }
 
-    /// `PullRequestsUnavailableState`: an icon card, the title and reason, and the buttons.
     fn unavailable(
         &self,
         shown: &Shown,
@@ -369,74 +368,92 @@ impl PullRequestPanel {
         refreshing: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let theme = cx.theme();
-        let failure = pull_request::detail_failure(message, shown.reference.number);
-        let open = shown.url.clone();
-        let label = pull_request::open_label(open.as_deref().unwrap_or(""));
-        v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .gap_6()
-            .p_6()
-            .text_center()
-            .child(
-                div()
-                    .size(px(36.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.background)
-                    .shadow_sm()
-                    .child(Icon::new(Icons::GitPullRequestArrow).size(px(18.))),
-            )
-            .child(
-                v_flex()
-                    .max_w(px(384.))
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(failure.title),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(failure.error),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap_2()
-                    .child(
-                        Button::new("pull-request-retry")
-                            .label("Retry")
-                            .icon(Icon::new(Icons::RefreshCw))
+        let host = shown
+            .reference
+            .host
+            .as_deref()
+            .filter(|host| !host.is_empty())
+            .or(shown.url.as_deref())
+            .unwrap_or("");
+        let failure = pull_request::detail_failure(message, shown.reference.number, host);
+        let retry = cx.listener(|this, _, _, cx| this.retry(cx));
+        unavailable_view(failure, shown.url.clone(), refreshing, retry, cx)
+    }
+}
+
+/// `PullRequestsUnavailableState`: an icon card, the title and reason, and the buttons.
+pub(super) fn unavailable_view(
+    failure: pull_request::Unavailable,
+    open: Option<String>,
+    refreshing: bool,
+    on_retry: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> gpui::Div {
+    let theme = cx.theme();
+    let label = pull_request::open_label(open.as_deref().unwrap_or(""));
+    v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap_6()
+        .p_6()
+        .text_center()
+        .child(
+            div()
+                .size(px(36.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .shadow_sm()
+                .child(Icon::new(Icons::GitPullRequestArrow).size(px(18.))),
+        )
+        .child(
+            v_flex()
+                .max_w(px(384.))
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .text_lg()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(failure.title),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(failure.error),
+                ),
+        )
+        .child(
+            h_flex()
+                .flex_wrap()
+                .justify_center()
+                .gap_2()
+                .child(
+                    Button::new("pull-request-retry")
+                        .label("Retry")
+                        .icon(Icon::new(Icons::RefreshCw))
+                        .outline()
+                        .small()
+                        .disabled(refreshing)
+                        .on_click(on_retry),
+                )
+                .when_some(open, |row, url| {
+                    row.child(
+                        Button::new("pull-request-open")
+                            .label(label)
+                            .icon(Icon::new(Icons::ExternalLink))
                             .outline()
                             .small()
-                            .disabled(refreshing)
-                            .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
                     )
-                    .when_some(open, |row, url| {
-                        row.child(
-                            Button::new("pull-request-open")
-                                .label(label)
-                                .icon(Icon::new(Icons::ExternalLink))
-                                .outline()
-                                .small()
-                                .on_click(move |_, _, cx| cx.open_url(&url)),
-                        )
-                    }),
-            )
-    }
+                }),
+        )
 }
 
 impl Render for PullRequestPanel {

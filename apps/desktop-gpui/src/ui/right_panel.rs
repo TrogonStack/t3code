@@ -375,7 +375,7 @@ pub struct Layout {
 impl MainView {
     /// The web's `rightPanelAvailable`: a thread with a workspace to diff.
     pub(super) fn right_panel_available(&self) -> bool {
-        self.selected_thread.is_some() && self.details_cwd().is_some()
+        !self.pull_requests_open && self.selected_thread.is_some() && self.details_cwd().is_some()
     }
 
     fn right_panel_is_open(&self) -> bool {

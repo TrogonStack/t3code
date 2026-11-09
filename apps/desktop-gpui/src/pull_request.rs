@@ -48,7 +48,6 @@ impl Reference {
     }
 }
 
-#[expect(dead_code, reason = "the pull requests page reads with it")]
 /// `PullRequestListInput` for the page's first read of one state.
 pub fn list_payload(state: &str, project_ids: &[String], limit: u32) -> Value {
     let mut payload = json!({ "state": state, "limit": limit });
@@ -68,18 +67,44 @@ pub struct Unavailable {
 pub const UNAVAILABLE_TITLE: &str = "Could not load pull requests";
 
 /// The detail panel's failure: a not-found reason gets its own title and copy.
-pub fn detail_failure(message: &str, number: u64) -> Unavailable {
+pub fn detail_failure(message: &str, number: u64, host: &str) -> Unavailable {
+    let term = term(host);
     match split_not_found(message) {
         (_, true) => Unavailable {
-            title: format!("Pull request #{number} not found"),
-            error: "It may be an issue rather than a pull request, or this account can't see it."
-                .to_owned(),
+            title: format!("{} #{number} not found", capitalize(term)),
+            error: format!(
+                "It may be an issue rather than a {term}, or this account can't see it."
+            ),
         },
         (text, false) => Unavailable {
             title: UNAVAILABLE_TITLE.to_owned(),
             error: text.to_owned(),
         },
     }
+}
+
+/// The web's provider terminology for a host or URL: GitLab says "merge request". The web
+/// resolves the provider from the repository identity; the host name stands in for it.
+pub fn term(host_or_url: &str) -> &'static str {
+    let host = host_or_url
+        .split_once("://")
+        .map_or(host_or_url, |(_, rest)| rest)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if host.contains("gitlab") {
+        "merge request"
+    } else {
+        "pull request"
+    }
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// `PullRequestDetail`, the fields the panel shows. The server's other fields are left out.
@@ -179,14 +204,8 @@ impl Detail {
         Self::deserialize(value).ok()
     }
 
-    /// `resolvePullRequestState`: an open draft is its own state.
     pub fn badge_state(&self) -> PrState {
-        match (self.state, self.is_draft) {
-            (State::Open, true) => PrState::Draft,
-            (State::Open, false) => PrState::Open,
-            (State::Closed, _) => PrState::Closed,
-            (State::Merged, _) => PrState::Merged,
-        }
+        badge_state(self.state, self.is_draft)
     }
 
     pub fn state_label(&self) -> &'static str {
@@ -209,6 +228,92 @@ impl Detail {
             } else {
                 format!("Conflicts with {}", self.base_branch)
             }
+        })
+    }
+}
+
+/// `resolvePullRequestState`: an open draft is its own state.
+pub fn badge_state(state: State, is_draft: bool) -> PrState {
+    match (state, is_draft) {
+        (State::Open, true) => PrState::Draft,
+        (State::Open, false) => PrState::Open,
+        (State::Closed, _) => PrState::Closed,
+        (State::Merged, _) => PrState::Merged,
+    }
+}
+
+/// `PullRequestListEntry`, the fields a row shows.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListEntry {
+    pub project_id: String,
+    pub host: String,
+    pub repository: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub author: Option<Actor>,
+    pub head_branch: String,
+    pub base_branch: String,
+    pub state: State,
+    #[serde(default)]
+    pub is_draft: bool,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+}
+
+impl ListEntry {
+    pub fn reference(&self) -> Reference {
+        Reference {
+            project_id: self.project_id.clone(),
+            host: Some(self.host.clone()).filter(|host| !host.is_empty()),
+            repository: self.repository.clone(),
+            number: self.number,
+        }
+    }
+}
+
+/// `PullRequestListProjectError`: a project whose host could not be read.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ListError {
+    pub project_title: String,
+    pub message: String,
+}
+
+/// `PullRequestListResult`, newest update first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct List {
+    pub entries: Vec<ListEntry>,
+    pub errors: Vec<ListError>,
+    pub truncated: bool,
+}
+
+impl List {
+    /// Entries that do not decode are dropped, so one odd row cannot hide the rest.
+    pub fn decode(value: &Value) -> Option<Self> {
+        let items = |key: &str| value.get(key).and_then(Value::as_array);
+        let mut entries: Vec<ListEntry> = items("entries")?
+            .iter()
+            .filter_map(|entry| ListEntry::deserialize(entry).ok())
+            .collect();
+        entries.sort_by_key(|entry| {
+            std::cmp::Reverse(crate::shell::timestamp_ms(&entry.updated_at).unwrap_or(0))
+        });
+        let errors = items("errors")
+            .into_iter()
+            .flatten()
+            .filter_map(|error| ListError::deserialize(error).ok())
+            .collect();
+        Some(Self {
+            entries,
+            errors,
+            truncated: value.get("truncated").and_then(Value::as_bool) == Some(true),
         })
     }
 }
@@ -279,8 +384,10 @@ mod tests {
 
     #[test]
     fn a_missing_pull_request_has_its_own_title() {
-        let missing = detail_failure(&format!("{NOT_FOUND_MARK}gone"), 7);
+        let missing = detail_failure(&format!("{NOT_FOUND_MARK}gone"), 7, "github.com");
         assert_eq!(missing.title, "Pull request #7 not found");
+        let gitlab = detail_failure(&format!("{NOT_FOUND_MARK}gone"), 7, "gitlab.com");
+        assert_eq!(gitlab.title, "Merge request #7 not found");
         let other = detail_failure("paused", 7);
         assert_eq!(other.title, UNAVAILABLE_TITLE);
         assert_eq!(other.error, "paused");
@@ -336,5 +443,32 @@ mod tests {
         assert_eq!(relative_age(0, 3 * 3_600_000), "3 hours ago");
         assert_eq!(relative_age(0, 2 * 86_400_000), "2 days ago");
         assert_eq!(relative_age(10, 0), "just now");
+    }
+
+    #[test]
+    fn the_list_decodes_rows_newest_first_and_drops_odd_ones() {
+        let row = |number: u64, updated: &str| {
+            json!({
+                "projectId": "p", "host": "github.com", "repository": "o/r", "number": number,
+                "title": "t", "url": "u", "headBranch": "h", "baseBranch": "b",
+                "state": "merged", "updatedAt": updated, "provider": "github",
+            })
+        };
+        let list = List::decode(&json!({
+            "entries": [
+                row(1, "2026-01-01T00:00:00.000Z"),
+                {"number": 9},
+                row(2, "2026-02-01T00:00:00.000Z"),
+            ],
+            "errors": [{"projectId": "p", "projectTitle": "Proj", "message": "no cli"}],
+            "truncated": true,
+        }))
+        .expect("decodes");
+        let numbers: Vec<u64> = list.entries.iter().map(|entry| entry.number).collect();
+        assert_eq!(numbers, [2, 1]);
+        assert_eq!(list.errors[0].project_title, "Proj");
+        assert!(list.truncated);
+        assert_eq!(list.entries[0].reference().key(), "p:github.com:o/r#2");
+        assert!(List::decode(&json!({})).is_none());
     }
 }

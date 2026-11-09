@@ -60,6 +60,7 @@ mod add_to_machine;
 mod composer_menu;
 mod model_popover;
 mod pull_request_panel;
+mod pull_requests_page;
 mod right_panel;
 mod run_on_menu;
 mod settings;
@@ -288,6 +289,9 @@ pub struct MainView {
     pull_request_tabs: HashMap<String, Vec<right_panel::PullRequestTab>>,
     right_panel_active: HashMap<String, right_panel::Active>,
     pull_request_panel: Entity<pull_request_panel::PullRequestPanel>,
+    /// The pull requests page, in place of the thread area while open.
+    pull_requests_open: bool,
+    pull_requests_page: Entity<pull_requests_page::PullRequestsPage>,
     /// Threads (and drafts, by project) whose terminal drawer is open; it starts closed.
     terminal_open: HashSet<String>,
     /// The drawer's height per thread, as dragged.
@@ -430,6 +434,10 @@ impl MainView {
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
             .detach();
+        let pull_request_panel = cx.new({
+            let actions = actions.clone();
+            move |_| pull_request_panel::PullRequestPanel::new(actions)
+        });
         Self {
             status,
             search: cx.new(|cx| InputState::new(window, cx).placeholder("Search")),
@@ -491,9 +499,11 @@ impl MainView {
             diff_list: cx.new(|_| right_panel::DiffList::new()),
             pull_request_tabs: HashMap::new(),
             right_panel_active: HashMap::new(),
-            pull_request_panel: cx.new({
+            pull_request_panel: pull_request_panel.clone(),
+            pull_requests_open: false,
+            pull_requests_page: cx.new({
                 let actions = actions.clone();
-                move |_| pull_request_panel::PullRequestPanel::new(actions)
+                move |_| pull_requests_page::PullRequestsPage::new(actions, pull_request_panel)
             }),
             terminal_open: HashSet::new(),
             terminal_heights: HashMap::new(),
@@ -653,6 +663,11 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= pull_requests_page::TOKEN_BASE {
+                self.pull_requests_page
+                    .update(cx, |page, cx| page.on_call(token, event, cx));
+                return;
+            }
             if token >= pull_request_panel::TOKEN_BASE {
                 self.pull_request_panel
                     .update(cx, |panel, cx| panel.on_call(token, event, cx));
@@ -708,6 +723,12 @@ impl MainView {
             self.diffs_requested.clear();
             self.pull_request_panel
                 .update(cx, |panel, cx| panel.reset(cx));
+            if self.pull_requests_open {
+                self.pull_requests_page
+                    .update(cx, |page, cx| page.reset(cx));
+            } else {
+                self.pull_requests_page.update(cx, |page, _| page.forget());
+            }
         }
         let access = match &status {
             Status::NotConnected => usage_dialog::Access::Unavailable,
@@ -1442,6 +1463,7 @@ impl MainView {
 
     fn apply_route(&mut self, route: Route, cx: &mut Context<Self>) {
         self.sidebar_overlay_open = false;
+        self.pull_requests_open = false;
         // A thread the scope hides widens it to all projects, like the web's route reveal.
         let hidden = self
             .shell()
@@ -2491,12 +2513,20 @@ impl MainView {
                     }),
                 ),
             )
-            .child(footer_button(
-                "pull-requests",
-                Icon::new(Icons::GitPullRequest),
-                "Pull requests",
-                cx,
-            ))
+            .child(
+                footer_button(
+                    "pull-requests",
+                    Icon::new(Icons::GitPullRequest),
+                    "Pull requests",
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.pull_requests_open = true;
+                    this.sidebar_overlay_open = false;
+                    this.pull_requests_page.update(cx, |page, cx| page.open(cx));
+                    cx.notify();
+                })),
+            )
             .child(
                 footer_button("usage", Icon::new(Icons::ChartNoAxesColumn), "Usage", cx).on_click(
                     cx.listener(|this, _, window, cx| {
@@ -2740,6 +2770,9 @@ impl MainView {
 
     /// The main content, with the thread details card floating at its top right when it fits.
     fn main_area(&self, viewport_height: f32, cx: &mut Context<Self>) -> AnyElement {
+        if self.pull_requests_open {
+            return self.pull_requests_page.clone().into_any_element();
+        }
         let drawer = self.terminal_drawer(viewport_height, cx);
         let drawer_height = if self.terminal_visible() {
             self.terminal_height(viewport_height)
