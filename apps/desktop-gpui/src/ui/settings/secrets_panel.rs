@@ -229,7 +229,7 @@ impl SecretsPanel {
     fn write(&mut self, patch: Value, cx: &mut Context<Self>) {
         let previous = self.config.settings.clone();
         secrets::apply_patch(&mut self.config.settings, &patch);
-        match self.send(Call::UpdateSettings, patch) {
+        match self.send(Call::UpdateSettings, json!({ "patch": patch })) {
             Some(token) => {
                 self.pending.insert(token, previous);
             }

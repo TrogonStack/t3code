@@ -28,6 +28,7 @@ gpui_kit_assets::icon_assets!(
         GitBranch,
         ShieldOff,
         Lock,
+        LockOpen,
         PenLine,
         Sparkles,
         Settings,

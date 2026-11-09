@@ -49,6 +49,9 @@ pub(in crate::ui::settings) struct SecretField {
     trigger: FocusHandle,
     check: Check,
     disabled: bool,
+    /// A plain literal: no source select and a visible value.
+    plain: bool,
+    mono: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -124,8 +127,9 @@ impl SecretField {
                         cx.notify();
                     }
                     InputEvent::Blur | InputEvent::PressEnter { .. } => {
-                        let typed = this.value.read(cx).value().trim().is_empty();
-                        if !typed {
+                        let blank = this.value.read(cx).value().trim().is_empty();
+                        let blurred = matches!(event, InputEvent::Blur);
+                        if !blank || (this.plain && blurred) {
                             cx.emit(SecretEvent::Commit);
                         }
                         if matches!(event, InputEvent::PressEnter { .. }) {
@@ -157,6 +161,8 @@ impl SecretField {
             trigger: cx.focus_handle().tab_stop(true),
             check: Check::Idle,
             disabled: false,
+            plain: false,
+            mono: false,
             _subscriptions: subscriptions,
         }
     }
@@ -181,6 +187,80 @@ impl SecretField {
 
     pub(in crate::ui::settings) fn set_check(&mut self, check: Check, cx: &mut Context<Self>) {
         self.check = check;
+        cx.notify();
+    }
+
+    /// A plain literal shows its text and offers no source; a sensitive one masks it.
+    pub(in crate::ui::settings) fn set_plain(
+        &mut self,
+        plain: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.plain == plain {
+            return;
+        }
+        self.plain = plain;
+        if plain {
+            self.provider = None;
+            self.committed = None;
+            self.rejected = None;
+            self.check = Check::Idle;
+        }
+        self.value
+            .update(cx, |state, cx| state.set_masked(!plain, window, cx));
+        self.sync_inputs(window, cx);
+        cx.notify();
+    }
+
+    /// Mono type for the value, as a variable's.
+    pub(in crate::ui::settings) fn set_mono(&mut self, mono: bool, cx: &mut Context<Self>) {
+        if self.mono != mono {
+            self.mono = mono;
+            cx.notify();
+        }
+    }
+
+    /// The text in the value input, untrimmed.
+    pub(in crate::ui::settings) fn typed(&self, cx: &App) -> String {
+        self.value.read(cx).value().to_string()
+    }
+
+    pub(in crate::ui::settings) fn set_typed(
+        &mut self,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = text.to_owned();
+        self.value
+            .update(cx, |state, cx| state.set_value(text, window, cx));
+    }
+
+    /// The committed reference of the chosen source.
+    pub(in crate::ui::settings) fn secret(&self) -> Option<(String, String)> {
+        self.committed
+            .clone()
+            .filter(|(provider, _)| Some(provider) == self.provider.as_ref())
+    }
+
+    /// Shows a reference, a stored literal that is not sent back, or `typed` text, dropping any draft.
+    pub(in crate::ui::settings) fn show(
+        &mut self,
+        secret: Option<(String, String)>,
+        configured: bool,
+        typed: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.provider = secret.as_ref().map(|(provider, _)| provider.clone());
+        self.committed = secret;
+        self.configured = configured;
+        self.rejected = None;
+        self.check = Check::Idle;
+        self.menu = None;
+        self.sync_inputs(window, cx);
+        self.set_typed(typed, window, cx);
         cx.notify();
     }
 
@@ -240,7 +320,9 @@ impl SecretField {
     }
 
     fn sync_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let placeholder = if self.configured {
+        let placeholder = if self.plain {
+            "value"
+        } else if self.configured {
             "Stored secret, enter a new value to replace"
         } else {
             "Not set"
@@ -308,13 +390,14 @@ impl SecretField {
     fn pick(&mut self, next: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         self.rejected = None;
-        if next.is_none() {
-            self.committed = None;
-        }
+        let dropped = next.is_none() && self.committed.take().is_some();
         self.provider = next;
         self.check = Check::Idle;
         self.sync_inputs(window, cx);
         cx.emit(SecretEvent::Changed);
+        if dropped {
+            cx.emit(SecretEvent::Commit);
+        }
         cx.notify();
     }
 
@@ -375,7 +458,7 @@ impl SecretField {
         }
     }
 
-    fn select(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(in crate::ui::settings) fn select(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Tokens::of(cx);
         let view = cx.entity();
         let selected = self.provider.as_ref().map(|p| {
@@ -558,14 +641,30 @@ impl SecretField {
     }
 }
 
-impl Render for SecretField {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl SecretField {
+    /// The value input, or the reference input with its check button, then `trailing`.
+    pub(in crate::ui::settings) fn value_element(
+        &self,
+        trailing: Option<AnyElement>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Tokens::of(cx);
-        let show_source = !(self.sources.is_empty() && self.provider.is_none());
-        let value = match &self.provider {
-            None => {
-                sm_field(&self.value, false, false, self.disabled, window, cx).into_any_element()
-            }
+        match &self.provider {
+            None => h_flex()
+                .min_w_0()
+                .items_center()
+                .gap(px(6.))
+                .child(div().flex_1().min_w_0().child(sm_field(
+                    &self.value,
+                    self.mono,
+                    false,
+                    self.disabled,
+                    window,
+                    cx,
+                )))
+                .children(trailing)
+                .into_any_element(),
             Some(_) => {
                 let check = self.check_button(cx);
                 let message = self
@@ -589,7 +688,8 @@ impl Render for SecretField {
                                 window,
                                 cx,
                             )))
-                            .children(check),
+                            .children(check)
+                            .children(trailing),
                     )
                     .children(message.map(|text| {
                         div()
@@ -600,13 +700,29 @@ impl Render for SecretField {
                     }))
                     .into_any_element()
             }
-        };
+        }
+    }
+
+    /// Whether a secret provider, not Value, is chosen.
+    pub(in crate::ui::settings) fn is_reference(&self) -> bool {
+        self.provider.is_some()
+    }
+
+    /// Whether the source select shows.
+    pub(in crate::ui::settings) fn has_source(&self) -> bool {
+        !self.plain && !(self.sources.is_empty() && self.provider.is_none())
+    }
+}
+
+impl Render for SecretField {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let value = self.value_element(None, window, cx);
         h_flex()
             .min_w_0()
             .flex_1()
             .items_start()
             .gap(px(6.))
-            .when(show_source, |row| row.child(self.select(cx)))
+            .when(self.has_source(), |row| row.child(self.select(cx)))
             .child(div().min_w_0().flex_1().child(value))
     }
 }

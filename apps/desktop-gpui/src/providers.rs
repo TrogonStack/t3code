@@ -371,6 +371,17 @@ pub struct Catalog {
     secrets: crate::settings_secrets::Config,
 }
 
+/// One row of the Providers tab's list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstanceRow {
+    pub id: String,
+    pub driver: String,
+    pub mark: Mark,
+    pub enabled: bool,
+    pub status: String,
+    pub message: Option<String>,
+}
+
 /// The two-letter instance chip at the icon's bottom-right.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Badge {
@@ -609,6 +620,22 @@ impl Catalog {
             .iter()
             .find(|entry| entry.provider.instance_id == instance_id)?;
         Some(mark(&entries, entry))
+    }
+
+    /// The provider instances the Providers tab lists, in the server's order.
+    pub fn instance_rows(&self) -> Vec<InstanceRow> {
+        let entries = self.entries(None);
+        entries
+            .iter()
+            .map(|entry| InstanceRow {
+                id: entry.provider.instance_id.clone(),
+                driver: entry.provider.driver.clone(),
+                mark: mark(&entries, entry),
+                enabled: entry.enabled,
+                status: entry.provider.status.clone(),
+                message: entry.provider.message.clone(),
+            })
+            .collect()
     }
 
     /// The model as the sidebar card names it: the instance's short name for the slug, else the slug.

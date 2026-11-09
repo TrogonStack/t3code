@@ -8,6 +8,7 @@ mod components;
 mod devices_panel;
 mod diffs_panel;
 mod labs_panel;
+mod providers_panel;
 mod scope_inheritance;
 mod scope_pickers;
 mod secret_field;
@@ -31,6 +32,7 @@ use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
+use providers_panel::ProvidersPanel;
 use scope_pickers::ScopeBar;
 use secrets_panel::SecretsPanel;
 use source_control_panel::SourceControlPanel;
@@ -175,6 +177,7 @@ pub struct SettingsDialog {
     devices: Entity<DevicesPanel>,
     source_control: Entity<SourceControlPanel>,
     secrets: Entity<SecretsPanel>,
+    providers: Entity<ProvidersPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -193,6 +196,8 @@ impl SettingsDialog {
         let source_control =
             cx.new(|cx| SourceControlPanel::new(actions.clone(), scope.clone(), window, cx));
         let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
+        let providers =
+            cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -228,6 +233,7 @@ impl SettingsDialog {
             devices,
             source_control,
             secrets,
+            providers,
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -250,6 +256,7 @@ impl SettingsDialog {
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
+        self.providers.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -331,6 +338,28 @@ impl SettingsDialog {
     ) {
         self.secrets
             .update(cx, |panel, cx| panel.set_data(config, cx));
+    }
+
+    pub fn set_providers_data(
+        &mut self,
+        config: crate::settings_secrets::Config,
+        instances: Vec<crate::providers::InstanceRow>,
+        sources: Vec<crate::secret_source::SecretSource>,
+        cx: &mut Context<Self>,
+    ) {
+        self.providers.update(cx, |panel, cx| {
+            panel.set_data(config, instances, sources, cx)
+        });
+    }
+
+    pub fn on_providers_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.providers
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
     pub fn on_secrets_call(
@@ -428,6 +457,9 @@ impl SettingsDialog {
             .secrets
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
+            return;
+        }
+        if self.providers.update(cx, |panel, cx| panel.close_menu(cx)) {
             return;
         }
         if self
@@ -1160,13 +1192,21 @@ impl SettingsDialog {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.secrets.clone().into_any_element()]
+        } else if self.section == Section::Providers {
+            self.providers
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.providers.clone().into_any_element()]
         } else {
             Vec::new()
         };
         // The web hides the scope sentence on device-only tabs; the tabs that apply a scope list here.
         let scoped = matches!(
             self.section,
-            Section::Labs | Section::Devices | Section::SourceControl | Section::Secrets
+            Section::Labs
+                | Section::Devices
+                | Section::SourceControl
+                | Section::Secrets
+                | Section::Providers
         );
         div()
             .w_full()
