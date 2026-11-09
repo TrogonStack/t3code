@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// `[name, light, dark]` as sRGB hex: Tailwind's 600 and 400 shades, in `PROJECT_ICON_COLORS` order.
-const COLORS: [(&str, u32, u32); 18] = [
+pub(crate) const COLORS: [(&str, u32, u32); 18] = [
     ("gray", 0x4b5563, 0x9ca3af),
     ("red", 0xdc2626, 0xf87171),
     ("orange", 0xea580c, 0xfb923c),
@@ -133,7 +133,7 @@ fn words(text: &str) -> Vec<&str> {
         .collect()
 }
 
-fn initials(name: &str) -> String {
+pub(crate) fn initials(name: &str) -> String {
     let words = words(name);
     let Some(first_word) = words.first() else {
         return "PR".to_owned();
@@ -159,7 +159,7 @@ fn initials(name: &str) -> String {
         .collect()
 }
 
-fn color_index(name: &str) -> usize {
+pub(crate) fn color_index(name: &str) -> usize {
     let lowered = name.trim().to_lowercase();
     let seed = if lowered.is_empty() {
         "project"

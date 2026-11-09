@@ -69,6 +69,9 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 256.;
 const SIDEBAR_MIN_WIDTH: f32 = 208.;
 /// The web's `THREAD_MAIN_CONTENT_MIN_WIDTH`, `40 * 16`.
 const MAIN_CONTENT_MIN_WIDTH: f32 = 640.;
+/// The web's `--chat-content-max-width` (`index.css:131`), `46rem`: the heading, composer and
+/// transcript column.
+const CHAT_CONTENT_WIDTH: f32 = 736.;
 /// The rail's hit area, the web's `w-4`, centered on the sidebar's right edge.
 const SIDEBAR_RAIL_WIDTH: f32 = 16.;
 /// The web's `--workspace-topbar-height` on macOS desktop.
@@ -444,7 +447,7 @@ impl MainView {
             card,
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
             usage: cx.new(|cx| usage_dialog::UsageDialog::new(actions.clone(), cx)),
-            settings: cx.new(|cx| settings::SettingsDialog::new(window, cx)),
+            settings: cx.new(|cx| settings::SettingsDialog::new(actions.clone(), window, cx)),
             slow_toast: None,
             main_width: Cell::new(0.),
             sending: None,
@@ -479,6 +482,30 @@ impl MainView {
         });
     }
 
+    /// Hands the Labs tab the scope bar's choices and the attached environment's flags.
+    fn sync_labs(&mut self, cx: &mut Context<Self>) {
+        let (label, machine, entries) = match &self.status {
+            Status::Connected {
+                label,
+                machine,
+                shell,
+                ..
+            } => (
+                label.clone(),
+                *machine,
+                shell
+                    .as_ref()
+                    .map(|s| s.project_entries.clone())
+                    .unwrap_or_default(),
+            ),
+            _ => return,
+        };
+        let data = crate::settings_labs::scope_data(&label, machine, &entries, &self.environments);
+        let flags = self.providers.as_ref().map(|c| c.labs_flags());
+        self.settings
+            .update(cx, |settings, cx| settings.set_labs_data(data, flags, cx));
+    }
+
     pub fn set_status(&mut self, status: Status, cx: &mut Context<Self>) {
         if let Status::ProjectFailed(message) = status {
             self.adding_project = None;
@@ -498,12 +525,14 @@ impl MainView {
                 Some(known) => *known = other,
                 None => self.environments.push(other),
             }
+            self.sync_labs(cx);
             return cx.notify();
         }
         if let Status::Providers(catalog) = status {
             self.usage
                 .update(cx, |usage, cx| usage.set_providers(&catalog, cx));
             self.providers = Some(*catalog);
+            self.sync_labs(cx);
             return cx.notify();
         }
         if let Status::Thread { id, transcript } = status {
@@ -545,6 +574,11 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_labs::TOKEN_BASE {
+                self.settings
+                    .update(cx, |settings, cx| settings.on_labs_call(token, event, cx));
+                return;
+            }
             if token >= usage_dialog::TOKEN_BASE {
                 self.usage
                     .update(cx, |usage, cx| usage.on_call(token, event, cx));
@@ -2590,7 +2624,8 @@ impl MainView {
                     .min_h_0()
                     .w_full()
                     .when(card.is_some(), |area| {
-                        area.pr(px(details::CARD_WIDTH + details::CARD_GAP + 32.))
+                        let (left, right) = details::lane_insets(self.main_width.get(), true);
+                        area.pl(px(left)).pr(px(right))
                     })
                     .child(content)
                     .children(card),
@@ -3052,7 +3087,7 @@ impl MainView {
                     ))
                     .child(
                         v_flex()
-                            .w(px(720.))
+                            .w(px(CHAT_CONTENT_WIDTH))
                             .max_w_full()
                             .child(self.composer_box(cx))
                             .children(active.and_then(|entry| self.context_strip(entry, cx))),
@@ -3286,7 +3321,7 @@ impl MainView {
         )
     }
 
-    /// One row in the web's 720px column: the user's words in a bubble on the right, the
+    /// One row in the web's chat content column: the user's words in a bubble on the right, the
     /// assistant's plain, tool work as a muted line.
     fn transcript_item(&self, ix: usize, cx: &App) -> AnyElement {
         let Some(entry) = self
@@ -3334,7 +3369,7 @@ impl MainView {
             .when(last, |row| {
                 row.pb(px(8. + self.reserved_composer_height.get()))
             })
-            .child(div().w_full().max_w(px(720.)).child(body))
+            .child(div().w_full().max_w(px(CHAT_CONTENT_WIDTH)).child(body))
             .into_any_element()
     }
 
@@ -4146,7 +4181,7 @@ impl MainView {
         );
         let chips = chip_infos(&self.attachments);
         v_flex()
-            .w(px(720.))
+            .w(px(CHAT_CONTENT_WIDTH))
             .max_w_full()
             .p_px()
             .rounded(px(16.))

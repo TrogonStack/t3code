@@ -308,6 +308,13 @@ struct Settings {
     usage_price_overrides: Option<BTreeMap<String, Price>>,
     #[serde(default, deserialize_with = "lenient_option")]
     usage_model_aliases: Option<BTreeMap<String, String>>,
+    /// The Labs tab's environment-wide flags (contracts settings.ts:1329, 1355, 1360).
+    #[serde(default)]
+    simlock_device_hosts_enabled: bool,
+    #[serde(default)]
+    guest_sharing_enabled: bool,
+    #[serde(default)]
+    linked_environments_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -510,6 +517,15 @@ impl Catalog {
     /// The editor ids the server found on its machine (`server.getConfig` `availableEditors`).
     pub fn available_editors(&self) -> &[String] {
         &self.available_editors
+    }
+
+    /// The attached environment's Labs flags.
+    pub fn labs_flags(&self) -> crate::settings_labs::ServerFlags {
+        crate::settings_labs::ServerFlags {
+            guest_sharing: self.settings.guest_sharing_enabled,
+            linked_environments: self.settings.linked_environments_enabled,
+            simlock_hosts: self.settings.simlock_device_hosts_enabled,
+        }
     }
 
     /// The workspace and permission defaults of a fresh draft in `project`: its override, then the server settings.

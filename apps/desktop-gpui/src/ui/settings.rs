@@ -2,19 +2,24 @@
 //! navigation (`SettingsSidebarNav.tsx`) and the General tab (`GeneralSettingsPanel`).
 
 mod components;
+mod diffs_panel;
+mod labs_panel;
+mod scope_pickers;
 mod tokens;
 
 use super::*;
 use crate::assets::SNAP_SHOT;
 use crate::settings::{
-    self as model, DeviceSettings, GENERAL_ITEMS, GroupingMode, NAV_GROUPS, NotificationMode,
-    QuitMode, SearchItem, Section, SortOrder, TimeFormat,
+    self as model, DeviceSettings, FollowUp, GroupingMode, NAV_GROUPS, NotificationMode, QuitMode,
+    SearchItem, Section, SendShortcut, SortOrder, TimeFormat,
 };
 use components::{
-    HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, ghost_button, group,
-    reset_button, row, section, select_menu, switch,
+    HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, disclosure,
+    ghost_button, group, reset_button, row, section, select_menu, select_menu_checked, switch,
 };
+use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
+use labs_panel::{LabsEvent, LabsPanel};
 use std::rc::Rc;
 use tokens::Tokens;
 
@@ -36,13 +41,18 @@ pub fn bindings() -> Vec<KeyBinding> {
     ]
 }
 
-/// The four selects of the General tab.
+/// Whether the primary modifier prints as the Command symbol (`isMacPlatform`).
+const MAC: bool = cfg!(target_os = "macos");
+
+/// The selects of the General and Chat tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pick {
     Notifications,
     ProjectOrder,
     Quit,
     Time,
+    SendShortcut,
+    FollowUp,
 }
 
 impl Pick {
@@ -52,6 +62,8 @@ impl Pick {
             Self::ProjectOrder => "settings-project-order",
             Self::Quit => "settings-quit-shortcut",
             Self::Time => "settings-time-format",
+            Self::SendShortcut => "settings-send-shortcut",
+            Self::FollowUp => "settings-follow-up-behavior",
         }
     }
 
@@ -61,7 +73,13 @@ impl Pick {
             Self::Notifications => 224.,
             Self::ProjectOrder => 176.,
             Self::Quit | Self::Time => 160.,
+            Self::SendShortcut | Self::FollowUp => 0.,
         }
+    }
+
+    /// `w-auto min-w-0` (SettingsPanels.tsx Chat tab): sized by the label.
+    fn auto_width(self) -> bool {
+        matches!(self, Self::SendShortcut | Self::FollowUp)
     }
 
     fn labels(self) -> Vec<&'static str> {
@@ -70,6 +88,11 @@ impl Pick {
             Self::ProjectOrder => SortOrder::ALL.iter().map(|m| m.label()).collect(),
             Self::Quit => QuitMode::ALL.iter().map(|m| m.label()).collect(),
             Self::Time => TimeFormat::ALL.iter().map(|m| m.label()).collect(),
+            Self::SendShortcut => SendShortcut::ALL
+                .iter()
+                .map(|m| m.menu_label(MAC))
+                .collect(),
+            Self::FollowUp => FollowUp::ALL.iter().map(|m| m.label()).collect(),
         }
     }
 
@@ -87,6 +110,10 @@ impl Pick {
             Self::Time => TimeFormat::ALL
                 .iter()
                 .position(|m| *m == settings.time_format),
+            Self::SendShortcut => SendShortcut::ALL
+                .iter()
+                .position(|m| *m == settings.send_shortcut),
+            Self::FollowUp => FollowUp::ALL.iter().position(|m| *m == settings.follow_up),
         };
         index.unwrap_or(0)
     }
@@ -97,14 +124,18 @@ impl Pick {
             Self::ProjectOrder => settings.project_order = SortOrder::ALL[index],
             Self::Quit => settings.confirm_quit = QuitMode::ALL[index],
             Self::Time => settings.time_format = TimeFormat::ALL[index],
+            Self::SendShortcut => settings.send_shortcut = SendShortcut::ALL[index],
+            Self::FollowUp => settings.follow_up = FollowUp::ALL[index],
         }
     }
 
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 6] = [
         Self::Notifications,
         Self::ProjectOrder,
         Self::Quit,
         Self::Time,
+        Self::SendShortcut,
+        Self::FollowUp,
     ];
 }
 
@@ -120,14 +151,28 @@ pub struct SettingsDialog {
     /// "/" moved focus to the search; its character must not land in the field.
     swallow_slash: bool,
     menu: Option<(Pick, usize)>,
-    triggers: [FocusHandle; 4],
+    triggers: [FocusHandle; 6],
+    /// `AdvancedSettings`' local `open` state: not persisted, closed again on leaving the tab.
+    advanced_open: bool,
+    diffs: Entity<DiffsPanel>,
+    labs: Entity<LabsPanel>,
     confirm_restore: bool,
     scroll: ScrollHandle,
     _search_events: Subscription,
+    _labs_events: Subscription,
 }
 
 impl SettingsDialog {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        actions: crate::connection::ActionSender,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let labs = cx.new(|cx| LabsPanel::new(actions, window, cx));
+        let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
+            let LabsEvent::OpenSection(section) = event;
+            this.select_section(*section, cx);
+        });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let events = cx.subscribe_in(
             &search,
@@ -150,9 +195,13 @@ impl SettingsDialog {
             swallow_slash: false,
             menu: None,
             triggers: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
+            advanced_open: false,
+            diffs: cx.new(DiffsPanel::new),
+            labs,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
             _search_events: events,
+            _labs_events: labs_events,
         }
     }
 
@@ -163,7 +212,10 @@ impl SettingsDialog {
         self.open = true;
         self.previous_focus = window.focused(cx);
         self.settings = DeviceSettings::load();
+        self.diffs.update(cx, |panel, cx| panel.reload(cx));
+        self.labs.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
+        self.advanced_open = false;
         self.confirm_restore = false;
         window.focus(&self.focus, cx);
         cx.notify();
@@ -181,6 +233,27 @@ impl SettingsDialog {
         cx.notify();
     }
 
+    /// The scope bar's data and the attached environment's Labs flags.
+    pub fn set_labs_data(
+        &mut self,
+        data: crate::settings_labs::ScopeData,
+        flags: Option<crate::settings_labs::ServerFlags>,
+        cx: &mut Context<Self>,
+    ) {
+        self.labs
+            .update(cx, |panel, cx| panel.set_data(data, flags, cx));
+    }
+
+    pub fn on_labs_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.labs
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
     fn query(&self, cx: &App) -> String {
         self.search.read(cx).value().to_string()
     }
@@ -188,7 +261,7 @@ impl SettingsDialog {
     fn results(&self, cx: &App) -> Vec<&'static SearchItem> {
         let desktop = true;
         let query = self.query(cx);
-        model::search(&query, GENERAL_ITEMS)
+        model::search(&query, model::searchable())
             .into_iter()
             .filter(|item| desktop || !item.desktop_only)
             .collect()
@@ -217,6 +290,10 @@ impl SettingsDialog {
     fn activate_result(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let results = self.results(cx);
         if let Some(item) = results.get(self.active_result) {
+            if item.section != self.section {
+                self.advanced_open = false;
+            }
+            self.advanced_open |= item.id == "skills-in-slash-menu";
             self.section = item.section;
             self.clear_search(window, cx);
             window.focus(&self.focus, cx);
@@ -225,12 +302,27 @@ impl SettingsDialog {
     }
 
     fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
+        if section != self.section {
+            self.advanced_open = false;
+        }
         self.section = section;
         self.scroll.set_offset(gpui::point(px(0.), px(0.)));
         cx.notify();
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .labs
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .diffs
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
         if self.confirm_restore {
             self.confirm_restore = false;
         } else if self.menu.is_some() {
@@ -272,6 +364,8 @@ impl SettingsDialog {
     fn restore_defaults(&mut self, cx: &mut Context<Self>) {
         self.confirm_restore = false;
         self.last_grouping = GroupingMode::Repository;
+        self.diffs
+            .update(cx, |panel, cx| panel.restore_defaults(cx));
         self.update(|settings| *settings = DeviceSettings::default(), cx);
     }
 
@@ -419,7 +513,12 @@ impl SettingsDialog {
         let theme = Tokens::of(cx);
         let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
         let general = self.section == Section::General;
-        let disabled = self.settings.changed_labels().is_empty();
+        let disabled = self
+            .diffs
+            .read(cx)
+            .settings()
+            .merge_labels(self.settings.changed_labels())
+            .is_empty();
         let crumbs = h_flex()
             .min_w_0()
             .items_center()
@@ -496,7 +595,12 @@ impl SettingsDialog {
         } else {
             (theme.popover, theme.accent.opacity(0.5))
         };
-        let labels = self.settings.changed_labels().join(", ");
+        let labels = self
+            .diffs
+            .read(cx)
+            .settings()
+            .merge_labels(self.settings.changed_labels())
+            .join(", ");
         let cancel = div()
             .id("settings-restore-cancel")
             .h(px(32.))
@@ -869,8 +973,17 @@ impl SettingsDialog {
 
     /// `SettingsPageContainer`: `max-w-4xl px-6 pt-6 pb-12 gap-8`.
     fn body(&self, content_width: f32, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let wide = content_width >= ROW_WIDE + 48.;
         let panel = if self.section == Section::General {
-            self.general(content_width >= ROW_WIDE + 48., window, cx)
+            self.general(wide, window, cx)
+        } else if self.section == Section::Chat {
+            self.chat(wide, window, cx)
+        } else if self.section == Section::Diffs {
+            self.diffs.update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.diffs.clone().into_any_element()]
+        } else if self.section == Section::Labs {
+            self.labs.update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.labs.clone().into_any_element()]
         } else {
             Vec::new()
         };
@@ -962,6 +1075,11 @@ impl SettingsDialog {
             self.triggers[slot].clone(),
             on_key,
         );
+        let trigger = if pick.auto_width() {
+            trigger.auto_width()
+        } else {
+            trigger
+        };
         let on_pick: PickHandler = {
             let view = view.clone();
             Rc::new(move |index, window, cx| {
@@ -979,6 +1097,7 @@ impl SettingsDialog {
                 })
             })
         };
+        let check = pick == Pick::SendShortcut;
         Popover::new(("settings-select", slot))
             .anchor(Anchor::TopRight)
             .offset(px(4.))
@@ -996,20 +1115,128 @@ impl SettingsDialog {
             })
             .trigger(trigger)
             .content(move |_, _, cx| {
-                select_menu(
-                    &Menu {
-                        id: pick.id(),
-                        labels: labels.clone(),
-                        selected,
-                        highlighted,
-                        width: pick.width(),
-                        on_pick: on_pick.clone(),
-                        on_hover: on_hover.clone(),
-                    },
-                    cx,
-                )
+                let menu = Menu {
+                    id: pick.id(),
+                    labels: labels.clone(),
+                    selected,
+                    highlighted,
+                    width: pick.width(),
+                    on_pick: on_pick.clone(),
+                    on_hover: on_hover.clone(),
+                };
+                if check {
+                    select_menu_checked(&menu, cx)
+                } else {
+                    select_menu(&menu, cx)
+                }
             })
             .into_any_element()
+    }
+
+    /// `ChatSettingsPanel` (SettingsPanels.tsx:1075-1287): Composer and Follow-ups.
+    fn chat(&self, wide: bool, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let s = self.settings;
+        let d = DeviceSettings::default();
+        let view = cx.entity();
+        let skills = row(
+            "Show skills in slash menu",
+            "Also include skills in the / command menu. Skills always appear when you type $.",
+            self.reset(
+                "settings-reset-skills-in-slash-menu",
+                s.skills_in_slash_menu != d.skills_in_slash_menu,
+                |s, d| s.skills_in_slash_menu = d.skills_in_slash_menu,
+                window,
+                cx,
+            ),
+            self.flag(
+                "settings-skills-in-slash-menu",
+                s.skills_in_slash_menu,
+                |s| s.skills_in_slash_menu = !s.skills_in_slash_menu,
+                window,
+                cx,
+            ),
+            wide,
+            cx,
+        );
+        let advanced = disclosure(
+            "settings-advanced",
+            self.advanced_open,
+            Rc::new(move |_, cx| {
+                view.update(cx, |this, cx| {
+                    this.advanced_open = !this.advanced_open;
+                    cx.notify();
+                })
+            }),
+            vec![skills.into_any_element()],
+            window,
+            cx,
+        );
+        let composer = group(
+            vec![
+                row(
+                    "Rich text composer",
+                    "Show formatted Markdown as you type.",
+                    self.reset(
+                        "settings-reset-rich-text-composer",
+                        s.composer_rich_text != d.composer_rich_text,
+                        |s, d| s.composer_rich_text = d.composer_rich_text,
+                        window,
+                        cx,
+                    ),
+                    self.flag(
+                        "settings-rich-text-composer",
+                        s.composer_rich_text,
+                        |s| s.composer_rich_text = !s.composer_rich_text,
+                        window,
+                        cx,
+                    ),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+                row(
+                    "Send shortcut",
+                    "Choose when Enter sends a prompt or inserts a new line",
+                    self.reset(
+                        "settings-reset-send-shortcut",
+                        s.send_shortcut != d.send_shortcut,
+                        |s, d| s.send_shortcut = d.send_shortcut,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::SendShortcut, cx),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+                advanced,
+            ],
+            cx,
+        );
+        let follow_ups = group(
+            vec![
+                row(
+                    "Follow-up behavior",
+                    model::follow_up_description(s.send_shortcut, MAC),
+                    self.reset(
+                        "settings-reset-follow-up-behavior",
+                        s.follow_up != d.follow_up,
+                        |s, d| s.follow_up = d.follow_up,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::FollowUp, cx),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        );
+        vec![
+            section("Composer", composer).into_any_element(),
+            section("Follow-ups", follow_ups).into_any_element(),
+        ]
     }
 
     /// `GeneralSettingsPanel` (SettingsPanels.tsx:781-1067): Notifications, Sidebar,

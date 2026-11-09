@@ -106,7 +106,72 @@ choice! {
     }
 }
 
-/// The General tab's slice of the client settings, with `DEFAULT_CLIENT_SETTINGS` defaults.
+/// `SendShortcut`; written by hand because its labels depend on the platform modifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendShortcut {
+    Enter,
+    ModEnterMultiline,
+    ModEnter,
+}
+
+choice! {
+    /// `FollowUpBehavior`.
+    FollowUp {
+        Queue => ("queue", "Queue"),
+        Steer => ("steer", "Steer"),
+    }
+}
+
+/// The platform's primary modifier as the Chat tab prints it.
+pub fn mod_label(mac: bool) -> &'static str {
+    if mac { "\u{2318}" } else { "Ctrl" }
+}
+
+impl SendShortcut {
+    pub const ALL: &'static [Self] = &[Self::Enter, Self::ModEnterMultiline, Self::ModEnter];
+
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::Enter => "enter",
+            Self::ModEnterMultiline => "mod-enter-multiline",
+            Self::ModEnter => "mod-enter",
+        }
+    }
+
+    pub fn from_wire(value: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|mode| mode.wire() == value)
+    }
+
+    pub fn menu_label(self, mac: bool) -> &'static str {
+        match (self, mac) {
+            (Self::Enter, _) => "Enter",
+            (Self::ModEnterMultiline, true) => "\u{2318} + Enter for multiline prompts",
+            (Self::ModEnterMultiline, false) => "Ctrl + Enter for multiline prompts",
+            (Self::ModEnter, true) => "\u{2318} + Enter always",
+            (Self::ModEnter, false) => "Ctrl + Enter always",
+        }
+    }
+}
+
+/// The Follow-up behavior row's description (`SettingsPanels.tsx` Follow-ups section).
+pub fn follow_up_description(send: SendShortcut, mac: bool) -> String {
+    let m = mod_label(mac);
+    let opposite = if send == SendShortcut::ModEnterMultiline {
+        format!(
+            "Press {m} + Enter for single-line prompts or {m} + Shift + Enter for multiline prompts to do the opposite for one message."
+        )
+    } else {
+        let shift = if send == SendShortcut::ModEnter {
+            " + Shift"
+        } else {
+            ""
+        };
+        format!("Press {m}{shift} + Enter to do the opposite for one message.")
+    };
+    format!("Queue follow-ups while the agent runs or steer the current run. {opposite}")
+}
+
+/// The General and Chat tabs' slice of the client settings, with `DEFAULT_CLIENT_SETTINGS` defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceSettings {
     pub notification_mode: NotificationMode,
@@ -119,6 +184,10 @@ pub struct DeviceSettings {
     pub confirm_delete: bool,
     pub confirm_quit: QuitMode,
     pub time_format: TimeFormat,
+    pub composer_rich_text: bool,
+    pub send_shortcut: SendShortcut,
+    pub follow_up: FollowUp,
+    pub skills_in_slash_menu: bool,
 }
 
 impl Default for DeviceSettings {
@@ -134,6 +203,10 @@ impl Default for DeviceSettings {
             confirm_delete: true,
             confirm_quit: QuitMode::Hold,
             time_format: TimeFormat::Locale,
+            composer_rich_text: true,
+            send_shortcut: SendShortcut::Enter,
+            follow_up: FollowUp::Steer,
+            skills_in_slash_menu: true,
         }
     }
 }
@@ -183,10 +256,18 @@ impl DeviceSettings {
             time_format: choice("timestampFormat")
                 .and_then(TimeFormat::from_wire)
                 .unwrap_or(defaults.time_format),
+            composer_rich_text: flag("composerRichTextEnabled", defaults.composer_rich_text),
+            send_shortcut: choice("sendShortcut")
+                .and_then(SendShortcut::from_wire)
+                .unwrap_or(defaults.send_shortcut),
+            follow_up: choice("followUpBehavior")
+                .and_then(FollowUp::from_wire)
+                .unwrap_or(defaults.follow_up),
+            skills_in_slash_menu: flag("showSkillsInSlashMenu", defaults.skills_in_slash_menu),
         })
     }
 
-    pub fn entries(self) -> [(&'static str, Value); 10] {
+    pub fn entries(self) -> [(&'static str, Value); 14] {
         [
             ("notificationMode", json!(self.notification_mode.wire())),
             (
@@ -204,6 +285,10 @@ impl DeviceSettings {
             ("confirmThreadDelete", json!(self.confirm_delete)),
             ("confirmQuit", json!(self.confirm_quit.wire())),
             ("timestampFormat", json!(self.time_format.wire())),
+            ("composerRichTextEnabled", json!(self.composer_rich_text)),
+            ("sendShortcut", json!(self.send_shortcut.wire())),
+            ("followUpBehavior", json!(self.follow_up.wire())),
+            ("showSkillsInSlashMenu", json!(self.skills_in_slash_menu)),
         ]
     }
 
@@ -263,6 +348,16 @@ impl DeviceSettings {
             ),
             (self.project_order != d.project_order, "Project order"),
             (self.working_shelf != d.working_shelf, "Working section"),
+            (
+                self.skills_in_slash_menu != d.skills_in_slash_menu,
+                "Show skills in slash menu",
+            ),
+            (
+                self.composer_rich_text != d.composer_rich_text,
+                "Rich text composer",
+            ),
+            (self.send_shortcut != d.send_shortcut, "Send shortcut"),
+            (self.follow_up != d.follow_up, "Follow-up behavior"),
             (self.confirm_unpin != d.confirm_unpin, "Unpin confirmation"),
             (
                 self.confirm_archive != d.confirm_archive,
@@ -423,8 +518,38 @@ const fn item(
     }
 }
 
-/// The General tab's `searchableSetting` entries, in the web's order. The other tabs have no
-/// panel here yet, so their settings are not searchable.
+const fn chat_item(id: &'static str, title: &'static str, terms: &'static str) -> SearchItem {
+    SearchItem {
+        section: Section::Chat,
+        ..item(id, title, terms, false)
+    }
+}
+
+/// The Chat tab's `searchableSetting` entries (`settingsSearch.ts:580-602`).
+pub const CHAT_ITEMS: &[SearchItem] = &[
+    chat_item(
+        "skills-in-slash-menu",
+        "Show skills in slash menu",
+        "command menu dollar $ slash /",
+    ),
+    chat_item(
+        "composer-rich-text",
+        "Rich text composer",
+        "composer rich text tiptap bold italic markdown styled wysiwyg",
+    ),
+    chat_item(
+        "send-shortcut",
+        "Send shortcut",
+        "enter return command ctrl multiline prompt new line composer",
+    ),
+    chat_item(
+        "follow-up-behavior",
+        "Follow-up behavior",
+        "queue steer running turn send default behavior composer",
+    ),
+];
+
+/// The General tab's `searchableSetting` entries, in the web's order.
 pub const GENERAL_ITEMS: &[SearchItem] = &[
     item(
         "project-grouping",
@@ -527,16 +652,34 @@ fn is_combining(ch: char) -> bool {
     matches!(ch, '\u{0300}'..='\u{036f}')
 }
 
+/// Every searchable setting of the tabs that have a panel, in the web's order
+/// (`settingsSearch.ts`): General, Labs, Diffs, then Chat.
+pub fn searchable() -> &'static [SearchItem] {
+    static ITEMS: std::sync::OnceLock<Vec<SearchItem>> = std::sync::OnceLock::new();
+    ITEMS.get_or_init(|| {
+        GENERAL_ITEMS
+            .iter()
+            .chain(crate::settings_labs::LABS_ITEMS)
+            .chain(crate::settings_diffs::DIFFS_ITEMS)
+            .chain(CHAT_ITEMS)
+            .copied()
+            .collect()
+    })
+}
+
 /// `searchSettings`: every token must appear in the title, the section label or the terms;
 /// ranked title-exact, title-prefix, title-substring, all-tokens-in-title, phrase anywhere.
-pub fn search<'a>(query: &str, items: &'a [SearchItem]) -> Vec<&'a SearchItem> {
+pub fn search<'a>(
+    query: &str,
+    items: impl IntoIterator<Item = &'a SearchItem>,
+) -> Vec<&'a SearchItem> {
     let query = normalize(query);
     if query.is_empty() {
         return Vec::new();
     }
     let tokens: Vec<&str> = query.split(' ').collect();
     let mut hits: Vec<(u8, usize, &SearchItem)> = items
-        .iter()
+        .into_iter()
         .enumerate()
         .filter_map(|(index, item)| {
             let title = normalize(item.title);
@@ -602,6 +745,10 @@ mod tests {
             confirm_delete: false,
             confirm_quit: QuitMode::DoubleClick,
             time_format: TimeFormat::Hour24,
+            composer_rich_text: false,
+            send_shortcut: SendShortcut::ModEnter,
+            follow_up: FollowUp::Queue,
+            skills_in_slash_menu: false,
         };
         assert_eq!(DeviceSettings::parse(&changed.to_json(None)), Some(changed));
     }
@@ -652,6 +799,78 @@ mod tests {
         );
         settings = DeviceSettings::default();
         assert!(settings.changed_labels().is_empty());
+    }
+
+    #[test]
+    fn chat_labels_sit_between_working_section_and_unpin() {
+        let settings = DeviceSettings {
+            working_shelf: false,
+            confirm_unpin: true,
+            follow_up: FollowUp::Queue,
+            send_shortcut: SendShortcut::ModEnter,
+            composer_rich_text: false,
+            skills_in_slash_menu: false,
+            ..DeviceSettings::default()
+        };
+        assert_eq!(
+            settings.changed_labels(),
+            [
+                "Working section",
+                "Show skills in slash menu",
+                "Rich text composer",
+                "Send shortcut",
+                "Follow-up behavior",
+                "Unpin confirmation"
+            ]
+        );
+    }
+
+    #[test]
+    fn chat_keys_parse_and_fall_back() {
+        let parsed = DeviceSettings::parse(
+            r#"{"sendShortcut":"mod-enter-multiline","followUpBehavior":"nope","composerRichTextEnabled":false}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.send_shortcut, SendShortcut::ModEnterMultiline);
+        assert_eq!(parsed.follow_up, FollowUp::Steer);
+        assert!(!parsed.composer_rich_text);
+        assert!(parsed.skills_in_slash_menu);
+    }
+
+    #[test]
+    fn follow_up_description_names_the_opposite_shortcut() {
+        let base = "Queue follow-ups while the agent runs or steer the current run. ";
+        assert_eq!(
+            follow_up_description(SendShortcut::Enter, false),
+            format!("{base}Press Ctrl + Enter to do the opposite for one message.")
+        );
+        assert_eq!(
+            follow_up_description(SendShortcut::ModEnter, true),
+            format!("{base}Press \u{2318} + Shift + Enter to do the opposite for one message.")
+        );
+        assert_eq!(
+            follow_up_description(SendShortcut::ModEnterMultiline, false),
+            format!(
+                "{base}Press Ctrl + Enter for single-line prompts or Ctrl + Shift + Enter for multiline prompts to do the opposite for one message."
+            )
+        );
+        assert_eq!(
+            SendShortcut::ModEnterMultiline.menu_label(true),
+            "\u{2318} + Enter for multiline prompts"
+        );
+    }
+
+    #[test]
+    fn chat_items_are_searchable_alongside_general() {
+        let ids: Vec<&str> = search("composer", GENERAL_ITEMS.iter().chain(CHAT_ITEMS))
+            .iter()
+            .map(|i| i.id)
+            .collect();
+        assert_eq!(
+            ids,
+            ["composer-rich-text", "send-shortcut", "follow-up-behavior"]
+        );
+        assert_eq!(search("$", CHAT_ITEMS)[0].section, Section::Chat);
     }
 
     #[test]

@@ -139,7 +139,55 @@ pub(super) fn row(
     div().px_4().py_3().child(inner)
 }
 
-/// `SettingResetButton` (settingsLayout.tsx): `icon-micro` `ghost-muted`, `size-3` Undo2.
+/// Hover state of a `TooltipPopup side="top"`, shared by the control that opens it.
+#[derive(Default)]
+struct TipState {
+    shown: bool,
+    epoch: u64,
+}
+
+/// Base UI's default `Tooltip.Root` open delay.
+const TIP_DELAY: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// `TooltipPopup` (tooltip.tsx:120-157): above the trigger, `sideOffset` 4, centered, a
+/// `rounded-md border bg-popover shadow-md/5 text-xs` box with `px-2 py-1` and `leading-snug`.
+fn tip_popup(text: &'static str, cx: &App) -> gpui::Div {
+    let theme = Tokens::of(cx);
+    div()
+        .absolute()
+        .bottom_full()
+        .mb(px(4.))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .px_2()
+                .py_1()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .text_xs()
+                .line_height(px(15.))
+                .text_color(theme.foreground)
+                .shadow(vec![BoxShadow {
+                    color: gpui::black().opacity(0.05),
+                    offset: point(px(0.), px(4.)),
+                    blur_radius: px(6.),
+                    spread_radius: px(-1.),
+                    inset: false,
+                }])
+                .child(text),
+        )
+}
+
+/// `SettingResetButton` (settingsLayout.tsx:548-580): `Button size="icon-micro" variant="ghost-muted"`
+/// (`size-5 rounded-sm`, muted, `bg-accent` and foreground on hover) holding a `size-3` Undo2,
+/// with a "Reset to default" tooltip above it that opens after 600ms of hover or on keyboard focus.
 pub(super) fn reset_button(
     id: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -149,9 +197,15 @@ pub(super) fn reset_button(
     let key = ElementId::from(id);
     let handle = tab_stop(&key, window, cx);
     let visible = focus_visible(&handle, window);
+    let tip = window.use_keyed_state(ElementId::from((key.clone(), "tip")), cx, |_, _| {
+        TipState::default()
+    });
+    let shown = tip.read(cx).shown || visible;
     let theme = Tokens::of(cx);
     let (muted, hover, foreground) = (theme.muted_foreground, theme.accent, theme.foreground);
     let ring = focus_ring(4., cx);
+    let popup = shown.then(|| gpui::deferred(tip_popup("Reset to default", cx)));
+    let (hovered_tip, clicked_tip) = (tip.clone(), tip.clone());
     div()
         .id(key)
         .track_focus(&handle)
@@ -164,9 +218,37 @@ pub(super) fn reset_button(
         .text_color(muted)
         .cursor_pointer()
         .hover(move |style| style.bg(hover).text_color(foreground))
-        .tooltip(tooltip("Reset to default"))
-        .on_click(on_click)
+        .on_hover(move |entered, window, cx| {
+            let epoch = hovered_tip.update(cx, |state, _| {
+                state.epoch += 1;
+                state.shown = false;
+                state.epoch
+            });
+            window.refresh();
+            if !*entered {
+                return;
+            }
+            let tip = hovered_tip.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor().timer(TIP_DELAY).await;
+                    cx.update(|window, cx| {
+                        tip.update(cx, |state, _| state.shown = state.epoch == epoch);
+                        window.refresh();
+                    })
+                    .ok();
+                })
+                .detach();
+        })
+        .on_click(move |event, window, cx| {
+            clicked_tip.update(cx, |state, _| {
+                state.epoch += 1;
+                state.shown = false;
+            });
+            on_click(event, window, cx);
+        })
         .child(Icon::new(Icons::Undo2).size(px(12.)))
+        .children(popup)
         .when(visible, |button| button.child(ring))
         .into_any_element()
 }
@@ -238,9 +320,23 @@ pub(super) struct SelectTrigger {
     handle: FocusHandle,
     open: bool,
     on_key: KeyHandler,
+    leading: Option<AnyElement>,
+    auto_width: bool,
 }
 
 impl SelectTrigger {
+    /// `w-auto`: the trigger is as wide as its label instead of `width`.
+    pub(super) fn auto_width(mut self) -> Self {
+        self.auto_width = true;
+        self
+    }
+
+    /// Content before the label, as the diff colors select puts its two dots.
+    pub(super) fn leading(mut self, leading: AnyElement) -> Self {
+        self.leading = Some(leading);
+        self
+    }
+
     pub(super) fn new(
         id: &'static str,
         label: &'static str,
@@ -256,6 +352,8 @@ impl SelectTrigger {
             handle,
             open: false,
             on_key,
+            leading: None,
+            auto_width: false,
         }
     }
 }
@@ -314,7 +412,7 @@ impl RenderOnce for SelectTrigger {
         h_flex()
             .id(self.id)
             .track_focus(&self.handle)
-            .w(px(self.width))
+            .when(!self.auto_width, |trigger| trigger.w(px(self.width)))
             .max_w_full()
             .min_h(px(28.))
             .items_center()
@@ -333,7 +431,14 @@ impl RenderOnce for SelectTrigger {
             .cursor_pointer()
             .shadow(shadow)
             .on_key_down(move |event, window, cx| on_key(event, window, cx))
-            .child(div().min_w_0().flex_1().truncate().child(self.label))
+            .children(self.leading)
+            .child(
+                div()
+                    .min_w_0()
+                    .when(!self.auto_width, |label| label.flex_1())
+                    .truncate()
+                    .child(self.label),
+            )
             .child(
                 div()
                     .mr(px(-4.))
@@ -360,6 +465,16 @@ pub(super) struct Menu {
 }
 
 pub(super) fn select_menu(menu: &Menu, cx: &App) -> gpui::Div {
+    menu_items(menu, false, cx)
+}
+
+/// `select_menu` with a trailing check on the chosen item (the send shortcut items,
+/// SettingsPanels.tsx Chat tab).
+pub(super) fn select_menu_checked(menu: &Menu, cx: &App) -> gpui::Div {
+    menu_items(menu, true, cx)
+}
+
+fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
     let Menu {
         id,
         labels,
@@ -418,7 +533,11 @@ pub(super) fn select_menu(menu: &Menu, cx: &App) -> gpui::Div {
                     }
                 })
                 .on_click(move |_, window, cx| pick(index, window, cx))
+                .when(check, |item| item.justify_between().gap_4())
                 .child(*label)
+                .when(check && index == selected, |item| {
+                    item.child(Icon::new(IconName::Check).size(px(16.)))
+                })
         }))
 }
 
@@ -454,4 +573,74 @@ pub(super) fn close_button(id: &'static str, cx: &App) -> gpui::Stateful<gpui::D
                 .text_color(muted)
                 .child(Icon::new(IconName::Close).size(px(14.))),
         )
+}
+
+/// `AdvancedSettings` (AdvancedSettings.tsx:11-42): a `min-h-10 px-4` trigger with a 14px chevron
+/// that turns 90 degrees when open, then the rows under a `border-border/50` rule and dividers.
+pub(super) fn disclosure(
+    id: &'static str,
+    open: bool,
+    on_toggle: Toggle,
+    rows: Vec<AnyElement>,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let key = ElementId::from(id);
+    let handle = tab_stop(&key, window, cx);
+    let visible = focus_visible(&handle, window);
+    let theme = Tokens::of(cx);
+    let (muted, foreground, ring) = (theme.muted_foreground, theme.foreground, theme.ring);
+    let divider = theme.border.opacity(0.5);
+    let click = on_toggle.clone();
+    let chevron = Icon::new(IconName::ChevronRight).size(px(14.));
+    let chevron = if open {
+        chevron.rotate(gpui::radians(std::f32::consts::FRAC_PI_2))
+    } else {
+        chevron
+    };
+    let trigger = h_flex()
+        .id(key)
+        .track_focus(&handle)
+        .relative()
+        .min_h(px(40.))
+        .w_full()
+        .items_center()
+        .gap(px(6.))
+        .px_4()
+        .when(!open, |trigger| trigger.rounded_b(px(12.)))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(move |style| style.text_color(foreground))
+        .on_click(move |_, window, cx| click(window, cx))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                cx.stop_propagation();
+                on_toggle(window, cx);
+            }
+        })
+        .child(div().flex_shrink_0().child(chevron))
+        .child("Advanced")
+        .when(visible, |trigger| {
+            trigger.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .when(!open, |ring_box| ring_box.rounded_b(px(12.)))
+                    .border_2()
+                    .border_color(ring),
+            )
+        });
+    let mut panel = v_flex().border_t_1().border_color(divider);
+    for (index, row) in rows.into_iter().enumerate() {
+        if index > 0 {
+            panel = panel.child(div().h(px(1.)).w_full().bg(divider));
+        }
+        panel = panel.child(row);
+    }
+    v_flex()
+        .child(trigger)
+        .when(open, |disclosure| disclosure.child(panel))
+        .into_any_element()
 }

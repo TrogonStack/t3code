@@ -37,6 +37,24 @@ pub fn card_height(container_width: f32, container_height: f32) -> Option<f32> {
     (height >= MIN_CARD_HEIGHT).then_some(height)
 }
 
+/// `MAX_CHAT_WIDTH`: the widest the chat lane grows (`canvasStore.ts`).
+const MAX_CHAT_WIDTH: f32 = 768.;
+
+/// The chat lane's left and right insets in the main area (`resolveChatCanvasLayout`). The lane
+/// stays centered in the full width, and only slides left, as little as it must, to keep
+/// `CARD_CLEARANCE` between it and the floating card.
+pub fn lane_insets(container_width: f32, card_shown: bool) -> (f32, f32) {
+    if !card_shown {
+        return (0., 0.);
+    }
+    let centered = (container_width - LANE_PADDING * 2.).clamp(0., MAX_CHAT_WIDTH);
+    let lane_right = container_width - CARD_WIDTH - CARD_GAP - CARD_CLEARANCE;
+    let width = centered.min(lane_right - LANE_PADDING).max(0.);
+    let center_left = (container_width - width) / 2.;
+    let left = center_left.min(lane_right - width).max(LANE_PADDING);
+    (left, (container_width - left - width).max(0.))
+}
+
 /// How much of the card shows: rows drop out as the available height shrinks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Density {
@@ -412,6 +430,15 @@ pub fn quiet_empty_draft(has_run: bool, status: Option<&VcsStatus>) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn lane_stays_centered_until_the_card_forces_it_left() {
+        assert_eq!(lane_insets(1200., false), (0., 0.));
+        assert_eq!(lane_insets(1600., true), (416., 416.));
+        assert_eq!(lane_insets(1416., true), (324., 324.));
+        assert_eq!(lane_insets(1208., true), (116., 324.));
+        assert_eq!(lane_insets(1012., true), (48., 324.));
+    }
 
     fn inputs() -> Inputs {
         Inputs {

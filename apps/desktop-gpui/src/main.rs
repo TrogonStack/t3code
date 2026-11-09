@@ -22,6 +22,8 @@ mod rpc;
 mod send;
 mod server;
 mod settings;
+mod settings_diffs;
+mod settings_labs;
 mod shell;
 mod slow_requests;
 mod status;
