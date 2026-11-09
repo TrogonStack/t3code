@@ -21,6 +21,7 @@ mod refs;
 mod rpc;
 mod send;
 mod server;
+mod settings;
 mod shell;
 mod slow_requests;
 mod status;
@@ -108,9 +109,12 @@ fn main() {
             Theme::change(ThemeMode::Dark, None, cx);
             // The web's default `sidebar.toggle` and `navigation.*` bindings.
             cx.bind_keys(ui::usage_bindings());
+            cx.bind_keys(ui::settings_bindings());
             cx.bind_keys([
                 KeyBinding::new("cmd-b", ui::ToggleSidebar, None),
                 KeyBinding::new("cmd-u", ui::OpenUsage, None),
+                // `CmdOrCtrl+,` of the desktop application menu (DesktopApplicationMenu.ts:174).
+                KeyBinding::new("cmd-,", ui::OpenSettings, None),
                 KeyBinding::new("cmd-u", gpui::NoAction, Some("Terminal")),
                 KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
                 KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),

@@ -73,7 +73,24 @@ gpui_kit_assets::icon_assets!(
         X,
         Star,
         StarFill,
-        Zap
+        Zap,
+        Settings2,
+        Palette,
+        MessageSquareText,
+        MessagesSquare,
+        Keyboard,
+        Bot,
+        Globe,
+        Smartphone,
+        CalendarClock,
+        FolderTree,
+        ShieldCheck,
+        KeyRound,
+        Wrench,
+        FlaskConical,
+        Archive,
+        PanelsTopLeft,
+        Undo2
     ]
 );
 
@@ -89,6 +106,17 @@ const MESSAGE_SQUARE_DASHED_SVG: &str = concat!(
     r#"<path d="M20 19a2 2 0 0 0 2-2v-1"/><path d="M22 10v2"/>"#,
     r#"<path d="M22 6V5a2 2 0 0 0-2-2"/><path d="M4 3a2 2 0 0 0-2 2v1"/>"#,
     r#"<path d="M8 19h2"/><path d="M8 3h2"/></svg>"#,
+);
+
+pub const SNAP_SHOT: &str = "icons/snap-shot.svg";
+
+/// `SnapShotIcon` (SettingsSidebarNav.tsx:63-73), which lucide does not ship.
+const SNAP_SHOT_SVG: &str = concat!(
+    r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" "#,
+    r#"fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" "#,
+    r#"stroke-linejoin="round">"#,
+    r#"<path d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M21 16v2a3 3 0 0 1-3 3h-2M8 21H6a3 3 0 0 1-3-3v-2"/>"#,
+    r#"<rect width="10" height="8" x="7" y="8" rx="2"/><circle cx="12" cy="12" r="1.5"/></svg>"#,
 );
 
 /// The web's dev `SidebarStageBackdrop` art, dark palette, faded into the sidebar.
@@ -271,6 +299,9 @@ impl AssetSource for AppAssets {
         if path == MESSAGE_SQUARE_DASHED {
             return Ok(Some(Cow::Borrowed(MESSAGE_SQUARE_DASHED_SVG.as_bytes())));
         }
+        if path == SNAP_SHOT {
+            return Ok(Some(Cow::Borrowed(SNAP_SHOT_SVG.as_bytes())));
+        }
         if path == STAGE_DEV {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev.svg"))));
         }
@@ -297,6 +328,9 @@ impl AssetSource for AppAssets {
         if MESSAGE_SQUARE_DASHED.starts_with(path) {
             paths.push(MESSAGE_SQUARE_DASHED.into());
         }
+        if SNAP_SHOT.starts_with(path) {
+            paths.push(SNAP_SHOT.into());
+        }
         paths.extend(ExtraIcons.list(path)?);
         Ok(paths)
     }
@@ -320,6 +354,23 @@ mod tests {
     fn every_catalog_icon_the_app_uses_loads() {
         for icon in [
             IconName::Paperclip,
+            IconName::Settings2,
+            IconName::Palette,
+            IconName::MessageSquareText,
+            IconName::MessagesSquare,
+            IconName::Keyboard,
+            IconName::Bot,
+            IconName::Globe,
+            IconName::Smartphone,
+            IconName::CalendarClock,
+            IconName::FolderTree,
+            IconName::ShieldCheck,
+            IconName::KeyRound,
+            IconName::Wrench,
+            IconName::FlaskConical,
+            IconName::Archive,
+            IconName::PanelsTopLeft,
+            IconName::Undo2,
             IconName::File,
             IconName::SquareMenu,
             IconName::PanelBottom,
@@ -384,6 +435,7 @@ mod tests {
                 .flatten()
                 .is_some()
         );
+        assert!(AppAssets.load(SNAP_SHOT).ok().flatten().is_some());
     }
 
     #[test]

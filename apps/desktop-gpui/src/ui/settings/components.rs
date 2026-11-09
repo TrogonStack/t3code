@@ -1,0 +1,405 @@
+//! Reusable pieces of the Settings route: `settingsLayout.tsx`, `SettingsGroup.tsx`, and the
+//! `Switch`, `Select` and `Button` primitives they hold.
+
+use super::*;
+use gpui::{BoxShadow, ClickEvent, ElementId, FocusHandle, KeyDownEvent, point};
+use std::rc::Rc;
+
+pub(super) type Toggle = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(super) type KeyHandler = Rc<dyn Fn(&KeyDownEvent, &mut Window, &mut App)>;
+pub(super) type PickHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+pub(super) type HoverHandler = Rc<dyn Fn(usize, &mut App)>;
+
+/// A tab stop kept across frames, keyed by the control's id.
+pub(super) fn tab_stop(id: &ElementId, window: &mut Window, cx: &mut App) -> FocusHandle {
+    window
+        .use_keyed_state(id.clone(), cx, |_, cx| cx.focus_handle().tab_stop(true))
+        .read(cx)
+        .clone()
+}
+
+fn focus_visible(handle: &FocusHandle, window: &Window) -> bool {
+    handle.is_focused(window) && window.last_input_was_keyboard()
+}
+
+/// `focus-visible:ring-2 ring-inset ring-ring ring-offset-1 ring-offset-background`
+/// (switch.tsx, button.tsx): a 2px ring inside the control, over a 1px line in the background.
+fn focus_ring(radius: f32, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .border_1()
+        .border_color(theme.background)
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded(px((radius - 1.).max(0.)))
+                .border_2()
+                .border_color(theme.ring),
+        )
+}
+
+/// `SettingsSection` (settingsLayout.tsx): `space-y-2.5`, the title row `min-h-7 px-4`, the title
+/// `text-base font-semibold`.
+pub(super) fn section(title: &'static str, group: impl IntoElement) -> gpui::Div {
+    v_flex()
+        .gap(px(10.))
+        .child(
+            h_flex().min_h(px(28.)).items_start().px_4().child(
+                h_flex()
+                    .min_h(px(28.))
+                    .items_center()
+                    .gap_2()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            ),
+        )
+        .child(group)
+}
+
+/// `SettingsGroup` (SettingsGroup.tsx): `rounded-xl border border-border/60 bg-card/40 shadow-xs/5`
+/// with `border-border/50` between rows.
+pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    let divider = theme.border.opacity(0.5);
+    let mut card = v_flex()
+        .relative()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.border.opacity(0.6))
+        .bg(theme.popover.opacity(0.4))
+        .shadow(vec![BoxShadow {
+            color: gpui::black().opacity(0.05),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        }]);
+    for (index, row) in rows.into_iter().enumerate() {
+        if index > 0 {
+            card = card.child(div().h(px(1.)).w_full().bg(divider));
+        }
+        card = card.child(row);
+    }
+    card
+}
+
+/// `SettingsRow` (settingsLayout.tsx): `px-4 py-3`, the columns `minmax(0,1fr) minmax(10rem,auto)`
+/// with `gap-8` from a 32rem container, stacked with `gap-3` below it.
+pub(super) fn row(
+    title: &'static str,
+    description: impl IntoElement,
+    reset: Option<AnyElement>,
+    control: AnyElement,
+    wide: bool,
+    cx: &App,
+) -> gpui::Div {
+    let theme = cx.theme();
+    let heading = h_flex()
+        .min_h(px(20.))
+        .items_center()
+        .gap(px(6.))
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child(title),
+        )
+        .child(div().size(px(20.)).flex_shrink_0().children(reset));
+    let text = v_flex().min_w_0().flex_1().gap_1().child(heading).child(
+        div()
+            .max_w(px(672.))
+            .text_xs()
+            .line_height(px(18.))
+            .text_color(theme.muted_foreground)
+            .child(description),
+    );
+    let control = h_flex()
+        .min_w_0()
+        .flex_shrink_0()
+        .items_center()
+        .gap_2()
+        .justify_end()
+        .child(control);
+    let inner = if wide {
+        h_flex()
+            .items_center()
+            .gap(px(32.))
+            .child(text)
+            .child(div().min_w(px(160.)).child(control))
+    } else {
+        v_flex().gap_3().child(text).child(control)
+    };
+    div().px_4().py_3().child(inner)
+}
+
+/// `SettingResetButton` (settingsLayout.tsx): `icon-micro` `ghost-muted`, `size-3` Undo2.
+pub(super) fn reset_button(
+    id: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let key = ElementId::from(id);
+    let handle = tab_stop(&key, window, cx);
+    let visible = focus_visible(&handle, window);
+    let theme = cx.theme();
+    let (muted, hover, foreground) = (theme.muted_foreground, theme.accent, theme.foreground);
+    let ring = focus_ring(4., cx);
+    div()
+        .id(key)
+        .track_focus(&handle)
+        .relative()
+        .size(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(muted)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover).text_color(foreground))
+        .tooltip(tooltip("Reset to default"))
+        .on_click(on_click)
+        .child(Icon::new(Icons::Undo2).size(px(12.)))
+        .when(visible, |button| button.child(ring))
+        .into_any_element()
+}
+
+/// `Switch` (switch.tsx) at the desktop size: a 30x18 track with 2px padding and a 14px thumb
+/// that travels 12px. Space and Enter toggle it.
+pub(super) fn switch(
+    id: &'static str,
+    checked: bool,
+    on_toggle: Toggle,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let key = ElementId::from(id);
+    let handle = tab_stop(&key, window, cx);
+    let visible = focus_visible(&handle, window);
+    let theme = cx.theme();
+    let track = if checked { theme.primary } else { theme.input };
+    let thumb = if checked || !theme.is_dark() {
+        theme.background
+    } else {
+        theme.muted_foreground
+    };
+    let ring = focus_ring(9., cx);
+    let click = on_toggle.clone();
+    div()
+        .id(key)
+        .track_focus(&handle)
+        .relative()
+        .w(px(30.))
+        .h(px(18.))
+        .flex_shrink_0()
+        .rounded_full()
+        .p(px(2.))
+        .bg(track)
+        .cursor_pointer()
+        .on_click(move |_, window, cx| click(window, cx))
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            if matches!(event.keystroke.key.as_str(), "space" | "enter") {
+                cx.stop_propagation();
+                on_toggle(window, cx);
+            }
+        })
+        .child(
+            div()
+                .size(px(14.))
+                .rounded_full()
+                .bg(thumb)
+                .ml(px(if checked { 12. } else { 0. }))
+                .shadow(vec![BoxShadow {
+                    color: gpui::black().opacity(0.05),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(2.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }]),
+        )
+        .when(visible, |track| track.child(ring))
+        .into_any_element()
+}
+
+/// The `size="sm"` select trigger (select.tsx): `min-h-7 rounded-lg border`, `text-sm`, a
+/// 14px chevron at 70% opacity.
+#[derive(IntoElement)]
+pub(super) struct SelectTrigger {
+    id: ElementId,
+    label: &'static str,
+    width: f32,
+    handle: FocusHandle,
+    focused: bool,
+    open: bool,
+    on_key: KeyHandler,
+}
+
+impl SelectTrigger {
+    pub(super) fn new(
+        id: &'static str,
+        label: &'static str,
+        width: f32,
+        handle: FocusHandle,
+        window: &Window,
+        on_key: KeyHandler,
+    ) -> Self {
+        let id = ElementId::from(id);
+        let focused = handle.is_focused(window);
+        Self {
+            id,
+            label,
+            width,
+            handle,
+            focused,
+            open: false,
+            on_key,
+        }
+    }
+}
+
+impl Selectable for SelectTrigger {
+    fn selected(self, _: bool) -> Self {
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        false
+    }
+
+    fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
+impl RenderOnce for SelectTrigger {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let background = if theme.is_dark() {
+            theme.input.opacity(0.32)
+        } else {
+            theme.background
+        };
+        let (input, ring, foreground, muted) = (
+            theme.input,
+            theme.ring,
+            theme.foreground,
+            theme.muted_foreground,
+        );
+        let on_key = self.on_key;
+        let highlighted = self.focused || self.open;
+        h_flex()
+            .id(self.id)
+            .track_focus(&self.handle)
+            .w(px(self.width))
+            .max_w_full()
+            .min_h(px(28.))
+            .items_center()
+            .gap(px(6.))
+            .pl(px(9.))
+            .pr(px(9.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(if highlighted { ring } else { input })
+            .bg(background)
+            .text_sm()
+            .text_color(foreground)
+            .cursor_pointer()
+            .shadow(if highlighted {
+                vec![BoxShadow {
+                    color: ring.opacity(0.24),
+                    offset: point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(3.),
+                    inset: false,
+                }]
+            } else {
+                vec![BoxShadow {
+                    color: gpui::black().opacity(0.05),
+                    offset: point(px(0.), px(1.)),
+                    blur_radius: px(2.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }]
+            })
+            .on_key_down(move |event, window, cx| on_key(event, window, cx))
+            .child(div().min_w_0().flex_1().truncate().child(self.label))
+            .child(
+                div()
+                    .mr(px(-4.))
+                    .flex_shrink_0()
+                    .opacity(0.7)
+                    .text_color(muted)
+                    .child(Icon::new(Icons::ChevronDown).size(px(14.))),
+            )
+    }
+}
+
+/// The select popup (select.tsx): `rounded-lg`, `p-1`, items `min-h-7 rounded-sm px-2 py-1
+/// text-sm`, the chosen item at `foreground/8%` and the highlighted one on `accent`.
+pub(super) struct Menu {
+    pub id: &'static str,
+    pub labels: Vec<&'static str>,
+    pub selected: usize,
+    pub highlighted: usize,
+    pub width: f32,
+    pub on_pick: PickHandler,
+    pub on_hover: HoverHandler,
+}
+
+pub(super) fn select_menu(menu: &Menu, cx: &App) -> gpui::Div {
+    let Menu {
+        id,
+        labels,
+        selected,
+        highlighted,
+        width,
+        on_pick,
+        on_hover,
+    } = menu;
+    let (selected, highlighted, id) = (*selected, *highlighted, *id);
+    let theme = cx.theme();
+    let (accent, accent_foreground, chosen) = (
+        theme.accent,
+        theme.accent_foreground,
+        theme.foreground.opacity(0.08),
+    );
+    v_flex()
+        .min_w(px(*width))
+        .p_1()
+        .children(labels.iter().enumerate().map(|(index, label)| {
+            let pick = on_pick.clone();
+            let hover = on_hover.clone();
+            div()
+                .id((id, index))
+                .min_h(px(28.))
+                .flex()
+                .items_center()
+                .px_2()
+                .py_1()
+                .rounded(px(4.))
+                .text_sm()
+                .cursor_pointer()
+                .when(index == selected, |item| item.bg(chosen))
+                .when(index == highlighted, |item| {
+                    item.bg(accent).text_color(accent_foreground)
+                })
+                .on_hover(move |entered, _, cx| {
+                    if *entered {
+                        hover(index, cx);
+                    }
+                })
+                .on_click(move |_, window, cx| pick(index, window, cx))
+                .child(*label)
+        }))
+}

@@ -57,8 +57,10 @@ const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod model_popover;
 mod right_panel;
+mod settings;
 mod usage_dialog;
 
+pub use settings::bindings as settings_bindings;
 pub use usage_dialog::bindings as usage_bindings;
 
 /// The web's `THREAD_SIDEBAR_DEFAULT_WIDTH`.
@@ -96,7 +98,8 @@ actions!(
         OpenFavoriteEditor,
         NewThread,
         NewScratchThread,
-        OpenUsage
+        OpenUsage,
+        OpenSettings
     ]
 );
 
@@ -274,6 +277,7 @@ pub struct MainView {
     card: Entity<DetailsCard>,
     toasts: Entity<ToastHost>,
     usage: Entity<usage_dialog::UsageDialog>,
+    settings: Entity<settings::SettingsDialog>,
     /// The slow requests toast; kept after the user dismisses it, like the web coordinator.
     slow_toast: Option<ToastId>,
     /// The main area's width at the last render, for fitting the details card.
@@ -440,6 +444,7 @@ impl MainView {
             card,
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
             usage: cx.new(|cx| usage_dialog::UsageDialog::new(actions.clone(), cx)),
+            settings: cx.new(|cx| settings::SettingsDialog::new(window, cx)),
             slow_toast: None,
             main_width: Cell::new(0.),
             sending: None,
@@ -2308,12 +2313,14 @@ impl MainView {
         h_flex()
             .pt_1()
             .gap_px()
-            .child(footer_button(
-                "settings",
-                Icon::new(IconName::Settings),
-                "Settings",
-                cx,
-            ))
+            .child(
+                footer_button("settings", Icon::new(IconName::Settings), "Settings", cx).on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.settings
+                            .update(cx, |settings, cx| settings.open(window, cx));
+                    }),
+                ),
+            )
             .child(footer_button(
                 "pull-requests",
                 Icon::new(Icons::GitPullRequest),
@@ -6139,6 +6146,10 @@ impl Render for MainView {
             .on_action(cx.listener(|this, _: &OpenUsage, window, cx| {
                 this.usage.update(cx, |usage, cx| usage.open(window, cx));
             }))
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                this.settings
+                    .update(cx, |settings, cx| settings.open(window, cx));
+            }))
             .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| this.toggle_right_panel(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleTerminal, window, cx| {
@@ -6190,6 +6201,7 @@ impl Render for MainView {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
             .child(self.usage.clone())
+            .child(self.settings.clone())
             .child(self.toasts.clone())
     }
 }
