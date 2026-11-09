@@ -2,6 +2,7 @@
 //! navigation (`SettingsSidebarNav.tsx`) and the General tab (`GeneralSettingsPanel`).
 
 mod components;
+mod tokens;
 
 use super::*;
 use crate::assets::SNAP_SHOT;
@@ -10,14 +11,12 @@ use crate::settings::{
     QuitMode, SearchItem, Section, SortOrder, TimeFormat,
 };
 use components::{
-    HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, group, reset_button, row, section,
-    select_menu, switch,
+    HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, ghost_button, group,
+    reset_button, row, section, select_menu, switch,
 };
-use gpui::{
-    ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription,
-    transparent_black,
-};
+use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use std::rc::Rc;
+use tokens::Tokens;
 
 const CONTEXT: &str = "SettingsPage";
 /// `SettingsSidebarNav`'s `w-60`.
@@ -331,7 +330,6 @@ impl Render for SettingsDialog {
         if !self.open {
             return gpui::Empty.into_any_element();
         }
-        let theme = cx.theme();
         let viewport = window.viewport_size();
         let (vw, vh) = (f32::from(viewport.width), f32::from(viewport.height));
         let pad = if vw >= 1024. {
@@ -347,11 +345,9 @@ impl Render for SettingsDialog {
         } else {
             (vw, vh)
         };
-        let backdrop = theme
-            .background
-            .opacity(if theme.is_dark() { 0.64 } else { 0.6 });
-        let (border, background) = (theme.border, theme.background);
-        let nav = self.nav(window, cx);
+        let tokens = Tokens::of(cx);
+        let (backdrop, border, background) = (tokens.backdrop(), tokens.border, tokens.background);
+        let nav = self.nav(cx);
         let header = self.header(cx);
         let body = self.body(width - NAV_WIDTH, window, cx);
         let confirm = self.restore_dialog(cx);
@@ -384,13 +380,19 @@ impl Render for SettingsDialog {
                     .overflow_hidden()
                     .occlude()
                     .bg(background)
-                    .text_color(cx.theme().foreground)
+                    .text_color(tokens.foreground)
                     .when(framed, |popup| {
                         popup
                             .rounded(px(16.))
                             .border_1()
                             .border_color(border)
-                            .shadow_2xl()
+                            .shadow(vec![gpui::BoxShadow {
+                                color: gpui::black().opacity(0.4),
+                                offset: gpui::point(px(0.), px(25.)),
+                                blur_radius: px(50.),
+                                spread_radius: px(-12.),
+                                inset: false,
+                            }])
                     })
                     .child(
                         h_flex().relative().flex_1().min_h_0().child(nav).child(
@@ -414,13 +416,8 @@ impl Render for SettingsDialog {
 impl SettingsDialog {
     /// `SettingsContentLayout`'s header: `h-12 gap-3 border-b ps-5 pe-2`.
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let (muted, border, foreground, hover) = (
-            theme.muted_foreground,
-            theme.border,
-            theme.foreground,
-            theme.accent,
-        );
+        let theme = Tokens::of(cx);
+        let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
         let general = self.section == Section::General;
         let disabled = self.settings.changed_labels().is_empty();
         let crumbs = h_flex()
@@ -438,43 +435,28 @@ impl SettingsDialog {
                     .text_color(foreground)
                     .child(self.section.label()),
             );
-        // `size="xs" variant="ghost"`: `h-6 gap-1 px-[7px] text-xs`, icon `mx-1 size-3.5`.
-        let restore = h_flex()
-            .id("settings-restore")
+        // `size="xs" variant="ghost"` (_chat.settings.tsx:33): `sm:h-6 gap-1 px-[7px] sm:text-xs`,
+        // `disabled:opacity-64 disabled:pointer-events-none`, icon `size-3.5` at `-mx-0.5`.
+        let restore = ghost_button("settings-restore", !disabled, cx)
             .h(px(24.))
-            .items_center()
             .gap_1()
             .px(px(7.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(transparent_black())
             .text_xs()
-            .text_color(foreground)
-            .when(disabled, |button| button.opacity(0.64))
             .when(!disabled, |button| {
-                button
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.confirm_restore = true;
-                        cx.notify();
-                    }))
+                button.on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_restore = true;
+                    cx.notify();
+                }))
             })
             .child(
                 div()
-                    .mx_1()
+                    .mx(px(-2.))
                     .text_color(muted)
                     .child(Icon::new(Icons::RotateCcw).size(px(14.))),
             )
             .child("Restore device defaults");
-        let close = ghost_icon_button(
-            "settings-close",
-            Icon::new(IconName::Close).size(px(14.)),
-            "Close (Esc)".into(),
-            true,
-            cx,
-        )
-        .on_click(cx.listener(|this, _, window, cx| this.close(window, cx)));
+        let close = close_button("settings-close", cx)
+            .on_click(cx.listener(|this, _, window, cx| this.close(window, cx)));
         h_flex()
             .h(px(48.))
             .flex_shrink_0()
@@ -500,9 +482,20 @@ impl SettingsDialog {
         if !self.confirm_restore {
             return None;
         }
-        let theme = cx.theme();
-        let (border, background, muted) = (theme.border, theme.background, theme.muted_foreground);
-        let backdrop = background.opacity(if theme.is_dark() { 0.64 } else { 0.6 });
+        let theme = Tokens::of(cx);
+        let (background, muted, backdrop) =
+            (theme.background, theme.muted_foreground, theme.backdrop());
+        // `dialog-glass` border (index.css:425-437).
+        let border = if theme.dark {
+            gpui::white().opacity(0.08)
+        } else {
+            theme.foreground.opacity(0.1)
+        };
+        let (outline_bg, outline_hover) = if theme.dark {
+            (theme.input.opacity(0.32), theme.input.opacity(0.64))
+        } else {
+            (theme.popover, theme.accent.opacity(0.5))
+        };
         let labels = self.settings.changed_labels().join(", ");
         let cancel = div()
             .id("settings-restore-cancel")
@@ -512,12 +505,14 @@ impl SettingsDialog {
             .items_center()
             .rounded(px(8.))
             .border_1()
-            .border_color(border)
+            .border_color(theme.input)
+            .bg(outline_bg)
+            .text_color(theme.foreground)
             .text_size(px(14.))
             .line_height(px(20.))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.foreground.opacity(0.06)))
+            .hover(move |style| style.bg(outline_hover))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.confirm_restore = false;
                 cx.notify();
@@ -530,8 +525,10 @@ impl SettingsDialog {
             .flex()
             .items_center()
             .rounded(px(8.))
-            .bg(theme.danger)
-            .text_color(theme.danger_foreground)
+            .border_1()
+            .border_color(theme.destructive)
+            .bg(theme.destructive)
+            .text_color(gpui::white())
             .text_size(px(14.))
             .line_height(px(20.))
             .font_weight(FontWeight::MEDIUM)
@@ -572,7 +569,17 @@ impl SettingsDialog {
                                 .border_1()
                                 .border_color(border)
                                 .bg(background)
-                                .shadow_lg()
+                                .shadow(vec![gpui::BoxShadow {
+                                    color: gpui::black().opacity(if theme.dark {
+                                        0.9
+                                    } else {
+                                        0.65
+                                    }),
+                                    offset: gpui::point(px(0.), px(24.)),
+                                    blur_radius: px(if theme.dark { 72. } else { 64. }),
+                                    spread_radius: px(if theme.dark { -20. } else { -24. }),
+                                    inset: false,
+                                }])
                                 .child(
                                     v_flex()
                                         .gap_2()
@@ -598,19 +605,17 @@ impl SettingsDialog {
     }
 
     /// `SettingsSidebarNav`: `w-60 border-e bg-sidebar`, content inset `p-2`, rows `gap-2`.
-    fn nav(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+    fn nav(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Tokens::of(cx);
         let (muted, sidebar_foreground, hover, border) = (
             theme.muted_foreground,
-            theme.sidebar_foreground,
-            theme.list_hover,
-            theme.sidebar_border,
+            theme.foreground,
+            theme.sidebar_row_hover,
+            theme.border,
         );
-        let (sidebar, accent, foreground, ring) =
-            (theme.sidebar, theme.accent, theme.foreground, theme.ring);
+        let (sidebar, foreground) = (theme.sidebar, theme.foreground);
         let query = self.query(cx);
         let searching = !query.is_empty();
-        let focused = self.search.focus_handle(cx).is_focused(window);
         let kbd = div()
             .h(px(20.))
             .min_w(px(20.))
@@ -634,27 +639,24 @@ impl SettingsDialog {
             .rounded(px(4.))
             .text_color(muted)
             .cursor_pointer()
-            .hover(move |style| style.bg(accent).text_color(foreground))
+            .hover(move |style| style.bg(hover).text_color(foreground))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.clear_search(window, cx);
                 this.focus_search(window, cx);
                 cx.notify();
             }))
             .child(Icon::new(IconName::Close).size(px(12.)));
-        // Hover and focus paint the row; `h-8 rounded-md px-2 gap-2 text-sm font-medium`.
+        // `h-8 rounded-md px-2 gap-2 text-sm font-medium`; only hover paints the row.
         let search_row = h_flex()
             .h_8()
             .items_center()
             .gap_2()
             .px_2()
             .rounded(px(6.))
-            .border_1()
-            .border_color(transparent_black())
             .text_sm()
             .font_weight(FontWeight::MEDIUM)
             .text_color(muted)
-            .hover(move |style| style.bg(hover))
-            .when(focused, |row| row.bg(hover).border_color(ring.opacity(0.7)))
+            .hover(move |style| style.bg(hover).text_color(foreground))
             .child(
                 div()
                     .flex_shrink_0()
@@ -698,7 +700,7 @@ impl SettingsDialog {
             .into_any_element()
     }
 
-    fn section_icon(section: Section, cx: &App) -> AnyElement {
+    fn section_icon(section: Section, active: bool, cx: &App) -> AnyElement {
         let icon = match section {
             Section::General => Icon::new(Icons::Settings2),
             Section::Appearance => Icon::new(Icons::Palette),
@@ -724,19 +726,23 @@ impl SettingsDialog {
         };
         div()
             .flex_shrink_0()
-            .text_color(cx.theme().muted_foreground.opacity(0.8))
+            .text_color(if active {
+                Tokens::of(cx).foreground
+            } else {
+                Tokens::of(cx).sidebar_icon
+            })
             .child(icon.size_4())
             .into_any_element()
     }
 
     /// `SidebarMenuButton`: `h-8 rounded-lg px-2.5 gap-2 text-sm`, muted until hovered or active.
     fn groups(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+        let theme = Tokens::of(cx);
         let (muted, foreground, hover, selected) = (
             theme.muted_foreground,
-            theme.sidebar_foreground,
-            theme.list_hover,
-            theme.list_active,
+            theme.foreground,
+            theme.sidebar_row_hover,
+            theme.sidebar_row_selected,
         );
         let mut groups = v_flex().gap_4();
         for (index, nav_group) in NAV_GROUPS.iter().enumerate() {
@@ -744,7 +750,7 @@ impl SettingsDialog {
             for section in nav_group.sections {
                 let target = *section;
                 let active = target == self.section;
-                let icon = Self::section_icon(target, cx);
+                let icon = Self::section_icon(target, active, cx);
                 rows = rows.child(
                     h_flex()
                         .id(("settings-section", index * 10 + target as usize))
@@ -799,15 +805,15 @@ impl SettingsDialog {
                 .py_6()
                 .text_center()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
+                .text_color(Tokens::of(cx).muted_foreground)
                 .child("No settings found")
                 .into_any_element();
         }
-        let theme = cx.theme();
+        let theme = Tokens::of(cx);
         let (muted, foreground, selected) = (
             theme.muted_foreground,
-            theme.sidebar_foreground,
-            theme.list_active,
+            theme.foreground,
+            theme.sidebar_row_selected,
         );
         v_flex()
             .gap_1()
@@ -818,7 +824,7 @@ impl SettingsDialog {
                     .items_start()
                     .gap_2()
                     .px(px(10.))
-                    .py(px(6.))
+                    .py(px(8.))
                     .rounded(px(8.))
                     .cursor_pointer()
                     .when(index == self.active_result, |row| row.bg(selected))
@@ -832,7 +838,11 @@ impl SettingsDialog {
                         this.active_result = index;
                         this.activate_result(window, cx);
                     }))
-                    .child(Self::section_icon(item.section, cx))
+                    .child(Self::section_icon(
+                        item.section,
+                        index == self.active_result,
+                        cx,
+                    ))
                     .child(
                         v_flex()
                             .min_w_0()
@@ -923,7 +933,7 @@ impl SettingsDialog {
     }
 
     /// `Select` (select.tsx) over a `Popover`; Enter, Space and the arrows open it.
-    fn select(&self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn select(&self, pick: Pick, cx: &mut Context<Self>) -> AnyElement {
         let view = cx.entity();
         let labels = pick.labels();
         let selected = pick.selected(&self.settings);
@@ -950,7 +960,6 @@ impl SettingsDialog {
             labels[selected],
             pick.width(),
             self.triggers[slot].clone(),
-            window,
             on_key,
         );
         let on_pick: PickHandler = {
@@ -975,6 +984,7 @@ impl SettingsDialog {
             .offset(px(4.))
             .open(open)
             .p_0()
+            .appearance(false)
             .on_open_change(move |opened, window, cx| {
                 view.update(cx, |this, cx| {
                     if *opened {
@@ -1037,7 +1047,7 @@ impl SettingsDialog {
                         window,
                         cx,
                     ),
-                    self.select(Pick::Notifications, window, cx),
+                    self.select(Pick::Notifications, cx),
                     wide,
                     cx,
                 ),
@@ -1090,7 +1100,7 @@ impl SettingsDialog {
                         window,
                         cx,
                     ),
-                    self.select(Pick::ProjectOrder, window, cx),
+                    self.select(Pick::ProjectOrder, cx),
                     wide,
                     cx,
                 ),
@@ -1189,7 +1199,7 @@ impl SettingsDialog {
                         window,
                         cx,
                     ),
-                    self.select(Pick::Quit, window, cx),
+                    self.select(Pick::Quit, cx),
                     wide,
                     cx,
                 ),
@@ -1207,7 +1217,7 @@ impl SettingsDialog {
                     window,
                     cx,
                 ),
-                self.select(Pick::Time, window, cx),
+                self.select(Pick::Time, cx),
                 wide,
                 cx,
             )]),

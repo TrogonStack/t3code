@@ -1,6 +1,7 @@
 //! Reusable pieces of the Settings route: `settingsLayout.tsx`, `SettingsGroup.tsx`, and the
 //! `Switch`, `Select` and `Button` primitives they hold.
 
+use super::tokens::Tokens;
 use super::*;
 use gpui::{BoxShadow, ClickEvent, ElementId, FocusHandle, KeyDownEvent, point};
 use std::rc::Rc;
@@ -25,7 +26,7 @@ fn focus_visible(handle: &FocusHandle, window: &Window) -> bool {
 /// `focus-visible:ring-2 ring-inset ring-ring ring-offset-1 ring-offset-background`
 /// (switch.tsx, button.tsx): a 2px ring inside the control, over a 1px line in the background.
 fn focus_ring(radius: f32, cx: &App) -> gpui::Div {
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     div()
         .absolute()
         .inset_0()
@@ -64,14 +65,14 @@ pub(super) fn section(title: &'static str, group: impl IntoElement) -> gpui::Div
 /// `SettingsGroup` (SettingsGroup.tsx): `rounded-xl border border-border/60 bg-card/40 shadow-xs/5`
 /// with `border-border/50` between rows.
 pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     let divider = theme.border.opacity(0.5);
     let mut card = v_flex()
         .relative()
         .rounded(px(12.))
         .border_1()
         .border_color(theme.border.opacity(0.6))
-        .bg(theme.popover.opacity(0.4))
+        .bg(theme.card.opacity(0.4))
         .shadow(vec![BoxShadow {
             color: gpui::black().opacity(0.05),
             offset: point(px(0.), px(1.)),
@@ -98,7 +99,7 @@ pub(super) fn row(
     wide: bool,
     cx: &App,
 ) -> gpui::Div {
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     let heading = h_flex()
         .min_h(px(20.))
         .items_center()
@@ -148,7 +149,7 @@ pub(super) fn reset_button(
     let key = ElementId::from(id);
     let handle = tab_stop(&key, window, cx);
     let visible = focus_visible(&handle, window);
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     let (muted, hover, foreground) = (theme.muted_foreground, theme.accent, theme.foreground);
     let ring = focus_ring(4., cx);
     div()
@@ -182,9 +183,9 @@ pub(super) fn switch(
     let key = ElementId::from(id);
     let handle = tab_stop(&key, window, cx);
     let visible = focus_visible(&handle, window);
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     let track = if checked { theme.primary } else { theme.input };
-    let thumb = if checked || !theme.is_dark() {
+    let thumb = if checked || !theme.dark {
         theme.background
     } else {
         theme.muted_foreground
@@ -235,7 +236,6 @@ pub(super) struct SelectTrigger {
     label: &'static str,
     width: f32,
     handle: FocusHandle,
-    focused: bool,
     open: bool,
     on_key: KeyHandler,
 }
@@ -246,17 +246,14 @@ impl SelectTrigger {
         label: &'static str,
         width: f32,
         handle: FocusHandle,
-        window: &Window,
         on_key: KeyHandler,
     ) -> Self {
         let id = ElementId::from(id);
-        let focused = handle.is_focused(window);
         Self {
             id,
             label,
             width,
             handle,
-            focused,
             open: false,
             on_key,
         }
@@ -283,21 +280,37 @@ impl Selectable for SelectTrigger {
 }
 
 impl RenderOnce for SelectTrigger {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let theme = cx.theme();
-        let background = if theme.is_dark() {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = Tokens::of(cx);
+        // `dark:bg-input/32`; light is `bg-background`.
+        let background = if theme.dark {
             theme.input.opacity(0.32)
         } else {
             theme.background
         };
-        let (input, ring, foreground, muted) = (
-            theme.input,
-            theme.ring,
-            theme.foreground,
-            theme.muted_foreground,
-        );
         let on_key = self.on_key;
-        let highlighted = self.focused || self.open;
+        // `focus-visible:border-ring focus-visible:ring-[3px] ring-ring/24 ring-inset`, and
+        // `shadow-none` while focused or pressed.
+        let focus_visible = !self.open && focus_visible(&self.handle, window);
+        let shadow = if focus_visible {
+            vec![BoxShadow {
+                color: theme.ring.opacity(0.24),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(3.),
+                inset: true,
+            }]
+        } else if self.open {
+            Vec::new()
+        } else {
+            vec![BoxShadow {
+                color: gpui::black().opacity(0.05),
+                offset: point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            }]
+        };
         h_flex()
             .id(self.id)
             .track_focus(&self.handle)
@@ -306,32 +319,19 @@ impl RenderOnce for SelectTrigger {
             .min_h(px(28.))
             .items_center()
             .gap(px(6.))
-            .pl(px(9.))
-            .pr(px(9.))
+            .px(px(9.))
             .rounded(px(8.))
             .border_1()
-            .border_color(if highlighted { ring } else { input })
+            .border_color(if focus_visible {
+                theme.ring
+            } else {
+                theme.input
+            })
             .bg(background)
             .text_sm()
-            .text_color(foreground)
+            .text_color(theme.foreground)
             .cursor_pointer()
-            .shadow(if highlighted {
-                vec![BoxShadow {
-                    color: ring.opacity(0.24),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(3.),
-                    inset: false,
-                }]
-            } else {
-                vec![BoxShadow {
-                    color: gpui::black().opacity(0.05),
-                    offset: point(px(0.), px(1.)),
-                    blur_radius: px(2.),
-                    spread_radius: px(0.),
-                    inset: false,
-                }]
-            })
+            .shadow(shadow)
             .on_key_down(move |event, window, cx| on_key(event, window, cx))
             .child(div().min_w_0().flex_1().truncate().child(self.label))
             .child(
@@ -339,14 +339,16 @@ impl RenderOnce for SelectTrigger {
                     .mr(px(-4.))
                     .flex_shrink_0()
                     .opacity(0.7)
-                    .text_color(muted)
+                    .text_color(theme.muted_foreground)
                     .child(Icon::new(Icons::ChevronDown).size(px(14.))),
             )
     }
 }
 
-/// The select popup (select.tsx): `rounded-lg`, `p-1`, items `min-h-7 rounded-sm px-2 py-1
-/// text-sm`, the chosen item at `foreground/8%` and the highlighted one on `accent`.
+/// The select popup (select.tsx:94-118, 144-167): `dropdown-glass` (index.css:454-465) on a
+/// `rounded-lg` shell with `p-1`, items `min-h-7 rounded-sm px-2 py-1 text-sm`, the chosen item at
+/// `foreground/[0.08]` and the highlighted one on `accent`. Painted opaque, as the web does where
+/// backdrop blur is unsupported.
 pub(super) struct Menu {
     pub id: &'static str,
     pub labels: Vec<&'static str>,
@@ -368,15 +370,31 @@ pub(super) fn select_menu(menu: &Menu, cx: &App) -> gpui::Div {
         on_hover,
     } = menu;
     let (selected, highlighted, id) = (*selected, *highlighted, *id);
-    let theme = cx.theme();
+    let theme = Tokens::of(cx);
     let (accent, accent_foreground, chosen) = (
         theme.accent,
         theme.accent_foreground,
         theme.foreground.opacity(0.08),
     );
+    let shadow = if theme.dark {
+        (18., 44., 0.8)
+    } else {
+        (16., 40., 0.55)
+    };
     v_flex()
         .min_w(px(*width))
         .p_1()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.foreground.opacity(0.1))
+        .bg(theme.popover)
+        .shadow(vec![BoxShadow {
+            color: gpui::black().opacity(shadow.2),
+            offset: point(px(0.), px(shadow.0)),
+            blur_radius: px(shadow.1),
+            spread_radius: px(-18.),
+            inset: false,
+        }])
         .children(labels.iter().enumerate().map(|(index, label)| {
             let pick = on_pick.clone();
             let hover = on_hover.clone();
@@ -402,4 +420,38 @@ pub(super) fn select_menu(menu: &Menu, cx: &App) -> gpui::Div {
                 .on_click(move |_, window, cx| pick(index, window, cx))
                 .child(*label)
         }))
+}
+
+/// `Button variant="ghost"` (button.tsx:59-60): `rounded-[--control-radius]` (8px), a transparent
+/// border, `text-foreground`, `bg-accent` on hover, and the icon in `--contrast-muted-foreground`.
+pub(super) fn ghost_button(id: &'static str, enabled: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let theme = Tokens::of(cx);
+    let accent = theme.accent;
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .text_color(theme.foreground)
+        .when(enabled, |button| {
+            button.cursor_pointer().hover(move |style| style.bg(accent))
+        })
+        .when(!enabled, |button| button.opacity(0.64))
+}
+
+/// `AppRouteModalClose`: `Button size="icon-sm" variant="ghost"` with a 14px X (`sm:size-7`).
+pub(super) fn close_button(id: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let muted = Tokens::of(cx).muted_foreground;
+    ghost_button(id, true, cx)
+        .size(px(28.))
+        .flex_shrink_0()
+        .tooltip(tooltip("Close (Esc)"))
+        .child(
+            div()
+                .text_color(muted)
+                .child(Icon::new(IconName::Close).size(px(14.))),
+        )
 }
