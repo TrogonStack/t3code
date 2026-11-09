@@ -19,6 +19,12 @@ use crate::rpc::{
     ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsReadFile, ProjectsWriteFile,
     SubscribeProjectClones,
 };
+use crate::rpc::{
+    PullRequestsActivity, PullRequestsChangeBreakdown, PullRequestsChecks, PullRequestsComment,
+    PullRequestsDetail, PullRequestsFilterOptions, PullRequestsInvalidate,
+    PullRequestsLinkedThreads, PullRequestsList, PullRequestsListStats, PullRequestsRouting,
+    PullRequestsRunAction, PullRequestsStack, PullRequestsSummary,
+};
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
 use crate::strip::{self, Branch};
@@ -122,6 +128,10 @@ pub enum Action {
 
 /// The RPCs an `Action::Call` can name, all with untyped payloads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    dead_code,
+    reason = "the pull request surface constructs the PullRequests calls next"
+)]
 pub enum Call {
     ListRefs,
     SwitchRef,
@@ -152,6 +162,20 @@ pub enum Call {
     StartProjectClone,
     /// A stream of the clone list that never ends by itself.
     WatchProjectClones,
+    PullRequestsList,
+    PullRequestsListStats,
+    PullRequestsFilterOptions,
+    PullRequestsSummary,
+    PullRequestsRouting,
+    PullRequestsStack,
+    PullRequestsLinkedThreads,
+    PullRequestsDetail,
+    PullRequestsActivity,
+    PullRequestsChecks,
+    PullRequestsChangeBreakdown,
+    PullRequestsInvalidate,
+    PullRequestsRunAction,
+    PullRequestsComment,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -209,6 +233,20 @@ impl Call {
             Self::WriteFile => "write the file",
             Self::StartProjectClone => "start the clone",
             Self::WatchProjectClones => "watch the clones",
+            Self::PullRequestsList => "list the pull requests",
+            Self::PullRequestsListStats => "count the pull requests",
+            Self::PullRequestsFilterOptions => "load the list filters",
+            Self::PullRequestsSummary => "load the pull request",
+            Self::PullRequestsRouting => "route the pull request",
+            Self::PullRequestsStack => "load the stack",
+            Self::PullRequestsLinkedThreads => "load the linked threads",
+            Self::PullRequestsDetail => "load the pull request",
+            Self::PullRequestsActivity => "load the activity",
+            Self::PullRequestsChecks => "load the checks",
+            Self::PullRequestsChangeBreakdown => "load the changed files",
+            Self::PullRequestsInvalidate => "refresh the pull request",
+            Self::PullRequestsRunAction => "run the pull request action",
+            Self::PullRequestsComment => "post the comment",
         }
     }
 
@@ -245,6 +283,26 @@ impl Call {
             Self::WriteFile => session.request::<ProjectsWriteFile>(payload),
             Self::StartProjectClone => session.request::<ProjectCloneStart>(payload),
             Self::WatchProjectClones => session.request::<SubscribeProjectClones>(payload),
+            Self::PullRequestsList => session.request::<PullRequestsList>(payload),
+            Self::PullRequestsListStats => session.request::<PullRequestsListStats>(payload),
+            Self::PullRequestsFilterOptions => {
+                session.request::<PullRequestsFilterOptions>(payload)
+            }
+            Self::PullRequestsSummary => session.request::<PullRequestsSummary>(payload),
+            Self::PullRequestsRouting => session.request::<PullRequestsRouting>(payload),
+            Self::PullRequestsStack => session.request::<PullRequestsStack>(payload),
+            Self::PullRequestsLinkedThreads => {
+                session.request::<PullRequestsLinkedThreads>(payload)
+            }
+            Self::PullRequestsDetail => session.request::<PullRequestsDetail>(payload),
+            Self::PullRequestsActivity => session.request::<PullRequestsActivity>(payload),
+            Self::PullRequestsChecks => session.request::<PullRequestsChecks>(payload),
+            Self::PullRequestsChangeBreakdown => {
+                session.request::<PullRequestsChangeBreakdown>(payload)
+            }
+            Self::PullRequestsInvalidate => session.request::<PullRequestsInvalidate>(payload),
+            Self::PullRequestsRunAction => session.request::<PullRequestsRunAction>(payload),
+            Self::PullRequestsComment => session.request::<PullRequestsComment>(payload),
         }
     }
 }

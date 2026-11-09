@@ -17,6 +17,7 @@ mod model_picker;
 mod pairing;
 mod projects;
 mod providers;
+mod pull_request;
 mod ref_picker;
 mod refs;
 mod rpc;

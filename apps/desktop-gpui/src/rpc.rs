@@ -306,6 +306,76 @@ untyped_method!(
     ProjectCloneStart,
     "projectClone.start"
 );
+untyped_method!(
+    /// `pullRequests.list`: the pull requests of the projects on the environment.
+    PullRequestsList,
+    "pullRequests.list"
+);
+untyped_method!(
+    /// `pullRequests.listStats`: the list's counts per state.
+    PullRequestsListStats,
+    "pullRequests.listStats"
+);
+untyped_method!(
+    /// `pullRequests.filterOptions`: the authors and labels the list can filter by.
+    PullRequestsFilterOptions,
+    "pullRequests.filterOptions"
+);
+untyped_method!(
+    /// `pullRequests.summary`: one pull request's row.
+    PullRequestsSummary,
+    "pullRequests.summary"
+);
+untyped_method!(
+    /// `pullRequests.routing`: the account and host a pull request is read through.
+    PullRequestsRouting,
+    "pullRequests.routing"
+);
+untyped_method!(
+    /// `pullRequests.stack`: the stack a pull request belongs to, or null.
+    PullRequestsStack,
+    "pullRequests.stack"
+);
+untyped_method!(
+    /// `pullRequests.linkedThreads`: the threads linked to a pull request.
+    PullRequestsLinkedThreads,
+    "pullRequests.linkedThreads"
+);
+untyped_method!(
+    /// `pullRequests.detail`: a pull request's detail.
+    PullRequestsDetail,
+    "pullRequests.detail"
+);
+untyped_method!(
+    /// `pullRequests.activity`: a pull request's timeline.
+    PullRequestsActivity,
+    "pullRequests.activity"
+);
+untyped_method!(
+    /// `pullRequests.checks`: a pull request's checks, or null.
+    PullRequestsChecks,
+    "pullRequests.checks"
+);
+untyped_method!(
+    /// `pullRequests.changeBreakdown`: a pull request's files and commits.
+    PullRequestsChangeBreakdown,
+    "pullRequests.changeBreakdown"
+);
+untyped_method!(
+    /// `pullRequests.invalidate`: drops the server's cached read so the next one hits the host.
+    PullRequestsInvalidate,
+    "pullRequests.invalidate"
+);
+untyped_method!(
+    /// `pullRequests.runAction`: merge, close, reopen, draft and the other actions.
+    PullRequestsRunAction,
+    "pullRequests.runAction"
+);
+untyped_method!(
+    /// `pullRequests.comment`: posts a comment.
+    PullRequestsComment,
+    "pullRequests.comment"
+);
 /// `subscribeProjectClones`, a stream of the clone list that stays open until interrupted.
 pub struct SubscribeProjectClones;
 
@@ -514,9 +584,64 @@ fn describe_cause(cause: &[CauseFrame]) -> String {
     }
 }
 
+/// Leads the message of a pull request failure the host reported as not found, so the panel can
+/// title it as the web does; `split_not_found` removes it.
+pub const NOT_FOUND_MARK: &str = "\u{1f}not-found\u{1f}";
+
+/// The message and whether it carries `NOT_FOUND_MARK`.
+pub fn split_not_found(message: &str) -> (&str, bool) {
+    match message.strip_prefix(NOT_FOUND_MARK) {
+        Some(rest) => (rest, true),
+        None => (message, false),
+    }
+}
+
+/// `PullRequestUnavailableError.message` and `PullRequestOperationError.message`, which are
+/// getters and so are not on the wire.
+fn pull_request_message(error: &Value) -> Option<String> {
+    let field = |key: &str| {
+        error
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+    };
+    match error.get("_tag").and_then(Value::as_str)? {
+        "PullRequestOperationError" => {
+            let text = format!(
+                "Pull request operation {} failed: {}",
+                field("operation")?,
+                field("detail")?
+            );
+            Some(if field("reason") == Some("not-found") {
+                format!("{NOT_FOUND_MARK}{text}")
+            } else {
+                text
+            })
+        }
+        "PullRequestUnavailableError" => Some(
+            match field("reason")? {
+                "cli-missing" => field("requirement")
+                    .unwrap_or("The tool this host is read through is not installed or set up."),
+                "cli-unauthenticated" => {
+                    field("requirement").unwrap_or("This host has no working credentials.")
+                }
+                "provider-unsupported" => {
+                    "Change requests cannot be browsed for this project's host yet."
+                }
+                _ => return None,
+            }
+            .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
 fn error_message(error: &Value) -> String {
     if let Some(text) = error.as_str() {
         return text.to_owned();
+    }
+    if let Some(text) = pull_request_message(error) {
+        return text;
     }
     ["message", "reason", "detail", "_tag"]
         .iter()
@@ -528,6 +653,43 @@ fn error_message(error: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pull_request_failures_read_as_the_web_message() {
+        let operation = json!({
+            "_tag": "PullRequestOperationError",
+            "operation": "detail",
+            "detail": "requests are paused",
+        });
+        assert_eq!(
+            error_message(&operation),
+            "Pull request operation detail failed: requests are paused"
+        );
+        let missing = json!({
+            "_tag": "PullRequestOperationError",
+            "operation": "detail",
+            "detail": "no such pull request",
+            "reason": "not-found",
+        });
+        let message = error_message(&missing);
+        let (text, not_found) = split_not_found(&message);
+        assert!(not_found);
+        assert_eq!(
+            text,
+            "Pull request operation detail failed: no such pull request"
+        );
+        assert_eq!(split_not_found("plain"), ("plain", false));
+        let unavailable = json!({
+            "_tag": "PullRequestUnavailableError",
+            "reason": "cli-unauthenticated",
+            "requirement": "Run gh auth login.",
+        });
+        assert_eq!(error_message(&unavailable), "Run gh auth login.");
+        assert_eq!(
+            error_message(&json!({"_tag": "PullRequestUnavailableError", "reason": "cli-missing"})),
+            "The tool this host is read through is not installed or set up."
+        );
+    }
 
     #[test]
     fn request_frame_matches_the_effect_envelope() {
