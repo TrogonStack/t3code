@@ -583,6 +583,7 @@ impl MainView {
             )
         });
         let source_control = self.providers.as_ref().map(|c| c.source_control().clone());
+        let secrets = self.providers.as_ref().map(|c| c.secrets().clone());
         let project_ids = crate::settings_devices::project_ids(&entries);
         self.settings.update(cx, |settings, cx| {
             settings.set_labs_data(data, flags, cx);
@@ -591,6 +592,9 @@ impl MainView {
             }
             if let Some(config) = source_control {
                 settings.set_source_control_data(config, project_ids, cx);
+            }
+            if let Some(config) = secrets {
+                settings.set_secrets_data(config, cx);
             }
         });
     }
@@ -663,6 +667,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_secrets::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_secrets_call(token, event, cx)
+                });
+                return;
+            }
             if token >= pull_requests_page::TOKEN_BASE {
                 self.pull_requests_page
                     .update(cx, |page, cx| page.on_call(token, event, cx));

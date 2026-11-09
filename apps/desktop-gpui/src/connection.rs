@@ -10,10 +10,10 @@ use crate::rpc::{
     DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
     OrchestrationLaunchThread, PING_FRAME, ProjectsMutate, ProviderConsumeResetCredit,
     ReviewGetDiffPreview, ServerCheckSecretSource, ServerDiscoverSourceControl, ServerGetConfig,
-    ServerGetUsageSummary, ServerRefreshProviders, ServerRefreshUsageRates, ServerUpdateSettings,
-    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
-    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
-    VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    ServerGetUsageSummary, ServerListOnePasswordAccounts, ServerRefreshProviders,
+    ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
+    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
+    TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::rpc::{
     ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsReadFile, ProjectsWriteFile,
@@ -155,6 +155,7 @@ pub enum Call {
     DeviceEasAccount,
     DiscoverSourceControl,
     CheckSecretSource,
+    ListOnePasswordAccounts,
     GetConfig,
     ListIgnoredFiles,
     ReadFile,
@@ -227,6 +228,7 @@ impl Call {
             Self::DeviceEasAccount => "check the Expo account",
             Self::DiscoverSourceControl => "scan the server environment",
             Self::CheckSecretSource => "check the secret",
+            Self::ListOnePasswordAccounts => "list the 1Password accounts",
             Self::GetConfig => "load the server settings",
             Self::ListIgnoredFiles => "list the ignored files",
             Self::ReadFile => "read the file",
@@ -277,6 +279,9 @@ impl Call {
             Self::DeviceEasAccount => session.request::<DeviceEasAccount>(payload),
             Self::DiscoverSourceControl => session.request::<ServerDiscoverSourceControl>(payload),
             Self::CheckSecretSource => session.request::<ServerCheckSecretSource>(payload),
+            Self::ListOnePasswordAccounts => {
+                session.request::<ServerListOnePasswordAccounts>(payload)
+            }
             Self::GetConfig => session.request::<ServerGetConfig>(payload),
             Self::ListIgnoredFiles => session.request::<ProjectsListIgnoredFiles>(payload),
             Self::ReadFile => session.request::<ProjectsReadFile>(payload),

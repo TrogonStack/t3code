@@ -367,6 +367,8 @@ pub struct Catalog {
     devices: crate::settings_devices::DeviceConfig,
     /// The Source control tab's keys.
     source_control: crate::settings_source_control::SourceControlConfig,
+    /// The Secrets tab's settings.
+    secrets: crate::settings_secrets::Config,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -461,6 +463,11 @@ impl Catalog {
                     value["environment"]["capabilities"]["secretReferences"].as_bool()
                         == Some(true),
                 );
+        let secrets = crate::settings_secrets::Config {
+            settings: value["settings"].clone(),
+            manageable: value["environment"]["capabilities"]["secretProviderSettings"].as_bool()
+                == Some(true),
+        };
         let Config {
             providers,
             settings,
@@ -473,6 +480,7 @@ impl Catalog {
             available_editors,
             devices,
             source_control,
+            secrets,
             usage_model_aliases: environment
                 .as_ref()
                 .is_some_and(|environment| environment.capabilities.usage_model_aliases),
@@ -541,6 +549,11 @@ impl Catalog {
     /// The attached environment's Source control settings.
     pub fn source_control(&self) -> &crate::settings_source_control::SourceControlConfig {
         &self.source_control
+    }
+
+    /// The attached environment's secret providers.
+    pub fn secrets(&self) -> &crate::settings_secrets::Config {
+        &self.secrets
     }
 
     /// The attached environment's Labs flags.

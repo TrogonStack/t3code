@@ -11,6 +11,7 @@ mod labs_panel;
 mod scope_inheritance;
 mod scope_pickers;
 mod secret_field;
+mod secrets_panel;
 mod source_control_panel;
 pub(crate) mod tokens;
 
@@ -31,6 +32,7 @@ use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
 use scope_pickers::ScopeBar;
+use secrets_panel::SecretsPanel;
 use source_control_panel::SourceControlPanel;
 use std::rc::Rc;
 use tokens::Tokens;
@@ -172,6 +174,7 @@ pub struct SettingsDialog {
     labs: Entity<LabsPanel>,
     devices: Entity<DevicesPanel>,
     source_control: Entity<SourceControlPanel>,
+    secrets: Entity<SecretsPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -189,6 +192,7 @@ impl SettingsDialog {
         let devices = cx.new(|cx| DevicesPanel::new(actions.clone(), scope.clone(), cx));
         let source_control =
             cx.new(|cx| SourceControlPanel::new(actions.clone(), scope.clone(), window, cx));
+        let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -223,6 +227,7 @@ impl SettingsDialog {
             labs,
             devices,
             source_control,
+            secrets,
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -244,6 +249,7 @@ impl SettingsDialog {
         self.labs.update(cx, |panel, cx| panel.reload(cx));
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
+        self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -315,6 +321,25 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.source_control
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_secrets_data(
+        &mut self,
+        config: crate::settings_secrets::Config,
+        cx: &mut Context<Self>,
+    ) {
+        self.secrets
+            .update(cx, |panel, cx| panel.set_data(config, cx));
+    }
+
+    pub fn on_secrets_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.secrets
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -397,6 +422,12 @@ impl SettingsDialog {
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.scope.update(cx, |bar, cx| bar.close_menu(cx)) {
+            return;
+        }
+        if self
+            .secrets
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
             return;
         }
         if self
@@ -564,6 +595,9 @@ impl Render for SettingsDialog {
         let devices = self
             .devices
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let secrets = self
+            .secrets
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -623,6 +657,7 @@ impl Render for SettingsDialog {
             )
             .children(confirm)
             .children(devices)
+            .children(secrets)
             .into_any_element()
     }
 }
@@ -1121,13 +1156,17 @@ impl SettingsDialog {
             self.source_control
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.source_control.clone().into_any_element()]
+        } else if self.section == Section::Secrets {
+            self.secrets
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.secrets.clone().into_any_element()]
         } else {
             Vec::new()
         };
         // The web hides the scope sentence on device-only tabs; the tabs that apply a scope list here.
         let scoped = matches!(
             self.section,
-            Section::Labs | Section::Devices | Section::SourceControl
+            Section::Labs | Section::Devices | Section::SourceControl | Section::Secrets
         );
         div()
             .w_full()

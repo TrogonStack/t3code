@@ -118,7 +118,7 @@ pub(in crate::ui::settings) fn spinner(size: f32, color: Hsla) -> AnyElement {
 }
 
 /// `Input` in its default size: `h-8 rounded-lg border bg-popover`, `ring` while focused.
-pub(super) fn field(
+pub(in crate::ui::settings) fn field(
     input: &Entity<InputState>,
     disabled: bool,
     window: &Window,
@@ -152,7 +152,7 @@ pub(super) fn field(
 }
 
 /// `label.block.space-y-1.5.text-sm`.
-pub(super) fn labeled(title: &'static str, body: impl IntoElement) -> gpui::Div {
+pub(in crate::ui::settings) fn labeled(title: &'static str, body: impl IntoElement) -> gpui::Div {
     v_flex()
         .gap(px(6.))
         .text_size(px(14.))
@@ -179,7 +179,7 @@ pub(in crate::ui::settings) fn problem(text: impl IntoElement, cx: &App) -> gpui
 }
 
 /// An item of a popup menu (menu.tsx): `min-h-7 rounded-sm px-2 py-1 text-sm`.
-pub(super) fn menu_item(
+pub(in crate::ui::settings) fn menu_item(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     destructive: bool,
@@ -218,6 +218,21 @@ pub(super) fn dialog(
     dismiss: impl Fn(&mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
+    dialog_of(id, 512., title, description, body, footer, dismiss, cx)
+}
+
+/// `dialog` with its own `max-w` and a title that is not a literal.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::ui::settings) fn dialog_of(
+    id: &'static str,
+    width: f32,
+    title: impl Into<SharedString>,
+    description: impl IntoElement,
+    body: Vec<AnyElement>,
+    footer: Vec<AnyElement>,
+    dismiss: impl Fn(&mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
     let theme = Tokens::of(cx);
     let border = if theme.dark {
         gpui::white().opacity(0.08)
@@ -233,7 +248,7 @@ pub(super) fn dialog(
             div()
                 .text_xl()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(title),
+                .child(title.into()),
         )
         .child(
             div()
@@ -283,7 +298,7 @@ pub(super) fn dialog(
                 .child(
                     v_flex()
                         .occlude()
-                        .w(px(512.))
+                        .w(px(width))
                         .max_w_full()
                         .max_h_full()
                         .overflow_hidden()

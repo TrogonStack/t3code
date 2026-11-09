@@ -29,6 +29,7 @@ mod settings_appearance;
 mod settings_devices;
 mod settings_diffs;
 mod settings_labs;
+mod settings_secrets;
 mod settings_source_control;
 mod settings_typography;
 mod shell;

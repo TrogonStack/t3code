@@ -105,6 +105,15 @@ impl Method for ServerCheckSecretSource {
     type Success = Value;
 }
 
+/// `server.listOnePasswordAccounts`, the accounts the server's `op` CLI is signed into.
+pub struct ServerListOnePasswordAccounts;
+
+impl Method for ServerListOnePasswordAccounts {
+    const TAG: &'static str = "server.listOnePasswordAccounts";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `device.configure`, the hub and agent-access switches.
 pub struct DeviceConfigure;
 
