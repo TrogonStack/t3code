@@ -59,6 +59,7 @@ const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod add_to_machine;
 mod composer_menu;
 mod model_popover;
+mod pull_request_panel;
 mod right_panel;
 mod run_on_menu;
 mod settings;
@@ -283,6 +284,10 @@ pub struct MainView {
     /// Directories whose diff was asked for on this connection.
     diffs_requested: HashSet<String>,
     diff_list: Entity<right_panel::DiffList>,
+    /// The pull request tabs opened per thread, and the surface each panel shows.
+    pull_request_tabs: HashMap<String, Vec<right_panel::PullRequestTab>>,
+    right_panel_active: HashMap<String, right_panel::Active>,
+    pull_request_panel: Entity<pull_request_panel::PullRequestPanel>,
     /// Threads (and drafts, by project) whose terminal drawer is open; it starts closed.
     terminal_open: HashSet<String>,
     /// The drawer's height per thread, as dragged.
@@ -484,6 +489,12 @@ impl MainView {
             diffs: HashMap::new(),
             diffs_requested: HashSet::new(),
             diff_list: cx.new(|_| right_panel::DiffList::new()),
+            pull_request_tabs: HashMap::new(),
+            right_panel_active: HashMap::new(),
+            pull_request_panel: cx.new({
+                let actions = actions.clone();
+                move |_| pull_request_panel::PullRequestPanel::new(actions)
+            }),
             terminal_open: HashSet::new(),
             terminal_heights: HashMap::new(),
             terminals: HashMap::new(),
@@ -642,6 +653,11 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= pull_request_panel::TOKEN_BASE {
+                self.pull_request_panel
+                    .update(cx, |panel, cx| panel.on_call(token, event, cx));
+                return;
+            }
             if token >= add_to_machine::TOKEN_BASE {
                 self.add_to_machine
                     .update(cx, |dialog, cx| dialog.on_call(token, event, cx));
@@ -690,6 +706,8 @@ impl MainView {
             self.branches_requested.clear();
             self.vcs.clear();
             self.diffs_requested.clear();
+            self.pull_request_panel
+                .update(cx, |panel, cx| panel.reset(cx));
         }
         let access = match &status {
             Status::NotConnected => usage_dialog::Access::Unavailable,
@@ -2339,11 +2357,34 @@ impl MainView {
         let pr_control = row.pr.as_ref().map(|badge| {
             let weak = cx.weak_entity();
             let list_id = row.id.clone();
-            pr_badge_control(row, badge, muted, dark, move |cx| {
-                let list_id = list_id.clone();
-                weak.update(cx, |this, cx| this.open_thread(Some(list_id), cx))
+            let (open_weak, thread, project_id) =
+                (weak.clone(), row.id.clone(), row.project_id.clone());
+            let open: OpenPullRequest = Rc::new(move |line, cx| {
+                let reference = crate::pull_request::Reference {
+                    project_id: project_id.clone(),
+                    host: Some(line.host.clone()).filter(|host| !host.is_empty()),
+                    repository: line.repository.clone(),
+                    number: line.number,
+                };
+                let (thread, url) = (thread.clone(), Some(line.url.clone()));
+                open_weak
+                    .update(cx, |this, cx| {
+                        this.open_pull_request(thread, reference, url, cx)
+                    })
                     .ok();
-            })
+            });
+            pr_badge_control(
+                row,
+                badge,
+                muted,
+                dark,
+                move |cx| {
+                    let list_id = list_id.clone();
+                    weak.update(cx, |this, cx| this.open_thread(Some(list_id), cx))
+                        .ok();
+                },
+                open,
+            )
         });
         thread_row(
             row,
@@ -5987,6 +6028,8 @@ fn badge_lines(badge: &PrBadge, lines: &[PrLine]) -> Vec<PrLine> {
             title: format!("Pull request #{number}"),
             depth: 0,
             url: url.clone(),
+            host: String::new(),
+            repository: badge.repository.clone().unwrap_or_default(),
             stack: None,
         }],
         _ => Vec::new(),
@@ -6022,6 +6065,7 @@ fn popup_offset(
 /// The web's `PullRequestBadge` tooltip popup: a mini list whose items open their pull request.
 struct PrPopup {
     lines: Vec<PrLine>,
+    open: OpenPullRequest,
     place: gpui::Point<Pixels>,
     height: f32,
 }
@@ -6032,7 +6076,7 @@ impl Render for PrPopup {
         let (muted, foreground, accent) = (theme.muted_foreground, theme.foreground, theme.accent);
         let (dark, mono) = (theme.is_dark(), theme.mono_font_family.clone());
         let items = self.lines.iter().enumerate().map(|(index, line)| {
-            let url = line.url.clone();
+            let (line_to_open, open) = (line.clone(), self.open.clone());
             pr_line_row(line, mono.clone(), muted, foreground, dark)
                 .id(("pr-popup-item", index))
                 .px_1()
@@ -6043,7 +6087,7 @@ impl Render for PrPopup {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |_, _, cx| {
                     cx.stop_propagation();
-                    cx.open_url(&url);
+                    open(&line_to_open, cx);
                 })
         });
         div().relative().left(self.place.x).top(self.place.y).child(
@@ -6065,6 +6109,9 @@ impl Render for PrPopup {
     }
 }
 
+/// Opens one popup item's pull request in the right panel.
+type OpenPullRequest = Rc<dyn Fn(&PrLine, &mut App)>;
+
 /// The badge in a row's meta line: a link for one pull request, else it opens the list. Hovering
 /// shows the popup. The web opens the right panel's pull requests view for a list; GPUI has
 /// none, so it activates the thread and the popup stays the list.
@@ -6074,6 +6121,7 @@ fn pr_badge_control(
     muted: Hsla,
     dark: bool,
     on_list: impl Fn(&mut App) + 'static,
+    open: OpenPullRequest,
 ) -> gpui::Stateful<gpui::Div> {
     let tone = pr_color(badge.state, dark).unwrap_or(muted);
     let anchor = Rc::new(Cell::new(Bounds::default()));
@@ -6109,8 +6157,10 @@ fn pr_badge_control(
         let height = popup_height(lines.len(), room);
         let place = popup_offset(popup_anchor.get(), window.mouse_position(), height);
         let lines = lines.clone();
+        let open = open.clone();
         cx.new(|_| PrPopup {
             lines,
+            open,
             place,
             height,
         })
@@ -6693,6 +6743,7 @@ mod tests {
             text: "19".to_owned(),
             url: None,
             opens_list: false,
+            repository: None,
         };
         let plain = branch_budget(300., true, None, true);
         assert!(branch_budget(300., true, Some(&badge), true) < plain);

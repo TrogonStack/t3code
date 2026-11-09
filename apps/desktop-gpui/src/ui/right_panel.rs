@@ -1,9 +1,10 @@
 //! The web's right panel (`ChatRightPanel.tsx`, `RightPanelTabs.tsx`, `rightPanelStore.ts`) with
-//! its Diff surface (`DiffPanel.tsx`). Only that surface is here; files, browser, device, pull
-//! requests and side chats have no counterpart yet, so the tab strip lists Diff alone.
+//! its Diff (`DiffPanel.tsx`) and pull request surfaces. Files, browser, device and side chats
+//! have no counterpart yet, so the tab strip lists Diff and the opened pull requests.
 
 use super::*;
 use crate::diff::{self, Change, Kind, Preview};
+use crate::pull_request::Reference;
 use gpui::{ScrollStrategy, UniformListScrollHandle, uniform_list};
 use std::{ops::Range, rc::Rc};
 
@@ -32,24 +33,18 @@ const DELETION: u32 = 0xef4444;
 /// The web's default `rightPanel.toggle` binding on macOS.
 pub const TOGGLE_SHORTCUT: &str = "\u{2325}\u{2318}B";
 
-/// What the panel can show; the web's `RightPanelKind` minus the surfaces not ported.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Surface {
+/// What the panel shows: the Diff surface or one opened pull request, by its reference key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Active {
     Diff,
+    PullRequest(String),
 }
 
-impl Surface {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Diff => "Diff",
-        }
-    }
-
-    fn icon(self) -> Icons {
-        match self {
-            Self::Diff => Icons::FileDiff,
-        }
-    }
+/// A `pull-request` tab, the web's `RightPanelSurface` with its reference.
+#[derive(Clone)]
+pub(super) struct PullRequestTab {
+    pub reference: Reference,
+    pub url: Option<String>,
 }
 
 /// The docked width: at least the minimum, at most 70% of the window and what leaves the chat
@@ -411,6 +406,67 @@ impl MainView {
         cx.notify();
     }
 
+    /// The pull request badge's items: selects the thread, opens its panel on a `pull-request`
+    /// tab for `reference` and reads it.
+    pub(super) fn open_pull_request(
+        &mut self,
+        thread: String,
+        reference: Reference,
+        url: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_thread.as_deref() != Some(thread.as_str()) {
+            self.open_thread(Some(thread.clone()), cx);
+        }
+        if !self.right_panel_available() {
+            return;
+        }
+        let key = reference.key();
+        let tabs = self.pull_request_tabs.entry(thread.clone()).or_default();
+        match tabs.iter_mut().find(|tab| tab.reference.key() == key) {
+            Some(tab) => tab.url = url.or_else(|| tab.url.take()),
+            None => tabs.push(PullRequestTab { reference, url }),
+        }
+        self.right_panel_active
+            .insert(thread.clone(), Active::PullRequest(key));
+        self.right_panel_open.insert(thread);
+        self.sync_diff();
+        cx.notify();
+    }
+
+    fn active_surface(&self) -> Active {
+        let Some(key) = self.details_key() else {
+            return Active::Diff;
+        };
+        match self.right_panel_active.get(&key) {
+            Some(Active::PullRequest(reference))
+                if self.pull_request_tabs.get(&key).is_some_and(|tabs| {
+                    tabs.iter().any(|tab| tab.reference.key() == *reference)
+                }) =>
+            {
+                Active::PullRequest(reference.clone())
+            }
+            _ => Active::Diff,
+        }
+    }
+
+    fn select_surface(&mut self, active: Active, cx: &mut Context<Self>) {
+        if let Some(key) = self.details_key() {
+            self.right_panel_active.insert(key, active);
+            cx.notify();
+        }
+    }
+
+    fn close_pull_request(&mut self, reference: &str, cx: &mut Context<Self>) {
+        let Some(key) = self.details_key() else {
+            return;
+        };
+        if let Some(tabs) = self.pull_request_tabs.get_mut(&key) {
+            tabs.retain(|tab| tab.reference.key() != reference);
+        }
+        cx.notify();
+    }
+
     /// Asks for the diff of the open panel's directory once per connection.
     pub(super) fn sync_diff(&mut self) {
         if !self.right_panel_is_open() {
@@ -485,6 +541,16 @@ impl MainView {
             .and_then(|cwd| self.diffs.get(&cwd).cloned());
         self.diff_list
             .update(cx, |list, cx| list.show(load.as_ref(), cx));
+        if let Active::PullRequest(key) = self.active_surface()
+            && let Some(tab) = self
+                .details_key()
+                .and_then(|thread| self.pull_request_tabs.get(&thread))
+                .and_then(|tabs| tabs.iter().find(|tab| tab.reference.key() == key))
+                .cloned()
+        {
+            self.pull_request_panel
+                .update(cx, |panel, cx| panel.show(tab.reference, tab.url, cx));
+        }
         if is_sheet(window_width) {
             let width = sheet_width(window_width);
             return Layout {
@@ -505,23 +571,68 @@ impl MainView {
     fn right_panel_body(&self, width: f32, sheet: bool, cx: &mut Context<Self>) -> gpui::Div {
         let theme = cx.theme();
         let (border, foreground) = (theme.border, theme.foreground);
-        let surface = Surface::Diff;
-        let tab = h_flex()
-            .h_6()
-            .flex_shrink_0()
-            .gap_1p5()
-            .pl_1p5()
-            .pr_2()
-            .rounded(px(6.))
-            .bg(foreground.opacity(0.06))
-            .text_xs()
-            .text_color(foreground)
-            .child(
-                Icon::new(surface.icon())
-                    .size(px(12.))
-                    .text_color(theme.muted_foreground),
+        let active = self.active_surface();
+        let tabs = self
+            .details_key()
+            .and_then(|key| self.pull_request_tabs.get(&key))
+            .cloned()
+            .unwrap_or_default();
+        let tab = |id: gpui::ElementId, icon: Icons, label: String, selected: bool| {
+            h_flex()
+                .id(id)
+                .h_6()
+                .flex_shrink_0()
+                .gap_1p5()
+                .pl_1p5()
+                .pr_2()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .text_xs()
+                .text_color(if selected {
+                    foreground
+                } else {
+                    theme.muted_foreground
+                })
+                .when(selected, |tab| tab.bg(foreground.opacity(0.06)))
+                .hover(move |style| style.bg(foreground.opacity(0.06)))
+                .child(
+                    Icon::new(icon)
+                        .size(px(12.))
+                        .text_color(theme.muted_foreground),
+                )
+                .child(label)
+        };
+        let diff_tab = tab(
+            "right-panel-tab-diff".into(),
+            Icons::FileDiff,
+            "Diff".to_owned(),
+            active == Active::Diff,
+        )
+        .on_click(cx.listener(|this, _, _, cx| this.select_surface(Active::Diff, cx)));
+        let pull_request_tabs = tabs.iter().enumerate().map(|(index, opened)| {
+            let key = opened.reference.key();
+            let selected = active == Active::PullRequest(key.clone());
+            let (select, close) = (key.clone(), key);
+            tab(
+                ("right-panel-tab-pr", index).into(),
+                Icons::GitPullRequestArrow,
+                format!("#{}", opened.reference.number),
+                selected,
             )
-            .child(surface.label());
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_surface(Active::PullRequest(select.clone()), cx)
+            }))
+            .child(
+                div()
+                    .id(("right-panel-tab-pr-close", index))
+                    .cursor_pointer()
+                    .child(Icon::new(IconName::Close).size(px(10.)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.close_pull_request(&close, cx)
+                    })),
+            )
+        });
         let strip = h_flex()
             .h(px(STRIP_HEIGHT))
             .flex_shrink_0()
@@ -529,18 +640,21 @@ impl MainView {
             .gap_1()
             .border_b_1()
             .border_color(border)
-            .child(tab)
+            .child(diff_tab)
+            .children(pull_request_tabs)
             .child(div().flex_1())
-            .child(
-                header_icon_button(
-                    "refresh-diff",
-                    Icons::RefreshCw,
-                    "Refresh diff".into(),
-                    true,
-                    cx,
+            .when(active == Active::Diff, |strip| {
+                strip.child(
+                    header_icon_button(
+                        "refresh-diff",
+                        Icons::RefreshCw,
+                        "Refresh diff".into(),
+                        true,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_diff(cx))),
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.refresh_diff(cx))),
-            )
+            })
             .when(sheet, |strip| {
                 strip.child(
                     ghost_icon_button(
@@ -553,6 +667,10 @@ impl MainView {
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_right_panel(cx))),
                 )
             });
+        let content: AnyElement = match active {
+            Active::Diff => self.diff_list.clone().into_any_element(),
+            Active::PullRequest(_) => self.pull_request_panel.clone().into_any_element(),
+        };
         v_flex()
             .w(px(width))
             .h_full()
@@ -561,7 +679,7 @@ impl MainView {
             .bg(cx.theme().background)
             .when(!sheet, |panel| panel.border_l_1().border_color(border))
             .child(strip)
-            .child(div().flex_1().min_h_0().child(self.diff_list.clone()))
+            .child(div().flex_1().min_h_0().child(content))
     }
 
     /// The panel's `DiffPanelShell` as a sheet: a dimmed backdrop and a drawer from the right.

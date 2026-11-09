@@ -306,6 +306,7 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
             text: linked.number.to_string(),
             url: Some(linked.url.clone()),
             opens_list: false,
+            repository: Some(linked.repository.clone()),
         });
     }
     let state_of = |link: &&PullRequestsItem| match link.snapshot.as_ref() {
@@ -327,6 +328,7 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
             text: only.number.to_string(),
             url: Some(only.url.clone()),
             opens_list: false,
+            repository: None,
         });
     }
     let states: Vec<PrState> = visible.iter().map(state_of).collect();
@@ -349,6 +351,7 @@ fn pr_badge(thread: &Thread) -> Option<PrBadge> {
         stack,
         url: None,
         opens_list: true,
+        repository: None,
         text: if stack {
             visible.len().to_string()
         } else {

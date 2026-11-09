@@ -155,6 +155,8 @@ pub struct PrBadge {
     pub url: Option<String>,
     /// `opensList`: a stack or several pull requests, so a click shows the list, not a link.
     pub opens_list: bool,
+    /// The repository of a link that has no snapshot or list line yet, to open its detail.
+    pub repository: Option<String>,
 }
 
 /// The status the web's thread card shows at the top right (`topStatus` in `SidebarThreadRow`).

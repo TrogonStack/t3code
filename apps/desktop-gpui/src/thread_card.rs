@@ -26,6 +26,8 @@ pub struct PrLine {
     pub title: String,
     pub depth: usize,
     pub url: String,
+    pub host: String,
+    pub repository: String,
     /// On a chain's first line: its kind and how many pull requests it holds.
     pub stack: Option<(ChainKind, usize)>,
 }
@@ -220,6 +222,8 @@ pub fn pr_lines(links: &[PullRequestsItem]) -> Vec<PrLine> {
                         .map_or_else(|| link.repository.clone(), |s| s.title.clone()),
                     depth: chain.depths[position],
                     url: link.url.clone(),
+                    host: link.host.clone(),
+                    repository: link.repository.clone(),
                     stack: (position == 0 && chain.layers.len() > 1)
                         .then_some((chain.kind, chain.layers.len())),
                 }

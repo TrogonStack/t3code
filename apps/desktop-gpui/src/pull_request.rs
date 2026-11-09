@@ -1,8 +1,6 @@
 //! The web's pull request reads (`packages/contracts/src/pullRequest.ts`): the payloads the
 //! panel sends and the way a failure is told apart.
 
-#![expect(dead_code, reason = "the pull request surface consumes these next")]
-
 use crate::rpc::split_not_found;
 use serde_json::{Value, json};
 
@@ -48,6 +46,7 @@ impl Reference {
     }
 }
 
+#[expect(dead_code, reason = "the pull requests page reads with it")]
 /// `PullRequestListInput` for the page's first read of one state.
 pub fn list_payload(state: &str, project_ids: &[String], limit: u32) -> Value {
     let mut payload = json!({ "state": state, "limit": limit });
@@ -78,6 +77,27 @@ pub fn detail_failure(message: &str, number: u64) -> Unavailable {
             title: UNAVAILABLE_TITLE.to_owned(),
             error: text.to_owned(),
         },
+    }
+}
+
+/// `openOnHostLabel` for the host a pull request URL names. The web resolves the provider
+/// from the repository identity; the URL's host stands in for it, so a self-hosted instance
+/// reads "Open on host".
+pub fn open_label(url: &str) -> String {
+    let host = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', ':'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    match host {
+        "github.com" => "Open on GitHub".to_owned(),
+        "gitlab.com" => "Open on GitLab".to_owned(),
+        "bitbucket.org" => "Open on Bitbucket".to_owned(),
+        "dev.azure.com" => "Open on Azure DevOps".to_owned(),
+        _ => "Open on host".to_owned(),
     }
 }
 
@@ -117,5 +137,16 @@ mod tests {
         let other = detail_failure("paused", 7);
         assert_eq!(other.title, UNAVAILABLE_TITLE);
         assert_eq!(other.error, "paused");
+    }
+
+    #[test]
+    fn the_open_label_names_the_known_hosts() {
+        assert_eq!(
+            open_label("https://github.com/o/r/pull/1"),
+            "Open on GitHub"
+        );
+        assert_eq!(open_label("https://www.gitlab.com/o/r"), "Open on GitLab");
+        assert_eq!(open_label("https://git.example.test/o/r"), "Open on host");
+        assert_eq!(open_label(""), "Open on host");
     }
 }
