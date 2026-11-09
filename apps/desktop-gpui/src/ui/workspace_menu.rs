@@ -81,7 +81,7 @@ fn content(menu: &Menu, cx: &App) -> gpui::Div {
         })
         .collect();
     composer_menu::popup(
-        "Workspace",
+        Some("Workspace"),
         menu.previous.is_some().then(|| px(338.)),
         rows,
         cx,

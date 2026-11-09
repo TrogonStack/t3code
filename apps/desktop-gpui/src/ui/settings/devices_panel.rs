@@ -4,7 +4,7 @@
 //! follow the Labs tab: optimistic, put back when the call fails.
 
 mod editors;
-mod widgets;
+pub(in crate::ui::settings) mod widgets;
 
 use super::components::{Toggle, group, reset_button, section, switch};
 use super::scope_inheritance::{Marker, PopTrigger, marker_row, popup_shell};
@@ -86,6 +86,7 @@ pub struct DevicesPanel {
     add_menu: bool,
     row_menu: Option<String>,
     editor: Option<Editor>,
+    secret_sources: Vec<crate::secret_source::SecretSource>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -113,6 +114,7 @@ impl DevicesPanel {
             wide: true,
             config: DeviceConfig::default(),
             projects: devices::ProjectIds::new(),
+            secret_sources: Vec::new(),
             state: None,
             busy: None,
             versions: None,
@@ -139,9 +141,16 @@ impl DevicesPanel {
         &mut self,
         config: DeviceConfig,
         projects: devices::ProjectIds,
+        secret_sources: Vec<crate::secret_source::SecretSource>,
         cx: &mut Context<Self>,
     ) {
         let mut changed = self.projects != projects;
+        if self.secret_sources != secret_sources {
+            self.secret_sources = secret_sources;
+            if let Some(editor) = &self.editor {
+                editor.set_sources(&self.secret_sources, cx);
+            }
+        }
         self.projects = projects;
         if self.pending.is_empty() && self.config != config {
             self.config = config;
@@ -484,7 +493,14 @@ impl DevicesPanel {
     ) {
         self.add_menu = false;
         self.row_menu = None;
-        let editor = Editor::open(kind, existing, &self.config, window, cx);
+        let editor = Editor::open(
+            kind,
+            existing,
+            &self.config,
+            &self.secret_sources,
+            window,
+            cx,
+        );
         let account = editor.wants_account();
         self.editor = Some(editor);
         if account {
@@ -678,6 +694,7 @@ impl DevicesPanel {
             layers: devices::layers(key, &ctx.label, ctx.in_project, project, environment),
             machine: ctx.machine,
             environment: ctx.label.clone(),
+            groups: Vec::new(),
         }
     }
 

@@ -438,7 +438,7 @@ impl ColorMode {
 }
 
 /// The built-in themes, in the web's card order (T3 Code first, then `BUILT_IN_THEMES`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ThemeId {
     Default,
     T3Chat,
@@ -479,7 +479,11 @@ impl Paint {
 /// OKLCH to gamma-encoded sRGB, clipped to the gamut (CSS Color 4 without gamut mapping).
 pub fn oklch_to_srgb(l: f32, c: f32, h: f32) -> [f32; 3] {
     let (sin, cos) = h.to_radians().sin_cos();
-    let (a, b) = (c * cos, c * sin);
+    oklab_to_srgb([l, c * cos, c * sin])
+}
+
+/// OKLab to gamma-encoded sRGB, clipped to the gamut.
+pub fn oklab_to_srgb([l, a, b]: [f32; 3]) -> [f32; 3] {
     let lms = [
         l + 0.396_337_78 * a + 0.215_803_76 * b,
         l - 0.105_561_346 * a - 0.063_854_17 * b,
@@ -501,6 +505,33 @@ pub fn oklch_to_srgb(l: f32, c: f32, h: f32) -> [f32; 3] {
     })
 }
 
+/// Gamma-encoded sRGB to OKLab.
+pub fn srgb_to_oklab(rgb: [f32; 3]) -> [f32; 3] {
+    let [r, g, b] = rgb.map(|v| {
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
+/// `color-mix(in oklab, from, to weight)`: `weight` of `from` over the rest of `to`.
+pub fn mix_oklab(from: [f32; 3], to: [f32; 3], weight: f32) -> [f32; 3] {
+    let (a, b) = (srgb_to_oklab(from), srgb_to_oklab(to));
+    oklab_to_srgb(std::array::from_fn(|i| {
+        a[i] * weight + b[i] * (1. - weight)
+    }))
+}
+
 /// The three roles a theme orb paints from (`THEME_PREVIEW_RENDER_SPECS`): the canvas it tints,
 /// the accent that fills it, and the message action that glows opposite.
 #[derive(Clone, Copy, Debug)]
@@ -508,6 +539,43 @@ pub struct OrbPalette {
     pub canvas: Paint,
     pub accent: Paint,
     pub action: Paint,
+}
+
+/// The extra roles `ThemeWireframePane` paints besides the orb's canvas and action.
+#[derive(Clone, Copy, Debug)]
+pub struct WireRoles {
+    pub sidebar: Paint,
+    pub surface: Paint,
+    pub accent_surface: Paint,
+    pub message_surface: Paint,
+}
+
+const fn roles(
+    sidebar: [f32; 3],
+    surface: [f32; 3],
+    accent_surface: [f32; 3],
+    message_surface: [f32; 3],
+) -> WireRoles {
+    WireRoles {
+        sidebar: Paint::Oklch(sidebar[0], sidebar[1], sidebar[2]),
+        surface: Paint::Oklch(surface[0], surface[1], surface[2]),
+        accent_surface: Paint::Oklch(accent_surface[0], accent_surface[1], accent_surface[2]),
+        message_surface: Paint::Oklch(message_surface[0], message_surface[1], message_surface[2]),
+    }
+}
+
+const fn hex_roles(
+    sidebar: u32,
+    surface: u32,
+    accent_surface: u32,
+    message_surface: u32,
+) -> WireRoles {
+    WireRoles {
+        sidebar: Paint::Hex(sidebar),
+        surface: Paint::Hex(surface),
+        accent_surface: Paint::Hex(accent_surface),
+        message_surface: Paint::Hex(message_surface),
+    }
 }
 
 const fn hex_orb(canvas: u32, accent: u32, action: u32) -> OrbPalette {
@@ -560,6 +628,74 @@ impl ThemeId {
 
     pub fn from_wire(value: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|v| v.wire() == value)
+    }
+
+    /// The wireframe roles for one half (themePalettes.ts, `getThemeCardDefinition`).
+    pub fn roles(self, dark: bool) -> WireRoles {
+        match (self, dark) {
+            (Self::Default, false) => hex_roles(0xfafafa, 0xffffff, 0xf4f4f5, 0xe4e4e7),
+            (Self::Default, true) => hex_roles(0x0f0f10, 0x121212, 0x27272a, 0x27272a),
+            (Self::T3Chat, false) => roles(
+                [0.928886, 0.031178, 322.592],
+                [0.971835, 0.012884, 321.894],
+                [0.939552, 0.024286, 321.664],
+                [0.926746, 0.037898, 332.6],
+            ),
+            (Self::T3Chat, true) => roles(
+                [0.185778, 0.019368, 322.159],
+                [0.267101, 0.02016, 311.799],
+                [0.364912, 0.050794, 308.491],
+                [0.273791, 0.025541, 309.079],
+            ),
+            (Self::Grove, false) => roles(
+                [0.936464, 0.014601, 163.554],
+                [0.972369, 0.005497, 157.15],
+                [0.909438, 0.021521, 164.612],
+                [0.891377, 0.026164, 164.929],
+            ),
+            (Self::Grove, true) => roles(
+                [0.309925, 0.032827, 160.944],
+                [0.260865, 0.02152, 162.75],
+                [0.437021, 0.060312, 158.962],
+                [0.470111, 0.067221, 158.676],
+            ),
+            (Self::Ocean, false) => roles(
+                [0.939254, 0.01193, 241.729],
+                [0.974199, 0.002856, 241.597],
+                [0.91295, 0.018827, 241.836],
+                [0.895373, 0.023469, 241.913],
+            ),
+            (Self::Ocean, true) => roles(
+                [0.290387, 0.032043, 247.274],
+                [0.242641, 0.024125, 250.573],
+                [0.413315, 0.051874, 243.855],
+                [0.445224, 0.056936, 243.413],
+            ),
+            (Self::Ember, false) => roles(
+                [0.942267, 0.01151, 50.785],
+                [0.976527, 0.002685, 60.725],
+                [0.916502, 0.01832, 49.597],
+                [0.899296, 0.022939, 49.163],
+            ),
+            (Self::Ember, true) => roles(
+                [0.293349, 0.029554, 46.882],
+                [0.245899, 0.019144, 42.044],
+                [0.416048, 0.055354, 50.484],
+                [0.447961, 0.061874, 50.849],
+            ),
+            (Self::Iris, false) => roles(
+                [0.941387, 0.014687, 300.474],
+                [0.976531, 0.003855, 303.226],
+                [0.914882, 0.022965, 299.986],
+                [0.897143, 0.028558, 299.758],
+            ),
+            (Self::Iris, true) => roles(
+                [0.266743, 0.044689, 294.138],
+                [0.225975, 0.031062, 293.741],
+                [0.372436, 0.07841, 294.204],
+                [0.399975, 0.086965, 294.177],
+            ),
+        }
     }
 
     /// The orb colors for one half (themePalettes.ts).
@@ -708,11 +844,6 @@ impl ThemeChoice {
             let _ = std::fs::write(path, self.to_json());
         }
     }
-}
-
-/// `color-mix(in srgb, from, to weight)`: `weight` of `from` over the rest of `to`.
-pub fn mix(from: [f32; 3], to: [f32; 3], weight: f32) -> [f32; 3] {
-    std::array::from_fn(|i| from[i] * weight + to[i] * (1. - weight))
 }
 
 const fn item(id: &'static str, title: &'static str, terms: &'static str) -> SearchItem {

@@ -50,19 +50,42 @@ fn focus_ring(radius: f32, cx: &App) -> gpui::Div {
 
 /// `SettingsSection` (settingsLayout.tsx): `space-y-2.5`, the title row `min-h-7 px-4`, the title
 /// `text-base font-semibold`.
-pub(super) fn section(title: &'static str, group: impl IntoElement) -> gpui::Div {
+pub(super) fn section(title: impl IntoElement, group: impl IntoElement) -> gpui::Div {
+    section_with_action(title, None, group)
+}
+
+/// `SettingsSection` with a `headerAction` at the right end of the title row.
+pub(super) fn section_with_action(
+    title: impl IntoElement,
+    action: Option<AnyElement>,
+    group: impl IntoElement,
+) -> gpui::Div {
     v_flex()
         .gap(px(10.))
         .child(
-            h_flex().min_h(px(28.)).items_start().px_4().child(
-                h_flex()
-                    .min_h(px(28.))
-                    .items_center()
-                    .gap_2()
-                    .text_base()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            ),
+            h_flex()
+                .min_h(px(28.))
+                .items_start()
+                .justify_between()
+                .gap_4()
+                .px_4()
+                .child(
+                    h_flex()
+                        .min_h(px(28.))
+                        .items_center()
+                        .gap_2()
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(
+                    h_flex()
+                        .min_h(px(28.))
+                        .min_w(px(28.))
+                        .items_center()
+                        .justify_end()
+                        .children(action),
+                ),
         )
         .child(group)
 }
@@ -230,6 +253,17 @@ pub(super) fn reset_button(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    reset_button_labeled(id, "Reset to default", on_click, window, cx)
+}
+
+/// `reset_button` with the tooltip of a `SettingResetButton` that has a `label` or a custom one.
+pub(super) fn reset_button_labeled(
+    id: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
     let key = ElementId::from(id);
     let handle = tab_stop(&key, window, cx);
     let visible = focus_visible(&handle, window);
@@ -240,7 +274,7 @@ pub(super) fn reset_button(
     let theme = Tokens::of(cx);
     let (muted, hover, foreground) = (theme.muted_foreground, theme.accent, theme.foreground);
     let ring = focus_ring(4., cx);
-    let popup = shown.then(|| gpui::deferred(tip_popup("Reset to default", cx)));
+    let popup = shown.then(|| gpui::deferred(tip_popup(label, cx)));
     let (hovered_tip, clicked_tip) = (tip.clone(), tip.clone());
     div()
         .id(key)
@@ -292,13 +326,13 @@ pub(super) fn reset_button(
 /// `Switch` (switch.tsx) at the desktop size: a 30x18 track with 2px padding and a 14px thumb
 /// that travels 12px. Space and Enter toggle it.
 pub(super) fn switch(
-    id: &'static str,
+    id: impl Into<ElementId>,
     checked: bool,
     on_toggle: Toggle,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let key = ElementId::from(id);
+    let key: ElementId = id.into();
     let handle = tab_stop(&key, window, cx);
     let visible = focus_visible(&handle, window);
     let theme = Tokens::of(cx);
@@ -357,10 +391,17 @@ pub(super) struct SelectTrigger {
     open: bool,
     on_key: KeyHandler,
     leading: Option<AnyElement>,
+    content: Option<AnyElement>,
     auto_width: bool,
 }
 
 impl SelectTrigger {
+    /// Replaces the label with an element, as `SelectValue` renders a function child.
+    pub(super) fn content(mut self, content: AnyElement) -> Self {
+        self.content = Some(content);
+        self
+    }
+
     /// `w-auto`: the trigger is as wide as its label instead of `width`.
     pub(super) fn auto_width(mut self) -> Self {
         self.auto_width = true;
@@ -374,13 +415,13 @@ impl SelectTrigger {
     }
 
     pub(super) fn new(
-        id: &'static str,
+        id: impl Into<ElementId>,
         label: impl Into<SharedString>,
         width: f32,
         handle: FocusHandle,
         on_key: KeyHandler,
     ) -> Self {
-        let id = ElementId::from(id);
+        let id = id.into();
         Self {
             id,
             label: label.into(),
@@ -389,6 +430,7 @@ impl SelectTrigger {
             open: false,
             on_key,
             leading: None,
+            content: None,
             auto_width: false,
         }
     }
@@ -473,7 +515,10 @@ impl RenderOnce for SelectTrigger {
                     .min_w_0()
                     .when(!self.auto_width, |label| label.flex_1())
                     .truncate()
-                    .child(self.label),
+                    .child(
+                        self.content
+                            .unwrap_or_else(|| self.label.into_any_element()),
+                    ),
             )
             .child(
                 div()

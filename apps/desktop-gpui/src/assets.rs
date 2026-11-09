@@ -7,6 +7,7 @@ gpui_kit_assets::icon_assets!(
     ExtraIcons,
     [
         Paperclip,
+        Type,
         Box,
         Pin,
         PinOff,
@@ -299,6 +300,86 @@ pub fn chip_icon(kind: ChipKind) -> Option<&'static str> {
     })
 }
 
+/// The version control and hosting marks of `SourceControlSettings` (`VcsIcon`, `SourceControlProviderIcon`).
+const SOURCE_CONTROL_ICONS: &[(&str, &[u8])] = &[
+    (
+        "source-control/github-dark.svg",
+        include_bytes!("source-control-icons/github-dark.svg") as &[u8],
+    ),
+    (
+        "source-control/github-light.svg",
+        include_bytes!("source-control-icons/github-light.svg") as &[u8],
+    ),
+    (
+        "source-control/gitlab.svg",
+        include_bytes!("source-control-icons/gitlab.svg") as &[u8],
+    ),
+    (
+        "source-control/gitcafe.svg",
+        include_bytes!("source-control-icons/gitcafe.svg") as &[u8],
+    ),
+    (
+        "source-control/forgejo.svg",
+        include_bytes!("source-control-icons/forgejo.svg") as &[u8],
+    ),
+    (
+        "source-control/bitbucket.svg",
+        include_bytes!("source-control-icons/bitbucket.svg") as &[u8],
+    ),
+    (
+        "source-control/azure-devops.svg",
+        include_bytes!("source-control-icons/azure-devops.svg") as &[u8],
+    ),
+    (
+        "source-control/git.svg",
+        include_bytes!("source-control-icons/git.svg") as &[u8],
+    ),
+    (
+        "source-control/jj.svg",
+        include_bytes!("source-control-icons/jj.svg") as &[u8],
+    ),
+];
+
+/// The marks of the secret providers (`SecretProviderKindIcon`).
+const SECRET_ICONS: &[(&str, &[u8])] = &[
+    (
+        "secret/one_password.svg",
+        include_bytes!("source-control-icons/one_password.svg") as &[u8],
+    ),
+    (
+        "secret/openbao.svg",
+        include_bytes!("source-control-icons/openbao.svg") as &[u8],
+    ),
+    (
+        "secret/aws_secrets_manager.svg",
+        include_bytes!("source-control-icons/aws_secrets_manager.svg") as &[u8],
+    ),
+];
+
+/// The mark of a secret provider kind, or `None` for a kind the web draws as a key.
+pub fn secret_provider_icon(kind: &str) -> Option<&'static str> {
+    SECRET_ICONS
+        .iter()
+        .find(|(path, _)| {
+            path.strip_prefix("secret/")
+                .and_then(|p| p.strip_suffix(".svg"))
+                == Some(kind)
+        })
+        .map(|(path, _)| *path)
+}
+
+/// The mark of a version control system or hosting provider kind, or `None` for a kind without one.
+pub fn source_control_icon(kind: &str, dark: bool) -> Option<&'static str> {
+    let scheme = if dark { "dark" } else { "light" };
+    [
+        format!("source-control/{kind}-{scheme}.svg"),
+        format!("source-control/{kind}.svg"),
+    ]
+    .iter()
+    .find_map(|wanted| SOURCE_CONTROL_ICONS.iter().find(|(path, _)| path == wanted))
+    .map(|(path, _)| *path)
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -316,6 +397,15 @@ impl AssetSource for AppAssets {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev-button.svg"))));
         }
         if let Some((_, bytes)) = PROVIDER_ICONS.iter().find(|(known, _)| *known == path) {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
+        if let Some((_, bytes)) = SOURCE_CONTROL_ICONS
+            .iter()
+            .find(|(known, _)| *known == path)
+        {
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
+        if let Some((_, bytes)) = SECRET_ICONS.iter().find(|(known, _)| *known == path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
         if let Some((_, bytes)) = CHIP_ICONS.iter().find(|(known, _)| *known == path) {

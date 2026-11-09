@@ -2,6 +2,7 @@ mod assets;
 mod attachments;
 mod auth;
 mod branch_picker;
+mod clone_flow;
 mod config;
 mod connection;
 mod credentials;
@@ -19,6 +20,7 @@ mod providers;
 mod ref_picker;
 mod refs;
 mod rpc;
+mod secret_source;
 mod send;
 mod server;
 mod settings;
@@ -26,6 +28,7 @@ mod settings_appearance;
 mod settings_devices;
 mod settings_diffs;
 mod settings_labs;
+mod settings_source_control;
 mod settings_typography;
 mod shell;
 mod slow_requests;
@@ -115,6 +118,7 @@ fn main() {
             Theme::change(ThemeMode::Dark, None, cx);
             // The web's default `sidebar.toggle` and `navigation.*` bindings.
             cx.bind_keys(ui::usage_bindings());
+            cx.bind_keys(ui::add_to_machine_bindings());
             cx.bind_keys(ui::settings_bindings());
             cx.bind_keys([
                 KeyBinding::new("cmd-b", ui::ToggleSidebar, None),

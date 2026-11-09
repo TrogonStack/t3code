@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::model_picker::{Focus, Listing, Tab};
-use crate::providers::{Control, PickerInstance};
+use crate::providers::{Control, Mark, PickerInstance};
 
 /// `h-86.5`: the body, rail and columns, above the footer.
 const BODY_HEIGHT: f32 = 346.;
@@ -44,6 +44,11 @@ struct Palette {
     accent: Hsla,
     track: Hsla,
     selected: Hsla,
+    ring: Hsla,
+    kbd: Hsla,
+    update: Hsla,
+    update_text: Hsla,
+    radius: Pixels,
 }
 
 impl Palette {
@@ -60,6 +65,15 @@ impl Palette {
             accent: theme.accent,
             track: theme.input.opacity(0.4),
             selected: theme.input.opacity(0.72),
+            ring: theme.ring,
+            kbd: theme.foreground.opacity(0.07),
+            update: theme.primary,
+            update_text: if theme.is_dark() {
+                gpui::rgb(0x60a5fa).into()
+            } else {
+                theme.primary
+            },
+            radius: theme.radius - px(1.),
         }
     }
 }
@@ -79,8 +93,17 @@ impl Panel {
             .child(
                 h_flex()
                     .h(px(BODY_HEIGHT))
+                    .min_h_0()
+                    .overflow_hidden()
                     .child(self.rail(searching, palette, cx))
-                    .child(self.models(&listing, searching, search_focused, palette, cx))
+                    .child(self.models(
+                        &listing,
+                        searching,
+                        search_focused,
+                        !effort_column,
+                        palette,
+                        cx,
+                    ))
                     .children(effort_column.then(|| self.effort_column(palette))),
             )
             .child(self.footer(palette, cx))
@@ -99,6 +122,7 @@ impl Panel {
             self.tab == Tab::Favorites,
             "Favorites".to_owned(),
             true,
+            None,
             Tab::Favorites,
             palette,
             Icon::new(if has_favorites {
@@ -126,23 +150,37 @@ impl Panel {
                 self.tab == tab,
                 note,
                 instance.unavailable.is_none(),
+                Some(instance.mark.clone()),
                 tab,
                 palette,
                 provider_mark_at(&instance.mark, 24., 20., 1., cx).into_any_element(),
             )
         });
-        v_flex()
-            .id("model-rail")
+        div()
             .w(px(RAIL_WIDTH))
             .h_full()
+            .min_h_0()
             .flex_shrink_0()
-            .gap_1()
-            .p_1()
+            .overflow_hidden()
             .bg(cx.theme().muted.opacity(0.3))
-            .overflow_y_scroll()
-            .child(favorites)
-            .child(div().h_px().w_full().flex_shrink_0().bg(palette.border))
-            .children(items)
+            .rounded_tl(palette.radius)
+            .child(
+                v_flex()
+                    .id("model-rail")
+                    .size_full()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(
+                        v_flex()
+                            .flex_shrink_0()
+                            .min_h_full()
+                            .gap_1()
+                            .p_1()
+                            .child(favorites)
+                            .child(div().h_px().w_full().flex_shrink_0().bg(palette.border))
+                            .children(items),
+                    ),
+            )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -153,6 +191,7 @@ impl Panel {
         active: bool,
         note: String,
         usable: bool,
+        mark: Option<Mark>,
         tab: Tab,
         palette: Palette,
         icon: AnyElement,
@@ -175,7 +214,7 @@ impl Panel {
                     .hover(move |style| style.bg(palette.foreground.opacity(0.1)))
             })
             .when(!usable, |item| item.opacity(0.5).cursor_not_allowed())
-            .tooltip(tooltip(note))
+            .tooltip(rail_tooltip(note, mark))
             .child(icon)
             .when(current, |item| {
                 // `h-5 w-0.75` at `right-1`, centered on the item.
@@ -205,6 +244,7 @@ impl Panel {
         listing: &Listing,
         searching: bool,
         search_focused: bool,
+        last: bool,
         palette: Palette,
         cx: &App,
     ) -> impl IntoElement {
@@ -218,7 +258,6 @@ impl Panel {
                 row.model,
                 jump,
                 on_list && self.highlight == index,
-                searching || self.tab == Tab::Favorites,
                 palette,
                 cx,
             )
@@ -229,19 +268,20 @@ impl Panel {
             div()
                 .id("model-older")
                 .flex()
-                .h(px(ROW_HEIGHT))
+                .h(px(28.))
                 .w_full()
                 .flex_shrink_0()
                 .items_center()
                 .px_2()
                 .rounded_sm()
                 .text_sm()
+                .line_height(px(19.25))
                 .text_color(palette.muted)
                 .cursor_pointer()
                 .when(highlighted, |row| {
                     row.bg(palette.hover).text_color(palette.foreground)
                 })
-                .hover(move |style| style.text_color(palette.foreground))
+                .hover(move |style| style.bg(palette.hover).text_color(palette.foreground))
                 .on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| this.picker_toggle_older(cx));
                 })
@@ -267,16 +307,19 @@ impl Panel {
             .min_w_0()
             .h_full()
             .bg(palette.fill)
+            .when(last, |column| column.rounded_tr(palette.radius))
             .border_l_1()
             .border_color(palette.border)
             .child(
-                // The search sits in a `px-3 pt-2.5` strip, underlined in the primary tone on focus.
+                // The search sits in a `px-3 pt-2.5` strip, underlined in the ring tone on focus.
                 div().px_3().pt(px(10.)).child(
                     h_flex()
+                        .relative()
+                        .top(px(-1.))
                         .pb(px(6.))
                         .border_b_1()
                         .border_color(if search_focused {
-                            palette.primary
+                            palette.ring
                         } else {
                             palette.border
                         })
@@ -317,7 +360,6 @@ impl Panel {
         model: &providers::PickerModel,
         jump: Option<usize>,
         highlighted: bool,
-        show_provider: bool,
         palette: Palette,
         cx: &App,
     ) -> impl IntoElement {
@@ -380,7 +422,7 @@ impl Panel {
             .h(px(ROW_HEIGHT))
             .w_full()
             .flex_shrink_0()
-            .gap(px(6.))
+            .gap_2()
             .px_2()
             .items_center()
             .rounded_sm()
@@ -391,54 +433,75 @@ impl Panel {
                     .hover(move |style| style.bg(palette.hover))
             })
             .when(!usable, |row| row.opacity(0.45))
-            .when(show_provider, |row| {
-                row.child(provider_mark(&instance.mark, 1., cx))
-            })
+            .child(provider_mark(&instance.mark, 1., cx))
             .child(
-                div()
+                h_flex()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .line_height(px(22.))
-                    .child(model.label.clone()),
+                    .gap_2()
+                    .items_center()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .line_height(px(19.25))
+                            .child(model.label.clone()),
+                    )
+                    .when(chosen, |row| {
+                        row.child(
+                            Icon::new(IconName::Check)
+                                .size(px(14.))
+                                .flex_shrink_0()
+                                .text_color(palette.foreground),
+                        )
+                    })
+                    .children(model.sub_provider.clone().map(|name| {
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(palette.muted.opacity(0.7))
+                            .child(name)
+                    }))
+                    .children(model.new.then(|| {
+                        div()
+                            .flex_shrink_0()
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(palette.update.opacity(0.35))
+                            .bg(palette.update.opacity(0.15))
+                            .px(px(2.))
+                            .py_px()
+                            .text_size(px(10.))
+                            .line_height(px(10.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(palette.update_text)
+                            .child("NEW")
+                    })),
             )
-            .children(model.sub_provider.clone().map(|name| {
-                div()
+            .child(
+                h_flex()
                     .flex_shrink_0()
-                    .text_xs()
-                    .text_color(palette.muted.opacity(0.7))
-                    .child(name)
-            }))
-            .children(model.new.then(|| {
-                div()
-                    .flex_shrink_0()
-                    .rounded_sm()
-                    .px_1()
-                    .text_xs()
-                    .text_color(palette.primary)
-                    .bg(palette.primary.opacity(0.12))
-                    .child("New")
-            }))
-            .child(div().flex_1())
-            .when(chosen, |row| {
-                row.child(
-                    Icon::new(IconName::Check)
-                        .size(px(14.))
-                        .text_color(palette.foreground),
-                )
-            })
-            .when(usable, |row| row.child(star))
-            .children(jump.map(|n| {
-                div()
-                    .flex_shrink_0()
-                    .px(px(4.))
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(palette.border)
-                    .text_size(px(10.))
-                    .line_height(px(14.))
-                    .text_color(palette.muted)
-                    .child(format!("\u{2318}{}", n + 1))
-            }))
+                    .gap(px(6.))
+                    .items_center()
+                    .when(usable, |row| row.child(star))
+                    .children(jump.map(|n| {
+                        div()
+                            .flex()
+                            .h(px(20.))
+                            .min_w(px(20.))
+                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
+                            .px_1()
+                            .rounded(px(4.))
+                            .bg(palette.kbd)
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(palette.muted)
+                            .child(format!("\u{2318}{}", n + 1))
+                    })),
+            )
             .when(usable, |row| {
                 row.on_click(move |_, _, cx| {
                     view.update(cx, |this, cx| this.pick_model(&id, &slug, cx));
@@ -469,33 +532,55 @@ impl Panel {
             if effort.levels.is_empty() {
                 rows.push(
                     div()
+                        .flex()
+                        .h(px(ROW_HEIGHT))
+                        .items_center()
                         .px_2()
-                        .py_1()
-                        .text_xs()
+                        .text_sm()
                         .text_color(palette.muted)
                         .child("No effort levels")
                         .into_any_element(),
                 );
             }
         }
+        let separated = controls.effort.is_some();
+        let mut others = Vec::new();
         for control in &controls.others {
-            rows.push(
+            others.push(
                 self.option_row(index, control, on_column && self.effort == index, palette)
                     .into_any_element(),
             );
             index += 1;
         }
+        if !others.is_empty() {
+            rows.push(
+                v_flex()
+                    .gap(px(2.))
+                    .when(separated, |group| {
+                        group
+                            .mt_1()
+                            .pt_1()
+                            .border_t_1()
+                            .border_color(palette.border)
+                    })
+                    .children(others)
+                    .into_any_element(),
+            );
+        }
         v_flex()
             .w(px(EFFORT_WIDTH))
             .h_full()
             .flex_shrink_0()
+            .bg(palette.fill)
+            .rounded_tr(palette.radius)
             .border_l_1()
             .border_color(palette.border)
             .child(
                 div().px_3().pt(px(10.)).child(
                     h_flex()
                         .h(px(33.))
-                        .mt(px(-1.))
+                        .relative()
+                        .top(px(-1.))
                         .gap_2()
                         .pb(px(6.))
                         .items_center()
@@ -558,7 +643,13 @@ impl Panel {
                     this.picker_set_option(&id, value.clone(), cx)
                 });
             })
-            .child(div().min_w_0().truncate().child(level.label.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(level.label.clone()),
+            )
             .when(level.is_default && !level.selected, |row| {
                 row.child(
                     div()
@@ -567,7 +658,6 @@ impl Panel {
                         .child("Default"),
                 )
             })
-            .child(div().flex_1())
             .when(level.selected, |row| {
                 row.child(
                     Icon::new(IconName::Check)
@@ -665,6 +755,8 @@ impl Panel {
             .border_t_1()
             .border_color(palette.border)
             .bg(palette.fill)
+            .rounded_bl(palette.radius)
+            .rounded_br(palette.radius)
             .children(speed)
             .child(div().ml_auto().child(permissions_popover(
                 &self.permissions,
@@ -679,6 +771,27 @@ impl Panel {
                 },
                 cx,
             )))
+    }
+}
+
+/// The rail's tooltip: the instance's mark beside its name.
+fn rail_tooltip(
+    label: String,
+    mark: Option<Mark>,
+) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView + 'static {
+    move |window, cx| {
+        let (label, mark) = (label.clone(), mark.clone());
+        Tooltip::element(move |_, cx| {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .children(mark.as_ref().map(|mark| provider_mark(mark, 1., cx)))
+                .child(label.clone())
+        })
+        .text_xs()
+        .py_1()
+        .rounded(px(6.))
+        .build(window, cx)
     }
 }
 

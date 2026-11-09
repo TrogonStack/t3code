@@ -106,6 +106,7 @@ pub struct AppearancePanel {
     preview_open: bool,
     wide: bool,
     content_width: f32,
+    scale: u32,
 }
 
 impl AppearancePanel {
@@ -119,6 +120,7 @@ impl AppearancePanel {
             preview_open: true,
             wide: true,
             content_width: 896.,
+            scale: 2,
         }
     }
 
@@ -592,7 +594,7 @@ impl AppearancePanel {
                     this.update_theme(|t| t.pick_half(id, dark), cx)
                 })
             })
-            .child(orb(id.orb(dark), dark, cx))
+            .child(orb(id, dark, self.scale, cx))
             .when(picked, |button| {
                 button
                     .child(
@@ -791,6 +793,7 @@ impl AppearancePanel {
 
 impl Render for AppearancePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.scale = window.scale_factor().ceil().clamp(1., 4.) as u32;
         let s = self.settings.clone();
         let d = AppearanceSettings::default();
         let wide = self.wide;

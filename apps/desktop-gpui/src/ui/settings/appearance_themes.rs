@@ -1,10 +1,14 @@
 //! The wireframe and orb drawings of the Appearance tab: `ThemeWireframe.tsx` and
-//! `ThemePreviewCircles.tsx`. gpui has no radial gradients, so each orb layer is a stack of
-//! concentric translucent circles that steps through the same alpha ramp.
+//! `ThemePreviewCircles.tsx`. gpui has no radial gradients or blur, so each orb is rasterized on
+//! the CPU once per theme, mode and device scale and drawn as an image.
 
 use super::*;
-use crate::settings_appearance::{ColorMode, OrbPalette, ThemeChoice, ThemeId, mix};
-use gpui::{BoxShadow, Hsla, Rgba, point, relative, rgb};
+use crate::settings_appearance::{ColorMode, Paint, ThemeChoice, ThemeId, mix_oklab};
+use gpui::{BoxShadow, Hsla, ImageSource, RenderImage, Rgba, img, point, relative, rgb};
+use image::{Frame, RgbaImage};
+use smallvec::smallvec;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 fn color(rgb: [f32; 3], a: f32) -> Hsla {
     Rgba {
@@ -26,56 +30,16 @@ struct Wire {
     action: Hsla,
 }
 
-/// The default theme's roles are exact; the others derive theirs from their orb colors.
 fn wire(theme: ThemeId, dark: bool) -> Wire {
-    if theme == ThemeId::Default {
-        let hex = |value: u32| -> Hsla { rgb(value).into() };
-        return if dark {
-            Wire {
-                canvas: hex(0x0a0a0a),
-                sidebar: hex(0x0f0f10),
-                surface: hex(0x121212),
-                accent_surface: hex(0x27272a),
-                message_surface: hex(0x27272a),
-                action: hex(0x8b9cff),
-            }
-        } else {
-            Wire {
-                canvas: hex(0xfcfcfc),
-                sidebar: hex(0xfafafa),
-                surface: hex(0xffffff),
-                accent_surface: hex(0xf4f4f5),
-                message_surface: hex(0xe4e4e7),
-                action: hex(0x4f46e5),
-            }
-        };
-    }
-    let palette = theme.orb(dark);
-    let (canvas, accent, action) = (
-        palette.canvas.rgb(),
-        palette.accent.rgb(),
-        palette.action.rgb(),
-    );
-    let (white, black) = ([1.; 3], [0.; 3]);
-    let tinted = |weight: f32| color(mix(canvas, accent, weight), 1.);
-    if dark {
-        Wire {
-            canvas: color(canvas, 1.),
-            sidebar: color(mix(canvas, white, 0.98), 1.),
-            surface: color(mix(canvas, white, 0.96), 1.),
-            accent_surface: tinted(0.8),
-            message_surface: tinted(0.7),
-            action: color(action, 1.),
-        }
-    } else {
-        Wire {
-            canvas: color(canvas, 1.),
-            sidebar: color(mix(canvas, black, 0.98), 1.),
-            surface: color(mix(canvas, white, 0.2), 1.),
-            accent_surface: tinted(0.88),
-            message_surface: tinted(0.8),
-            action: color(action, 1.),
-        }
+    let (palette, roles) = (theme.orb(dark), theme.roles(dark));
+    let paint = |paint: Paint| color(paint.rgb(), 1.);
+    Wire {
+        canvas: paint(palette.canvas),
+        sidebar: paint(roles.sidebar),
+        surface: paint(roles.surface),
+        accent_surface: paint(roles.accent_surface),
+        message_surface: paint(roles.message_surface),
+        action: paint(palette.action),
     }
 }
 
@@ -243,81 +207,222 @@ pub(super) fn wireframe(mode: ColorMode, choice: ThemeChoice, cx: &App) -> gpui:
     }
 }
 
-/// Alpha of a gradient with `(offset, alpha)` stops at distance fraction `t`.
-fn ramp(stops: &[(f32, f32)], t: f32) -> f32 {
-    let mut previous = stops[0];
-    for &stop in stops {
-        if t <= stop.0 {
-            let span = (stop.0 - previous.0).max(f32::EPSILON);
-            return previous.1 + (stop.1 - previous.1) * ((t - previous.0) / span).clamp(0., 1.);
-        }
-        previous = stop;
-    }
-    previous.1
-}
+/// The orb's inner box and clip circle, in logical pixels (`size-14` minus the 2px border).
+const INNER: f32 = 52.;
+const RADIUS: f32 = INNER / 2.;
+/// `THEME_PREVIEW_RENDER_SPECS`: blur sigma and the scale applied after the blur.
+const BLUR: f32 = 3.;
+const ZOOM: f32 = 1.1;
 
-/// One radial gradient as concentric circles, outermost first.
-fn gradient(
-    rgb: [f32; 3],
+/// One radial gradient layer: a constant color whose alpha follows `(offset, alpha)` stops by the
+/// distance from `center` as a fraction of the farthest-corner reach.
+struct Radial {
+    color: [f32; 3],
     center: (f32, f32),
-    stops: &[(f32, f32)],
-    steps: usize,
-    size: f32,
-) -> Vec<gpui::Div> {
-    let (cx, cy) = (center.0 * size, center.1 * size);
-    let reach = [(0., 0.), (size, 0.), (0., size), (size, size)]
-        .iter()
-        .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
-        .fold(0., f32::max);
-    let end = stops[stops.len() - 1].0;
-    let mut circles = Vec::new();
-    let mut outer = 0.;
-    for step in 0..steps {
-        let radius = reach * end * (1. - step as f32 / steps as f32);
-        let next = reach * end * (1. - (step + 1) as f32 / steps as f32);
-        let t = ((radius + next) / 2.) / reach;
-        let total = ramp(stops, t).min(0.98);
-        let alpha = (1. - (1. - total) / (1. - outer)).max(0.);
-        outer = outer + alpha * (1. - outer);
-        circles.push(
-            div()
-                .absolute()
-                .left(px(cx - radius))
-                .top(px(cy - radius))
-                .size(px(radius * 2.))
-                .rounded_full()
-                .bg(color(rgb, alpha)),
-        );
-    }
-    circles
+    stops: [(f32, f32); 3],
 }
 
-/// The 56px orb (`ThemePreviewCircles`): the canvas tinted to 80% of the way to the page color,
-/// the accent glowing from one corner and the message action from the opposite one.
-pub(super) fn orb(palette: OrbPalette, dark: bool, cx: &App) -> gpui::Div {
-    const INNER: f32 = 52.;
-    let theme = Tokens::of(cx);
+impl Radial {
+    fn alpha(&self, x: f32, y: f32) -> f32 {
+        let (cx, cy) = (self.center.0 * INNER, self.center.1 * INNER);
+        let reach = [(0., 0.), (INNER, 0.), (0., INNER), (INNER, INNER)]
+            .iter()
+            .map(|(px, py)| ((px - cx).powi(2) + (py - cy).powi(2)).sqrt())
+            .fold(0., f32::max);
+        let t = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() / reach;
+        let mut previous = self.stops[0];
+        for stop in self.stops {
+            if t <= stop.0 {
+                let span = (stop.0 - previous.0).max(f32::EPSILON);
+                return previous.1
+                    + (stop.1 - previous.1) * ((t - previous.0) / span).clamp(0., 1.);
+            }
+            previous = stop;
+        }
+        previous.1
+    }
+}
+
+/// Coverage of a pixel whose center lies `distance` logical pixels inside an edge.
+fn coverage(distance: f32, scale: f32) -> f32 {
+    (distance * scale + 0.5).clamp(0., 1.)
+}
+
+fn noise(x: usize, y: usize) -> f32 {
+    let mut h = (x as u32).wrapping_mul(0x9e37_79b1) ^ (y as u32).wrapping_mul(0x85eb_ca6b);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b_3c6d);
+    h ^= h >> 12;
+    (h & 0xffff) as f32 / 65536.
+}
+
+/// A separable Gaussian blur of premultiplied pixels; outside the buffer is transparent.
+fn blur(pixels: &mut [[f32; 4]], size: usize, sigma: f32) {
+    let radius = (sigma * 3.).ceil() as isize;
+    let mut kernel: Vec<f32> = (-radius..=radius)
+        .map(|i| (-((i * i) as f32) / (2. * sigma * sigma)).exp())
+        .collect();
+    let total: f32 = kernel.iter().sum();
+    kernel.iter_mut().for_each(|w| *w /= total);
+    let mut scratch = vec![[0.; 4]; pixels.len()];
+    for horizontal in [true, false] {
+        for y in 0..size {
+            for x in 0..size {
+                let mut sum = [0.; 4];
+                for (tap, weight) in kernel.iter().enumerate() {
+                    let offset = tap as isize - radius;
+                    let (sx, sy) = if horizontal {
+                        (x as isize + offset, y as isize)
+                    } else {
+                        (x as isize, y as isize + offset)
+                    };
+                    if (0..size as isize).contains(&sx) && (0..size as isize).contains(&sy) {
+                        let source = pixels[sy as usize * size + sx as usize];
+                        for channel in 0..4 {
+                            sum[channel] += source[channel] * weight;
+                        }
+                    }
+                }
+                scratch[y * size + x] = sum;
+            }
+        }
+        pixels.copy_from_slice(&scratch);
+    }
+}
+
+fn sample(pixels: &[[f32; 4]], size: usize, x: f32, y: f32) -> [f32; 4] {
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let at = |dx: isize, dy: isize| {
+        let (px, py) = (x0 as isize + dx, y0 as isize + dy);
+        if (0..size as isize).contains(&px) && (0..size as isize).contains(&py) {
+            pixels[py as usize * size + px as usize]
+        } else {
+            [0.; 4]
+        }
+    };
+    let (a, b, c, d) = (at(0, 0), at(1, 0), at(0, 1), at(1, 1));
+    std::array::from_fn(|i| {
+        (a[i] * (1. - fx) + b[i] * fx) * (1. - fy) + (c[i] * (1. - fx) + d[i] * fx) * fy
+    })
+}
+
+/// `ThemePreviewCircle` as straight RGBA: the oklab-tinted canvas under the accent and action
+/// radial layers, clipped to the circle, blurred, zoomed about the center, then clipped again
+/// with the 1px edge ring showing through the blurred rim.
+fn rasterize(theme: ThemeId, dark: bool, scale: u32) -> Vec<u8> {
+    let palette = theme.orb(dark);
     let target = if dark {
         [9. / 255., 9. / 255., 11. / 255.]
     } else {
         [1.; 3]
     };
-    let base = mix(palette.canvas.rgb(), target, 0.8);
-    let accent = palette.accent.rgb();
-    let action = palette.action.rgb();
-    let (accent_stops, accent_center, action_center) = if dark {
+    let base = mix_oklab(palette.canvas.rgb(), target, 0.8);
+    let (accent, action) = if dark {
         (
-            [(0., 1.), (0.28, 0.62), (0.58, 0.)],
-            (0.28, 0.78),
-            (0.82, 0.18),
+            Radial {
+                color: palette.accent.rgb(),
+                center: (0.28, 0.78),
+                stops: [(0., 1.), (0.28, 0.62), (0.58, 0.)],
+            },
+            Radial {
+                color: palette.action.rgb(),
+                center: (0.82, 0.18),
+                stops: [(0., 0.45), (0.55, 0.), (0.55, 0.)],
+            },
         )
     } else {
         (
-            [(0., 1.), (0.28, 0.72), (0.58, 0.)],
-            (0.72, 0.22),
-            (0.18, 0.82),
+            Radial {
+                color: palette.accent.rgb(),
+                center: (0.72, 0.22),
+                stops: [(0., 1.), (0.28, 0.72), (0.58, 0.)],
+            },
+            Radial {
+                color: palette.action.rgb(),
+                center: (0.18, 0.82),
+                stops: [(0., 0.45), (0.55, 0.), (0.55, 0.)],
+            },
         )
     };
+    let s = scale as f32;
+    let size = (INNER * s) as usize;
+    let local = |index: usize| (index as f32 + 0.5) / s;
+    let radius_at = |x: f32, y: f32| ((x - RADIUS).powi(2) + (y - RADIUS).powi(2)).sqrt();
+
+    let mut layer = vec![[0.; 4]; size * size];
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = (local(x), local(y));
+            let inside = coverage(RADIUS - radius_at(u, v), s);
+            let mut rgb = base;
+            for radial in [&action, &accent] {
+                rgb = mix_rgb(rgb, radial.color, radial.alpha(u, v));
+            }
+            layer[y * size + x] = [rgb[0] * inside, rgb[1] * inside, rgb[2] * inside, inside];
+        }
+    }
+    blur(&mut layer, size, BLUR * s);
+
+    let (ring, ring_alpha) = if dark { (1., 0.14) } else { (0., 0.10) };
+    let mut out = Vec::with_capacity(size * size * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let (u, v) = (local(x), local(y));
+            let radius = radius_at(u, v);
+            let from = |p: f32| (RADIUS + (p - RADIUS) / ZOOM) * s - 0.5;
+            let zoomed = sample(&layer, size, from(u), from(v));
+            let edge = coverage(RADIUS - radius, s) * (1. - coverage(RADIUS - 1. - radius, s));
+            let under = ring_alpha * edge;
+            let alpha = zoomed[3] + under * (1. - zoomed[3]);
+            let premultiplied: [f32; 3] =
+                std::array::from_fn(|i| zoomed[i] + ring * under * (1. - zoomed[3]));
+            let clip = coverage(RADIUS - radius, s);
+            let final_alpha = alpha * clip;
+            let jitter = noise(x, y) - 0.5;
+            let byte = |value: f32| (value * 255. + jitter).round().clamp(0., 255.) as u8;
+            let straight = |value: f32| if alpha > 0. { value / alpha } else { 0. };
+            out.extend([
+                byte(straight(premultiplied[0])),
+                byte(straight(premultiplied[1])),
+                byte(straight(premultiplied[2])),
+                (final_alpha * 255.).round().clamp(0., 255.) as u8,
+            ]);
+        }
+    }
+    out
+}
+
+fn mix_rgb(from: [f32; 3], to: [f32; 3], alpha: f32) -> [f32; 3] {
+    std::array::from_fn(|i| from[i] * (1. - alpha) + to[i] * alpha)
+}
+
+type OrbKey = (ThemeId, bool, u32);
+
+fn orb_image(theme: ThemeId, dark: bool, scale: u32) -> Arc<RenderImage> {
+    static CACHE: OnceLock<Mutex<HashMap<OrbKey, Arc<RenderImage>>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .entry((theme, dark, scale))
+        .or_insert_with(|| {
+            let side = INNER as u32 * scale;
+            let mut pixels = rasterize(theme, dark, scale);
+            // gpui samples BGRA.
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            let image = RgbaImage::from_raw(side, side, pixels).expect("square RGBA buffer");
+            Arc::new(RenderImage::new(smallvec![Frame::new(image)]))
+        })
+        .clone()
+}
+
+/// The 56px orb: the rasterized `ThemePreviewCircle` inside its 2px page-colored border and drop
+/// shadow. The image is already clipped to the circle, so nothing paints outside it.
+pub(super) fn orb(theme: ThemeId, dark: bool, scale: u32, cx: &App) -> gpui::Div {
     let shadow = BoxShadow {
         color: gpui::black().opacity(if dark { 0.18 } else { 0.08 }),
         offset: point(px(0.), px(1.)),
@@ -326,21 +431,35 @@ pub(super) fn orb(palette: OrbPalette, dark: bool, cx: &App) -> gpui::Div {
         inset: false,
     };
     div()
-        .relative()
         .size(px(56.))
         .flex_shrink_0()
-        .overflow_hidden()
         .rounded_full()
         .border_2()
-        .border_color(theme.background)
-        .bg(color(base, 1.))
+        .border_color(Tokens::of(cx).background)
         .shadow(vec![shadow])
-        .children(gradient(accent, accent_center, &accent_stops, 12, INNER))
-        .children(gradient(
-            action,
-            action_center,
-            &[(0., 0.45), (0.55, 0.)],
-            6,
-            INNER,
-        ))
+        .child(img(ImageSource::Render(orb_image(theme, dark, scale))).size(px(INNER)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn alpha_at(pixels: &[u8], size: usize, x: usize, y: usize) -> u8 {
+        pixels[(y * size + x) * 4 + 3]
+    }
+
+    #[test]
+    fn orb_is_clipped_to_the_circle() {
+        for theme in ThemeId::ALL {
+            for dark in [false, true] {
+                let pixels = rasterize(theme, dark, 2);
+                let size = 104;
+                for (x, y) in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)] {
+                    assert_eq!(alpha_at(&pixels, size, x, y), 0, "{theme:?} corner");
+                }
+                assert_eq!(alpha_at(&pixels, size, 52, 52), 255, "{theme:?} center");
+                assert!(alpha_at(&pixels, size, 52, 0) < 255, "{theme:?} rim");
+            }
+        }
+    }
 }

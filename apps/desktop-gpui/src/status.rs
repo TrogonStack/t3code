@@ -11,7 +11,7 @@ use crate::wire::generated::{ThreadsEntryLastErrorClass, ThreadsEntryStatus};
 use std::fmt;
 
 /// What the window shows about the managed server and its socket.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Status {
     NotConnected,
     Starting,

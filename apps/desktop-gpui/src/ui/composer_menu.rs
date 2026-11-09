@@ -141,9 +141,9 @@ pub(super) fn plain_body(icon: Icons, label: impl IntoElement, cx: &App) -> gpui
 }
 
 /// The popup: `dropdown-glass` painted opaque on a `rounded-lg` shell, a `p-1` list, the group
-/// label, then the rows. `width` is a fixed width; otherwise `min-w-[150px]`.
+/// label (when there is one), then the rows. `width` is a fixed width; otherwise `min-w-[150px]`.
 pub(super) fn popup(
-    group: &'static str,
+    group: Option<&'static str>,
     width: Option<Pixels>,
     rows: Vec<Row>,
     cx: &App,
@@ -208,16 +208,18 @@ pub(super) fn popup(
         .child(
             v_flex()
                 .p_1()
-                .child(
-                    div()
-                        .px_2()
-                        .py(px(6.))
-                        .text_xs()
-                        .line_height(px(16.))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(tokens.muted_foreground)
-                        .child(group),
-                )
+                .when_some(group, |list, group| {
+                    list.child(
+                        div()
+                            .px_2()
+                            .py(px(6.))
+                            .text_xs()
+                            .line_height(px(16.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(tokens.muted_foreground)
+                            .child(group),
+                    )
+                })
                 .children(rows),
         )
 }

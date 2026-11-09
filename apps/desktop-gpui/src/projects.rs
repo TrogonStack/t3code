@@ -105,6 +105,34 @@ pub struct ProjectEntry {
     pub logical_key: Option<String>,
     /// Other environments that have the same logical project.
     pub remote: Vec<RemoteMember>,
+    /// The representative's repository, which the add-to-another-machine dialog clones.
+    pub repository: Option<RepositoryInfo>,
+}
+
+/// What `project.repositoryIdentity` says about where a project came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryInfo {
+    /// `origin.remoteUrl`, else the locator's: the URL a clone starts from.
+    pub remote_url: String,
+    /// `displayName`, which names the repository in the dialog's subtitle.
+    pub display_name: Option<String>,
+    /// The repository's top folder, where the project may sit below.
+    pub root_path: Option<String>,
+}
+
+fn repository_info(project: &Project) -> Option<RepositoryInfo> {
+    let identity = project.repository_identity.as_ref()?;
+    let remote_url = identity
+        .origin
+        .as_ref()
+        .and_then(|origin| origin.remote_url.clone())
+        .unwrap_or_else(|| identity.locator.remote_url.clone());
+    // `useAddProjectTargets` gates on the locator, so a project without one offers no clone.
+    (!identity.locator.remote_url.trim().is_empty()).then(|| RepositoryInfo {
+        remote_url,
+        display_name: identity.display_name.clone(),
+        root_path: identity.root_path.clone(),
+    })
 }
 
 impl ProjectEntry {
@@ -416,6 +444,7 @@ pub fn build_entries<'a>(
                 scratch: is_scratch(representative),
                 root: representative.workspace_root.clone(),
                 remote: Vec::new(),
+                repository: repository_info(representative),
             };
             (entry, activity)
         })
@@ -639,6 +668,7 @@ mod tests {
             root: String::new(),
             logical_key: None,
             remote: Vec::new(),
+            repository: None,
         };
         let opened = ["a", "b", "c"].map(str::to_owned);
         let now = [entry("d", false), entry("c", true), entry("a", false)];
@@ -668,6 +698,7 @@ mod tests {
             root: root.to_owned(),
             logical_key: None,
             remote: Vec::new(),
+            repository: None,
         }
     }
 

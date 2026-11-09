@@ -1,12 +1,24 @@
 use crate::auth::{self, Credential};
-use crate::connection::{self, Ended};
+use crate::connection::{self, ActionSender, Ended};
 use crate::credentials::{CredentialStore, StoredCredential};
 use crate::pairing;
 use crate::projects::EnvironmentProjects;
 use crate::server;
 use crate::status::{Status, StatusSender, publish};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::time::sleep;
+
+fn senders() -> &'static Mutex<HashMap<String, ActionSender>> {
+    static SENDERS: OnceLock<Mutex<HashMap<String, ActionSender>>> = OnceLock::new();
+    SENDERS.get_or_init(Mutex::default)
+}
+
+/// Where actions for a saved environment go: its own connection, whose `Status::Call` answers
+/// reach the window through the same status stream as the primary's.
+pub fn sender(environment_id: &str) -> Option<ActionSender> {
+    senders().lock().ok()?.get(environment_id).cloned()
+}
 
 /// Lists what the Keychain holds for environments other than `primary_id` and keeps a connection
 /// to each reachable one. Any failure costs only the badges, and is logged once.
@@ -33,7 +45,10 @@ async fn follow(store: Arc<dyn CredentialStore>, saved: StoredCredential, status
     let client = auth::http_client();
     let (own_tx, own_rx) = async_channel::unbounded();
     // The connection ends its session when the action channel closes, so keep the sender here.
-    let (_actions_tx, actions_rx) = async_channel::unbounded();
+    let (actions_tx, actions_rx) = async_channel::unbounded();
+    if let Ok(mut senders) = senders().lock() {
+        senders.insert(saved.environment_id.clone(), actions_tx.clone());
+    }
     let mut backoff = connection::Backoff::new();
     let environment = loop {
         match server::fetch_environment(&client, &saved.http_base).await {
@@ -55,6 +70,10 @@ async fn follow(store: Arc<dyn CredentialStore>, saved: StoredCredential, status
     let forward = async {
         let mut last: Option<EnvironmentProjects> = None;
         while let Ok(update) = own_rx.recv().await {
+            if matches!(update, Status::Call { .. }) {
+                publish(&status, update);
+                continue;
+            }
             let (projects, connected) = match update {
                 Status::Connected {
                     shell: Some(shell), ..
@@ -96,6 +115,10 @@ async fn follow(store: Arc<dyn CredentialStore>, saved: StoredCredential, status
         );
         // Close the channel so `forward` ends and the badges clear.
         own_tx.close();
+        if let Ok(mut senders) = senders().lock() {
+            senders.remove(&saved.environment_id);
+        }
+        drop(actions_tx);
     };
     tokio::join!(forward, session);
 }

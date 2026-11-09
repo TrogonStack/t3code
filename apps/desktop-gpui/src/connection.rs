@@ -9,10 +9,15 @@ use crate::rpc::{
     AttachmentsCreateUploadUrl, AttachmentsDelete, DeviceConfigure, DeviceEasAccount, DeviceList,
     DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
     OrchestrationLaunchThread, PING_FRAME, ProjectsMutate, ProviderConsumeResetCredit,
-    ReviewGetDiffPreview, ServerGetConfig, ServerGetUsageSummary, ServerRefreshProviders,
-    ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
-    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
-    TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    ReviewGetDiffPreview, ServerCheckSecretSource, ServerDiscoverSourceControl, ServerGetConfig,
+    ServerGetUsageSummary, ServerRefreshProviders, ServerRefreshUsageRates, ServerUpdateSettings,
+    Session, ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus,
+    TerminalAttach, TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs,
+    VcsPull, VcsRefreshStatus, VcsSwitchRef,
+};
+use crate::rpc::{
+    ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsReadFile, ProjectsWriteFile,
+    SubscribeProjectClones,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -109,6 +114,10 @@ pub enum Action {
         call: Call,
         payload: serde_json::Value,
     },
+    /// Stops a streaming `Call`; nothing more arrives under `token`.
+    EndCall {
+        token: u64,
+    },
 }
 
 /// The RPCs an `Action::Call` can name, all with untyped payloads.
@@ -134,6 +143,15 @@ pub enum Call {
     DeviceConfigure,
     DeviceTestHost,
     DeviceEasAccount,
+    DiscoverSourceControl,
+    CheckSecretSource,
+    GetConfig,
+    ListIgnoredFiles,
+    ReadFile,
+    WriteFile,
+    StartProjectClone,
+    /// A stream of the clone list that never ends by itself.
+    WatchProjectClones,
 }
 
 pub type ActionSender = async_channel::Sender<Action>;
@@ -156,6 +174,7 @@ impl Action {
             Self::TerminalClose { .. } => "close the terminal",
             Self::Upload { .. } => "upload the attachment",
             Self::Call { call, .. } => call.describe(),
+            Self::EndCall { .. } => "end the request",
         }
     }
 }
@@ -182,6 +201,14 @@ impl Call {
             Self::DeviceConfigure => "update the device settings",
             Self::DeviceTestHost => "test the connection",
             Self::DeviceEasAccount => "check the Expo account",
+            Self::DiscoverSourceControl => "scan the server environment",
+            Self::CheckSecretSource => "check the secret",
+            Self::GetConfig => "load the server settings",
+            Self::ListIgnoredFiles => "list the ignored files",
+            Self::ReadFile => "read the file",
+            Self::WriteFile => "write the file",
+            Self::StartProjectClone => "start the clone",
+            Self::WatchProjectClones => "watch the clones",
         }
     }
 
@@ -210,6 +237,14 @@ impl Call {
             Self::DeviceConfigure => session.request::<DeviceConfigure>(payload),
             Self::DeviceTestHost => session.request::<DeviceTestHost>(payload),
             Self::DeviceEasAccount => session.request::<DeviceEasAccount>(payload),
+            Self::DiscoverSourceControl => session.request::<ServerDiscoverSourceControl>(payload),
+            Self::CheckSecretSource => session.request::<ServerCheckSecretSource>(payload),
+            Self::GetConfig => session.request::<ServerGetConfig>(payload),
+            Self::ListIgnoredFiles => session.request::<ProjectsListIgnoredFiles>(payload),
+            Self::ReadFile => session.request::<ProjectsReadFile>(payload),
+            Self::WriteFile => session.request::<ProjectsWriteFile>(payload),
+            Self::StartProjectClone => session.request::<ProjectCloneStart>(payload),
+            Self::WatchProjectClones => session.request::<SubscribeProjectClones>(payload),
         }
     }
 }
@@ -542,6 +577,17 @@ async fn serve(
                     }
                     continue;
                 }
+                if let Action::EndCall { token } = &action {
+                    let id = calls.iter().find_map(|(id, owner)| (owner == token).then(|| id.clone()));
+                    if let Some(id) = id {
+                        calls.remove(&id);
+                        let frame = session.interrupt(&id);
+                        if let Err(error) = sink.send(Message::text(frame)).await {
+                            return error.to_string();
+                        }
+                    }
+                    continue;
+                }
                 let request = match &action {
                     Action::Upload { token, relative_url, path, mime } => {
                         uploader.start(*token, relative_url, path.clone(), mime.clone(), status);
@@ -645,7 +691,7 @@ async fn serve(
                     Action::LoadBranch { root } => session
                         .request::<VcsListRefs>(&refs_query(root))
                         .map(|(id, frame)| (id, frame, Some(root.clone()))),
-                    Action::Call { .. } => continue,
+                    Action::Call { .. } | Action::EndCall { .. } => continue,
                 };
                 match request {
                     Ok((id, frame, root)) => {

@@ -56,6 +56,7 @@ use std::{
 const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
+mod add_to_machine;
 mod composer_menu;
 mod model_popover;
 mod right_panel;
@@ -64,6 +65,7 @@ mod settings;
 mod usage_dialog;
 mod workspace_menu;
 
+pub use add_to_machine::bindings as add_to_machine_bindings;
 pub use settings::bindings as settings_bindings;
 pub use usage_dialog::bindings as usage_bindings;
 
@@ -294,6 +296,7 @@ pub struct MainView {
     card: Entity<DetailsCard>,
     toasts: Entity<ToastHost>,
     usage: Entity<usage_dialog::UsageDialog>,
+    add_to_machine: Entity<add_to_machine::AddToMachine>,
     settings: Entity<settings::SettingsDialog>,
     /// The slow requests toast; kept after the user dismisses it, like the web coordinator.
     slow_toast: Option<ToastId>,
@@ -398,6 +401,27 @@ impl MainView {
             |this, _, event: &branch_picker::Event, cx| this.on_branch_event(event, cx),
         )
         .detach();
+        let add_to_machine =
+            cx.new(|cx| add_to_machine::AddToMachine::new(actions.clone(), window, cx));
+        cx.subscribe(
+            &add_to_machine,
+            |this, _, notice: &add_to_machine::Notice, cx| {
+                let kind = if notice.error {
+                    ToastKind::Error
+                } else {
+                    ToastKind::Info
+                };
+                let toast = Toast::new(notice.title.clone()).kind(kind);
+                let toast = match &notice.description {
+                    Some(description) => toast.description(description.clone()),
+                    None => toast,
+                };
+                this.toasts.update(cx, |toasts, cx| {
+                    toasts.add(toast, cx);
+                });
+            },
+        )
+        .detach();
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
             .detach();
@@ -468,6 +492,7 @@ impl MainView {
             card,
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
             usage: cx.new(|cx| usage_dialog::UsageDialog::new(actions.clone(), cx)),
+            add_to_machine,
             settings: cx.new(|cx| settings::SettingsDialog::new(actions.clone(), window, cx)),
             slow_toast: None,
             main_width: Cell::new(0.),
@@ -533,12 +558,18 @@ impl MainView {
             (
                 c.devices().clone(),
                 crate::settings_devices::project_ids(&entries),
+                c.source_control().secret_sources().to_vec(),
             )
         });
+        let source_control = self.providers.as_ref().map(|c| c.source_control().clone());
+        let project_ids = crate::settings_devices::project_ids(&entries);
         self.settings.update(cx, |settings, cx| {
             settings.set_labs_data(data, flags, cx);
-            if let Some((config, projects)) = devices {
-                settings.set_devices_data(config, projects, cx);
+            if let Some((config, projects, sources)) = devices {
+                settings.set_devices_data(config, projects, sources, cx);
+            }
+            if let Some(config) = source_control {
+                settings.set_source_control_data(config, project_ids, cx);
             }
         });
     }
@@ -611,6 +642,17 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= add_to_machine::TOKEN_BASE {
+                self.add_to_machine
+                    .update(cx, |dialog, cx| dialog.on_call(token, event, cx));
+                return;
+            }
+            if token >= crate::settings_source_control::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_source_control_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_devices::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_devices_call(token, event, cx)
@@ -3702,7 +3744,7 @@ impl MainView {
         )
     }
 
-    /// The web's `ComposerSurface.ContextStrip` under the composer; none for the scratch project.
+    /// The web's `ComposerSurface.ContextStrip` under the composer. The no-project draft keeps only the run-on and permissions controls.
     fn context_strip(
         &self,
         project: &ProjectEntry,
@@ -3711,9 +3753,6 @@ impl MainView {
         let Status::Connected { label, machine, .. } = &self.status else {
             return None;
         };
-        if project.scratch {
-            return None;
-        }
         let defaults = self.providers.as_ref().map_or_else(
             || Defaults::resolve(None, None, None),
             |c| c.defaults(Some(&project.id)),
@@ -3725,8 +3764,10 @@ impl MainView {
         let is_repo = current.is_some();
         let shown = strip::shown_branch(workspace, current, self.draft_bases.get(&project.id));
         let branch_label = shown.map(|branch| branch.label(workspace, defaults.start_from_origin));
-        self.branch_picker
-            .update(cx, |picker, _| picker.sync(&project.root, workspace));
+        if !project.scratch {
+            self.branch_picker
+                .update(cx, |picker, _| picker.sync(&project.root, workspace));
+        }
         // A reused worktree fixes the ref, so the control names its branch and does not open.
         let branch = if !is_repo {
             None
@@ -3750,7 +3791,15 @@ impl MainView {
                 WORKSPACE_SHORTCUT,
             )
         });
-        let host_control = if run_on_menu::is_select(&project.remote) {
+        let add_targets = self.add_targets(project);
+        // `useLogicalProjectEnvironments` with `scratchDraft`: every connected environment that
+        // has its own scratch project, instead of those that share the project.
+        let others = if project.scratch {
+            self.scratch_environments()
+        } else {
+            project.remote.clone()
+        };
+        let host_control = if run_on_menu::is_select(&others, !add_targets.is_empty()) {
             run_on_menu::popover(
                 run_on_menu::Menu {
                     view: cx.entity(),
@@ -3758,7 +3807,8 @@ impl MainView {
                         label: environment.clone(),
                         machine: *machine,
                     },
-                    others: project.remote.clone(),
+                    others,
+                    can_add: !add_targets.is_empty(),
                     highlight: self.host_highlight,
                 },
                 self.host_open,
@@ -3784,7 +3834,8 @@ impl MainView {
                 .children(branch)
                 .child(permissions_popover(
                     &self.permissions,
-                    self.permissions_open,
+                    // One flag serves both triggers: the model picker's footer owns it while open.
+                    self.permissions_open && !self.model_open,
                     runtime_mode,
                     PermissionsTrigger {
                         mode: runtime_mode,
@@ -3877,6 +3928,74 @@ impl MainView {
         self.host_open = open;
         self.host_highlight = 0;
         cx.notify();
+    }
+
+    /// The other saved environments a no-project draft lists under "Run on".
+    fn scratch_environments(&self) -> Vec<projects::RemoteMember> {
+        let mut others: Vec<_> = self
+            .environments
+            .iter()
+            .filter(|environment| {
+                environment.connected && environment.projects.iter().any(|entry| entry.scratch)
+            })
+            .map(|environment| projects::RemoteMember {
+                label: environment.label.clone(),
+                machine: environment.machine,
+            })
+            .collect();
+        others.sort_by_key(|member| member.label.to_lowercase());
+        others
+    }
+
+    /// `useAddProjectTargets`: connected machines without the project that can be reached from
+    /// here, for a project that has a git remote.
+    fn add_targets(&self, project: &ProjectEntry) -> Vec<add_to_machine::Target> {
+        if project.repository.is_none() {
+            return Vec::new();
+        }
+        let mut targets: Vec<_> = self
+            .environments
+            .iter()
+            .filter(|environment| {
+                environment.connected
+                    && crate::environments::sender(&environment.id).is_some()
+                    && !environment.projects.iter().any(|other| {
+                        project.logical_key.is_some() && other.logical_key == project.logical_key
+                    })
+            })
+            .map(|environment| add_to_machine::Target {
+                id: environment.id.clone(),
+                label: environment.label.clone(),
+                machine: environment.machine,
+            })
+            .collect();
+        targets.sort_by_key(|target| target.label.to_lowercase());
+        targets
+    }
+
+    /// "Add to another machine": closes the menu and opens the clone dialog.
+    pub(crate) fn open_add_to_machine(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_host_open(false, window, cx);
+        let Status::Connected { label, machine, .. } = &self.status else {
+            return;
+        };
+        let Some(project) = self.draft_project().filter(|entry| !entry.scratch) else {
+            return;
+        };
+        let Some(repository) = project.repository.clone() else {
+            return;
+        };
+        let targets = self.add_targets(project);
+        let request = add_to_machine::Request {
+            title: project.title.clone(),
+            root: project.root.clone(),
+            repository,
+            source_label: strip::environment_label(label),
+            source_machine: *machine,
+            targets,
+        };
+        self.add_to_machine
+            .update(cx, |dialog, cx| dialog.open(request, window, cx));
     }
 
     pub(crate) fn highlight_host(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -4156,8 +4275,25 @@ impl MainView {
     }
 
     pub(crate) fn picker_toggle_older(&mut self, cx: &mut Context<Self>) {
-        self.model_ui.expanded = !self.model_ui.expanded;
+        self.flip_older(cx);
         cx.notify();
+    }
+
+    fn flip_older(&mut self, cx: &App) {
+        self.model_ui.expanded = !self.model_ui.expanded;
+        let Some((instances, _)) = self.picker_context() else {
+            return;
+        };
+        let tab = self
+            .model_ui
+            .tab
+            .clone()
+            .unwrap_or(model_picker::Tab::Favorites);
+        let query = self.model_search.read(cx).value();
+        self.model_ui.highlight =
+            model_picker::listing(&instances, &tab, &query, self.model_ui.expanded)
+                .rows
+                .len();
     }
 
     /// Writes one option of the model in view into the composer's pick, so the next turn sends it.
@@ -4268,7 +4404,7 @@ impl MainView {
                         self.pick_model(&instance, &slug, cx);
                     }
                 } else if listing.older.is_some() {
-                    self.model_ui.expanded = !self.model_ui.expanded;
+                    self.flip_older(cx);
                 }
             }
             (Focus::List, "left") if cursor == 0 => self.model_ui.focus = Focus::Sidebar,
@@ -4331,7 +4467,7 @@ impl MainView {
             focus: self.model_ui.focus,
             effort: self.model_ui.effort,
             permissions: self.permissions.clone(),
-            permissions_open: self.permissions_open,
+            permissions_open: self.permissions_open && self.model_open,
             mode,
             instances,
             trigger: trigger.clone(),
@@ -4342,6 +4478,9 @@ impl MainView {
                 .open(self.model_open)
                 .track_focus(&search.focus_handle(cx))
                 .p_0()
+                .bg(cx.theme().popover)
+                .border_1()
+                .border_color(dropdown_glass_edge(cx))
                 .on_open_change(move |open, window, cx| {
                     search.update(cx, |state, cx| state.set_value("", window, cx));
                     view.update(cx, |this, cx| {
@@ -6427,8 +6566,19 @@ impl Render for MainView {
                 root.child(self.sidebar_drawer(overlay_width(width), window, cx))
             })
             .child(self.usage.clone())
+            .child(self.add_to_machine.clone())
             .child(self.settings.clone())
             .child(self.toasts.clone())
+    }
+}
+
+/// `dropdown-glass`'s `1px solid` edge: `--contrast-foreground` at 10%. GPUI has no backdrop blur,
+/// so the fill takes the web's no-blur fallback, a solid `--popover` (index.css `@supports not`).
+fn dropdown_glass_edge(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        gpui::white().opacity(0.1)
+    } else {
+        gpui::black().opacity(0.1)
     }
 }
 
@@ -6495,6 +6645,7 @@ mod tests {
             root: String::new(),
             logical_key: None,
             remote: Vec::new(),
+            repository: None,
         }
     }
 

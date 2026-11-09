@@ -98,7 +98,7 @@ impl Tokens {
     }
 
     /// `dialog-backdrop` (index.css:444-452): `--background` at 60%, 64% in dark.
-    pub(super) fn backdrop(&self) -> Hsla {
+    pub(crate) fn backdrop(&self) -> Hsla {
         self.background.opacity(if self.dark { 0.64 } else { 0.6 })
     }
 }

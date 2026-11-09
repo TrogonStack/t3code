@@ -9,7 +9,7 @@ use gpui_component::input::Input;
 use gpui_component::spinner::Spinner;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Variant {
+pub(in crate::ui::settings) enum Variant {
     Primary,
     Outline,
     Ghost,
@@ -18,13 +18,13 @@ pub(super) enum Variant {
 }
 
 /// `--warning-foreground` (index.css:1165, 1217): amber-700, amber-400 in dark.
-pub(super) fn warning(theme: &Tokens) -> Hsla {
+pub(in crate::ui::settings) fn warning(theme: &Tokens) -> Hsla {
     gpui::rgb(if theme.dark { 0xfbbf24 } else { 0xb45309 }).into()
 }
 
 /// `Button size="sm"` (`h-7 gap-1.5 rounded-lg px-[9px] text-sm`): the caller adds the content
 /// and `on_click`.
-pub(super) fn button(
+pub(in crate::ui::settings) fn button(
     id: impl Into<ElementId>,
     variant: Variant,
     enabled: bool,
@@ -99,7 +99,7 @@ pub(super) fn button(
 }
 
 /// `Button size="icon-sm"` (`size-8 sm:size-7`).
-pub(super) fn icon_button(
+pub(in crate::ui::settings) fn icon_button(
     id: impl Into<ElementId>,
     variant: Variant,
     enabled: bool,
@@ -109,7 +109,7 @@ pub(super) fn icon_button(
 }
 
 /// `Spinner` (spinner.tsx): the glyph without the continuous spin the app avoids.
-pub(super) fn spinner(size: f32, color: Hsla) -> AnyElement {
+pub(in crate::ui::settings) fn spinner(size: f32, color: Hsla) -> AnyElement {
     Spinner::new()
         .icon(Icon::new(Icons::LoaderCircle))
         .color(color)
@@ -161,7 +161,7 @@ pub(super) fn labeled(title: &'static str, body: impl IntoElement) -> gpui::Div 
 }
 
 /// A line of `text-xs text-muted-foreground`.
-pub(super) fn note(text: impl IntoElement, cx: &App) -> gpui::Div {
+pub(in crate::ui::settings) fn note(text: impl IntoElement, cx: &App) -> gpui::Div {
     div()
         .text_xs()
         .line_height(px(16.))
@@ -170,7 +170,7 @@ pub(super) fn note(text: impl IntoElement, cx: &App) -> gpui::Div {
 }
 
 /// `p.text-xs.text-destructive[role=alert]`.
-pub(super) fn problem(text: impl IntoElement, cx: &App) -> gpui::Div {
+pub(in crate::ui::settings) fn problem(text: impl IntoElement, cx: &App) -> gpui::Div {
     div()
         .text_xs()
         .line_height(px(16.))

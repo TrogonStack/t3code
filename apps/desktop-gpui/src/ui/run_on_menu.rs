@@ -2,9 +2,9 @@
 //! control. With one environment it is the web's locked label; with several it is a select whose
 //! rows name the environments that have the project, plus "Add to another machine".
 //!
-//! A GPUI draft can only run on the environment the window is attached to, and the app has no
-//! add-project-to-machine flow, so the other environments and "Add to another machine" render as
-//! the web draws them but do nothing (the web disables a row without `onEnvironmentChange`).
+//! A GPUI draft can only run on the environment the window is attached to, so the other
+//! environments render as the web draws them but do nothing (the web disables a row without
+//! `onEnvironmentChange`). "Add to another machine" opens the clone dialog.
 
 use super::composer_menu::{self, OnClick, OnHover, Row, RowState};
 use super::*;
@@ -20,12 +20,15 @@ pub(super) struct Menu {
     pub view: Entity<MainView>,
     pub current: Env,
     pub others: Vec<RemoteMember>,
+    /// `addTargets.length > 0`: a connected machine can still be given the project.
+    pub can_add: bool,
     pub highlight: usize,
 }
 
-/// `hasMultipleEnvironments`: the select exists only when another environment has the project.
-pub(super) fn is_select(others: &[RemoteMember]) -> bool {
-    !others.is_empty()
+/// `hasMultipleEnvironments`: the select exists when another environment has the project, or
+/// when the project can be added to one.
+pub(super) fn is_select(others: &[RemoteMember], can_add: bool) -> bool {
+    !others.is_empty() || can_add
 }
 
 /// Rows before "Add to another machine": the environments, current first.
@@ -99,21 +102,25 @@ fn content(menu: &Menu, cx: &App) -> gpui::Div {
         })
         .collect();
     let add = add_index(menu);
-    rows.push(Row {
-        id: ("host-row", add),
-        state: RowState {
-            selected: false,
-            lit: add == menu.highlight,
-            // The add-project-to-machine dialog is not ported, so the row only closes the menu.
-            disabled: false,
-            quiet: true,
-        },
-        body: composer_menu::plain_body(Icons::Plus, "Add to another machine", cx)
-            .into_any_element(),
-        on_hover: hover(&menu.view, add),
-        on_click: close(&menu.view),
-    });
-    composer_menu::popup("Run on", None, rows, cx)
+    if menu.can_add {
+        let view = menu.view.clone();
+        rows.push(Row {
+            id: ("host-row", add),
+            state: RowState {
+                selected: false,
+                lit: add == menu.highlight,
+                disabled: false,
+                quiet: true,
+            },
+            body: composer_menu::plain_body(Icons::Plus, "Add to another machine", cx)
+                .into_any_element(),
+            on_hover: hover(&menu.view, add),
+            on_click: Box::new(move |window: &mut Window, cx: &mut App| {
+                view.update(cx, |this, cx| this.open_add_to_machine(window, cx));
+            }),
+        });
+    }
+    composer_menu::popup(Some("Run on"), None, rows, cx)
 }
 
 #[cfg(test)]
@@ -122,10 +129,14 @@ mod tests {
 
     #[test]
     fn the_select_needs_another_environment() {
-        assert!(!is_select(&[]));
-        assert!(is_select(&[RemoteMember {
-            label: "Other".to_owned(),
-            machine: MachineKind::Cloud,
-        }]));
+        assert!(!is_select(&[], false));
+        assert!(is_select(&[], true));
+        assert!(is_select(
+            &[RemoteMember {
+                label: "Other".to_owned(),
+                machine: MachineKind::Cloud,
+            }],
+            false
+        ));
     }
 }

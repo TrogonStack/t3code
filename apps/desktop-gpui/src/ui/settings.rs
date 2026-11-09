@@ -10,6 +10,8 @@ mod diffs_panel;
 mod labs_panel;
 mod scope_inheritance;
 mod scope_pickers;
+mod secret_field;
+mod source_control_panel;
 pub(crate) mod tokens;
 
 use super::*;
@@ -29,6 +31,7 @@ use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
 use scope_pickers::ScopeBar;
+use source_control_panel::SourceControlPanel;
 use std::rc::Rc;
 use tokens::Tokens;
 
@@ -168,6 +171,7 @@ pub struct SettingsDialog {
     typography: Entity<AppearanceTypography>,
     labs: Entity<LabsPanel>,
     devices: Entity<DevicesPanel>,
+    source_control: Entity<SourceControlPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -183,6 +187,8 @@ impl SettingsDialog {
     ) -> Self {
         let scope = cx.new(|cx| ScopeBar::new(window, cx));
         let devices = cx.new(|cx| DevicesPanel::new(actions.clone(), scope.clone(), cx));
+        let source_control =
+            cx.new(|cx| SourceControlPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -216,6 +222,7 @@ impl SettingsDialog {
             typography: cx.new(|cx| AppearanceTypography::new(window, cx)),
             labs,
             devices,
+            source_control,
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -236,6 +243,7 @@ impl SettingsDialog {
         self.typography.update(cx, |panel, cx| panel.reload(cx));
         self.labs.update(cx, |panel, cx| panel.reload(cx));
         self.devices.update(cx, |panel, cx| panel.reload(cx));
+        self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -282,10 +290,32 @@ impl SettingsDialog {
         &mut self,
         config: crate::settings_devices::DeviceConfig,
         projects: crate::settings_devices::ProjectIds,
+        secret_sources: Vec<crate::secret_source::SecretSource>,
         cx: &mut Context<Self>,
     ) {
-        self.devices
+        self.devices.update(cx, |panel, cx| {
+            panel.set_data(config, projects, secret_sources, cx)
+        });
+    }
+
+    pub fn set_source_control_data(
+        &mut self,
+        config: crate::settings_source_control::SourceControlConfig,
+        projects: crate::settings_devices::ProjectIds,
+        cx: &mut Context<Self>,
+    ) {
+        self.source_control
             .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn on_source_control_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.source_control
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
     pub fn on_devices_call(
@@ -377,6 +407,12 @@ impl SettingsDialog {
         }
         if self
             .devices
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .source_control
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -1081,11 +1117,18 @@ impl SettingsDialog {
             self.devices
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.devices.clone().into_any_element()]
+        } else if self.section == Section::SourceControl {
+            self.source_control
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.source_control.clone().into_any_element()]
         } else {
             Vec::new()
         };
         // The web hides the scope sentence on device-only tabs; the tabs that apply a scope list here.
-        let scoped = matches!(self.section, Section::Labs | Section::Devices);
+        let scoped = matches!(
+            self.section,
+            Section::Labs | Section::Devices | Section::SourceControl
+        );
         div()
             .w_full()
             .flex()

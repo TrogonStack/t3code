@@ -354,7 +354,7 @@ struct FileAttachments {
 }
 
 /// The provider snapshots and settings of one environment.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Catalog {
     providers: Vec<Provider>,
     settings: Settings,
@@ -365,6 +365,8 @@ pub struct Catalog {
     usage_model_aliases: bool,
     /// The Devices tab's keys.
     devices: crate::settings_devices::DeviceConfig,
+    /// The Source control tab's keys.
+    source_control: crate::settings_source_control::SourceControlConfig,
 }
 
 /// The two-letter instance chip at the icon's bottom-right.
@@ -452,6 +454,13 @@ impl Entry<'_> {
 impl Catalog {
     pub fn decode(value: Value) -> Result<Self, String> {
         let devices = crate::settings_devices::DeviceConfig::from_settings(&value["settings"]);
+        let source_control =
+            crate::settings_source_control::SourceControlConfig::from_settings(&value["settings"])
+                .with_secret_sources(
+                    &value["settings"],
+                    value["environment"]["capabilities"]["secretReferences"].as_bool()
+                        == Some(true),
+                );
         let Config {
             providers,
             settings,
@@ -463,6 +472,7 @@ impl Catalog {
             settings,
             available_editors,
             devices,
+            source_control,
             usage_model_aliases: environment
                 .as_ref()
                 .is_some_and(|environment| environment.capabilities.usage_model_aliases),
@@ -526,6 +536,11 @@ impl Catalog {
     /// The attached environment's device settings.
     pub fn devices(&self) -> &crate::settings_devices::DeviceConfig {
         &self.devices
+    }
+
+    /// The attached environment's Source control settings.
+    pub fn source_control(&self) -> &crate::settings_source_control::SourceControlConfig {
+        &self.source_control
     }
 
     /// The attached environment's Labs flags.

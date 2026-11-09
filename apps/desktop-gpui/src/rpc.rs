@@ -87,6 +87,24 @@ impl Method for DeviceList {
     type Success = Value;
 }
 
+/// `server.discoverSourceControl`, the version control tools and hosting integrations on the server.
+pub struct ServerDiscoverSourceControl;
+
+impl Method for ServerDiscoverSourceControl {
+    const TAG: &'static str = "server.discoverSourceControl";
+    type Payload = Value;
+    type Success = Value;
+}
+
+/// `server.checkSecretSource`, resolving a secret reference on the server.
+pub struct ServerCheckSecretSource;
+
+impl Method for ServerCheckSecretSource {
+    const TAG: &'static str = "server.checkSecretSource";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `device.configure`, the hub and agent-access switches.
 pub struct DeviceConfigure;
 
@@ -268,6 +286,35 @@ untyped_method!(
     ProviderConsumeResetCredit,
     "provider.consumeResetCredit"
 );
+untyped_method!(
+    /// `projects.listIgnoredFiles`: the files git ignores in a project, for the clone dialog.
+    ProjectsListIgnoredFiles,
+    "projects.listIgnoredFiles"
+);
+untyped_method!(
+    /// `projects.readFile`: a workspace file's text.
+    ProjectsReadFile,
+    "projects.readFile"
+);
+untyped_method!(
+    /// `projects.writeFile`: writes a workspace file.
+    ProjectsWriteFile,
+    "projects.writeFile"
+);
+untyped_method!(
+    /// `projectClone.start`: begins a clone and adds the project once it lands.
+    ProjectCloneStart,
+    "projectClone.start"
+);
+/// `subscribeProjectClones`, a stream of the clone list that stays open until interrupted.
+pub struct SubscribeProjectClones;
+
+impl Method for SubscribeProjectClones {
+    const TAG: &'static str = "subscribeProjectClones";
+    const STREAMING: bool = true;
+    type Payload = Value;
+    type Success = Value;
+}
 /// `git.runStackedAction`, a stream of progress events ending with the action's result.
 pub struct GitRunStackedAction;
 

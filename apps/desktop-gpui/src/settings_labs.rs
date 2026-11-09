@@ -1117,6 +1117,7 @@ mod tests {
             root: format!("/home/user/projects/{key}"),
             logical_key: logical.map(str::to_owned),
             remote: Vec::new(),
+            repository: None,
         }
     }
 

@@ -2,6 +2,7 @@
 //! SimlockDeviceHostEditor.tsx) as one dialog: their drafts, checks and the host-list writes.
 
 use super::super::scope_inheritance::{PopTrigger, popup_shell};
+use super::super::secret_field::{SecretEvent, SecretField};
 use super::super::tokens::Tokens;
 use super::super::*;
 use super::DevicesPanel;
@@ -9,6 +10,7 @@ use super::widgets::{
     Variant, button, dialog, field, icon_button, labeled, menu_item, note, problem, spinner,
     warning,
 };
+use crate::secret_source::SecretSource;
 use crate::settings_devices::{
     self as devices, AddKind, Availability, DeviceConfig, EasHost, SimlockHost, Source, SshHost,
 };
@@ -44,7 +46,7 @@ enum Account {
 
 enum Token {
     Keep,
-    Set(String),
+    Set(Value),
     Clear,
 }
 
@@ -121,6 +123,8 @@ pub(super) struct Editor {
     existing: Option<Source>,
     id: String,
     fields: Vec<Entity<InputState>>,
+    /// The token input; the matching entry of `fields` stays unused.
+    token: Entity<SecretField>,
     options_open: bool,
     pub(super) seq: u64,
     check: Check,
@@ -139,6 +143,7 @@ impl Editor {
         kind: AddKind,
         existing: Option<&Source>,
         _config: &DeviceConfig,
+        sources: &[SecretSource],
         window: &mut Window,
         cx: &mut Context<DevicesPanel>,
     ) -> Self {
@@ -229,6 +234,25 @@ impl Editor {
                 input
             })
             .collect();
+        let saved = match existing {
+            Some(Source::Eas(host)) if kind == AddKind::Eas => host.access_token.clone(),
+            Some(Source::Simlock(host)) if kind == AddKind::Simlock => host.agent_token.clone(),
+            _ => Value::Null,
+        };
+        let token = cx.new(|cx| SecretField::new("device-token", "Token", window, cx));
+        token.update(cx, |field, cx| {
+            field.set_sources(sources, cx);
+            field.set_can_check(false, cx);
+            field.load(&saved, window, cx);
+        });
+        subscriptions.push(cx.subscribe(
+            &token,
+            |_: &mut DevicesPanel, _, event: &SecretEvent, cx| {
+                if matches!(event, SecretEvent::Changed | SecretEvent::Commit) {
+                    cx.notify();
+                }
+            },
+        ));
         let first = fields[0].read(cx).focus_handle(cx).clone();
         window.focus(&first, cx);
         Self {
@@ -236,6 +260,7 @@ impl Editor {
             existing: existing.cloned(),
             id,
             fields,
+            token,
             options_open,
             seq: 0,
             check: Check::Idle,
@@ -323,14 +348,7 @@ impl Editor {
 
     /// Saved (kept), new, or cleared, as the secret field resolves them.
     fn token(&self, cx: &App) -> Token {
-        let typed = self.text(2, cx);
-        let typed = if self.kind == AddKind::Eas {
-            self.text(1, cx)
-        } else {
-            typed
-        };
-        let typed = typed.trim().to_owned();
-        if !typed.is_empty() {
+        if let Some(typed) = self.token.read(cx).submission(cx) {
             Token::Set(typed)
         } else if self.cleared || !self.saved_token {
             Token::Clear
@@ -339,8 +357,9 @@ impl Editor {
         }
     }
 
-    fn token_index(&self) -> usize {
-        if self.kind == AddKind::Eas { 1 } else { 2 }
+    pub(super) fn set_sources(&self, sources: &[SecretSource], cx: &mut Context<DevicesPanel>) {
+        self.token
+            .update(cx, |field, cx| field.set_sources(sources, cx));
     }
 
     pub(super) fn start_test(&mut self, cx: &App) -> Option<Value> {
@@ -478,10 +497,9 @@ impl Editor {
         }
     }
 
-    fn secret(&self, view: &Entity<DevicesPanel>, window: &Window, cx: &App) -> AnyElement {
-        let index = self.token_index();
-        let visible = !self.cleared && (self.saved_token || !self.text(index, cx).is_empty());
-        let input = self.fields[index].clone();
+    fn secret(&self, view: &Entity<DevicesPanel>, _window: &Window, cx: &App) -> AnyElement {
+        let visible = !self.cleared && (self.saved_token || self.token.read(cx).has_draft(cx));
+        let input = self.token.clone();
         let clear = visible.then(|| {
             let view = view.clone();
             icon_button(
@@ -497,7 +515,7 @@ impl Editor {
                     if let Some(editor) = &mut this.editor {
                         editor.cleared = true;
                     }
-                    input.update(cx, |state, cx| state.set_value("", window, cx));
+                    input.update(cx, |field, cx| field.clear(window, cx));
                     cx.notify();
                 })
             })
@@ -506,11 +524,7 @@ impl Editor {
         h_flex()
             .items_center()
             .gap_2()
-            .child(
-                div()
-                    .flex_1()
-                    .child(field(&self.fields[index], self.saving, window, cx)),
-            )
+            .child(div().flex_1().child(self.token.clone()))
             .children(clear)
             .into_any_element()
     }
