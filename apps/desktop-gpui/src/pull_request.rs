@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(missing.title, "Pull request #7 not found");
         let gitlab = detail_failure(&format!("{NOT_FOUND_MARK}gone"), 7, "gitlab.com");
         assert_eq!(gitlab.title, "Merge request #7 not found");
-        let other = detail_failure("paused", 7);
+        let other = detail_failure("paused", 7, "");
         assert_eq!(other.title, UNAVAILABLE_TITLE);
         assert_eq!(other.error, "paused");
     }
