@@ -48,7 +48,6 @@ pub(in crate::ui::settings) struct SecretField {
     menu: Option<usize>,
     trigger: FocusHandle,
     check: Check,
-    can_check: bool,
     disabled: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -157,7 +156,6 @@ impl SecretField {
             menu: None,
             trigger: cx.focus_handle().tab_stop(true),
             check: Check::Idle,
-            can_check: true,
             disabled: false,
             _subscriptions: subscriptions,
         }
@@ -177,18 +175,6 @@ impl SecretField {
     pub(in crate::ui::settings) fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
         if self.disabled != disabled {
             self.disabled = disabled;
-            cx.notify();
-        }
-    }
-
-    /// Whether the server lets this client check a secret (`checkSecretSource.permissionAtom`).
-    pub(in crate::ui::settings) fn set_can_check(
-        &mut self,
-        can_check: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if self.can_check != can_check {
-            self.can_check = can_check;
             cx.notify();
         }
     }
@@ -524,16 +510,12 @@ impl SecretField {
         }
         let theme = Tokens::of(cx);
         let view = cx.entity();
-        let enabled = self.can_check && self.check != Check::Checking;
-        let tip = if !self.can_check {
-            "You cannot check secrets on this environment".to_owned()
-        } else {
-            match &self.check {
-                Check::Idle => "Check that the secret resolves".to_owned(),
-                Check::Checking => "Checking the secret".to_owned(),
-                Check::Resolved => "Secret resolved".to_owned(),
-                Check::Failed(detail) => detail.clone(),
-            }
+        let enabled = self.check != Check::Checking;
+        let tip = match &self.check {
+            Check::Idle => "Check that the secret resolves".to_owned(),
+            Check::Checking => "Checking the secret".to_owned(),
+            Check::Resolved => "Secret resolved".to_owned(),
+            Check::Failed(detail) => detail.clone(),
         };
         let glyph: AnyElement = match &self.check {
             Check::Checking => spinner(12., theme.muted_foreground),

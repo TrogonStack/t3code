@@ -61,6 +61,9 @@ enum Pending {
     Account {
         seq: u64,
     },
+    Secret {
+        field: Entity<super::secret_field::SecretField>,
+    },
 }
 
 /// A failure or a test result, shown under the sources card in place of the web's toast.
@@ -397,6 +400,22 @@ impl DevicesPanel {
         let Some(pending) = self.pending.remove(&token) else {
             return;
         };
+        if let Pending::Secret { field } = pending {
+            use super::secret_field::Check;
+            let state = match event {
+                CallEvent::Done(value) if value["_tag"] == "Resolved" => Check::Resolved,
+                CallEvent::Done(value) => Check::Failed(
+                    value["detail"]
+                        .as_str()
+                        .unwrap_or("The secret could not be resolved.")
+                        .to_owned(),
+                ),
+                CallEvent::Failed(message) => Check::Failed(message),
+                CallEvent::Progress(_) => return,
+            };
+            field.update(cx, |field, cx| field.set_check(state, cx));
+            return;
+        }
         let label = self.ctx(cx).label;
         match (pending, event) {
             (Pending::Configure { previous }, event) => {
@@ -587,6 +606,27 @@ impl DevicesPanel {
         let seq = editor.seq;
         self.send(Call::DeviceTestHost, payload, Pending::Test { seq });
         cx.notify();
+    }
+
+    pub(super) fn check_secret(
+        &mut self,
+        field: &Entity<super::secret_field::SecretField>,
+        provider: &str,
+        reference: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let payload = crate::secret_source::check_payload(provider, reference);
+        let pending = Pending::Secret {
+            field: field.clone(),
+        };
+        if !self.send(Call::CheckSecretSource, payload, pending) {
+            field.update(cx, |field, cx| {
+                field.set_check(
+                    super::secret_field::Check::Failed("Could not reach the server.".to_owned()),
+                    cx,
+                )
+            });
+        }
     }
 
     pub(super) fn check_account(&mut self, cx: &mut Context<Self>) {

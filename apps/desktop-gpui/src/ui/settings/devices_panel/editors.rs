@@ -242,15 +242,16 @@ impl Editor {
         let token = cx.new(|cx| SecretField::new("device-token", "Token", window, cx));
         token.update(cx, |field, cx| {
             field.set_sources(sources, cx);
-            field.set_can_check(false, cx);
             field.load(&saved, window, cx);
         });
         subscriptions.push(cx.subscribe(
             &token,
-            |_: &mut DevicesPanel, _, event: &SecretEvent, cx| {
-                if matches!(event, SecretEvent::Changed | SecretEvent::Commit) {
-                    cx.notify();
+            |this: &mut DevicesPanel, field, event: &SecretEvent, cx| match event {
+                SecretEvent::Changed | SecretEvent::Commit => cx.notify(),
+                SecretEvent::Check(provider, reference) => {
+                    this.check_secret(&field, provider, reference, cx)
                 }
+                _ => {}
             },
         ));
         let first = fields[0].read(cx).focus_handle(cx).clone();
