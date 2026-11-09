@@ -3,7 +3,12 @@
 
 use super::tokens::Tokens;
 use super::*;
-use gpui::{BoxShadow, ClickEvent, ElementId, FocusHandle, KeyDownEvent, point};
+use crate::settings_appearance::{Slide, slide_value};
+use gpui::{
+    Bounds, BoxShadow, ClickEvent, DragMoveEvent, ElementId, FocusHandle, KeyDownEvent,
+    MouseButton, Pixels, canvas, point, relative,
+};
+use std::cell::Cell;
 use std::rc::Rc;
 
 pub(super) type Toggle = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -99,6 +104,31 @@ pub(super) fn row(
     wide: bool,
     cx: &App,
 ) -> gpui::Div {
+    row_with(title, description, reset, control, None, wide, cx)
+}
+
+/// A `SettingsRow` with `children`: `pt-3 pb-1` and the content under the row's columns.
+pub(super) fn row_with_preview(
+    title: &'static str,
+    description: impl IntoElement,
+    reset: Option<AnyElement>,
+    control: AnyElement,
+    preview: AnyElement,
+    wide: bool,
+    cx: &App,
+) -> gpui::Div {
+    row_with(title, description, reset, control, Some(preview), wide, cx)
+}
+
+fn row_with(
+    title: &'static str,
+    description: impl IntoElement,
+    reset: Option<AnyElement>,
+    control: AnyElement,
+    preview: Option<AnyElement>,
+    wide: bool,
+    cx: &App,
+) -> gpui::Div {
     let theme = Tokens::of(cx);
     let heading = h_flex()
         .min_h(px(20.))
@@ -136,7 +166,13 @@ pub(super) fn row(
     } else {
         v_flex().gap_3().child(text).child(control)
     };
-    div().px_4().py_3().child(inner)
+    let framed = div().px_4();
+    let framed = if preview.is_some() {
+        framed.pt_3().pb_1()
+    } else {
+        framed.py_3()
+    };
+    framed.child(inner).children(preview)
 }
 
 /// Hover state of a `TooltipPopup side="top"`, shared by the control that opens it.
@@ -315,7 +351,7 @@ pub(super) fn switch(
 #[derive(IntoElement)]
 pub(super) struct SelectTrigger {
     id: ElementId,
-    label: &'static str,
+    label: SharedString,
     width: f32,
     handle: FocusHandle,
     open: bool,
@@ -339,7 +375,7 @@ impl SelectTrigger {
 
     pub(super) fn new(
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         width: f32,
         handle: FocusHandle,
         on_key: KeyHandler,
@@ -347,7 +383,7 @@ impl SelectTrigger {
         let id = ElementId::from(id);
         Self {
             id,
-            label,
+            label: label.into(),
             width,
             handle,
             open: false,
@@ -474,6 +510,31 @@ pub(super) fn select_menu_checked(menu: &Menu, cx: &App) -> gpui::Div {
     menu_items(menu, true, cx)
 }
 
+/// The shell shared by the select popup and the Thread details menu: `rounded-lg border p-1`
+/// on `popover`, with the deep, tight popup shadow.
+pub(super) fn popup_shell(width: f32, cx: &App) -> gpui::Div {
+    let theme = Tokens::of(cx);
+    let shadow = if theme.dark {
+        (18., 44., 0.8)
+    } else {
+        (16., 40., 0.55)
+    };
+    v_flex()
+        .min_w(px(width))
+        .p_1()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.foreground.opacity(0.1))
+        .bg(theme.popover)
+        .shadow(vec![BoxShadow {
+            color: gpui::black().opacity(shadow.2),
+            offset: point(px(0.), px(shadow.0)),
+            blur_radius: px(shadow.1),
+            spread_radius: px(-18.),
+            inset: false,
+        }])
+}
+
 fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
     let Menu {
         id,
@@ -491,54 +552,35 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
         theme.accent_foreground,
         theme.foreground.opacity(0.08),
     );
-    let shadow = if theme.dark {
-        (18., 44., 0.8)
-    } else {
-        (16., 40., 0.55)
-    };
-    v_flex()
-        .min_w(px(*width))
-        .p_1()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(theme.foreground.opacity(0.1))
-        .bg(theme.popover)
-        .shadow(vec![BoxShadow {
-            color: gpui::black().opacity(shadow.2),
-            offset: point(px(0.), px(shadow.0)),
-            blur_radius: px(shadow.1),
-            spread_radius: px(-18.),
-            inset: false,
-        }])
-        .children(labels.iter().enumerate().map(|(index, label)| {
-            let pick = on_pick.clone();
-            let hover = on_hover.clone();
-            div()
-                .id((id, index))
-                .min_h(px(28.))
-                .flex()
-                .items_center()
-                .px_2()
-                .py_1()
-                .rounded(px(4.))
-                .text_sm()
-                .cursor_pointer()
-                .when(index == selected, |item| item.bg(chosen))
-                .when(index == highlighted, |item| {
-                    item.bg(accent).text_color(accent_foreground)
-                })
-                .on_hover(move |entered, _, cx| {
-                    if *entered {
-                        hover(index, cx);
-                    }
-                })
-                .on_click(move |_, window, cx| pick(index, window, cx))
-                .when(check, |item| item.justify_between().gap_4())
-                .child(*label)
-                .when(check && index == selected, |item| {
-                    item.child(Icon::new(IconName::Check).size(px(16.)))
-                })
-        }))
+    popup_shell(*width, cx).children(labels.iter().enumerate().map(|(index, label)| {
+        let pick = on_pick.clone();
+        let hover = on_hover.clone();
+        div()
+            .id((id, index))
+            .min_h(px(28.))
+            .flex()
+            .items_center()
+            .px_2()
+            .py_1()
+            .rounded(px(4.))
+            .text_sm()
+            .cursor_pointer()
+            .when(index == selected, |item| item.bg(chosen))
+            .when(index == highlighted, |item| {
+                item.bg(accent).text_color(accent_foreground)
+            })
+            .on_hover(move |entered, _, cx| {
+                if *entered {
+                    hover(index, cx);
+                }
+            })
+            .on_click(move |_, window, cx| pick(index, window, cx))
+            .when(check, |item| item.justify_between().gap_4())
+            .child(*label)
+            .when(check && index == selected, |item| {
+                item.child(Icon::new(IconName::Check).size(px(16.)))
+            })
+    }))
 }
 
 /// `Button variant="ghost"` (button.tsx:59-60): `rounded-[--control-radius]` (8px), a transparent
@@ -642,5 +684,200 @@ pub(super) fn disclosure(
     v_flex()
         .child(trigger)
         .when(open, |disclosure| disclosure.child(panel))
+        .into_any_element()
+}
+
+/// `Button variant="outline" size="xs"` at the desktop size: `h-6 gap-1 px-[7px] text-xs`, the
+/// icon 14px in `--contrast-muted-foreground`. The caller adds the icon and label as children.
+pub(super) fn outline_button(id: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let theme = Tokens::of(cx);
+    let (background, hover) = if theme.dark {
+        (theme.input.opacity(0.32), theme.input.opacity(0.64))
+    } else {
+        (theme.popover, theme.accent.opacity(0.5))
+    };
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_1()
+        .h(px(24.))
+        .px(px(7.))
+        .flex_shrink_0()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(theme.input)
+        .bg(background)
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.foreground)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+}
+
+pub(super) type Change = Rc<dyn Fn(u32, &mut Window, &mut App)>;
+
+/// The drag payload of a slider; the id keeps one slider's drag from moving another.
+#[derive(Clone)]
+struct SliderDrag(ElementId);
+
+impl Render for SliderDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// Thumb diameter; the thumb centre travels the track minus this.
+const THUMB: f32 = 16.;
+
+/// The value under window x for a slider laid out in `bounds`, with the thumb centre running from
+/// 8px in to 8px short of the far edge (index.css:963-1077).
+fn slider_value_at(range: Slide, bounds: Bounds<Pixels>, x: Pixels) -> u32 {
+    let travel = (f32::from(bounds.size.width) - THUMB).max(1.);
+    let ratio = (f32::from(x - bounds.origin.x) - THUMB / 2.) / travel;
+    slide_value(range, ratio)
+}
+
+/// The `Slider` styling of index.css:963-1077: a 24px row holding a 6px track (`muted-foreground`
+/// at 22% under a `primary` fill to the thumb centre, with a 1px border), and a 16px thumb with a
+/// 2px `primary` ring on `background`. Click or drag to set, arrow keys step, Home and End jump.
+pub(super) fn slider(
+    id: &'static str,
+    range: Slide,
+    value: u32,
+    on_change: Change,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let key = ElementId::from(id);
+    let handle = tab_stop(&key, window, cx);
+    let visible = focus_visible(&handle, window);
+    let measured = window
+        .use_keyed_state(ElementId::from((key.clone(), "bounds")), cx, |_, _| {
+            Rc::new(Cell::new(Bounds::<Pixels>::default()))
+        })
+        .read(cx)
+        .clone();
+    let theme = Tokens::of(cx);
+    let ratio = value.saturating_sub(range.min) as f32 / (range.max - range.min) as f32;
+    let ratio = ratio.clamp(0., 1.);
+    let thumb_shadow = if visible {
+        vec![
+            BoxShadow {
+                color: theme.background,
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(1.),
+                inset: true,
+            },
+            BoxShadow {
+                color: theme.ring,
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(3.),
+                inset: true,
+            },
+        ]
+    } else {
+        vec![BoxShadow {
+            color: theme.foreground.opacity(0.12),
+            offset: point(px(0.), px(1.)),
+            blur_radius: px(2.),
+            spread_radius: px(0.),
+            inset: false,
+        }]
+    };
+    let track = div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .top(px(9.))
+        .h(px(6.))
+        .rounded_full()
+        .overflow_hidden()
+        .bg(theme.muted_foreground.opacity(0.22))
+        .child(
+            h_flex()
+                .size_full()
+                .child(div().w(px(THUMB / 2.)).h_full().bg(theme.primary))
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .child(div().w(relative(ratio)).h_full().bg(theme.primary)),
+                ),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_full()
+                .border_1()
+                .border_color(theme.border.opacity(0.55)),
+        );
+    let thumb = div()
+        .absolute()
+        .top(px(4.))
+        .bottom(px(4.))
+        .left(px(THUMB / 2.))
+        .right(px(THUMB / 2.))
+        .child(
+            div()
+                .absolute()
+                .left(relative(ratio))
+                .ml(px(-THUMB / 2.))
+                .size(px(THUMB))
+                .rounded_full()
+                .border_2()
+                .border_color(theme.primary)
+                .bg(theme.background)
+                .shadow(thumb_shadow),
+        );
+    let (down_cell, down_change) = (measured.clone(), on_change.clone());
+    let (drag_id, drag_change) = (key.clone(), on_change.clone());
+    let key_change = on_change;
+    let focus = handle.clone();
+    div()
+        .id(key.clone())
+        .track_focus(&handle)
+        .relative()
+        .w_full()
+        .h(px(24.))
+        .cursor_pointer()
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            window.focus(&focus, cx);
+            let value = slider_value_at(range, down_cell.get(), event.position.x);
+            down_change(value, window, cx);
+        })
+        .on_drag(SliderDrag(key), |drag, _, _, cx| {
+            cx.stop_propagation();
+            cx.new(|_| drag.clone())
+        })
+        .on_drag_move(move |event: &DragMoveEvent<SliderDrag>, window, cx| {
+            if event.drag(cx).0 != drag_id {
+                return;
+            }
+            let value = slider_value_at(range, event.bounds, event.event.position.x);
+            drag_change(value, window, cx);
+        })
+        .on_key_down(move |event: &KeyDownEvent, window, cx| {
+            let step = range.step;
+            let next = match event.keystroke.key.as_str() {
+                "left" | "down" => value.saturating_sub(step).max(range.min),
+                "right" | "up" => (value + step).min(range.max),
+                "home" => range.min,
+                "end" => range.max,
+                _ => return,
+            };
+            cx.stop_propagation();
+            key_change(next, window, cx);
+        })
+        .child(
+            canvas(move |bounds, _, _| measured.set(bounds), |_, _, _, _| {})
+                .absolute()
+                .inset_0(),
+        )
+        .child(track)
+        .child(thumb)
         .into_any_element()
 }

@@ -7,6 +7,7 @@ gpui_kit_assets::icon_assets!(
     ExtraIcons,
     [
         Paperclip,
+        Box,
         Pin,
         PinOff,
         Server,
@@ -22,6 +23,7 @@ gpui_kit_assets::icon_assets!(
         Folder,
         FolderGit,
         FolderGit2,
+        RotateCcwClock,
         GitBranch,
         ShieldOff,
         Lock,
@@ -92,7 +94,10 @@ gpui_kit_assets::icon_assets!(
         PanelsTopLeft,
         Undo2,
         Apple,
-        Ellipsis
+        Ellipsis,
+        Sun,
+        Moon,
+        Paintbrush
     ]
 );
 
@@ -358,6 +363,9 @@ mod tests {
             IconName::Paperclip,
             IconName::Settings2,
             IconName::Palette,
+            IconName::Sun,
+            IconName::Moon,
+            IconName::Paintbrush,
             IconName::MessageSquareText,
             IconName::MessagesSquare,
             IconName::Keyboard,
@@ -401,6 +409,7 @@ mod tests {
             IconName::Folder,
             IconName::FolderGit,
             IconName::FolderGit2,
+            IconName::RotateCcwClock,
             IconName::GitBranch,
             IconName::ShieldOff,
             IconName::Lock,

@@ -85,6 +85,11 @@ impl Model<'_> {
 pub enum Workspace<'a> {
     /// The project's checkout, on `branch` when it is known.
     Root { branch: Option<&'a str> },
+    /// A worktree the draft already has, the Previous worktree row's, on `branch` when it has one.
+    Existing {
+        worktree_path: &'a str,
+        branch: Option<&'a str>,
+    },
     /// A new worktree started from `base`.
     Worktree {
         base: &'a str,
@@ -119,6 +124,16 @@ impl<'a> Workspace<'a> {
             Self::Root {
                 branch: Some(branch),
             } => json!({"type": "root", "branch": branch}),
+            Self::Existing {
+                worktree_path,
+                branch: None,
+            } => json!({"type": "existing_worktree", "worktreePath": worktree_path}),
+            Self::Existing {
+                worktree_path,
+                branch: Some(branch),
+            } => {
+                json!({"type": "existing_worktree", "worktreePath": worktree_path, "branch": branch})
+            }
             Self::Worktree {
                 base,
                 start_from_origin: true,
@@ -492,6 +507,27 @@ mod tests {
         assert_matches_contract(
             "orchestration.launchThread",
             &plan(&composer("go", Ok(origin)), ids()).unwrap().payload,
+        );
+    }
+
+    #[test]
+    fn a_reused_worktree_launches_in_place() {
+        let strategy = |branch| {
+            let existing = Workspace::Existing {
+                worktree_path: "/work/tree",
+                branch,
+            };
+            let payload = plan(&composer("go", Ok(existing)), ids()).unwrap().payload;
+            assert_matches_contract("orchestration.launchThread", &payload);
+            payload["workspaceStrategy"].clone()
+        };
+        assert_eq!(
+            strategy(Some("feature")),
+            json!({"type": "existing_worktree", "worktreePath": "/work/tree", "branch": "feature"})
+        );
+        assert_eq!(
+            strategy(None),
+            json!({"type": "existing_worktree", "worktreePath": "/work/tree"})
         );
     }
 

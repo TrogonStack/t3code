@@ -24,6 +24,7 @@ use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
 use crate::toast::{Kind as ToastKind, Toast, ToastHost, ToastId};
+use crate::workspace::{self, Choice, Draft};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
     Focusable as _, FollowMode, FontWeight, Hsla, IntoElement, Keystroke, ListAlignment,
@@ -55,10 +56,13 @@ use std::{
 const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
+mod composer_menu;
 mod model_popover;
 mod right_panel;
+mod run_on_menu;
 mod settings;
 mod usage_dialog;
+mod workspace_menu;
 
 pub use settings::bindings as settings_bindings;
 pub use usage_dialog::bindings as usage_bindings;
@@ -89,6 +93,8 @@ actions!(
         ToggleSidebar,
         DismissSidebar,
         OpenPermissions,
+        OpenWorkspace,
+        UsePreviousWorktree,
         GoBack,
         GoForward,
         ToggleDetails,
@@ -212,6 +218,14 @@ pub struct MainView {
     send_hovered: bool,
     permissions_open: bool,
     workspace_open: bool,
+    host_open: bool,
+    host_highlight: usize,
+    /// The row the Workspace menu's keys and pointer have lit.
+    workspace_highlight: usize,
+    /// Routes the menu's keys while it is open.
+    workspace_keys: Option<gpui::Subscription>,
+    /// The worktree a draft was pointed at by Previous worktree, by project id.
+    draft_worktrees: HashMap<String, workspace::Seed>,
     /// The workspace mode the user picked for a draft, by project id.
     env_modes: HashMap<String, EnvMode>,
     /// The ref a new worktree will start from, by project id.
@@ -311,6 +325,8 @@ struct Sending {
     opens: Option<String>,
     /// The draft's details key, whose model pick the new thread inherits.
     from_key: Option<String>,
+    /// The project whose draft this send consumes.
+    draft_project: Option<String>,
     /// The attachments the message carries, which leave the composer with it.
     attachments: Vec<String>,
 }
@@ -402,6 +418,11 @@ impl MainView {
             send_hovered: false,
             permissions_open: false,
             workspace_open: false,
+            host_open: false,
+            host_highlight: 0,
+            workspace_highlight: 0,
+            workspace_keys: None,
+            draft_worktrees: HashMap::new(),
             env_modes: HashMap::new(),
             draft_bases: HashMap::new(),
             branch_picker,
@@ -716,11 +737,17 @@ impl MainView {
                 }),
                 picked: pick.is_some(),
                 runtime_mode: self.runtime_mode.unwrap_or(defaults.runtime_mode),
-                workspace: send::Workspace::resolve(
-                    mode,
-                    strip::shown_branch(mode, current, base),
-                    defaults.start_from_origin,
-                ),
+                workspace: match project.and_then(|entry| self.draft_worktrees.get(&entry.id)) {
+                    Some(seed) => Ok(send::Workspace::Existing {
+                        worktree_path: &seed.worktree_path,
+                        branch: seed.branch.as_deref(),
+                    }),
+                    None => send::Workspace::resolve(
+                        mode,
+                        strip::shown_branch(mode, current, base),
+                        defaults.start_from_origin,
+                    ),
+                },
                 running: self.thread_running(),
                 attachments: &self.attachments,
             };
@@ -732,9 +759,9 @@ impl MainView {
                     message: new_project_id(),
                 },
             )
-            .map(|plan| (plan, key))
+            .map(|plan| (plan, key, project_id.map(str::to_owned)))
         };
-        let (plan, from_key) = match planned {
+        let (plan, from_key, draft_project) = match planned {
             Ok(planned) => planned,
             Err(message) => return self.error_toast("Could not send the message", message, cx),
         };
@@ -753,6 +780,7 @@ impl MainView {
         self.sending = Some(Sending {
             opens: plan.opens,
             from_key,
+            draft_project,
             attachments: self
                 .attachments
                 .iter()
@@ -1258,6 +1286,9 @@ impl MainView {
         self.attachments
             .retain(|item| !sent.attachments.contains(&item.id));
         if let Some(thread) = sent.opens {
+            if let Some(project) = &sent.draft_project {
+                self.draft_worktrees.remove(project);
+            }
             if let Some(pick) = sent.from_key.and_then(|key| self.model_picks.remove(&key)) {
                 self.model_picks.insert(thread.clone(), pick);
             }
@@ -3688,24 +3719,55 @@ impl MainView {
             |c| c.defaults(Some(&project.id)),
         );
         let environment = strip::environment_label(label);
-        let workspace = self
-            .env_modes
-            .get(&project.id)
-            .copied()
-            .unwrap_or(defaults.env_mode);
+        let (draft, previous) = self.workspace_draft(project);
+        let workspace = draft.mode;
         let current = self.branches.get(&project.root).and_then(Option::as_ref);
         let is_repo = current.is_some();
         let shown = strip::shown_branch(workspace, current, self.draft_bases.get(&project.id));
         let branch_label = shown.map(|branch| branch.label(workspace, defaults.start_from_origin));
         self.branch_picker
             .update(cx, |picker, _| picker.sync(&project.root, workspace));
-        let branch = branch_label
-            .filter(|_| is_repo)
-            .map(|label| self.branch_popover(label, cx));
-        let workspace_control = if is_repo {
-            Some(self.workspace_popover(&project.id, workspace, cx))
-        } else {
+        // A reused worktree fixes the ref, so the control names its branch and does not open.
+        let branch = if !is_repo {
             None
+        } else if let Some(label) = draft.branch_label() {
+            Some(
+                strip_control("branch", Icons::GitBranch, label.clone(), label, false, cx)
+                    .into_any_element(),
+            )
+        } else {
+            branch_label.map(|label| self.branch_popover(label, cx))
+        };
+        let workspace_control = is_repo.then(|| {
+            workspace_menu::popover(
+                workspace_menu::Menu {
+                    view: cx.entity(),
+                    draft,
+                    previous,
+                    highlight: self.workspace_highlight,
+                },
+                self.workspace_open,
+                WORKSPACE_SHORTCUT,
+            )
+        });
+        let host_control = if run_on_menu::is_select(&project.remote) {
+            run_on_menu::popover(
+                run_on_menu::Menu {
+                    view: cx.entity(),
+                    current: run_on_menu::Env {
+                        label: environment.clone(),
+                        machine: *machine,
+                    },
+                    others: project.remote.clone(),
+                    highlight: self.host_highlight,
+                },
+                self.host_open,
+                HOST_SHORTCUT,
+            )
+        } else {
+            // One environment is the only one a draft can run on: the web's locked label.
+            composer_menu::locked("host", machine_icon(*machine), environment.clone(), cx)
+                .into_any_element()
         };
         let runtime_mode = self.runtime_mode.unwrap_or(defaults.runtime_mode);
         Some(
@@ -3715,17 +3777,7 @@ impl MainView {
                 .gap_1()
                 .px_2()
                 .pt_2()
-                .child(
-                    // One environment is the only one a draft can run on, so the host is a label.
-                    strip_control(
-                        "host",
-                        machine_icon(*machine),
-                        environment.clone(),
-                        strip::tooltip_text(&environment, Some(HOST_SHORTCUT)),
-                        false,
-                        cx,
-                    ),
-                )
+                .child(host_control)
                 .children(is_repo.then(|| strip_separator(cx)))
                 .children(workspace_control)
                 .child(div().flex_1())
@@ -3743,78 +3795,196 @@ impl MainView {
         )
     }
 
-    /// The web's `BranchToolbarEnvModeSelector`: a menu of the two workspace modes.
-    fn workspace_popover(
-        &self,
-        project_id: &str,
-        mode: EnvMode,
+    /// The workspace mode of a project's draft, its worktree, and the worktree Previous worktree
+    /// would reuse (`resolvePreviousWorktreeSeed` over the project's threads).
+    fn workspace_draft(&self, project: &ProjectEntry) -> (Draft, Option<workspace::Seed>) {
+        let defaults = self.providers.as_ref().map_or_else(
+            || Defaults::resolve(None, None, None),
+            |catalog| catalog.defaults(Some(&project.id)),
+        );
+        let draft = Draft {
+            mode: self
+                .env_modes
+                .get(&project.id)
+                .copied()
+                .unwrap_or(defaults.env_mode),
+            worktree: self.draft_worktrees.get(&project.id).cloned(),
+        };
+        let current = draft
+            .worktree
+            .as_ref()
+            .map(|seed| seed.worktree_path.as_str());
+        let previous = self.shell().and_then(|shell| {
+            workspace::previous_seed(
+                shell
+                    .rows
+                    .iter()
+                    .filter(|row| row.project_id == project.id)
+                    .map(|row| workspace::Thread {
+                        branch: row.branch.as_deref(),
+                        worktree_path: row.worktree_path.as_deref(),
+                        updated_at_ms: row.updated_at_ms,
+                    }),
+                current,
+            )
+        });
+        (draft, previous)
+    }
+
+    /// Whether the composer shows the workspace control: a project, and a repository.
+    fn workspace_project(&self) -> Option<&ProjectEntry> {
+        let project = self.draft_project().filter(|entry| !entry.scratch)?;
+        self.branches
+            .get(&project.root)
+            .and_then(Option::as_ref)
+            .map(|_| project)
+    }
+
+    /// Opens or closes the menu; opening lights the selected row and takes over the arrow keys.
+    pub(crate) fn set_workspace_open(
+        &mut self,
+        open: bool,
+        _: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let view = cx.entity();
-        let project_id = project_id.to_owned();
-        Popover::new("workspace")
-            .anchor(Anchor::BottomLeft)
-            .open(self.workspace_open)
-            .p_0()
-            .on_open_change({
-                let view = view.clone();
-                move |open, _, cx| {
-                    view.update(cx, |this, cx| {
-                        this.workspace_open = *open;
-                        cx.notify();
-                    });
+    ) {
+        self.workspace_open = open;
+        self.workspace_keys = None;
+        if open {
+            let lit = self.workspace_project().map(|project| {
+                let (draft, previous) = self.workspace_draft(project);
+                Draft::rows(previous.is_some())
+                    .iter()
+                    .position(|row| *row == draft.selected())
+                    .unwrap_or(0)
+            });
+            self.workspace_highlight = lit.unwrap_or(0);
+            let view = cx.weak_entity();
+            self.workspace_keys = Some(cx.intercept_keystrokes(move |event, window, cx| {
+                let handled = view
+                    .update(cx, |this, cx| {
+                        this.workspace_key(&event.keystroke, window, cx)
+                    })
+                    .unwrap_or(false);
+                if handled {
+                    cx.stop_propagation();
                 }
-            })
-            .trigger(StripTrigger {
-                id: "workspace",
-                icon: workspace_icon(mode),
-                label: mode.label().to_owned(),
-                tip: strip::tooltip_text(mode.label(), Some(WORKSPACE_SHORTCUT)),
-                shrink: false,
-                open: false,
-            })
-            .content(move |_, _, cx| {
-                let theme = cx.theme();
-                let (muted, hover, selected) =
-                    (theme.muted_foreground, theme.list_hover, theme.list_active);
-                let rows = EnvMode::ALL.into_iter().map(|choice| {
-                    let (view, project_id) = (view.clone(), project_id.clone());
-                    h_flex()
-                        .id(("workspace-mode", choice as usize))
-                        .gap(px(6.))
-                        .px_2()
-                        .py_1p5()
-                        .items_center()
-                        .rounded_md()
-                        .text_sm()
-                        .cursor_pointer()
-                        .when(choice == mode, |row| row.bg(selected))
-                        .hover(move |style| style.bg(hover))
-                        .child(Icon::new(workspace_icon(choice)).size(px(12.)))
-                        .child(div().flex_1().child(choice.label()))
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |this, cx| {
-                                this.env_modes.insert(project_id.clone(), choice);
-                                this.workspace_open = false;
-                                cx.notify();
-                            });
-                        })
-                });
-                v_flex()
-                    .w(px(224.))
-                    .p_1()
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(muted)
-                            .child("Workspace"),
-                    )
-                    .children(rows)
-            })
-            .into_any_element()
+            }));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_host_open(&mut self, open: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.host_open = open;
+        self.host_highlight = 0;
+        cx.notify();
+    }
+
+    pub(crate) fn highlight_host(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.host_highlight != index {
+            self.host_highlight = index;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn highlight_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.workspace_highlight != index {
+            self.workspace_highlight = index;
+            cx.notify();
+        }
+    }
+
+    /// Applies a row to the draft (`onEnvModeChange`, `onUsePreviousWorktree`) and returns focus
+    /// to the composer, as the web does (`scheduleComposerFocus`).
+    pub(crate) fn pick_workspace(
+        &mut self,
+        choice: Choice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_open = false;
+        self.workspace_keys = None;
+        let Some(project) = self.workspace_project() else {
+            return cx.notify();
+        };
+        let id = project.id.clone();
+        let (draft, previous) = self.workspace_draft(project);
+        let next = draft.choose(choice, previous.as_ref());
+        self.env_modes.insert(id.clone(), next.mode);
+        match next.worktree {
+            Some(seed) => {
+                self.draft_worktrees.insert(id, seed);
+            }
+            None => {
+                self.draft_worktrees.remove(&id);
+            }
+        }
+        window.focus(&self.composer.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// The menu's keyboard, which the select gives the web: arrows and Home and End move the lit
+    /// row, Enter and Space choose it, Escape closes. Returns whether the key was taken.
+    fn workspace_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let modifiers = keystroke.modifiers;
+        if !self.workspace_open
+            || modifiers.platform
+            || modifiers.control
+            || modifiers.alt
+            || modifiers.shift
+        {
+            return false;
+        }
+        let Some(project) = self.workspace_project() else {
+            return false;
+        };
+        let count = Draft::rows(self.workspace_draft(project).1.is_some()).len();
+        match keystroke.key.as_str() {
+            "down" => {
+                self.workspace_highlight = model_picker::step(self.workspace_highlight, count, 1);
+            }
+            "up" => {
+                self.workspace_highlight = model_picker::step(self.workspace_highlight, count, -1);
+            }
+            "home" => self.workspace_highlight = 0,
+            "end" => self.workspace_highlight = count.saturating_sub(1),
+            "enter" | "space" => {
+                let (draft, previous) = self.workspace_draft(project);
+                let rows = Draft::rows(previous.is_some());
+                let choice = rows.get(self.workspace_highlight).copied();
+                let _ = draft;
+                match choice {
+                    Some(choice) => self.pick_workspace(choice, window, cx),
+                    None => return false,
+                }
+            }
+            "escape" => self.set_workspace_open(false, window, cx),
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    /// `composer.workspace`: opens the menu when the control is on screen.
+    fn open_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_project().is_some() {
+            self.set_workspace_open(true, window, cx);
+        }
+    }
+
+    /// `composer.previousWorktree` (`usePreviousWorktree`): reuses the previous worktree without
+    /// opening the menu, when one is offered.
+    fn use_previous_worktree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let offered = self
+            .workspace_project()
+            .is_some_and(|project| self.workspace_draft(project).1.is_some());
+        if offered {
+            self.pick_workspace(Choice::Previous, window, cx);
+        }
     }
 
     /// The web's `BranchToolbarBranchSelector` in the composer strip.
@@ -4570,13 +4740,6 @@ fn strip_separator(cx: &App) -> gpui::Div {
         .w(px(1.))
         .h(px(14.))
         .bg(cx.theme().border)
-}
-
-fn workspace_icon(mode: EnvMode) -> Icons {
-    match mode {
-        EnvMode::Local => Icons::Folder,
-        EnvMode::Worktree => Icons::FolderGit2,
-    }
 }
 
 /// `runtimeModeConfig`'s icons.
@@ -6199,6 +6362,12 @@ impl Render for MainView {
                 cx.listener(|this, _: &DismissSidebar, _, cx| this.close_sidebar_overlay(cx)),
             )
             .on_action(cx.listener(|this, _: &OpenPermissions, _, cx| this.open_permissions(cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenWorkspace, window, cx| this.open_workspace(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &UsePreviousWorktree, window, cx| {
+                this.use_previous_worktree(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleDetails, _, cx| this.toggle_details(cx)))
             .on_action(cx.listener(|this, _: &OpenUsage, window, cx| {
                 this.usage.update(cx, |usage, cx| usage.open(window, cx));
@@ -6347,6 +6516,7 @@ mod tests {
             last_error: None,
             worktree_path: None,
             has_run: false,
+            updated_at_ms: None,
         }
     }
 

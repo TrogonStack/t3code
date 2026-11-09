@@ -451,6 +451,7 @@ impl ShellState {
                 .clone()
                 .filter(|path| !path.trim().is_empty()),
             has_run: thread.latest_run_id.is_some(),
+            updated_at_ms: timestamp_ms(&thread.updated_at),
         };
         let rows = SECTION_ORDER
             .into_iter()

@@ -22,9 +22,6 @@ pub enum EnvMode {
 }
 
 impl EnvMode {
-    /// The workspace menu's rows, in the web's order.
-    pub const ALL: [Self; 2] = [Self::Local, Self::Worktree];
-
     fn parse(text: &str) -> Option<Self> {
         match text {
             "local" => Some(Self::Local),

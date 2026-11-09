@@ -444,20 +444,38 @@ impl Session {
     }
 }
 
+// Mirrors the web's `Cause.squash(cause).message`: the first failure wins, then the first defect.
+// Contract errors compute `message` from a getter that is not on the wire, so fall back to the
+// fields those getters usually return.
 fn describe_cause(cause: &[CauseFrame]) -> String {
-    let parts: Vec<String> = cause
+    let squashed = cause
         .iter()
-        .map(|entry| match entry {
-            CauseFrame::Fail { error } => format!("failed: {error}"),
-            CauseFrame::Die { defect } => format!("defect: {defect}"),
-            CauseFrame::Interrupt => "interrupted".to_owned(),
+        .find_map(|entry| match entry {
+            CauseFrame::Fail { error } => Some(error),
+            _ => None,
         })
-        .collect();
-    if parts.is_empty() {
-        "request failed".to_owned()
-    } else {
-        parts.join("; ")
+        .or_else(|| {
+            cause.iter().find_map(|entry| match entry {
+                CauseFrame::Die { defect } => Some(defect),
+                _ => None,
+            })
+        });
+    match squashed {
+        Some(error) => error_message(error),
+        None if cause.is_empty() => "request failed".to_owned(),
+        None => "interrupted".to_owned(),
     }
+}
+
+fn error_message(error: &Value) -> String {
+    if let Some(text) = error.as_str() {
+        return text.to_owned();
+    }
+    ["message", "reason", "detail", "_tag"]
+        .iter()
+        .find_map(|key| error.get(key).and_then(Value::as_str))
+        .filter(|text| !text.is_empty())
+        .map_or_else(|| error.to_string(), str::to_owned)
 }
 
 #[cfg(test)]
@@ -548,7 +566,17 @@ mod tests {
             failed.events,
             vec![Event::Failed {
                 request_id: "2".into(),
-                message: r#"failed: {"_tag":"Nope"}; interrupted"#.into()
+                message: "Nope".into()
+            }]
+        );
+        let reasoned = session.react(
+            r#"{"_tag":"Exit","requestId":"3","exit":{"_tag":"Failure","cause":[{"_tag":"Die","defect":"boom"},{"_tag":"Fail","error":{"_tag":"DeviceEasAccountError","reason":"No Expo credential"}}]}}"#,
+        );
+        assert_eq!(
+            reasoned.events,
+            vec![Event::Failed {
+                request_id: "3".into(),
+                message: "No Expo credential".into()
             }]
         );
         assert!(matches!(

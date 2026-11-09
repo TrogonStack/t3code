@@ -8,13 +8,14 @@ use gpui::{App, Hsla, rgb, white};
 use gpui_component::ActiveTheme as _;
 
 #[derive(Clone, Copy)]
-pub(super) struct Tokens {
+pub(crate) struct Tokens {
     pub dark: bool,
     pub background: Hsla,
     pub foreground: Hsla,
     pub card: Hsla,
     pub popover: Hsla,
     pub primary: Hsla,
+    pub muted: Hsla,
     pub muted_foreground: Hsla,
     pub accent: Hsla,
     pub accent_foreground: Hsla,
@@ -38,7 +39,7 @@ fn mix(a: u32, b: u32, share_of_a: f32) -> Hsla {
 }
 
 impl Tokens {
-    pub(super) fn of(cx: &App) -> Self {
+    pub(crate) fn of(cx: &App) -> Self {
         if cx.theme().is_dark() {
             Self::dark()
         } else {
@@ -57,6 +58,7 @@ impl Tokens {
             card,
             popover: card,
             primary: rgb(0x346bf1).into(),
+            muted: white().opacity(0.03),
             muted_foreground: rgb(0xa3a3a3).into(),
             accent: white().opacity(0.04),
             accent_foreground: rgb(0xf5f5f5).into(),
@@ -80,6 +82,7 @@ impl Tokens {
             card: rgb(0xffffff).into(),
             popover: rgb(0xffffff).into(),
             primary: rgb(0x1b4ed8).into(),
+            muted: rgb(0xfafafa).into(),
             muted_foreground: rgb(0x71717a).into(),
             accent: rgb(0xf4f4f5).into(),
             accent_foreground: rgb(0x18181b).into(),

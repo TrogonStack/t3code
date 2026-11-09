@@ -1,13 +1,16 @@
 //! The web's Settings route (`_chat.settings.tsx`) as an `AppRouteModal`, with its section
 //! navigation (`SettingsSidebarNav.tsx`) and the General tab (`GeneralSettingsPanel`).
 
+mod appearance_panel;
+mod appearance_themes;
+mod appearance_typography;
 mod components;
 mod devices_panel;
 mod diffs_panel;
 mod labs_panel;
 mod scope_inheritance;
 mod scope_pickers;
-mod tokens;
+pub(crate) mod tokens;
 
 use super::*;
 use crate::assets::SNAP_SHOT;
@@ -15,6 +18,8 @@ use crate::settings::{
     self as model, DeviceSettings, FollowUp, GroupingMode, NAV_GROUPS, NotificationMode, QuitMode,
     SearchItem, Section, SendShortcut, SortOrder, TimeFormat,
 };
+use appearance_panel::AppearancePanel;
+use appearance_typography::AppearanceTypography;
 use components::{
     HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, disclosure,
     ghost_button, group, reset_button, row, section, select_menu, select_menu_checked, switch,
@@ -159,6 +164,8 @@ pub struct SettingsDialog {
     /// `AdvancedSettings`' local `open` state: not persisted, closed again on leaving the tab.
     advanced_open: bool,
     diffs: Entity<DiffsPanel>,
+    appearance: Entity<AppearancePanel>,
+    typography: Entity<AppearanceTypography>,
     labs: Entity<LabsPanel>,
     devices: Entity<DevicesPanel>,
     scope: Entity<ScopeBar>,
@@ -205,6 +212,8 @@ impl SettingsDialog {
             triggers: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             advanced_open: false,
             diffs: cx.new(DiffsPanel::new),
+            appearance: cx.new(AppearancePanel::new),
+            typography: cx.new(|cx| AppearanceTypography::new(window, cx)),
             labs,
             devices,
             scope,
@@ -223,6 +232,8 @@ impl SettingsDialog {
         self.previous_focus = window.focused(cx);
         self.settings = DeviceSettings::load();
         self.diffs.update(cx, |panel, cx| panel.reload(cx));
+        self.appearance.update(cx, |panel, cx| panel.reload(cx));
+        self.typography.update(cx, |panel, cx| panel.reload(cx));
         self.labs.update(cx, |panel, cx| panel.reload(cx));
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
@@ -327,6 +338,17 @@ impl SettingsDialog {
                 self.advanced_open = false;
             }
             self.advanced_open |= item.id == "skills-in-slash-menu";
+            if crate::settings_appearance::is_advanced(item.id) {
+                self.appearance
+                    .update(cx, |panel, cx| panel.open_advanced(cx));
+            }
+            if matches!(
+                item.id,
+                "separate-fonts" | "font-smoothing" | "prompt-font" | "terminal-font"
+            ) {
+                self.typography
+                    .update(cx, |panel, cx| panel.open_advanced(item.id, cx));
+            }
             self.section = item.section;
             self.clear_search(window, cx);
             window.focus(&self.focus, cx);
@@ -361,6 +383,18 @@ impl SettingsDialog {
         }
         if self
             .diffs
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .appearance
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .typography
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -407,6 +441,10 @@ impl SettingsDialog {
         self.confirm_restore = false;
         self.last_grouping = GroupingMode::Repository;
         self.diffs
+            .update(cx, |panel, cx| panel.restore_defaults(cx));
+        self.appearance
+            .update(cx, |panel, cx| panel.restore_defaults(cx));
+        self.typography
             .update(cx, |panel, cx| panel.restore_defaults(cx));
         self.update(|settings| *settings = DeviceSettings::default(), cx);
     }
@@ -1027,6 +1065,15 @@ impl SettingsDialog {
         } else if self.section == Section::Diffs {
             self.diffs.update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.diffs.clone().into_any_element()]
+        } else if self.section == Section::Appearance {
+            self.appearance
+                .update(cx, |panel, cx| panel.set_layout(wide, content_width, cx));
+            self.typography
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![
+                self.appearance.clone().into_any_element(),
+                self.typography.clone().into_any_element(),
+            ]
         } else if self.section == Section::Labs {
             self.labs.update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.labs.clone().into_any_element()]

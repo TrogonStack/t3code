@@ -22,9 +22,11 @@ mod rpc;
 mod send;
 mod server;
 mod settings;
+mod settings_appearance;
 mod settings_devices;
 mod settings_diffs;
 mod settings_labs;
+mod settings_typography;
 mod shell;
 mod slow_requests;
 mod status;
@@ -43,6 +45,7 @@ mod usage_data;
 mod usage_limits;
 mod usage_prices;
 mod wire;
+mod workspace;
 
 use assets::AppAssets;
 use config::{Attach, Config};
@@ -121,6 +124,9 @@ fn main() {
                 KeyBinding::new("cmd-u", gpui::NoAction, Some("Terminal")),
                 KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
                 KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),
+                // `composer.workspace` and `composer.previousWorktree`.
+                KeyBinding::new("shift-cmd-x", ui::OpenWorkspace, None),
+                KeyBinding::new("shift-cmd-l", ui::UsePreviousWorktree, None),
                 KeyBinding::new("shift-cmd-b", ui::ToggleDetails, None),
                 KeyBinding::new("cmd-j", ui::ToggleTerminal, None),
                 KeyBinding::new("alt-cmd-b", ui::ToggleRightPanel, None),

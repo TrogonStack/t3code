@@ -123,6 +123,8 @@ pub struct ThreadRow {
     pub worktree_path: Option<String>,
     /// Whether the thread has ever run, which un-quiets the details card's changes row.
     pub has_run: bool,
+    /// `updatedAt`, which the composer's Previous worktree row sorts by; `None` if unparseable.
+    pub updated_at_ms: Option<i64>,
 }
 
 /// The card's error row: `usage_limit` is a warning, any other class an error.

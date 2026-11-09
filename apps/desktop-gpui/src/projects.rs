@@ -689,6 +689,7 @@ mod tests {
             last_error: None,
             worktree_path: None,
             has_run: false,
+            updated_at_ms: None,
         }
     }
 

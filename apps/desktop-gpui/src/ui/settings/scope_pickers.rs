@@ -26,6 +26,16 @@ pub(super) struct Picker {
     pub query: String,
     pub on_open: OpenHandler,
     pub on_pick: ChoiceHandler,
+    pub style: PickerStyle,
+}
+
+/// How a picker differs from the scope pickers: the Typography font picker (`FontFamilyPicker`,
+/// `w-44` trigger, `w-72` popup aligned to the end) is a virtualized combobox whose rows are set in
+/// their own family, with a "default" tag on the `all` entry that hides while searching.
+#[derive(Default, Clone, Copy)]
+pub(super) struct PickerStyle {
+    pub trigger_width: Option<f32>,
+    pub fonts: bool,
 }
 
 /// `Button variant="outline" size="sm"` with `min-w-0 max-w-72`.
@@ -37,6 +47,7 @@ struct Trigger {
     handle: FocusHandle,
     open: bool,
     on_open: OpenHandler,
+    width: Option<f32>,
 }
 
 impl Selectable for Trigger {
@@ -77,6 +88,9 @@ impl RenderOnce for Trigger {
             .track_focus(&self.handle)
             .min_w_0()
             .max_w(px(288.))
+            .when_some(self.width, |trigger, width| {
+                trigger.w(px(width)).justify_between()
+            })
             .min_h(px(28.))
             .items_center()
             .gap(px(6.))
@@ -140,6 +154,14 @@ fn icon(kind: &ChoiceIcon, cx: &App) -> Option<AnyElement> {
     }
 }
 
+/// What a font row adds: its own family and the "default" tag.
+#[derive(Default, Clone)]
+struct RowStyle {
+    font: Option<SharedString>,
+    default_tag: bool,
+    height: Option<f32>,
+}
+
 /// `ScopeOptionLabel` plus the selected check (`CheckIcon size-3.5`).
 fn row(
     index: usize,
@@ -147,6 +169,7 @@ fn row(
     choice: &Choice,
     picked: bool,
     on_pick: &ChoiceHandler,
+    style: RowStyle,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = Tokens::of(cx);
@@ -159,7 +182,7 @@ fn row(
     let on_pick = on_pick.clone();
     h_flex()
         .id((id, index))
-        .min_h(px(28.))
+        .min_h(px(style.height.unwrap_or(28.)))
         .items_center()
         .gap_2()
         .px_2()
@@ -174,7 +197,14 @@ fn row(
             v_flex()
                 .min_w_0()
                 .flex_1()
-                .child(div().truncate().child(choice.label.clone()))
+                .child(
+                    div()
+                        .truncate()
+                        .when_some(style.font.clone(), |label, family| {
+                            label.font_family(family)
+                        })
+                        .child(choice.label.clone()),
+                )
                 .when(!choice.secondary.is_empty(), |text| {
                     text.child(
                         div()
@@ -185,6 +215,15 @@ fn row(
                     )
                 }),
         )
+        .when(style.default_tag, |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.))
+                    .text_color(muted.opacity(0.6))
+                    .child("default"),
+            )
+        })
         .when(choice.offline, |row| {
             row.child(
                 div()
@@ -228,6 +267,42 @@ fn shell(width: f32, cx: &App) -> gpui::Div {
         }])
 }
 
+/// The virtualized font rows: a `uniform_list` of 30px rows, at most ten tall.
+fn font_list(spec: &Picker, shown: &[&Choice], cx: &App) -> AnyElement {
+    const ROW: f32 = 30.;
+    let rows: Rc<Vec<Choice>> = Rc::new(shown.iter().map(|c| (*c).clone()).collect());
+    let height = (rows.len() as f32 * ROW).min(288.);
+    let (id, selected, on_pick) = (spec.id, spec.selected.clone(), spec.on_pick.clone());
+    let default = spec.all.as_ref().map(|choice| choice.value.clone());
+    let count = rows.len();
+    let _ = cx;
+    gpui::uniform_list(ElementId::from((id, 2usize)), count, move |range, _, cx| {
+        range
+            .map(|index| {
+                let choice = &rows[index];
+                let is_default = default.as_deref() == Some(choice.value.as_str());
+                let style = RowStyle {
+                    font: (!is_default).then(|| SharedString::from(choice.label.clone())),
+                    default_tag: is_default,
+                    height: Some(ROW),
+                };
+                row(
+                    index,
+                    id,
+                    choice,
+                    choice.value == selected,
+                    &on_pick,
+                    style,
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>()
+    })
+    .h(px(height))
+    .mt_1()
+    .into_any_element()
+}
+
 pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElement {
     let id = ElementId::from(spec.id);
     let handle = tab_stop(&id, window, cx);
@@ -238,12 +313,18 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
         handle,
         open: spec.open,
         on_open: spec.on_open.clone(),
+        width: spec.style.trigger_width,
     };
     let on_change = spec.on_open.clone();
-    let combobox = labs::searchable(spec.choices.len());
+    let fonts = spec.style.fonts;
+    let combobox = fonts || labs::searchable(spec.choices.len());
     let popover_id = ElementId::from((spec.id, 1usize));
     Popover::new(popover_id)
-        .anchor(Anchor::TopLeft)
+        .anchor(if fonts {
+            Anchor::TopRight
+        } else {
+            Anchor::TopLeft
+        })
         .offset(px(4.))
         .open(spec.open)
         .p_0()
@@ -254,7 +335,7 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
             let mut all: Vec<Choice> = spec.all.iter().cloned().collect();
             all.extend(spec.choices.iter().cloned());
             let theme = Tokens::of(cx);
-            let width = if combobox { 320. } else { 288. };
+            let width = if fonts || !combobox { 288. } else { 320. };
             let rows = |items: Vec<&Choice>| -> Vec<AnyElement> {
                 let mut out = Vec::new();
                 let has_all = spec.all.is_some();
@@ -266,6 +347,7 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
                             choice,
                             choice.value == spec.selected,
                             &spec.on_pick,
+                            RowStyle::default(),
                             cx,
                         )
                         .into_any_element(),
@@ -287,8 +369,41 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
             if !combobox {
                 return shell(width, cx).children(rows(all.iter().collect()));
             }
-            let shown = labs::filter(&all, &spec.query);
+            let shown = if fonts {
+                // The default entry is offered only before any search (`query.length === 0`).
+                let named: Vec<Choice> = spec.choices.clone();
+                if spec.query.trim().is_empty() {
+                    all.clone()
+                } else {
+                    labs::filter(&named, &spec.query)
+                        .into_iter()
+                        .cloned()
+                        .collect()
+                }
+            } else {
+                labs::filter(&all, &spec.query)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            };
+            let shown: Vec<&Choice> = shown.iter().collect();
             let empty = shown.is_empty();
+            let list = if fonts {
+                font_list(&spec, &shown, cx)
+            } else {
+                v_flex()
+                    .id((spec.id, 2usize))
+                    .max_h(px(288.))
+                    .overflow_y_scroll()
+                    .pt_1()
+                    .children(rows(shown))
+                    .into_any_element()
+            };
+            let empty_text = if fonts {
+                "No fonts found."
+            } else {
+                "No matches found."
+            };
             shell(width, cx)
                 .child(
                     div()
@@ -303,24 +418,17 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
                                 .prefix(Icon::new(IconName::Search).size(px(14.))),
                         ),
                 )
-                .child(
-                    v_flex()
-                        .id((spec.id, 2usize))
-                        .max_h(px(288.))
-                        .overflow_y_scroll()
-                        .pt_1()
-                        .children(rows(shown))
-                        .when(empty, |list| {
-                            list.child(
-                                div()
-                                    .py_2()
-                                    .text_center()
-                                    .text_sm()
-                                    .text_color(theme.muted_foreground)
-                                    .child("No matches found."),
-                            )
-                        }),
-                )
+                .child(list)
+                .when(empty, |shell| {
+                    shell.child(
+                        div()
+                            .py_2()
+                            .text_center()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(empty_text),
+                    )
+                })
         })
         .into_any_element()
 }
@@ -429,6 +537,7 @@ impl ScopeBar {
             .as_ref()
             .and_then(|key| self.data.projects.iter().find(|p| &p.key == key));
         let spec = Picker {
+            style: PickerStyle::default(),
             id: "settings-scope-project",
             label: labs::project_label(&self.search, &self.data),
             icon: selected.map(|p| ChoiceIcon::Project {
@@ -474,6 +583,7 @@ impl ScopeBar {
             .as_ref()
             .and_then(|id| self.data.environments.iter().find(|e| &e.id == id));
         let spec = Picker {
+            style: PickerStyle::default(),
             id: "settings-scope-environment",
             label: labs::environment_trigger_label(&self.search, &self.data),
             icon: selected.map(|e| ChoiceIcon::Machine(e.machine)),
