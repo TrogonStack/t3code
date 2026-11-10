@@ -4648,8 +4648,11 @@ it.effect.each(["commit", "credential", "expiry", "refresh"] as const)(
                   nextCursor: null,
                 };
               }),
-            getDiffFileContents: () =>
+            getDiffFileContents: (input) =>
               Effect.sync(() => {
+                if (input.newPath.endsWith(".gitattributes")) {
+                  return { oldContents: "", newContents: "" };
+                }
                 contentReads += 1;
                 return { oldContents: "old", newContents: "new" };
               }),
@@ -4734,6 +4737,9 @@ it.effect(
               }),
             getDiffFileContents: (input) =>
               Effect.sync(() => {
+                if (input.newPath.endsWith(".gitattributes")) {
+                  return { oldContents: "", newContents: "" };
+                }
                 read.push(`${input.oldPath}->${input.newPath}`);
                 return { oldContents: "old", newContents: "new" };
               }),
@@ -4803,8 +4809,11 @@ it.effect.each(["commit", "credential"] as const)(
                 truncated: false,
                 nextCursor: null,
               })),
-            getDiffFileContents: () =>
+            getDiffFileContents: (input) =>
               Effect.sync(() => {
+                if (input.newPath.endsWith(".gitattributes")) {
+                  return { oldContents: "", newContents: "" };
+                }
                 contentReads += 1;
                 return { oldContents: "old", newContents: "new" };
               }),
@@ -4908,4 +4917,56 @@ it.effect.each(["expiry", "commit expiry", "cache hit", "commit cache hit", "ref
       assert.strictEqual(error.reason, "not-found");
       assert.strictEqual(diffReads, 2);
     }),
+);
+
+it.effect("marks changed files that .gitattributes at the diff revision calls generated", () =>
+  Effect.gen(function* () {
+    const reads: Array<string> = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getDiff: () =>
+            Effect.succeed({
+              patch: [
+                "diff --git a/pkg/api.gen.ts b/pkg/api.gen.ts",
+                "--- a/pkg/api.gen.ts",
+                "+++ b/pkg/api.gen.ts",
+                "@@ -1 +1 @@",
+                "-a",
+                "+b",
+                "diff --git a/pkg/keep.gen.ts b/pkg/keep.gen.ts",
+                "--- a/pkg/keep.gen.ts",
+                "+++ b/pkg/keep.gen.ts",
+                "@@ -1 +1 @@",
+                "-a",
+                "+b",
+                "",
+              ].join("\n"),
+              truncated: false,
+              nextCursor: null,
+            }),
+          getDiffFileContents: (input) =>
+            Effect.suspend(() => {
+              reads.push(input.newPath);
+              return input.newPath === ".gitattributes"
+                ? Effect.succeed({ oldContents: "", newContents: "*.gen.ts linguist-generated\n" })
+                : input.newPath === "pkg/.gitattributes"
+                  ? Effect.succeed({
+                      oldContents: "",
+                      newContents: "keep.gen.ts -linguist-generated\n",
+                    })
+                  : Effect.die("missing");
+            }),
+        }),
+      ],
+    });
+    const result = yield* service.diff({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+    });
+    assert.deepStrictEqual(result.generatedPaths, ["pkg/api.gen.ts"]);
+    assert.deepStrictEqual([...reads].toSorted(), [".gitattributes", "pkg/.gitattributes"]);
+  }),
 );
