@@ -1,5 +1,6 @@
 use crate::details::VcsStatus;
 use crate::diff;
+use crate::keybindings::Keybindings;
 use crate::projects::{EnvironmentProjects, MachineKind, ProjectEntry};
 use crate::providers::Catalog;
 use crate::slow_requests::SlowRequest;
@@ -31,6 +32,8 @@ pub enum Status {
     Environment(EnvironmentProjects),
     /// The primary connection's provider instances, for the composer's model picker.
     Providers(Box<Catalog>),
+    /// The primary connection's resolved keybindings, and what the server found wrong in them.
+    Keybindings(Box<Keybindings>),
     /// The selected thread's transcript, or why it could not be loaded.
     Thread {
         id: String,
@@ -248,6 +251,9 @@ impl fmt::Display for Status {
             Self::ProjectAdded(id) => write!(f, "ProjectAdded {id}"),
             Self::ProjectFailed(message) => write!(f, "ProjectFailed {message}"),
             Self::SlowRequests { requests, .. } => write!(f, "SlowRequests {}", requests.len()),
+            Self::Keybindings(keybindings) => {
+                write!(f, "Keybindings {}", keybindings.rules.len())
+            }
         }
     }
 }

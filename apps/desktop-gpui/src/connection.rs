@@ -3,6 +3,7 @@
 use crate::auth::{self, AuthError, Credential};
 use crate::details::VcsStatus;
 use crate::diff;
+use crate::keybindings::Keybindings;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
@@ -17,7 +18,7 @@ use crate::rpc::{
 };
 use crate::rpc::{
     ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsMutateJson, ProjectsReadFile,
-    ProjectsWriteFile, SubscribeProjectClones,
+    ProjectsWriteFile, SubscribeProjectClones, SubscribeServerConfig,
 };
 use crate::rpc::{
     PullRequestsActivity, PullRequestsChangeBreakdown, PullRequestsChecks, PullRequestsComment,
@@ -560,6 +561,17 @@ async fn serve(
             None
         }
     };
+    let mut config_stream = match session.request::<SubscribeServerConfig>(&serde_json::json!({})) {
+        Ok((id, frame)) => match sink.send(Message::text(frame)).await {
+            Ok(()) => Some(id),
+            Err(error) => return error.to_string(),
+        },
+        Err(error) => {
+            eprintln!("[rpc] could not subscribe to the server config: {error}");
+            None
+        }
+    };
+    let mut keybindings_path: Option<String> = None;
     // Whatever was clicked while disconnected is stale by now, except which thread is open.
     while let Ok(action) = actions.try_recv() {
         match action {
@@ -804,6 +816,33 @@ async fn serve(
                         let Some(event) = terminals.route(event, status) else {
                             continue;
                         };
+                        if let Some(id) = &config_stream {
+                            match &event {
+                                Event::Item { request_id, value } if request_id == id => {
+                                    if let Some(found) = Keybindings::from_event(
+                                        value,
+                                        keybindings_path.as_deref(),
+                                    ) {
+                                        keybindings_path = found.path.clone();
+                                        publish(status, Status::Keybindings(Box::new(found)));
+                                    }
+                                    continue;
+                                }
+                                Event::Failed {
+                                    request_id,
+                                    message,
+                                } if request_id == id => {
+                                    eprintln!("[rpc] the server config stream failed: {message}");
+                                    config_stream = None;
+                                    continue;
+                                }
+                                Event::Done { request_id, .. } if request_id == id => {
+                                    config_stream = None;
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         if config_request.as_ref().is_some_and(|id| owns(&event, id)) {
                             config_request = None;
                             publish_catalog(event, status);

@@ -12,6 +12,7 @@ mod diff;
 mod environments;
 mod git_actions;
 mod history;
+mod keybindings;
 mod minimap;
 mod model_picker;
 mod pairing;
@@ -120,36 +121,16 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
-            // The web's default `sidebar.toggle` and `navigation.*` bindings.
             cx.bind_keys(ui::usage_bindings());
             cx.bind_keys(ui::add_to_machine_bindings());
             cx.bind_keys(ui::settings_bindings());
             cx.bind_keys([
-                KeyBinding::new("cmd-b", ui::ToggleSidebar, None),
-                KeyBinding::new("cmd-u", ui::OpenUsage, None),
                 // `CmdOrCtrl+,` of the desktop application menu (DesktopApplicationMenu.ts:174).
                 KeyBinding::new("cmd-,", ui::OpenSettings, None),
-                KeyBinding::new("cmd-u", gpui::NoAction, Some("Terminal")),
                 KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
-                KeyBinding::new("shift-cmd-a", ui::OpenPermissions, None),
-                // `composer.workspace` and `composer.previousWorktree`.
-                KeyBinding::new("shift-cmd-x", ui::OpenWorkspace, None),
-                KeyBinding::new("shift-cmd-l", ui::UsePreviousWorktree, None),
-                KeyBinding::new("shift-cmd-b", ui::ToggleDetails, None),
-                KeyBinding::new("cmd-j", ui::ToggleTerminal, None),
-                KeyBinding::new("alt-cmd-b", ui::ToggleRightPanel, None),
-                KeyBinding::new("cmd-o", ui::OpenFavoriteEditor, None),
-                // `chat.new` and `chat.newWithoutProject`; `terminal.new` wins while a terminal has focus.
-                KeyBinding::new("cmd-n", ui::NewThread, None),
-                KeyBinding::new("alt-cmd-n", ui::NewScratchThread, None),
-                KeyBinding::new("cmd-[", ui::GoBack, None),
-                KeyBinding::new("cmd-]", ui::GoForward, None),
-                // The web's `terminal.*` defaults, which apply while the terminal has focus.
-                KeyBinding::new("cmd-d", ui::SplitTerminal, Some("Terminal")),
-                KeyBinding::new("shift-cmd-d", ui::SplitTerminalVertical, Some("Terminal")),
-                KeyBinding::new("cmd-n", ui::NewTerminal, Some("Terminal")),
-                KeyBinding::new("cmd-w", ui::CloseTerminal, Some("Terminal")),
             ]);
+            // The web's defaults until the server sends its keybindings.
+            ui::apply_default_keybindings(cx);
             if let Some(supervisor) = supervisor {
                 // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
                 cx.on_app_quit(move |_| {

@@ -58,6 +58,7 @@ const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod add_to_machine;
 mod composer_menu;
+mod keymap;
 mod model_popover;
 mod pull_request_panel;
 mod pull_requests_page;
@@ -68,6 +69,7 @@ mod usage_dialog;
 mod workspace_menu;
 
 pub use add_to_machine::bindings as add_to_machine_bindings;
+pub use keymap::apply_defaults as apply_default_keybindings;
 pub use settings::bindings as settings_bindings;
 pub use usage_dialog::bindings as usage_bindings;
 
@@ -663,6 +665,10 @@ impl MainView {
             }
             self.sync_labs(cx);
             return cx.notify();
+        }
+        if let Status::Keybindings(keybindings) = status {
+            keymap::apply(&keybindings, cx);
+            return;
         }
         if let Status::Providers(catalog) = status {
             self.usage

@@ -403,6 +403,15 @@ impl Method for SubscribeProjectClones {
     type Payload = Value;
     type Success = Value;
 }
+/// `subscribeServerConfig`: a snapshot of the server config, then its changes.
+pub struct SubscribeServerConfig;
+
+impl Method for SubscribeServerConfig {
+    const TAG: &'static str = "subscribeServerConfig";
+    const STREAMING: bool = true;
+    type Payload = Value;
+    type Success = Value;
+}
 /// `git.runStackedAction`, a stream of progress events ending with the action's result.
 pub struct GitRunStackedAction;
 

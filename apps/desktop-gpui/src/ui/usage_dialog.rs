@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Call tokens, above the attachment range.
 pub const TOKEN_BASE: u64 = 1 << 43;
 /// `usagePageOpen` in the web's keybinding `when` clauses.
-const CONTEXT: &str = "UsagePage";
+pub(super) const CONTEXT: &str = "UsagePage";
 /// A summary older than this is fetched again when the page opens.
 const STALE_MS: i64 = 60_000;
 /// `figureClass`, `opacity-40`.
@@ -44,19 +44,10 @@ actions!(
     ]
 );
 
-/// `usage.*` entries of `DEFAULT_KEYBINDINGS` (keybindings.ts:232-238), plus Escape for the modal.
+/// Escape for the modal; the `usage.*` keys come from the server's keybindings.
 pub fn bindings() -> Vec<KeyBinding> {
     let context = Some(CONTEXT);
-    vec![
-        KeyBinding::new("escape", CloseUsage, context),
-        KeyBinding::new("c", ShowCost, context),
-        KeyBinding::new("t", ShowTokens, context),
-        KeyBinding::new("l", ShowLimits, context),
-        KeyBinding::new("shift-cmd-1", PastDay, context),
-        KeyBinding::new("shift-cmd-2", PastWeek, context),
-        KeyBinding::new("shift-cmd-3", PastMonth, context),
-        KeyBinding::new("shift-cmd-4", PastQuarter, context),
-    ]
+    vec![KeyBinding::new("escape", CloseUsage, context)]
 }
 
 /// What the connection says about reading usage (`resolveUsageAccess`).
