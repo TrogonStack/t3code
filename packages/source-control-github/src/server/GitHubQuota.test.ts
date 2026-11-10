@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Result from "effect/Result";
 
 import * as GitHubQuota from "./GitHubQuota.ts";
 import { CredentialScope } from "@t3tools/source-control-core/server/SourceControlRateLimit";
@@ -13,17 +14,22 @@ const headers = (remaining: number, resource = "graphql", reset = RESET) => ({
 });
 
 describe("GitHubQuota", () => {
-  it.effect("refuses a background request below the reserve, per quota and account", () =>
-    Effect.gen(function* () {
-      const quota = yield* GitHubQuota.GitHubQuota;
-      yield* quota.observe("github.com", headers(499));
-      const refused = yield* Effect.flip(quota.admit("github.com", "graphql"));
-      assert.strictEqual(refused.retryAt, RESET);
-      yield* quota.admit("github.com", "core");
-      yield* quota.admit("ghe.example", "graphql");
-      yield* quota.admit("github.com", "graphql").pipe(Effect.provideService(CredentialScope, "b"));
-      yield* quota.admit("github.com", "graphql", { allowReserve: true });
-    }).pipe(Effect.provide(GitHubQuota.layer)),
+  it.effect.each([{ remaining: 499 }, { remaining: 500 }])(
+    "refuses a background request at or below the reserve ($remaining), per quota and account",
+    ({ remaining }) =>
+      Effect.gen(function* () {
+        const quota = yield* GitHubQuota.GitHubQuota;
+        yield* quota.observe("github.com", headers(remaining));
+        const admission = yield* Effect.result(quota.admit("github.com", "graphql"));
+        assert.isTrue(Result.isFailure(admission));
+        if (Result.isFailure(admission)) assert.strictEqual(admission.failure.retryAt, RESET);
+        yield* quota.admit("github.com", "core");
+        yield* quota.admit("ghe.example", "graphql");
+        yield* quota
+          .admit("github.com", "graphql")
+          .pipe(Effect.provideService(CredentialScope, "b"));
+        yield* quota.admit("github.com", "graphql", { allowReserve: true });
+      }).pipe(Effect.provide(GitHubQuota.layer)),
   );
 
   it.effect("takes the latest balance in a window, and ignores an older window", () =>
