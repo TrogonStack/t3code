@@ -955,6 +955,9 @@ function PullRequestCodeTab({
     onGutterUtilityClick: beginComment,
     onLineSelectionEnd: beginComment,
     onPostRender: codeViewReveal.flush,
+    // Find may repeat requests before render; only unfold, never toggle.
+    onRevealSearchMatch: (item: CodeViewItem<ReviewAnnotationGroup>) =>
+      setFoldChoices((current) => setFileDiffFold(current, item.id, false)),
   };
 
   const runThreadCommand = async (
@@ -1579,10 +1582,6 @@ function PullRequestCodeTab({
               renderHeaderPrefix={renderHeaderPrefix}
               renderHeaderMetadata={renderHeaderMetadata}
               renderAnnotation={renderAnnotation}
-              // Find may repeat requests before render; only unfold, never toggle.
-              onRevealSearchMatch={(item) =>
-                setFoldChoices((current) => setFileDiffFold(current, item.id, false))
-              }
               unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
             />
           </FileViewedToggleContext>

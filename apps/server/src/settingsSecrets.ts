@@ -8,6 +8,7 @@ import {
   type ServerSettings,
   type SettingsSecretValue,
   SimlockDeviceHostConfig,
+  TextGeneratorConfig,
   UsageLimitSourceConfig,
   isSecretReference,
   secretSettingsFields,
@@ -46,6 +47,7 @@ const providerSecretFields = new Map([
   ),
 ]);
 const usageLimitSecretFields = secretSettingsFields(UsageLimitSourceConfig);
+const textGeneratorSecretFields = secretSettingsFields(TextGeneratorConfig);
 const voiceSecretFields = secretSettingsFields(CloudSpeechCredentials);
 const SECRET_PROVIDER_CREDENTIAL_FIELDS = new Map<string, ReadonlyArray<string>>([
   ["openbao", ["token"]],
@@ -237,6 +239,18 @@ function mapSecretFieldGroups(
       ];
     }),
   ) as ServerSettings["secretProviders"];
+  const textGenerators = Object.fromEntries(
+    Object.entries(settings.textGenerators).map(([id, generator]) => [
+      id,
+      mapFields(
+        generator,
+        textGeneratorSecretFields,
+        (field, serverHost) =>
+          `text-generator-${encode(id)}-${encode(field)}` +
+          (serverHost === null ? "" : `-${encode(serverHost)}`),
+      ),
+    ]),
+  ) as ServerSettings["textGenerators"];
 
   const easDeviceHosts = settings.easDeviceHosts.map(
     (host) =>
@@ -272,6 +286,7 @@ function mapSecretFieldGroups(
     sourceControlHosts,
     usageLimitSources,
     secretProviders,
+    textGenerators,
     easDeviceHosts,
     simlockDeviceHosts,
   };
