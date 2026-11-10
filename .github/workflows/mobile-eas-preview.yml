@@ -269,7 +269,8 @@ jobs:
   android-build:
     name: Android preview client
     needs: android
-    if: needs.android.outputs.build == 'true'
+    # disabled: Android and iOS builds are not used by this fork
+    if: false
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 60
     concurrency:
@@ -346,13 +347,6 @@ jobs:
             echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
           } >> "$GITHUB_ENV"
-
-      - name: Mount build cache
-        if: steps.record.outputs.built != 'true'
-        uses: useblacksmith/stickydisk@v1
-        with:
-          key: ${{ github.repository }}-android-preview-build
-          path: ~/.cache/t3-android-preview
 
       - name: Configure Gradle and ccache
         if: steps.record.outputs.built != 'true'
