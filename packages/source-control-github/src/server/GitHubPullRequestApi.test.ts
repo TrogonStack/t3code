@@ -1290,160 +1290,387 @@ layer("GitHubPullRequestApi.layer", (it) => {
     }),
   );
 
-  {
-    const pull = (fields: Record<string, unknown> = {}) =>
-      encodeJson({
-        state: "open",
-        merged_at: null,
-        mergeable: true,
-        mergeable_state: "blocked",
-        updated_at: "2026-10-01T00:00:00Z",
-        comments: 1,
-        review_comments: 2,
-        head: { sha: "abc123" },
-        ...fields,
-      });
-    const runs = encodeJson({
-      check_runs: [
-        { status: "completed", conclusion: "success" },
-        { status: "in_progress", conclusion: null },
-      ],
-    });
-    const statuses = encodeJson({ statuses: [{ state: "success" }] });
-    const read = Effect.flatMap(GitHubPullRequestApi.GitHubPullRequestApi, (cli) =>
-      cli.getPullRequestWatchFingerprint({ ...pullRequestInput, repository: "acme/watch" }),
-    );
-    const answerFrom = (
-      bodies: Readonly<Record<"pulls" | "check-runs" | "status", string>>,
-      revalidated: boolean,
-    ) =>
+  it.effect("batches a large watch sweep without spending the REST budget", () =>
+    Effect.gen(function* () {
       mockedExecute.mockImplementation((call) => {
-        assert.strictEqual(call.kind, "rest");
-        const kind = (["check-runs", "status"] as const).find((name) =>
-          call.kind === "rest" ? call.path.includes(`/${name}?`) : false,
+        if (call.kind === "rest") {
+          return Effect.succeed(
+            output(
+              encodeJson(
+                call.path.includes("/check-runs?")
+                  ? { check_runs: [{ status: "in_progress", conclusion: null }] }
+                  : call.path.includes("/status?")
+                    ? { statuses: [] }
+                    : {
+                        state: "open",
+                        merged_at: null,
+                        mergeable: true,
+                        mergeable_state: "blocked",
+                        updated_at: "2026-10-01T00:00:00Z",
+                        comments: 0,
+                        review_comments: 0,
+                        head: { sha: "abc123" },
+                      },
+              ),
+              false,
+              false,
+              { etag: 'W/"watch"' },
+            ),
+          );
+        }
+        const data = Object.fromEntries(
+          Object.keys(call.variables ?? {})
+            .filter((key) => /^_\d+_number$/.test(key))
+            .map((key) => [
+              key.replace(/number$/, "repository"),
+              {
+                pullRequest: {
+                  state: "OPEN",
+                  mergeable: "MERGEABLE",
+                  mergeStateStatus: "BLOCKED",
+                  updatedAt: "2026-10-01T00:00:00Z",
+                  totalCommentsCount: 0,
+                  headRefOid: "abc123",
+                  comments: { totalCount: 0, nodes: [] },
+                  reviews: { totalCount: 0, nodes: [] },
+                  reviewThreads: { totalCount: 0 },
+                  commits: { nodes: [] },
+                },
+              },
+            ]),
         );
+        return Effect.succeed(output(encodeJson({ data })));
+      });
+      const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+      const sweep = yield* Effect.forEach(
+        Array.from({ length: 158 }, (_, index) => index + 1),
+        (number) =>
+          api.getPullRequestWatchFingerprint({
+            ...pullRequestInput,
+            repository: "acme/watch-volume",
+            number,
+          }),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      const fingerprints = yield* Fiber.join(sweep);
+      expect(fingerprints).toHaveLength(158);
+      expect(fingerprints.every((fingerprint) => fingerprint?.status.startsWith("OPEN "))).toBe(
+        true,
+      );
+      const calls = mockedExecute.mock.calls.map(([call]) => call);
+      expect(calls.filter((call) => call.kind === "rest")).toHaveLength(0);
+      const batches = calls.filter((call) => call.kind === "graphql");
+      expect(batches).toHaveLength(7);
+      expect(
+        batches.map(
+          (call) =>
+            Object.keys(call.variables ?? {}).filter((key) => /^_\d+_number$/.test(key)).length,
+        ),
+      ).toEqual([25, 25, 25, 25, 25, 25, 8]);
+    }),
+  );
+
+  {
+    const watched = (fields: Record<string, unknown> = {}) => ({
+      state: "OPEN",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      updatedAt: "2026-10-01T00:00:00Z",
+      totalCommentsCount: 3,
+      headRefOid: "abc123",
+      comments: { totalCount: 1, nodes: [] },
+      reviews: { totalCount: 2, nodes: [] },
+      reviewThreads: { totalCount: 0 },
+      commits: {
+        nodes: [
+          {
+            commit: {
+              statusCheckRollup: {
+                contexts: {
+                  checkRunCountsByState: [
+                    { state: "SUCCESS", count: 1 },
+                    { state: "IN_PROGRESS", count: 1 },
+                  ],
+                  statusContextCountsByState: [{ state: "SUCCESS", count: 1 }],
+                },
+              },
+            },
+          },
+        ],
+      },
+      ...fields,
+    });
+    const answerFrom = (pullRequest: Record<string, unknown> | null, remaining?: number) =>
+      mockedExecute.mockImplementation((call) => {
+        assert.strictEqual(call.kind, "graphql");
         return Effect.succeed(
-          revalidated && call.kind === "rest" && call.ifNoneMatch !== undefined
-            ? output("", false, false, {}, 304)
-            : output(bodies[kind ?? "pulls"], false, false, { etag: `W/"${kind ?? "pulls"}"` }),
+          output(
+            encodeJson({
+              data: { _0_repository: { pullRequest } },
+            }),
+            false,
+            false,
+            remaining === undefined ? {} : graphqlQuota(remaining),
+          ),
         );
       });
+    const read = Effect.flatMap(GitHubPullRequestApi.GitHubPullRequestApi, (api) =>
+      api.getPullRequestWatchFingerprint({ ...pullRequestInput, repository: "acme/watch" }),
+    );
+    const poll = Effect.gen(function* () {
+      const pending = yield* read.pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 millis");
+      return yield* Fiber.join(pending);
+    });
 
-    it.effect("costs no quota while nothing moved, and reads again when it did", () =>
+    it.effect("preserves a watch fingerprint until its status or remarks change", () =>
       Effect.gen(function* () {
-        answerFrom({ pulls: pull(), "check-runs": runs, status: statuses }, true);
-        const first = yield* read;
-        const second = yield* read;
+        answerFrom(watched());
+        const first = yield* poll;
+        const second = yield* poll;
         assert.deepStrictEqual(second, first);
         assert.deepStrictEqual(first, {
-          status: "OPEN MERGEABLE blocked abc123 in_progress:1,success:1 success:1",
-          remarks: "1 2 2026-10-01T00:00:00Z",
-          conditional: true,
+          status: "OPEN MERGEABLE BLOCKED abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1",
+          remarks: "2026-10-01T00:00:00Z 3 1  2  0",
+          includesCheckState: true,
+          includesRemarkState: true,
         });
-        expect(mockedExecute).toHaveBeenCalledTimes(6);
-        for (const index of [0, 1, 2]) expect(callAt(index)).not.toHaveProperty("ifNoneMatch");
-        for (const index of [3, 4, 5]) {
-          expect(callAt(index)).toMatchObject({ ifNoneMatch: expect.stringContaining("W/") });
-        }
-
+        expect(mockedExecute).toHaveBeenCalledTimes(2);
         answerFrom(
-          {
-            pulls: pull({ comments: 2, updated_at: "2026-10-01T00:05:00Z" }),
-            "check-runs": runs,
-            status: statuses,
-          },
-          false,
+          watched({
+            comments: {
+              totalCount: 1,
+              nodes: [{ lastEditedAt: "2026-10-01T00:05:00Z" }],
+            },
+          }),
         );
-        const edited = yield* read;
-        assert.strictEqual(edited?.remarks, "2 2 2026-10-01T00:05:00Z");
+        const edited = yield* poll;
+        assert.strictEqual(edited?.remarks, "2026-10-01T00:00:00Z 3 1 2026-10-01T00:05:00Z 2  0");
         assert.strictEqual(edited?.status, first?.status);
       }),
     );
 
     it.effect("moves the status when checks change under an unchanged pull request", () =>
       Effect.gen(function* () {
-        answerFrom({ pulls: pull(), "check-runs": runs, status: statuses }, false);
-        const before = yield* read;
+        answerFrom(watched());
+        const before = yield* poll;
         answerFrom(
-          {
-            pulls: pull(),
-            "check-runs": encodeJson({
-              check_runs: [{ status: "completed", conclusion: "failure" }],
-            }),
-            status: statuses,
-          },
-          false,
+          watched({
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      contexts: {
+                        checkRunCountsByState: [{ state: "FAILURE", count: 1 }],
+                        statusContextCountsByState: [{ state: "SUCCESS", count: 1 }],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
         );
-        const after = yield* read;
+        const after = yield* poll;
         assert.notStrictEqual(after?.status, before?.status);
         assert.strictEqual(after?.remarks, before?.remarks);
       }),
     );
 
-    it.effect("falls back to GraphQL when REST cannot answer", () =>
-      Effect.gen(function* () {
-        mockedExecute.mockImplementation((call) =>
-          call.kind === "rest"
-            ? Effect.fail(
-                new GitHubRequestPolicy.GitHubApiNotFoundError({
-                  host: "github.com",
-                  operation: "getPullRequestWatchFingerprint",
-                }),
-              )
-            : Effect.succeed(
-                output(
-                  encodeJson({
-                    data: {
-                      _0_repository: {
-                        pullRequest: {
-                          state: "OPEN",
-                          mergeable: "MERGEABLE",
-                          headRefOid: "abc123",
-                          comments: { totalCount: 0, nodes: [] },
-                          reviews: { totalCount: 0, nodes: [] },
-                          reviewThreads: { totalCount: 0 },
-                          commits: { nodes: [] },
-                        },
-                      },
-                    },
-                  }),
-                ),
-              ),
-        );
-        const fingerprint = yield* read.pipe(Effect.forkChild);
-        yield* TestClock.adjust("10 millis");
-        const result = yield* Fiber.join(fingerprint);
-        assert.isDefined(result);
-        assert.notProperty(result, "conditional");
-        expect(restCallsTo("pulls/7")).toHaveLength(1);
+    it.effect(
+      "moves the status when merge-state status changes under an unchanged pull request",
+      () =>
+        Effect.gen(function* () {
+          answerFrom(watched({ mergeStateStatus: "BLOCKED" }));
+          const before = yield* poll;
+          answerFrom(watched({ mergeStateStatus: "CLEAN" }));
+          const after = yield* poll;
+          assert.notStrictEqual(after?.status, before?.status);
+          assert.strictEqual(after?.remarks, before?.remarks);
+        }),
+    );
 
-        // The host is remembered as unsupported, so the next read goes straight to GraphQL.
-        const again = yield* read.pipe(Effect.forkChild);
-        yield* TestClock.adjust("10 millis");
-        yield* Fiber.join(again);
-        expect(restCallsTo("pulls/7")).toHaveLength(1);
+    it.effect("moves remarks when only the pull request update time changes", () =>
+      Effect.gen(function* () {
+        answerFrom(watched({ updatedAt: "2026-10-01T00:00:00Z" }));
+        const before = yield* poll;
+        answerFrom(watched({ updatedAt: "2026-10-01T00:05:00Z" }));
+        const after = yield* poll;
+        assert.notStrictEqual(after?.remarks, before?.remarks);
+        assert.strictEqual(after?.status, before?.status);
       }),
     );
 
-    it.effect("falls back to GraphQL when the checks span more than one page", () =>
+    it.effect(
+      "moves remarks for review replies and deletions without another signal changing",
+      () =>
+        Effect.gen(function* () {
+          answerFrom(watched({ totalCommentsCount: 3 }));
+          const before = yield* poll;
+          answerFrom(watched({ totalCommentsCount: 4 }));
+          const replied = yield* poll;
+          assert.notStrictEqual(replied?.remarks, before?.remarks);
+          assert.strictEqual(replied?.status, before?.status);
+          answerFrom(watched({ totalCommentsCount: 3 }));
+          const deleted = yield* poll;
+          assert.strictEqual(deleted?.remarks, before?.remarks);
+        }),
+    );
+
+    it.effect("keeps check state when the aggregate comment count is unavailable", () =>
       Effect.gen(function* () {
-        mockedExecute.mockImplementation((call) =>
-          call.kind === "rest"
-            ? Effect.succeed(
-                call.path.includes("/check-runs?")
-                  ? output(runs, false, false, {
-                      etag: 'W/"runs"',
-                      link: '<https://api.github.com/x?page=2>; rel="next"',
-                    })
-                  : call.path.includes("/status?")
-                    ? output(statuses, false, false, { etag: 'W/"status"' })
-                    : output(pull(), false, false, { etag: 'W/"pull"' }),
-              )
-            : Effect.succeed(output('{"data":{"_0_repository":{"pullRequest":null}}}')),
+        answerFrom(watched({ totalCommentsCount: null }));
+        const fingerprint = yield* poll;
+        assert.isNotNull(fingerprint);
+        assert.isTrue(fingerprint?.includesCheckState);
+        assert.isFalse(fingerprint?.includesRemarkState);
+      }),
+    );
+
+    it.effect("keeps a missing pull request isolated from the rest of its watch batch", () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValue(
+          Effect.succeed(
+            output(
+              encodeJson({
+                data: {
+                  _0_repository: { pullRequest: null },
+                  _1_repository: { pullRequest: watched() },
+                },
+                errors: [
+                  {
+                    type: "NOT_FOUND",
+                    path: ["_0_repository", "pullRequest"],
+                    message: "Not found",
+                  },
+                ],
+              }),
+            ),
+          ),
         );
-        const fingerprint = yield* read.pipe(Effect.forkChild);
+        const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const pending = yield* Effect.forEach(
+          [7, 8],
+          (number) => api.getPullRequestWatchFingerprint({ ...pullRequestInput, number }),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild);
         yield* TestClock.adjust("10 millis");
-        assert.isNull(yield* Fiber.join(fingerprint));
+        const [missing, found] = yield* Fiber.join(pending);
+        assert.isNull(missing);
+        assert.isDefined(found);
+        assert.isTrue(found?.includesCheckState);
+        expect(mockedExecute).toHaveBeenCalledOnce();
+      }),
+    );
+
+    it.effect("fingerprints check counts beyond a REST page without listing each check", () =>
+      Effect.gen(function* () {
+        answerFrom(
+          watched({
+            commits: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      contexts: {
+                        checkRunCountsByState: [
+                          { state: "IN_PROGRESS", count: 120 },
+                          { state: "SUCCESS", count: 30 },
+                        ],
+                        statusContextCountsByState: [],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+        );
+        const result = yield* poll;
+        expect(result?.status).toContain("IN_PROGRESS:120,SUCCESS:30");
+        expect(mockedExecute).toHaveBeenCalledOnce();
+      }),
+    );
+
+    it.effect.each([
+      {
+        label: "null run counts",
+        commits: {
+          nodes: [
+            {
+              commit: {
+                statusCheckRollup: {
+                  contexts: { checkRunCountsByState: null, statusContextCountsByState: [] },
+                },
+              },
+            },
+          ],
+        },
+      },
+      {
+        label: "null status counts",
+        commits: {
+          nodes: [
+            {
+              commit: {
+                statusCheckRollup: {
+                  contexts: { checkRunCountsByState: [], statusContextCountsByState: null },
+                },
+              },
+            },
+          ],
+        },
+      },
+      { label: "null commit nodes", commits: { nodes: null } },
+      { label: "missing latest commit", commits: { nodes: [] } },
+    ] as const)("keeps opaque check state for $label", ({ commits }) =>
+      Effect.gen(function* () {
+        answerFrom(watched({ commits }));
+        const result = yield* poll;
+        assert.isNotNull(result);
+        assert.isFalse(result?.includesCheckState);
+      }),
+    );
+
+    it.effect("marks an explicit absence of checks as complete", () =>
+      Effect.gen(function* () {
+        answerFrom(watched({ commits: { nodes: [{ commit: { statusCheckRollup: null } }] } }));
+        assert.isTrue((yield* poll)?.includesCheckState);
+      }),
+    );
+
+    it.effect("preserves reported GraphQL reserve before dispatching another watch sweep", () =>
+      Effect.gen(function* () {
+        answerFrom(watched(), 499);
+        const api = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const input = { ...pullRequestInput, host: "github.watch-reserve.test" };
+        const first = yield* api.getPullRequestWatchFingerprint(input).pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        yield* Fiber.join(first);
+        const pending = yield* Effect.forEach(
+          Array.from({ length: 158 }, (_, index) => index + 1),
+          (number) => api.getPullRequestWatchFingerprint({ ...input, number }).pipe(Effect.result),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        const blocked = yield* Fiber.join(pending);
+        expect(blocked).toHaveLength(158);
+        expect(
+          blocked.every(
+            (result) =>
+              Result.isFailure(result) &&
+              result.failure._tag === "SourceControlRateLimitPausedError",
+          ),
+        ).toBe(true);
+        expect(mockedExecute).toHaveBeenCalledOnce();
+        const manual = yield* api
+          .getPullRequestWatchFingerprint(input)
+          .pipe(Effect.provideService(SourceControlRateLimit.Interactive, true), Effect.forkChild);
+        yield* TestClock.adjust("10 millis");
+        assert.isDefined(yield* Fiber.join(manual));
+        expect(mockedExecute).toHaveBeenCalledTimes(2);
       }),
     );
   }

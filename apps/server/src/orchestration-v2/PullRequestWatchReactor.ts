@@ -42,13 +42,6 @@ import {
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
-/**
- * While checks run, a sweep of conditional fingerprints spends no quota when nothing moved, so
- * it can follow CI closely. GitHub's secondary limits count requests, hence not faster.
- */
-const ACTIVE_SWEEP_SECONDS = 30;
-/** A push starts checks that may not be listed yet, so keep the quick pace for a while. */
-const RECENT_PUSH_MS = 5 * 60_000;
 const READ_FAILURE_LIMIT = 8;
 /** Group reads in flight at once, inside the host's own request limit. */
 const GROUP_READS = 4;
@@ -91,7 +84,6 @@ interface LastRead {
   readonly at: number;
   readonly fingerprint: string;
   readonly inFlight: boolean;
-  readonly conditional: boolean;
   readonly remarksComplete: boolean;
   readonly watches: ReadonlySet<string>;
   readonly status: string | null;
@@ -168,14 +160,15 @@ function planRead(
     return { detail: read || checksDue, activity: read };
   }
   const activity =
+    fingerprint.includesRemarkState === false ||
     last.remarks !== fingerprint.remarks ||
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
-  // A conditional fingerprint already carries check and mergeability state, so in-flight work
-  // shows up as a status change there.
-  const settling = last.inFlight && fingerprint.conditional !== true;
+  const checksNeedRead =
+    fingerprint.includesCheckState === false ||
+    (last.inFlight && fingerprint.includesCheckState !== true);
   return {
-    detail: activity || checksDue || last.status !== fingerprint.status || settling,
+    detail: activity || checksDue || last.status !== fingerprint.status || checksNeedRead,
     activity,
   };
 }
@@ -482,9 +475,10 @@ export const make = Effect.gen(function* () {
     if (
       last === undefined ||
       group.targets.some((target) => !last.watches.has(watchKey(target))) ||
+      fingerprint?.includesRemarkState === false ||
       (fingerprint !== null && last.remarks !== fingerprint.remarks)
     ) {
-      // A new watch or changed host remarks needs a fresh view of every tail.
+      // Incomplete remark state cannot establish that cached tails are unchanged.
       threadTails.delete(group.key);
     }
     const reference = referenceOf(group);
@@ -564,7 +558,6 @@ export const make = Effect.gen(function* () {
           ? (threadTails.get(group.key)?.fetchedAt ?? now)
           : last.at,
       fingerprint: group.fingerprint,
-      conditional: fingerprint?.conditional === true,
       inFlight:
         detail.mergeability === "unknown" ||
         detail.checks.some((check) => check.status === "pending"),
@@ -597,8 +590,6 @@ export const make = Effect.gen(function* () {
       return watchesEqual(report.next, target.watch) ? Effect.void : record(target, report.next);
     });
   });
-
-  let nextSweepMs = SWEEP_MINUTES * 60_000;
 
   const sweep = Effect.gen(function* () {
     const threads = yield* projections.getThreadsWithPullRequests();
@@ -651,16 +642,13 @@ export const make = Effect.gen(function* () {
     // Every fingerprint is asked for at once so the host can batch them, and each group reads
     // as soon as its own answer lands rather than waiting on the slowest host.
     const reads = yield* Semaphore.make(GROUP_READS);
-    let paused = false;
     yield* Effect.forEach(
       groups,
       (group) =>
         fingerprintOf(group).pipe(
           Effect.flatMap((fingerprint) =>
             fingerprint === "paused"
-              ? Effect.sync(() => {
-                  paused = true;
-                })
+              ? Effect.void
               : reads.withPermit(
                   readGroup(group, fingerprint).pipe(
                     Effect.catchCause(
@@ -672,24 +660,12 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: "unbounded", discard: true },
     );
-    const now = yield* Clock.currentTimeMillis;
-    const quick =
-      !paused &&
-      groups.some((group) => {
-        const last = lastReads.get(group.key);
-        return (
-          last?.conditional === true &&
-          (last.inFlight ||
-            group.targets.some((target) => now - lifeOf(target).pushedAt < RECENT_PUSH_MS))
-        );
-      });
-    nextSweepMs = quick ? ACTIVE_SWEEP_SECONDS * 1000 : SWEEP_MINUTES * 60_000;
   }).pipe(
     Effect.catchCause(logFailure("pull request watch sweep failed", {})),
     Effect.withSpan("PullRequestWatchReactor.sweep"),
   );
 
-  const sweepDelayMs = Effect.sync(() => nextSweepMs);
+  const sweepDelayMs = Effect.succeed(SWEEP_MINUTES * 60_000);
 
   const start: PullRequestWatchReactor["Service"]["start"] = () =>
     forkParked(

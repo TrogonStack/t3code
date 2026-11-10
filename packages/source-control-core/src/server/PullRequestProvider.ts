@@ -77,8 +77,10 @@ export class PullRequestProviderError extends Schema.TaggedError<PullRequestProv
 export interface ProviderChangeRequestWatchFingerprint {
   readonly status: string;
   readonly remarks: string;
-  /** Read without spending quota while nothing changed, so a watch can poll it often. */
-  readonly conditional?: true;
+  /** True carries complete checks; false requires detail reads; absent is unspecified. */
+  readonly includesCheckState?: boolean;
+  /** True carries complete remark state; false requires activity reads; absent is unspecified. */
+  readonly includesRemarkState?: boolean;
 }
 
 export interface PullRequestProviderFailure {

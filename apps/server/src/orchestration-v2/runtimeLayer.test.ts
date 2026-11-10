@@ -3978,7 +3978,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("sweeps quickly only while checks run and the fingerprint is conditional", () =>
+  it.effect("keeps two-minute sweeps while complete check fingerprints avoid detail rereads", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-pull-request-watch-cadence");
@@ -4015,9 +4015,12 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         link: { url: "https://github.com/pingdotgg/t3code/pull/15", source: "agent" },
       });
 
-      let checkStatus: "pending" | "success" = "pending";
-      let fingerprint: "conditional" | "graphql" | "paused" = "conditional";
+      let checkStatus: "pending" | "success" | "failure" = "pending";
+      let fingerprint: "complete" | "opaque" | "incomplete" | "incomplete-remarks" | "paused" =
+        "complete";
       let detailReads = 0;
+      let activityReads = 0;
+      let commentAt: string | null = null;
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -4039,9 +4042,17 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                       }),
                     )
                   : Effect.succeed({
-                      status: checkStatus,
+                      status:
+                        fingerprint === "incomplete" ? "unavailable-check-counts" : checkStatus,
                       remarks: "0",
-                      ...(fingerprint === "conditional" ? { conditional: true as const } : {}),
+                      ...(fingerprint === "incomplete-remarks"
+                        ? { includesRemarkState: false as const }
+                        : {}),
+                      ...(fingerprint === "complete" || fingerprint === "incomplete-remarks"
+                        ? { includesCheckState: true as const }
+                        : fingerprint === "incomplete"
+                          ? { includesCheckState: false as const }
+                          : {}),
                     }),
               invalidate: () => Effect.void,
               detail: () =>
@@ -4066,12 +4077,29 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                   };
                 }),
               activity: () =>
-                Effect.succeed({
-                  comments: [],
-                  commentCount: 0,
-                  commentsTruncated: false,
-                  reviewThreads: [],
-                  commits: [],
+                Effect.sync(() => {
+                  activityReads += 1;
+                  return {
+                    comments:
+                      commentAt === null
+                        ? []
+                        : [
+                            {
+                              id: "cadence-reviewer-comment",
+                              kind: "issue-comment" as const,
+                              author: { login: "reviewer", name: null, avatarUrl: null },
+                              body: "One more thing.",
+                              createdAt: commentAt,
+                              url: "https://github.com/pingdotgg/t3code/pull/15#comment",
+                              path: null,
+                              reviewState: null,
+                            },
+                          ],
+                    commentCount: commentAt === null ? 0 : 1,
+                    commentsTruncated: false,
+                    reviewThreads: [],
+                    commits: [],
+                  };
                 }),
             }),
           ),
@@ -4079,21 +4107,74 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       );
       const delayAfterSweep = Effect.andThen(reactor.sweep, reactor.sweepDelayMs);
 
-      assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
-      assert.equal(yield* delayAfterSweep, 30_000, "checks are still running");
-      assert.equal(detailReads, 1, "an unchanged conditional fingerprint needs no reread");
-      fingerprint = "graphql";
+      assert.equal(yield* delayAfterSweep, 120_000, "checks are running");
+      assert.equal(yield* delayAfterSweep, 120_000, "checks are still running");
+      assert.equal(detailReads, 1, "an unchanged check-state fingerprint needs no reread");
+      fingerprint = "opaque";
       assert.equal(
         yield* delayAfterSweep,
         120_000,
-        "reading costs quota without a conditional fingerprint",
+        "opaque fingerprints cannot replace active check reads",
       );
+      assert.equal(detailReads, 2, "opaque fingerprints retain active check reads");
       fingerprint = "paused";
       assert.equal(yield* delayAfterSweep, 120_000, "the host is rate limited");
-      fingerprint = "conditional";
+      assert.equal(detailReads, 2, "a paused host is not read");
+      fingerprint = "complete";
       checkStatus = "success";
       yield* TestClock.adjust("10 minutes");
       assert.equal(yield* delayAfterSweep, 120_000, "nothing is in flight");
+      assert.equal(detailReads, 3, "a changed check-state fingerprint refreshes detail");
+      yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(
+        messages.flatMap((message) => message.notification?.summary ?? []),
+        ["#15: checks passed"],
+      );
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(detailReads, 3, "unchanged complete settled checks need no reread");
+
+      fingerprint = "incomplete";
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(detailReads, 4, "the first incomplete fingerprint records settled detail");
+      checkStatus = "failure";
+      yield* TestClock.adjust("2 minutes");
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(detailReads, 5, "incomplete check state cannot hide a failure after settling");
+      yield* TestClock.adjust("2 minutes");
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(detailReads, 6, "incomplete checks still require a fresh detail read");
+      yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+      const afterFailure = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(
+        afterFailure.messages.flatMap((message) => message.notification?.summary ?? []),
+        ["#15: checks passed", "#15: checks failed"],
+      );
+
+      fingerprint = "incomplete-remarks";
+      assert.equal(yield* delayAfterSweep, 120_000);
+      const readsBeforeComment = activityReads;
+      yield* TestClock.adjust("2 minutes");
+      commentAt = DateTime.formatIso(yield* DateTime.now);
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(
+        activityReads,
+        readsBeforeComment + 1,
+        "incomplete remarks cannot hide a new comment after settling",
+      );
+      yield* TestClock.adjust("2 minutes");
+      assert.equal(yield* delayAfterSweep, 120_000);
+      assert.equal(
+        activityReads,
+        readsBeforeComment + 2,
+        "incomplete remarks require fresh activity",
+      );
+      yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+      const afterComment = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(
+        afterComment.messages.flatMap((message) => message.notification?.summary ?? []),
+        ["#15: checks passed", "#15: checks failed", "#15: new comments"],
+      );
 
       yield* orchestrator.dispatch({
         type: "thread.pull-request.watch",
@@ -4401,6 +4482,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   it.effect.each([
     "single page",
     "paginated",
+    "incomplete remark fingerprint",
     "page failure",
     "repeated cursor",
     "missing comments",
@@ -4481,15 +4563,31 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         body: "Twelfth reply.",
         createdAt: "2999-01-01T00:00:02.000Z",
       };
-      const incomplete = mode !== "single page" && mode !== "paginated" && mode !== "hidden reply";
+      const incomplete =
+        mode !== "single page" &&
+        mode !== "paginated" &&
+        mode !== "incomplete remark fingerprint" &&
+        mode !== "hidden reply";
       let recovering = false;
       let pagesRead = 0;
+      let tailEdited = false;
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
             NodeCrypto.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              watchFingerprint: () =>
+                Effect.succeed(
+                  mode === "incomplete remark fingerprint"
+                    ? {
+                        status: "settled",
+                        remarks: "unavailable-comment-total",
+                        includesCheckState: true,
+                        includesRemarkState: false,
+                      }
+                    : null,
+                ),
               invalidate: () => Effect.void,
               detail: () => Effect.succeed(detail),
               activity: () =>
@@ -4541,7 +4639,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                   return Effect.succeed({ comments: [], nextCursor: null });
                 }
                 return Effect.succeed({
-                  comments: [eleventh, twelfth],
+                  comments: [
+                    eleventh,
+                    tailEdited
+                      ? {
+                          ...twelfth,
+                          body: "Edited twelfth reply.",
+                          editedAt: "2999-01-01T00:00:04.000Z",
+                        }
+                      : twelfth,
+                  ],
                   nextCursor: null,
                   ...(mode === "hidden reply" ? { hiddenCount: 1 } : {}),
                 });
@@ -4567,7 +4674,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       yield* reactor.sweep;
       const pagesBefore = pagesRead;
       yield* reactor.sweep;
-      assert.equal(pagesRead, pagesBefore);
+      if (mode !== "incomplete remark fingerprint") assert.equal(pagesRead, pagesBefore);
 
       const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
       assert.deepEqual(
@@ -4591,6 +4698,20 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         { headSha: watch?.headSha, failedChecks: watch?.failedChecks, wakes: watch?.wakes },
         { headSha: "abc1234def", failedChecks: ["lint"], wakes: incomplete ? 1 : 0 },
       );
+      if (mode === "incomplete remark fingerprint") {
+        tailEdited = true;
+        yield* TestClock.adjust("2 minutes");
+        yield* reactor.sweep;
+        yield* TestClock.adjust("2 minutes");
+        yield* reactor.sweep;
+        yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+        const afterEdit = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+        assert.deepEqual(
+          afterEdit.messages.flatMap((message) => message.notification?.summary ?? []),
+          ["#7: checks failed, new comments", "#7: new comments"],
+        );
+        assert.include(afterEdit.messages.at(-1)?.text ?? "", "Edited twelfth reply.");
+      }
     }),
   );
 

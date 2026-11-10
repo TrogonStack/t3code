@@ -64,8 +64,11 @@ const make = Effect.gen(function* () {
       const key = keyOf(host, resource, yield* SourceControlRateLimit.CredentialScope);
       const snapshot = (yield* Ref.get(snapshots)).get(key);
       if (snapshot === undefined || snapshot.resetAtMs <= now) return;
-      const floor = options?.allowReserve === true ? 1 : snapshot.limit * RESERVE_RATIO;
-      if (snapshot.remaining >= floor) return;
+      const hasBudget =
+        options?.allowReserve === true
+          ? snapshot.remaining >= 1
+          : snapshot.remaining > snapshot.limit * RESERVE_RATIO;
+      if (hasBudget) return;
       return yield* new SourceControlRateLimit.SourceControlRateLimitPausedError({
         provider: SourceControlProviderKind.make("github"),
         host: host.trim().toLowerCase(),
