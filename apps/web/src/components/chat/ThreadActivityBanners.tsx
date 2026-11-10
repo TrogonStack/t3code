@@ -8,7 +8,9 @@ import type {
 import type { EnvironmentThreadShell, ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import {
   presentPendingBackgroundWork,
+  backgroundTaskCommandText,
   presentProviderGoal,
+  resolveBackgroundTaskItem,
   type RunStopPresentation,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@t3tools/client-runtime/state/threads";
@@ -30,6 +32,7 @@ import { tickTextContent } from "~/lib/tickTextContent";
 import { Button, InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
+import { BackgroundWorkDetails } from "./BackgroundWorkDetails";
 import type { ThreadNowItem } from "./ThreadNow";
 
 export function extensionStatusBannerItem(
@@ -168,6 +171,7 @@ export function runStopNowItem(input: {
 
 /** Background commands and subagents, for the end of the timeline. */
 export function backgroundWorkNowItem(input: {
+  readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
   readonly turnItems: ThreadStructure["turnItems"];
@@ -180,13 +184,13 @@ export function backgroundWorkNowItem(input: {
   const presentation = presentPendingBackgroundWork(input.tasks);
   if (presentation === null) return null;
   const rows = presentation.items.map((task) => {
-    // Same key derivePendingBackgroundWork gives turn-item tasks; subagent items carry progress.
-    const item = input.turnItems.findLast(
-      (candidate) => (candidate.nativeItemRef?.nativeId || candidate.id) === task.taskId,
-    );
+    // Subagent items carry progress.
+    const item = resolveBackgroundTaskItem(task, input.turnItems);
     const subagent = item?.type === "subagent" ? item : undefined;
     return {
       task,
+      command: item ? backgroundTaskCommandText(item) : null,
+      outputItemId: item?.type === "command_execution" ? item.id : null,
       label:
         item?.type === "command_execution" && commandDisplayText(item.input) === task.label ? (
           <span className="font-mono in-data-[slot=popover-popup]:whitespace-pre-wrap">
@@ -212,6 +216,13 @@ export function backgroundWorkNowItem(input: {
   const startedAtMs = only?.startedAtMs ?? null;
   return {
     id: `background-work:${input.threadId}`,
+    details: (
+      <BackgroundWorkDetails
+        environmentId={input.environmentId}
+        threadId={input.threadId}
+        rows={rows}
+      />
+    ),
     icon: rows.every(isCommand) ? <TerminalIcon /> : <CircleDashedIcon />,
     title:
       only && typeof only.label !== "string" && only.task.label !== only.task.kind ? (
