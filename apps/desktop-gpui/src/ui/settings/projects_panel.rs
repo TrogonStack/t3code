@@ -11,6 +11,7 @@ use super::secret_field::sm_field;
 use super::tokens::Tokens;
 use super::*;
 use crate::connection::{Action, ActionSender, Call, command_id};
+use crate::keybindings::Keybindings;
 use crate::projects::{MachineKind, Member, ProjectEntry};
 use crate::providers::Catalog;
 use crate::settings::{DeviceSettings, GroupingMode};
@@ -38,6 +39,7 @@ pub struct ProjectsData {
     pub thread_projects: Vec<String>,
     pub config: SourceControlConfig,
     pub catalog: Option<Catalog>,
+    pub keybindings: Keybindings,
 }
 
 /// The select that is open, and the checkout it belongs to.
@@ -53,6 +55,10 @@ struct Editor {
     editing: Option<String>,
     form: model::Script,
     problem: Option<&'static str>,
+    /// The shortcut as input text, and what it was when the editor opened.
+    keybinding: String,
+    initial_keybinding: String,
+    recording: bool,
 }
 
 /// Members still to remove, one `project.delete` at a time as the web does.
@@ -86,6 +92,10 @@ pub struct ProjectsPanel {
     global_grouping: GroupingMode,
     /// Settings writes in flight, with what to put back and the failure title.
     saves: HashMap<u64, (SourceControlConfig, &'static str)>,
+    /// The shortcut writes that follow a settings write once it succeeds.
+    follow: HashMap<u64, Vec<(Call, Value)>>,
+    keybindings: Keybindings,
+    _keys: Option<Subscription>,
     menu: Option<(MenuKind, usize)>,
     editor: Option<Editor>,
     script_name: Entity<InputState>,
@@ -149,6 +159,9 @@ impl ProjectsPanel {
             grouping: DeviceSettings::grouping_overrides(),
             global_grouping: DeviceSettings::load().project_grouping,
             saves: HashMap::new(),
+            follow: HashMap::new(),
+            keybindings: Keybindings::default(),
+            _keys: None,
             menu: None,
             editor: None,
             script_name,
@@ -184,6 +197,7 @@ impl ProjectsPanel {
             thread_projects,
             config,
             catalog,
+            keybindings,
         } = data;
         let mut changed = false;
         macro_rules! take {
@@ -202,6 +216,7 @@ impl ProjectsPanel {
         take!(machine, machine);
         take!(thread_projects, thread_projects);
         take!(catalog, catalog);
+        take!(keybindings, keybindings);
         if self.saves.is_empty() {
             take!(config, config);
         }
@@ -286,6 +301,7 @@ impl ProjectsPanel {
 
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
         if let Some((previous, failure)) = self.saves.remove(&token) {
+            let follow = self.follow.remove(&token);
             if let CallEvent::Failed(message) = event {
                 self.config = previous;
                 if self.error.is_none() {
@@ -293,7 +309,14 @@ impl ProjectsPanel {
                 }
             } else if matches!(event, CallEvent::Progress(_)) {
                 self.saves.insert(token, (previous, failure));
+                if let Some(follow) = follow {
+                    self.follow.insert(token, follow);
+                }
                 return;
+            } else {
+                for (call, payload) in follow.into_iter().flatten() {
+                    self.send_shortcut(call, payload);
+                }
             }
             cx.notify();
             return;

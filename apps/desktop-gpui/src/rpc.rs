@@ -285,6 +285,16 @@ untyped_method!(
     "vcs.refreshStatus"
 );
 untyped_method!(
+    /// `server.upsertKeybinding`: writes one keybinding rule; replies `{keybindings, issues}`.
+    ServerUpsertKeybinding,
+    "server.upsertKeybinding"
+);
+untyped_method!(
+    /// `server.removeKeybinding`: removes one keybinding rule; replies `{keybindings, issues}`.
+    ServerRemoveKeybinding,
+    "server.removeKeybinding"
+);
+untyped_method!(
     /// `server.getUsageSummary`: token and cost buckets for a day window.
     ServerGetUsageSummary,
     "server.getUsageSummary"

@@ -12,6 +12,7 @@ mod diff;
 mod environments;
 mod git_actions;
 mod history;
+mod keybinding_rules;
 mod keybindings;
 mod minimap;
 mod model_picker;

@@ -268,6 +268,7 @@ pub struct MainView {
     /// The other saved environments, by id.
     environments: Vec<EnvironmentProjects>,
     providers: Option<Catalog>,
+    keybindings: crate::keybindings::Keybindings,
     /// The branch per workspace root; `None` for a root that is not a repository.
     branches: HashMap<String, Option<Branch>>,
     /// Roots whose branch was asked for on this connection.
@@ -489,6 +490,7 @@ impl MainView {
             picker_order: None,
             environments: Vec::new(),
             providers: None,
+            keybindings: Default::default(),
             branches: HashMap::new(),
             branches_requested: HashSet::new(),
             details_closed: HashSet::new(),
@@ -593,6 +595,7 @@ impl MainView {
         };
         crate::settings_labs::add_archived(&mut data, &archived);
         let (live, can_organize, environment) = (entries.clone(), self.can_pin(), label.clone());
+        let keybindings = self.keybindings.clone();
         let flags = self.providers.as_ref().map(|c| c.labs_flags());
         let devices = self.providers.as_ref().map(|c| {
             (
@@ -627,6 +630,7 @@ impl MainView {
             if let Some((config, instances, sources)) = provider_tab {
                 settings.set_providers_data(config, instances, sources, cx);
             }
+            settings.set_keybindings_data(keybindings.clone(), cx);
             settings.set_projects_data(
                 settings::ProjectsData {
                     live,
@@ -638,6 +642,7 @@ impl MainView {
                     thread_projects,
                     config: projects_config,
                     catalog: projects_catalog,
+                    keybindings,
                 },
                 cx,
             );
@@ -668,6 +673,8 @@ impl MainView {
         }
         if let Status::Keybindings(keybindings) = status {
             keymap::apply(&keybindings, cx);
+            self.keybindings = *keybindings;
+            self.sync_labs(cx);
             return;
         }
         if let Status::Providers(catalog) = status {
@@ -716,6 +723,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::keybinding_rules::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_keybindings_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_projects::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_projects_call(token, event, cx)

@@ -7,6 +7,7 @@ mod appearance_typography;
 mod components;
 mod devices_panel;
 mod diffs_panel;
+mod keybindings_panel;
 mod labs_panel;
 mod projects_panel;
 mod providers_panel;
@@ -32,6 +33,7 @@ use components::{
 use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
+use keybindings_panel::KeybindingsPanel;
 use labs_panel::{LabsEvent, LabsPanel};
 pub use projects_panel::ProjectsData;
 use projects_panel::ProjectsPanel;
@@ -182,6 +184,7 @@ pub struct SettingsDialog {
     secrets: Entity<SecretsPanel>,
     providers: Entity<ProvidersPanel>,
     projects: Entity<ProjectsPanel>,
+    keybindings: Entity<KeybindingsPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -203,6 +206,8 @@ impl SettingsDialog {
         let providers =
             cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
         let projects = cx.new(|cx| ProjectsPanel::new(actions.clone(), scope.clone(), window, cx));
+        let keybindings =
+            cx.new(|cx| KeybindingsPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -240,6 +245,7 @@ impl SettingsDialog {
             secrets,
             providers,
             projects,
+            keybindings,
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -264,6 +270,7 @@ impl SettingsDialog {
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.providers.update(cx, |panel, cx| panel.reload(cx));
         self.projects.update(cx, |panel, cx| panel.reload(cx));
+        self.keybindings.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -362,6 +369,25 @@ impl SettingsDialog {
     pub fn set_projects_data(&mut self, data: ProjectsData, cx: &mut Context<Self>) {
         self.projects
             .update(cx, |panel, cx| panel.set_data(data, cx));
+    }
+
+    pub fn set_keybindings_data(
+        &mut self,
+        keybindings: crate::keybindings::Keybindings,
+        cx: &mut Context<Self>,
+    ) {
+        self.keybindings
+            .update(cx, |panel, cx| panel.set_data(keybindings, cx));
+    }
+
+    pub fn on_keybindings_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.keybindings
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
     pub fn on_projects_call(
@@ -482,6 +508,12 @@ impl SettingsDialog {
             return;
         }
         if self.providers.update(cx, |panel, cx| panel.close_menu(cx)) {
+            return;
+        }
+        if self
+            .keybindings
+            .update(cx, |panel, cx| panel.close_menu(cx))
+        {
             return;
         }
         if self.projects.update(cx, |panel, cx| panel.close_menu(cx)) {
@@ -661,6 +693,9 @@ impl Render for SettingsDialog {
         let projects = self
             .projects
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let keybindings = self
+            .keybindings
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -723,6 +758,7 @@ impl Render for SettingsDialog {
             .children(secrets)
             .children(providers)
             .children(projects)
+            .children(keybindings)
             .into_any_element()
     }
 }
@@ -1233,6 +1269,10 @@ impl SettingsDialog {
             self.projects
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.projects.clone().into_any_element()]
+        } else if self.section == Section::Keybindings {
+            self.keybindings
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.keybindings.clone().into_any_element()]
         } else {
             Vec::new()
         };
@@ -1245,6 +1285,7 @@ impl SettingsDialog {
                 | Section::Secrets
                 | Section::Providers
                 | Section::Projects
+                | Section::Keybindings
         );
         div()
             .w_full()

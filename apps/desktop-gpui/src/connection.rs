@@ -18,7 +18,8 @@ use crate::rpc::{
 };
 use crate::rpc::{
     ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsMutateJson, ProjectsReadFile,
-    ProjectsWriteFile, SubscribeProjectClones, SubscribeServerConfig,
+    ProjectsWriteFile, ServerRemoveKeybinding, ServerUpsertKeybinding, SubscribeProjectClones,
+    SubscribeServerConfig,
 };
 use crate::rpc::{
     PullRequestsActivity, PullRequestsChangeBreakdown, PullRequestsChecks, PullRequestsComment,
@@ -142,6 +143,8 @@ pub enum Call {
     LaunchThread,
     DispatchCommand,
     UpdateSettings,
+    UpsertKeybinding,
+    RemoveKeybinding,
     ProjectsMutate,
     /// A stream: progress events, then the result.
     RunStackedAction,
@@ -217,6 +220,8 @@ impl Call {
             Self::LaunchThread => "start the thread",
             Self::DispatchCommand => "send the command",
             Self::UpdateSettings => "update the settings",
+            Self::UpsertKeybinding => "save the keybinding",
+            Self::RemoveKeybinding => "remove the keybinding",
             Self::ProjectsMutate => "update the project",
             Self::RunStackedAction => "run the action",
             Self::CreateUploadUrl => "prepare the upload",
@@ -269,6 +274,8 @@ impl Call {
             Self::LaunchThread => session.request::<OrchestrationLaunchThread>(payload),
             Self::DispatchCommand => session.request::<OrchestrationDispatchCommand>(payload),
             Self::UpdateSettings => session.request::<ServerUpdateSettings>(payload),
+            Self::UpsertKeybinding => session.request::<ServerUpsertKeybinding>(payload),
+            Self::RemoveKeybinding => session.request::<ServerRemoveKeybinding>(payload),
             Self::ProjectsMutate => session.request::<ProjectsMutateJson>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
             Self::CreateUploadUrl => session.request::<AttachmentsCreateUploadUrl>(payload),

@@ -9,6 +9,7 @@ use crate::ui::settings::scope_inheritance::{Marker, marker_row_with};
 use gpui::{ElementId, KeyDownEvent};
 use gpui_component::input::Textarea;
 
+const SHORTCUT_FAILURE: &str = "Failed to save action shortcut";
 const WORKSPACES: [(&str, &str); 2] = [("local", "Local"), ("worktree", "New worktree")];
 const GROUPINGS: [GroupingMode; 3] = [
     GroupingMode::Repository,
@@ -43,10 +44,10 @@ impl ProjectsPanel {
         changes: Vec<(Field, Option<Value>)>,
         failure: &'static str,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<u64> {
         let members = Self::member_ids(entry);
         if members.is_empty() {
-            return;
+            return None;
         }
         let patch = self.config.patch(&changes, Some(&members));
         let previous = self.config.clone();
@@ -59,13 +60,103 @@ impl ProjectsPanel {
             payload: patch,
         };
         self.error = None;
-        if self.actions.try_send(action).is_ok() {
+        let sent = self.actions.try_send(action).is_ok();
+        if sent {
             self.saves.insert(token, (previous, failure));
         } else {
             self.config = previous;
             self.error = Some(format!("{failure}: could not send the request"));
         }
         cx.notify();
+        sent.then_some(token)
+    }
+
+    /// One shortcut write after the settings write that came with it.
+    pub(super) fn send_shortcut(&mut self, call: Call, payload: Value) {
+        let token = self.next_token;
+        self.next_token += 1;
+        let action = Action::Call {
+            token,
+            call,
+            payload,
+        };
+        if self.actions.try_send(action).is_ok() {
+            self.pending.insert(token, SHORTCUT_FAILURE);
+        } else if self.error.is_none() {
+            self.error = Some(format!("{SHORTCUT_FAILURE}: could not send the request"));
+        }
+    }
+
+    /// Whether a connected environment lets this app write keybindings.
+    fn can_write_keys(&self, cx: &App) -> bool {
+        self.scope
+            .read(cx)
+            .data()
+            .environments
+            .iter()
+            .any(|e| e.connected && e.writable)
+    }
+
+    fn record_key(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) {
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        match keystroke.key.as_str() {
+            "escape" => {}
+            "backspace" | "delete" => editor.keybinding.clear(),
+            _ => match super::super::keybindings_panel::capture(keystroke) {
+                Some(input) => editor.keybinding = input,
+                None => return,
+            },
+        }
+        editor.recording = false;
+        self._keys = None;
+        cx.notify();
+    }
+
+    fn start_key_recording(&mut self, cx: &mut Context<Self>) {
+        if !self.can_write_keys(cx) {
+            return;
+        }
+        let view = cx.weak_entity();
+        if let Some(editor) = self.editor.as_mut() {
+            editor.recording = true;
+        }
+        self._keys = Some(cx.intercept_keystrokes(move |event, _, cx| {
+            let keystroke = event.keystroke.clone();
+            let _ = view.update(cx, |this, cx| this.record_key(&keystroke, cx));
+            cx.stop_propagation();
+        }));
+        cx.notify();
+    }
+
+    /// The web's `writeTargets` shortcut step for one action: set the new key, replacing the old
+    /// one, or remove the old one when it was cleared.
+    fn shortcut_writes(
+        &self,
+        id: &str,
+        next: Option<&str>,
+        retained_elsewhere: bool,
+    ) -> Vec<(Call, Value)> {
+        let command = format!("script.{id}.run");
+        let previous =
+            crate::keybinding_rules::value_for_command(&self.keybindings.rules, &command);
+        match (next, previous) {
+            (Some(next), previous) => {
+                let replace = previous
+                    .filter(|key| key != next)
+                    .map(|key| crate::keybinding_rules::target_payload(&command, &key, ""));
+                vec![(
+                    Call::UpsertKeybinding,
+                    crate::keybinding_rules::upsert_payload(&command, next, "", replace),
+                )]
+            }
+            (None, Some(previous)) if !retained_elsewhere => vec![(
+                Call::RemoveKeybinding,
+                crate::keybinding_rules::target_payload(&command, &previous, ""),
+            )],
+            _ => Vec::new(),
+        }
     }
 
     fn marker(&self, id: &'static str, field: Field, members: &[String]) -> Marker {
@@ -112,7 +203,7 @@ impl ProjectsPanel {
             move |_, _, cx| {
                 let entry = entry.clone();
                 view.update(cx, |this, cx| {
-                    this.write_settings(&entry, vec![(field, None)], "Failed to reset", cx)
+                    this.write_settings(&entry, vec![(field, None)], "Failed to reset", cx);
                 })
             },
             window,
@@ -597,10 +688,23 @@ impl ProjectsPanel {
         self.script_command.update(cx, |state, cx| {
             state.set_value(form.command.clone(), window, cx)
         });
+        let keybinding = id
+            .as_ref()
+            .and_then(|id| {
+                crate::keybinding_rules::value_for_command(
+                    &self.keybindings.rules,
+                    &format!("script.{id}.run"),
+                )
+            })
+            .unwrap_or_default();
+        self._keys = None;
         self.editor = Some(Editor {
             editing: id,
             form,
             problem: None,
+            initial_keybinding: keybinding.clone(),
+            keybinding,
+            recording: false,
         });
         cx.notify();
     }
@@ -622,6 +726,7 @@ impl ProjectsPanel {
         let name = self.script_name.read(cx).value().trim().to_owned();
         let command = self.script_command.read(cx).value().trim().to_owned();
         let preview = self.script_preview.read(cx).value().trim().to_owned();
+        let can_write_keys = self.can_write_keys(cx);
         let Some(editor) = self.editor.as_mut() else {
             return;
         };
@@ -630,6 +735,14 @@ impl ProjectsPanel {
             cx.notify();
             return;
         }
+        let key = editor.keybinding.trim().to_owned();
+        let changed = key != editor.initial_keybinding.trim();
+        if changed && !can_write_keys {
+            editor.problem = Some("This connection cannot change keyboard shortcuts.");
+            cx.notify();
+            return;
+        }
+        let writes_key = (editor.editing.is_none() && can_write_keys) || changed;
         let mut form = editor.form.clone();
         form.name = name;
         form.command = command;
@@ -638,15 +751,26 @@ impl ProjectsPanel {
         if form.id.is_empty() {
             form.id = model::next_script_id(&form.name, &self.config.script_ids());
         }
+        let script_id = form.id.clone();
         let updated = model::saved_scripts(&self.effective_scripts(&entry), form);
         let value = Value::Array(updated.iter().map(model::Script::encode).collect());
+        let writes = if writes_key {
+            let next = (!key.is_empty()).then_some(key.as_str());
+            self.shortcut_writes(&script_id, next, false)
+        } else {
+            Vec::new()
+        };
+        self._keys = None;
         self.editor = None;
-        self.write_settings(
+        if let Some(token) = self.write_settings(
             &entry,
             vec![(Field::Scripts, Some(value))],
             "Failed to save action",
             cx,
-        );
+        ) && !writes.is_empty()
+        {
+            self.follow.insert(token, writes);
+        }
     }
 
     fn delete_confirmed(&mut self, cx: &mut Context<Self>) {
@@ -662,13 +786,21 @@ impl ProjectsPanel {
             .filter(|script| script.id != id)
             .map(model::Script::encode)
             .collect();
+        self._keys = None;
         self.editor = None;
-        self.write_settings(
+        let token = self.write_settings(
             &entry,
             vec![(Field::Scripts, Some(Value::Array(remaining)))],
             "Failed to delete action",
             cx,
         );
+        if let Some(token) = token {
+            let retained = self.config.script_ids().contains(&id);
+            let writes = self.shortcut_writes(&id, None, retained);
+            if !writes.is_empty() {
+                self.follow.insert(token, writes);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -706,6 +838,8 @@ impl ProjectsPanel {
         let editor = self.editor.as_ref()?;
         let (form, editing, problem_text) =
             (editor.form.clone(), editor.editing.clone(), editor.problem);
+        let (keybinding, recording) = (editor.keybinding.clone(), editor.recording);
+        let can_write_keys = self.can_write_keys(cx);
         let theme = Tokens::of(cx);
         let view = cx.entity();
         let icons =
@@ -775,9 +909,44 @@ impl ProjectsPanel {
                     .child("Open this URL in the in-app preview when this action runs."),
             );
         let has_preview = !self.script_preview.read(cx).value().trim().is_empty();
+        let shortcut = v_flex()
+            .gap_1()
+            .child(
+                div()
+                    .id("project-action-keybinding")
+                    .h(px(32.))
+                    .px(px(11.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(if recording { theme.ring } else { theme.input })
+                    .bg(background)
+                    .text_size(px(14.))
+                    .when(!can_write_keys, |cell| cell.opacity(0.64))
+                    .when(can_write_keys, |cell| cell.cursor_pointer())
+                    .child(if recording || keybinding.is_empty() {
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .child("Press shortcut")
+                            .into_any_element()
+                    } else {
+                        div().child(keybinding.clone()).into_any_element()
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.start_key_recording(cx))),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        "Press a shortcut. Use Backspace to clear. Shortcuts are environment-wide. Projects using the same action share its shortcut.",
+                    ),
+            );
         let mut body = vec![
             field("Name", name.into_any_element()),
             field("Icon", icons.into_any_element()),
+            field("Keybinding", shortcut.into_any_element()),
             field("Command", command.into_any_element()),
             field("Preview URL (optional)", preview.into_any_element()),
             self.switch_row(
