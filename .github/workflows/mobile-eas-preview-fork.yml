@@ -84,7 +84,7 @@ jobs:
       # The comment script comes from main, not from the PR.
       - name: Checkout trusted scripts
         if: steps.expo-token.outputs.present == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: .trusted
           sparse-checkout: .github/scripts
@@ -249,14 +249,14 @@ jobs:
       ORG_GRADLE_PROJECT_reactNativeArchitectures: armeabi-v7a,arm64-v8a
     steps:
       - name: Checkout reviewed commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
       # The comment script comes from main, not from the PR.
       - name: Checkout trusted scripts
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: .trusted
           sparse-checkout: .github/scripts
@@ -288,7 +288,7 @@ jobs:
           fi
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: package.json
 
@@ -302,13 +302,13 @@ jobs:
         run: pnpm install --frozen-lockfile --filter=@t3tools/mobile...
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup EAS
-        uses: expo/expo-github-action@v8
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8.2.1
         with:
           eas-version: latest
           eas-cache: false
