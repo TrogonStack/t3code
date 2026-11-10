@@ -21,7 +21,6 @@ import { CheckpointRef, GitCommandError, VcsProcessExitError } from "@t3tools/co
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as ServerConfig from "../config.ts";
-import { gitCommandDuration, gitCommandsTotal } from "../observability/Metrics.ts";
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -1290,16 +1289,32 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
+const gitCommandDurations = (operation: string, outcome?: string) =>
+  Metric.snapshot.pipe(
+    Effect.map((snapshots) =>
+      snapshots.flatMap((snapshot) =>
+        snapshot.id === "t3code.git.command.duration" &&
+        snapshot.type === "Histogram" &&
+        snapshot.attributes?.["t3code.git.operation"] === operation &&
+        (outcome === undefined || snapshot.attributes["t3code.outcome"] === outcome)
+          ? [snapshot.state]
+          : [],
+      ),
+    ),
+  );
+
 const gitCommandCount = (operation: string, outcome: string) =>
-  Metric.value(
-    Metric.withAttributes(gitCommandsTotal, [
-      ["operation", operation],
-      ["outcome", outcome],
-    ]),
-  ).pipe(Effect.map((state) => state.count));
+  gitCommandDurations(operation, outcome).pipe(
+    Effect.map((states) => states.reduce((count, state) => count + state.count, 0)),
+  );
 
 const gitCommandTiming = (operation: string) =>
-  Metric.value(Metric.withAttributes(gitCommandDuration, [["operation", operation]]));
+  gitCommandDurations(operation).pipe(
+    Effect.map((states) => ({
+      count: states.reduce((count, state) => count + state.count, 0),
+      sum: states.reduce((sum, state) => sum + state.sum, 0),
+    })),
+  );
 
 // Keep VcsProcess's exit classification; replace only the subprocess and its clock.
 const makeMeteredDriver = Effect.fn("test.makeMeteredDriver")(function* (exitCode: number) {
@@ -1338,7 +1353,7 @@ it.effect("GitVcsDriver meters each git command once under its operation", () =>
     assert.strictEqual(yield* gitCommandCount(operation, "failure"), 0);
     const timing = yield* gitCommandTiming(operation);
     assert.strictEqual(timing.count, 2);
-    assert.strictEqual(timing.sum, 500);
+    assert.strictEqual(timing.sum, 0.5);
   }).pipe(
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),
@@ -1362,7 +1377,7 @@ it.effect("GitVcsDriver counts an allowed non-zero exit as a success", () =>
     assert.strictEqual(yield* gitCommandCount(operation, "failure"), 0);
     const timing = yield* gitCommandTiming(operation);
     assert.strictEqual(timing.count, 1);
-    assert.strictEqual(timing.sum, 250);
+    assert.strictEqual(timing.sum, 0.25);
   }).pipe(
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),
@@ -1383,7 +1398,7 @@ it.effect("GitVcsDriver counts a failed git command as a failure", () =>
     assert.strictEqual(yield* gitCommandCount(operation, "success"), 0);
     const timing = yield* gitCommandTiming(operation);
     assert.strictEqual(timing.count, 1);
-    assert.strictEqual(timing.sum, 250);
+    assert.strictEqual(timing.sum, 0.25);
   }).pipe(
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),
@@ -1448,7 +1463,7 @@ it.effect("git metrics finalize cancellation without exposing arbitrary operatio
     assert.strictEqual(yield* gitCommandCount(operation, "interrupt"), 0);
     const timing = yield* gitCommandTiming("other");
     assert.strictEqual(timing.count, 1);
-    assert.strictEqual(timing.sum, 250);
+    assert.strictEqual(timing.sum, 0.25);
   }).pipe(
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),
@@ -1504,7 +1519,7 @@ it.effect("git metrics count fsync fallback and transient retry subprocesses sep
     assert.strictEqual(yield* gitCommandCount(operation, "success"), 1);
     const timing = yield* gitCommandTiming(operation);
     assert.strictEqual(timing.count, 3);
-    assert.strictEqual(timing.sum, 750);
+    assert.strictEqual(timing.sum, 0.75);
   }).pipe(
     Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     Effect.provideService(Metric.MetricRegistry, new Map()),

@@ -1,0 +1,12 @@
+# Weaver resolves these paths from its working directory, so it runs from here.
+[registry]
+path = "../../otel/registry"
+v2 = true
+
+[policy]
+paths = ["../../otel/policies"]
+
+[generate]
+templates = "https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.7[templates]"
+target = "code/typescript_effect"
+output = "../../apps/server/src/observability/otel"
