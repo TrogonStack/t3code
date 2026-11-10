@@ -42,10 +42,6 @@ import {
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
-/** Check-state fingerprints avoid full detail reads while following active CI. */
-const ACTIVE_SWEEP_SECONDS = 30;
-/** A push starts checks that may not be listed yet, so keep the quick pace for a while. */
-const RECENT_PUSH_MS = 5 * 60_000;
 const READ_FAILURE_LIMIT = 8;
 /** Group reads in flight at once, inside the host's own request limit. */
 const GROUP_READS = 4;
@@ -88,7 +84,6 @@ interface LastRead {
   readonly at: number;
   readonly fingerprint: string;
   readonly inFlight: boolean;
-  readonly includesCheckState: boolean;
   readonly remarksComplete: boolean;
   readonly watches: ReadonlySet<string>;
   readonly status: string | null;
@@ -557,7 +552,6 @@ export const make = Effect.gen(function* () {
           ? (threadTails.get(group.key)?.fetchedAt ?? now)
           : last.at,
       fingerprint: group.fingerprint,
-      includesCheckState: fingerprint?.includesCheckState === true,
       inFlight:
         detail.mergeability === "unknown" ||
         detail.checks.some((check) => check.status === "pending"),
@@ -590,8 +584,6 @@ export const make = Effect.gen(function* () {
       return watchesEqual(report.next, target.watch) ? Effect.void : record(target, report.next);
     });
   });
-
-  let nextSweepMs = SWEEP_MINUTES * 60_000;
 
   const sweep = Effect.gen(function* () {
     const threads = yield* projections.getThreadsWithPullRequests();
@@ -644,16 +636,13 @@ export const make = Effect.gen(function* () {
     // Every fingerprint is asked for at once so the host can batch them, and each group reads
     // as soon as its own answer lands rather than waiting on the slowest host.
     const reads = yield* Semaphore.make(GROUP_READS);
-    let paused = false;
     yield* Effect.forEach(
       groups,
       (group) =>
         fingerprintOf(group).pipe(
           Effect.flatMap((fingerprint) =>
             fingerprint === "paused"
-              ? Effect.sync(() => {
-                  paused = true;
-                })
+              ? Effect.void
               : reads.withPermit(
                   readGroup(group, fingerprint).pipe(
                     Effect.catchCause(
@@ -665,24 +654,12 @@ export const make = Effect.gen(function* () {
         ),
       { concurrency: "unbounded", discard: true },
     );
-    const now = yield* Clock.currentTimeMillis;
-    const quick =
-      !paused &&
-      groups.some((group) => {
-        const last = lastReads.get(group.key);
-        return (
-          last?.includesCheckState === true &&
-          (last.inFlight ||
-            group.targets.some((target) => now - lifeOf(target).pushedAt < RECENT_PUSH_MS))
-        );
-      });
-    nextSweepMs = quick ? ACTIVE_SWEEP_SECONDS * 1000 : SWEEP_MINUTES * 60_000;
   }).pipe(
     Effect.catchCause(logFailure("pull request watch sweep failed", {})),
     Effect.withSpan("PullRequestWatchReactor.sweep"),
   );
 
-  const sweepDelayMs = Effect.sync(() => nextSweepMs);
+  const sweepDelayMs = Effect.succeed(SWEEP_MINUTES * 60_000);
 
   const start: PullRequestWatchReactor["Service"]["start"] = () =>
     forkParked(

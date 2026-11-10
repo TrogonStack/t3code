@@ -3968,7 +3968,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("sweeps quickly only while checks run and the fingerprint includes check state", () =>
+  it.effect("keeps two-minute sweeps while complete check fingerprints avoid detail rereads", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-pull-request-watch-cadence");
@@ -4069,8 +4069,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       );
       const delayAfterSweep = Effect.andThen(reactor.sweep, reactor.sweepDelayMs);
 
-      assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
-      assert.equal(yield* delayAfterSweep, 30_000, "checks are still running");
+      assert.equal(yield* delayAfterSweep, 120_000, "checks are running");
+      assert.equal(yield* delayAfterSweep, 120_000, "checks are still running");
       assert.equal(detailReads, 1, "an unchanged check-state fingerprint needs no reread");
       fingerprint = "opaque";
       assert.equal(
@@ -4078,12 +4078,21 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         120_000,
         "opaque fingerprints cannot replace active check reads",
       );
+      assert.equal(detailReads, 2, "opaque fingerprints retain active check reads");
       fingerprint = "paused";
       assert.equal(yield* delayAfterSweep, 120_000, "the host is rate limited");
+      assert.equal(detailReads, 2, "a paused host is not read");
       fingerprint = "complete";
       checkStatus = "success";
       yield* TestClock.adjust("10 minutes");
       assert.equal(yield* delayAfterSweep, 120_000, "nothing is in flight");
+      assert.equal(detailReads, 3, "a changed check-state fingerprint refreshes detail");
+      yield* (yield* EffectWorker.OrchestrationEffectWorkerV2).drain();
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(
+        messages.flatMap((message) => message.notification?.summary ?? []),
+        ["#15: checks passed"],
+      );
 
       yield* orchestrator.dispatch({
         type: "thread.pull-request.watch",
