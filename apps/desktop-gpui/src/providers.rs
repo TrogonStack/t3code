@@ -471,13 +471,11 @@ impl Catalog {
             crate::settings_source_control::SourceControlConfig::from_settings(&value["settings"])
                 .with_secret_sources(
                     &value["settings"],
-                    value["environment"]["capabilities"]["secretReferences"].as_bool()
-                        == Some(true),
+                    value["secretReferences"].as_bool() == Some(true),
                 );
         let secrets = crate::settings_secrets::Config {
             settings: value["settings"].clone(),
-            manageable: value["environment"]["capabilities"]["secretProviderSettings"].as_bool()
-                == Some(true),
+            manageable: value["secretProviderSettings"].as_bool() == Some(true),
         };
         let Config {
             providers,
@@ -1611,6 +1609,18 @@ mod tests {
         .unwrap();
         assert_eq!(with.available_editors(), ["zed", "file-manager"]);
         assert!(catalog(vec![], json!({})).available_editors().is_empty());
+    }
+
+    #[test]
+    fn the_secret_flags_are_read_from_the_top_level_of_the_server_config() {
+        let with = Catalog::decode(json!({
+            "providers": [], "settings": {"secretProviders": {"vault": {"kind": "openbao", "label": "Vault"}}},
+            "secretProviderSettings": true, "secretReferences": true,
+        }))
+        .unwrap();
+        assert!(with.secrets().manageable);
+        assert!(!with.source_control().secret_sources().is_empty());
+        assert!(!catalog(vec![], json!({})).secrets().manageable);
     }
 
     #[test]
