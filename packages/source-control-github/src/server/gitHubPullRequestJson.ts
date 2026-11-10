@@ -966,7 +966,7 @@ export function toPullRequestSummary(pr: SummarizedPullRequest): GitHubPullReque
 export interface GitHubPullRequestWatchFingerprint {
   readonly status: string;
   readonly remarks: string;
-  readonly conditional?: true;
+  readonly includesCheckState?: true;
 }
 
 type EditedConnection = WatchedPullRequest["comments"] | WatchedPullRequest["reviews"];
@@ -991,6 +991,7 @@ export function toPullRequestWatchFingerprint(
 ): GitHubPullRequestWatchFingerprint {
   const contexts = pr.commits.nodes?.[0]?.commit.statusCheckRollup?.contexts;
   return {
+    includesCheckState: true,
     status: [
       pr.state,
       pr.mergeable,

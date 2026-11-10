@@ -42,10 +42,7 @@ import {
 
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
-/**
- * While checks run, a sweep of conditional fingerprints spends no quota when nothing moved, so
- * it can follow CI closely. GitHub's secondary limits count requests, hence not faster.
- */
+/** Check-state fingerprints avoid full detail reads while following active CI. */
 const ACTIVE_SWEEP_SECONDS = 30;
 /** A push starts checks that may not be listed yet, so keep the quick pace for a while. */
 const RECENT_PUSH_MS = 5 * 60_000;
@@ -91,7 +88,7 @@ interface LastRead {
   readonly at: number;
   readonly fingerprint: string;
   readonly inFlight: boolean;
-  readonly conditional: boolean;
+  readonly includesCheckState: boolean;
   readonly remarksComplete: boolean;
   readonly watches: ReadonlySet<string>;
   readonly status: string | null;
@@ -171,9 +168,7 @@ function planRead(
     last.remarks !== fingerprint.remarks ||
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
-  // A conditional fingerprint already carries check and mergeability state, so in-flight work
-  // shows up as a status change there.
-  const settling = last.inFlight && fingerprint.conditional !== true;
+  const settling = last.inFlight && fingerprint.includesCheckState !== true;
   return {
     detail: activity || checksDue || last.status !== fingerprint.status || settling,
     activity,
@@ -562,7 +557,7 @@ export const make = Effect.gen(function* () {
           ? (threadTails.get(group.key)?.fetchedAt ?? now)
           : last.at,
       fingerprint: group.fingerprint,
-      conditional: fingerprint?.conditional === true,
+      includesCheckState: fingerprint?.includesCheckState === true,
       inFlight:
         detail.mergeability === "unknown" ||
         detail.checks.some((check) => check.status === "pending"),
@@ -676,7 +671,7 @@ export const make = Effect.gen(function* () {
       groups.some((group) => {
         const last = lastReads.get(group.key);
         return (
-          last?.conditional === true &&
+          last?.includesCheckState === true &&
           (last.inFlight ||
             group.targets.some((target) => now - lifeOf(target).pushedAt < RECENT_PUSH_MS))
         );

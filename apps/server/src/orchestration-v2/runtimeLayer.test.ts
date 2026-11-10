@@ -3968,7 +3968,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("sweeps quickly only while checks run and the fingerprint is conditional", () =>
+  it.effect("sweeps quickly only while checks run and the fingerprint includes check state", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
       const threadId = ThreadId.make("runtime-pull-request-watch-cadence");
@@ -4006,7 +4006,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       });
 
       let checkStatus: "pending" | "success" = "pending";
-      let fingerprint: "conditional" | "graphql" | "paused" = "conditional";
+      let fingerprint: "complete" | "opaque" | "paused" = "complete";
       let detailReads = 0;
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
@@ -4031,7 +4031,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                   : Effect.succeed({
                       status: checkStatus,
                       remarks: "0",
-                      ...(fingerprint === "conditional" ? { conditional: true as const } : {}),
+                      ...(fingerprint === "complete" ? { includesCheckState: true as const } : {}),
                     }),
               invalidate: () => Effect.void,
               detail: () =>
@@ -4071,16 +4071,16 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
 
       assert.equal(yield* delayAfterSweep, 30_000, "checks are running");
       assert.equal(yield* delayAfterSweep, 30_000, "checks are still running");
-      assert.equal(detailReads, 1, "an unchanged conditional fingerprint needs no reread");
-      fingerprint = "graphql";
+      assert.equal(detailReads, 1, "an unchanged check-state fingerprint needs no reread");
+      fingerprint = "opaque";
       assert.equal(
         yield* delayAfterSweep,
         120_000,
-        "reading costs quota without a conditional fingerprint",
+        "opaque fingerprints cannot replace active check reads",
       );
       fingerprint = "paused";
       assert.equal(yield* delayAfterSweep, 120_000, "the host is rate limited");
-      fingerprint = "conditional";
+      fingerprint = "complete";
       checkStatus = "success";
       yield* TestClock.adjust("10 minutes");
       assert.equal(yield* delayAfterSweep, 120_000, "nothing is in flight");
