@@ -33,6 +33,7 @@ use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
+pub use projects_panel::ProjectsData;
 use projects_panel::ProjectsPanel;
 use providers_panel::ProvidersPanel;
 use scope_pickers::ScopeBar;
@@ -358,25 +359,9 @@ impl SettingsDialog {
         });
     }
 
-    pub fn set_projects_data(
-        &mut self,
-        live: Vec<crate::projects::ProjectEntry>,
-        archived: Vec<crate::projects::ProjectEntry>,
-        can_organize: bool,
-        environment: String,
-        thread_projects: Vec<String>,
-        cx: &mut Context<Self>,
-    ) {
-        self.projects.update(cx, |panel, cx| {
-            panel.set_data(
-                live,
-                archived,
-                can_organize,
-                environment,
-                thread_projects,
-                cx,
-            )
-        });
+    pub fn set_projects_data(&mut self, data: ProjectsData, cx: &mut Context<Self>) {
+        self.projects
+            .update(cx, |panel, cx| panel.set_data(data, cx));
     }
 
     pub fn on_projects_call(

@@ -551,15 +551,17 @@ impl MainView {
 
     /// Hands the Labs tab the scope bar's choices and the attached environment's flags.
     fn sync_labs(&mut self, cx: &mut Context<Self>) {
-        let (label, machine, entries) = match &self.status {
+        let (label, machine, environment_id, entries) = match &self.status {
             Status::Connected {
                 label,
                 machine,
+                environment_id,
                 shell,
                 ..
             } => (
                 label.clone(),
                 *machine,
+                environment_id.clone(),
                 shell
                     .as_ref()
                     .map(|s| s.project_entries.clone())
@@ -598,6 +600,8 @@ impl MainView {
             )
         });
         let source_control = self.providers.as_ref().map(|c| c.source_control().clone());
+        let projects_config = source_control.clone().unwrap_or_default();
+        let projects_catalog = self.providers.clone();
         let secrets = self.providers.as_ref().map(|c| c.secrets().clone());
         let provider_tab = self.providers.as_ref().map(|c| {
             (
@@ -622,11 +626,17 @@ impl MainView {
                 settings.set_providers_data(config, instances, sources, cx);
             }
             settings.set_projects_data(
-                live,
-                archived,
-                can_organize,
-                environment,
-                thread_projects,
+                settings::ProjectsData {
+                    live,
+                    archived,
+                    can_organize,
+                    environment,
+                    environment_id,
+                    machine,
+                    thread_projects,
+                    config: projects_config,
+                    catalog: projects_catalog,
+                },
                 cx,
             );
         });

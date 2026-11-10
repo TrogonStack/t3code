@@ -149,6 +149,220 @@ pub fn has_default_icon(member: &Member) -> bool {
     member.favicon_path.is_none() && member.icon.is_none()
 }
 
+/// `MAX_SCRIPT_ID_LENGTH`.
+const SCRIPT_ID_MAX: usize = 24;
+
+/// The action icons (`ProjectScriptIcon`), in the editor's order, with their labels.
+pub const SCRIPT_ICONS: [(&str, &str); 6] = [
+    ("play", "Play"),
+    ("test", "Test"),
+    ("lint", "Lint"),
+    ("configure", "Configure"),
+    ("build", "Build"),
+    ("debug", "Debug"),
+];
+
+/// A project action (`ProjectScript`): the editor's fields, in the shape the form holds them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Script {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    pub icon: String,
+    pub run_on_worktree_create: bool,
+    /// `async: false`: the agent waits for the setup to finish.
+    pub wait_for_setup: bool,
+    pub run_on_settle: bool,
+    pub stop_on_settle: bool,
+    /// Empty when the action has no preview.
+    pub preview_url: String,
+    pub auto_open_preview: bool,
+}
+
+impl Script {
+    /// A blank form for a new action.
+    pub fn blank() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            command: String::new(),
+            icon: "play".to_owned(),
+            run_on_worktree_create: false,
+            wait_for_setup: false,
+            run_on_settle: false,
+            stop_on_settle: false,
+            preview_url: String::new(),
+            auto_open_preview: false,
+        }
+    }
+
+    /// Reads one entry of `defaultProjectScripts`; an entry without an id, name or command is skipped.
+    pub fn decode(value: &Value) -> Option<Self> {
+        let text = |key: &str| value.get(key).and_then(Value::as_str);
+        let flag = |key: &str| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let icon = text("icon").unwrap_or("play");
+        Some(Self {
+            id: text("id")?.to_owned(),
+            name: text("name")?.to_owned(),
+            command: text("command")?.to_owned(),
+            icon: if SCRIPT_ICONS.iter().any(|(known, _)| *known == icon) {
+                icon.to_owned()
+            } else {
+                "play".to_owned()
+            },
+            run_on_worktree_create: flag("runOnWorktreeCreate"),
+            wait_for_setup: value.get("async").and_then(Value::as_bool) == Some(false),
+            run_on_settle: flag("runOnSettle"),
+            stop_on_settle: flag("stopOnSettle"),
+            preview_url: text("previewUrl").unwrap_or_default().to_owned(),
+            auto_open_preview: flag("autoOpenPreview"),
+        })
+    }
+
+    /// `buildProjectScript`: optional keys appear only when they matter.
+    pub fn encode(&self) -> Value {
+        let mut script = json!({
+            "id": self.id,
+            "name": self.name,
+            "command": self.command,
+            "icon": self.icon,
+            "runOnWorktreeCreate": self.run_on_worktree_create,
+        });
+        if self.run_on_worktree_create && self.wait_for_setup {
+            script["async"] = json!(false);
+        }
+        if self.run_on_settle {
+            script["runOnSettle"] = json!(true);
+        }
+        if self.stop_on_settle {
+            script["stopOnSettle"] = json!(true);
+        }
+        if !self.preview_url.is_empty() {
+            script["previewUrl"] = json!(self.preview_url);
+            script["autoOpenPreview"] = json!(self.auto_open_preview);
+        }
+        script
+    }
+}
+
+pub fn decode_scripts(value: &Value) -> Vec<Script> {
+    value
+        .as_array()
+        .map(|scripts| scripts.iter().filter_map(Script::decode).collect())
+        .unwrap_or_default()
+}
+
+/// The editor's validation, in the order it shows them.
+pub fn script_problem(name: &str, command: &str) -> Option<&'static str> {
+    if name.trim().is_empty() {
+        Some("Name is required.")
+    } else if command.trim().is_empty() {
+        Some("Command is required.")
+    } else {
+        None
+    }
+}
+
+fn normalized_script_id(name: &str) -> String {
+    let mut cleaned = String::new();
+    for ch in name.trim().to_lowercase().chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            cleaned.push(ch);
+        } else if !cleaned.ends_with('-') {
+            cleaned.push('-');
+        }
+    }
+    let cleaned = cleaned.trim_matches('-');
+    if cleaned.is_empty() {
+        return "script".to_owned();
+    }
+    if cleaned.len() <= SCRIPT_ID_MAX {
+        return cleaned.to_owned();
+    }
+    let cut = cleaned[..SCRIPT_ID_MAX].trim_end_matches('-');
+    if cut.is_empty() { "script" } else { cut }.to_owned()
+}
+
+/// `nextProjectScriptId`: the name's slug, then `-2`, `-3` and so on while it is taken.
+pub fn next_script_id(name: &str, existing: &[String]) -> String {
+    let base = normalized_script_id(name);
+    if !existing.contains(&base) {
+        return base;
+    }
+    for suffix in 2..10_000 {
+        let candidate = format!("{base}-{suffix}");
+        let candidate = if candidate.len() <= SCRIPT_ID_MAX {
+            candidate
+        } else {
+            let keep = SCRIPT_ID_MAX
+                .saturating_sub(suffix.to_string().len() + 1)
+                .max(1);
+            format!("{}-{suffix}", &base[..keep.min(base.len())])
+        };
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+    }
+    base
+}
+
+/// The list after a save: the edited action replaces its entry (or is appended), and the other
+/// actions give up a setup or settle role the saved one claims (`releaseClaimedRoles`).
+pub fn saved_scripts(current: &[Script], saved: Script) -> Vec<Script> {
+    let mut updated: Vec<Script> = current
+        .iter()
+        .map(|script| {
+            if script.id == saved.id {
+                return saved.clone();
+            }
+            let mut other = script.clone();
+            if saved.run_on_worktree_create {
+                other.run_on_worktree_create = false;
+            }
+            if saved.run_on_settle {
+                other.run_on_settle = false;
+            }
+            other
+        })
+        .collect();
+    if !current.iter().any(|script| script.id == saved.id) {
+        updated.push(saved);
+    }
+    updated
+}
+
+/// `derivePhysicalProjectKey`: the key a checkout's grouping rule is saved under.
+pub fn grouping_key(environment_id: &str, root: &str) -> String {
+    let trimmed = root.trim();
+    let drive = trimmed.len() >= 2
+        && trimmed.as_bytes()[0].is_ascii_alphabetic()
+        && trimmed.as_bytes()[1] == b':';
+    let is_root = matches!(trimmed, "/" | "\\")
+        || (drive && trimmed.len() == 3 && matches!(trimmed.as_bytes()[2], b'/' | b'\\'));
+    let path = if is_root {
+        trimmed.to_owned()
+    } else if trimmed.starts_with('/') {
+        let kept = trimmed.trim_end_matches('/');
+        if kept.is_empty() { trimmed } else { kept }.to_owned()
+    } else {
+        let kept = trimmed.trim_end_matches(['/', '\\']);
+        if kept.is_empty() {
+            trimmed.to_owned()
+        } else if kept.len() == 2 && drive {
+            format!("{kept}\\")
+        } else {
+            kept.to_owned()
+        }
+    };
+    let windows = drive || path.starts_with("\\\\");
+    let path = if windows {
+        path.replace('/', "\\").to_lowercase()
+    } else {
+        path
+    };
+    format!("{environment_id}:{path}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +446,74 @@ mod tests {
         project.icon = Some("rocket \u{b7} sky".to_owned());
         assert_eq!(icon_description(&project), "rocket \u{b7} sky");
         assert!(!has_default_icon(&project));
+    }
+
+    #[test]
+    fn an_action_round_trips_in_the_servers_shape() {
+        let wire = json!({
+            "id": "test", "name": "Test", "command": "bun test", "icon": "test",
+            "runOnWorktreeCreate": true, "async": false, "runOnSettle": true,
+            "previewUrl": "http://localhost:5173", "autoOpenPreview": true
+        });
+        let script = Script::decode(&wire).unwrap();
+        assert!(script.wait_for_setup && script.run_on_settle && script.auto_open_preview);
+        assert_eq!(script.encode(), wire);
+        let mut plain = script;
+        plain.run_on_worktree_create = false;
+        plain.run_on_settle = false;
+        plain.preview_url.clear();
+        let encoded = plain.encode();
+        assert!(encoded.get("async").is_none() && encoded.get("runOnSettle").is_none());
+        assert!(encoded.get("previewUrl").is_none() && encoded.get("autoOpenPreview").is_none());
+        assert_eq!(Script::decode(&json!({"id": "x", "name": "X"})), None);
+    }
+
+    #[test]
+    fn action_ids_follow_next_project_script_id() {
+        let taken = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+        assert_eq!(next_script_id("Run Tests!", &[]), "run-tests");
+        assert_eq!(next_script_id("  ", &[]), "script");
+        assert_eq!(next_script_id("Test", &taken(&["test"])), "test-2");
+        assert_eq!(
+            next_script_id("Test", &taken(&["test", "test-2"])),
+            "test-3"
+        );
+        let long = next_script_id("a very long action name indeed", &[]);
+        assert!(long.len() <= 24 && !long.ends_with('-'));
+        let again = next_script_id("a very long action name indeed", &taken(&[long.as_str()]));
+        assert!(again.len() <= 24 && again != long);
+    }
+
+    #[test]
+    fn saving_an_action_releases_the_roles_it_claims() {
+        let mut setup = Script::blank();
+        setup.id = "setup".to_owned();
+        setup.run_on_worktree_create = true;
+        setup.run_on_settle = true;
+        let mut other = Script::blank();
+        other.id = "other".to_owned();
+        let mut claims = Script::blank();
+        claims.id = "claims".to_owned();
+        claims.run_on_worktree_create = true;
+        let list = saved_scripts(&[setup.clone(), other.clone()], claims.clone());
+        assert_eq!(list.len(), 3);
+        assert!(!list[0].run_on_worktree_create && list[0].run_on_settle);
+        assert_eq!(list[2], claims);
+        let edited = Script {
+            name: "Renamed".to_owned(),
+            ..other
+        };
+        assert_eq!(saved_scripts(&list, edited.clone())[1], edited);
+        assert_eq!(saved_scripts(&list, edited).len(), 3);
+        assert_eq!(script_problem(" ", "x"), Some("Name is required."));
+        assert_eq!(script_problem("a", " "), Some("Command is required."));
+        assert_eq!(script_problem("a", "b"), None);
+    }
+
+    #[test]
+    fn a_checkouts_grouping_key_is_the_environment_and_its_normalized_path() {
+        assert_eq!(grouping_key("env1", " /work/app/ "), "env1:/work/app");
+        assert_eq!(grouping_key("env1", "/"), "env1:/");
+        assert_eq!(grouping_key("env1", "C:/Work/App/"), "env1:c:\\work\\app");
     }
 }

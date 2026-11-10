@@ -440,6 +440,7 @@ pub async fn run(
                         label: environment.label.clone(),
                         machine: environment.machine,
                         can_pin: environment.project_organization,
+                        environment_id: environment.id.clone(),
                         shell: None,
                     },
                 );
@@ -1300,6 +1301,7 @@ fn handle(
                             label: environment.label.clone(),
                             machine: environment.machine,
                             can_pin: environment.project_organization,
+                            environment_id: environment.id.clone(),
                             shell: Some(shell.view()),
                         },
                     );

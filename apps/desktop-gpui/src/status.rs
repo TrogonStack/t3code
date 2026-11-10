@@ -22,6 +22,8 @@ pub enum Status {
         machine: MachineKind,
         /// The server keeps project pins, so the window offers them.
         can_pin: bool,
+        /// The server's own id for the environment, which client-side overrides are keyed by.
+        environment_id: String,
         shell: Option<ShellView>,
     },
     Failed(String),
@@ -298,6 +300,7 @@ mod tests {
             label: label.clone(),
             machine: MachineKind::Server,
             can_pin: false,
+            environment_id: String::new(),
             shell: None,
         };
         assert_eq!(waiting.to_string(), "Connected to Local");
@@ -305,6 +308,7 @@ mod tests {
             label: label.clone(),
             machine: MachineKind::Server,
             can_pin: false,
+            environment_id: String::new(),
             shell: Some(ShellView {
                 projects: 2,
                 threads: 14,
@@ -319,6 +323,7 @@ mod tests {
             label,
             machine: MachineKind::Server,
             can_pin: false,
+            environment_id: String::new(),
             shell: Some(ShellView {
                 projects: 1,
                 threads: 1,

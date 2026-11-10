@@ -135,6 +135,12 @@ pub enum Field {
     ReviewInstructions,
     ReviewModel,
     WriterModel,
+    /// The Projects tab's New threads model, `defaultModelSelection`.
+    DefaultModel,
+    /// The Projects tab's New threads workspace, `defaultThreadEnvMode`.
+    ThreadEnvMode,
+    /// The Projects tab's actions, `defaultProjectScripts`.
+    Scripts,
 }
 
 impl Field {
@@ -151,6 +157,9 @@ impl Field {
             Self::ReviewInstructions => "reviewGuideInstructions",
             Self::ReviewModel => "reviewGuideModelSelection",
             Self::WriterModel => "sourceControlWriterModelSelection",
+            Self::DefaultModel => "defaultModelSelection",
+            Self::ThreadEnvMode => "defaultThreadEnvMode",
+            Self::Scripts => "defaultProjectScripts",
         }
     }
 
@@ -176,11 +185,15 @@ impl Field {
             Self::FollowTemplates => json!(true),
             Self::StyleMode => json!("repo_conventions"),
             Self::StyleInstructions | Self::ReviewInstructions => json!(""),
-            Self::MergeMethod | Self::ReviewModel | Self::WriterModel => Value::Null,
+            Self::MergeMethod | Self::ReviewModel | Self::WriterModel | Self::DefaultModel => {
+                Value::Null
+            }
+            Self::ThreadEnvMode => json!("local"),
+            Self::Scripts => json!([]),
         }
     }
 
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 13] = [
         Self::AutoPull,
         Self::AgentCredits,
         Self::MergeMethod,
@@ -191,6 +204,9 @@ impl Field {
         Self::ReviewInstructions,
         Self::ReviewModel,
         Self::WriterModel,
+        Self::DefaultModel,
+        Self::ThreadEnvMode,
+        Self::Scripts,
     ];
 }
 
@@ -413,6 +429,17 @@ impl SourceControlConfig {
         read(&self.environment, field).is_some_and(|value| value != field.default_value())
     }
 
+    /// Every action id any layer holds, which a new action's id must not repeat.
+    pub fn script_ids(&self) -> Vec<String> {
+        let key = Field::Scripts.wire();
+        std::iter::once(&self.environment)
+            .chain(self.overrides.values())
+            .filter_map(|map| map.get(key)?.as_array())
+            .flatten()
+            .filter_map(|script| script.get("id")?.as_str().map(str::to_owned))
+            .collect()
+    }
+
     /// The first project of the group that overrides the key.
     pub fn project_override(&self, field: Field, members: &[String]) -> Option<Value> {
         if !field.project_scoped() {
@@ -581,10 +608,25 @@ pub fn style_description(mode: &str) -> &'static str {
 }
 
 /// The value of a layer row.
+/// `resolveEnvModeLabel`.
+pub fn env_mode_label(mode: &str) -> &'static str {
+    if mode == "worktree" {
+        "New worktree"
+    } else {
+        "Local"
+    }
+}
+
 fn describe(field: Field, value: &Value) -> String {
     match field {
         Field::MergeMethod => MERGE_METHODS[merge_index(value)].1.to_owned(),
         Field::StyleMode => STYLE_MODES[style_index(value)].1.to_owned(),
+        Field::ThreadEnvMode => env_mode_label(value.as_str().unwrap_or("local")).to_owned(),
+        Field::Scripts => match value.as_array().map_or(0, Vec::len) {
+            1 => "1 action".to_owned(),
+            count => format!("{count} actions"),
+        },
+        Field::DefaultModel if value.is_null() => "Automatic".to_owned(),
         _ => match value {
             Value::Bool(true) => "On".to_owned(),
             Value::Bool(false) => "Off".to_owned(),

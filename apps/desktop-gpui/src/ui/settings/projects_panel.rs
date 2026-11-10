@@ -1,23 +1,66 @@
-//! The Projects tab: `ProjectsSettings.tsx` (the list under "All projects") and the first part of
-//! `ProjectSettingsPanel.tsx` (Name, Location, Project icon, Pin, Archive and Danger). The icon
-//! picker dialogs are not here: the buttons show and stay off. Writes go out as `project.update`
-//! and `project.delete` per member; the shell stream brings the result back.
+//! The Projects tab: `ProjectsSettings.tsx` (the list under "All projects") and
+//! `ProjectSettingsPanel.tsx` (Name, Location, Project icon, Pin, Archive, New threads, Actions,
+//! Checkouts and Danger). The icon picker dialogs are not here: the buttons show and stay off.
+//! Writes go out as `project.update` and `project.delete` per member, and as settings patches
+//! for the New threads and Actions overrides; the streams bring the result back.
 
-use super::components::{group, reset_button_labeled, row, section, switch};
+use super::components::{group, reset_button_labeled, row, section, switch, tab_stop};
 use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem};
 use super::scope_pickers::ScopeBar;
 use super::secret_field::sm_field;
 use super::tokens::Tokens;
 use super::*;
 use crate::connection::{Action, ActionSender, Call, command_id};
-use crate::projects::{Member, ProjectEntry};
+use crate::projects::{MachineKind, Member, ProjectEntry};
+use crate::providers::Catalog;
+use crate::settings::{DeviceSettings, GroupingMode};
 use crate::settings_projects::{self as model};
+use crate::settings_source_control::{Field, SourceControlConfig};
 use crate::status::CallEvent;
 use gpui::{PathPromptOptions, Subscription};
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::input::{InputEvent, InputState, TextareaState};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::rc::Rc;
+
+mod sections;
+
+/// What the tab reads from the connection, handed over whenever it changes.
+#[derive(Clone, PartialEq)]
+pub struct ProjectsData {
+    pub live: Vec<ProjectEntry>,
+    pub archived: Vec<ProjectEntry>,
+    pub can_organize: bool,
+    pub environment: String,
+    pub environment_id: String,
+    pub machine: MachineKind,
+    /// The project of every listed thread, for the removal's thread count.
+    pub thread_projects: Vec<String>,
+    pub config: SourceControlConfig,
+    pub catalog: Option<Catalog>,
+}
+
+/// The select that is open, and the checkout it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MenuKind {
+    Workspace,
+    Grouping(usize),
+}
+
+/// The action editor: the switches and icon the form holds besides its three text inputs.
+struct Editor {
+    /// The id of the action being edited; `None` adds one.
+    editing: Option<String>,
+    form: model::Script,
+    problem: Option<&'static str>,
+}
+
+/// Members still to remove, one `project.delete` at a time as the web does.
+struct Removal {
+    queue: VecDeque<Member>,
+    current: Option<(u64, String)>,
+    whole_group: bool,
+}
 
 const DIALOG_WIDTH: f32 = 512.;
 const INFO: &str =
@@ -32,16 +75,33 @@ pub struct ProjectsPanel {
     archived: Vec<ProjectEntry>,
     can_organize: bool,
     environment: String,
+    environment_id: String,
+    machine: MachineKind,
     /// The project of every listed thread, for the removal's thread count.
     thread_projects: Vec<String>,
+    config: SourceControlConfig,
+    catalog: Option<Catalog>,
+    /// Client-side grouping rules by physical key, and the global rule they fall back to.
+    grouping: BTreeMap<String, GroupingMode>,
+    global_grouping: GroupingMode,
+    /// Settings writes in flight, with what to put back and the failure title.
+    saves: HashMap<u64, (SourceControlConfig, &'static str)>,
+    menu: Option<(MenuKind, usize)>,
+    editor: Option<Editor>,
+    script_name: Entity<InputState>,
+    script_preview: Entity<InputState>,
+    script_command: Entity<TextareaState>,
+    /// The action the delete confirmation asks about: its id and name.
+    delete_script: Option<(String, String)>,
     name: Entity<InputState>,
     /// The group and title the name input shows.
     seeded: Option<(String, String)>,
     /// Writes in flight, with the failure title each reports.
     pending: HashMap<u64, &'static str>,
-    removing: bool,
+    removal: Option<Removal>,
     error: Option<String>,
-    confirm: bool,
+    /// The members the removal confirmation asks about.
+    confirm: Option<Vec<Member>>,
     next_token: u64,
     _subscriptions: Vec<Subscription>,
 }
@@ -54,6 +114,14 @@ impl ProjectsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("Project name"));
+        let script_name = cx.new(|cx| InputState::new(window, cx).placeholder("Test"));
+        let script_preview =
+            cx.new(|cx| InputState::new(window, cx).placeholder("http://localhost:5173"));
+        let script_command = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("bun test")
+                .auto_grow(3, 6)
+        });
         let subscriptions = vec![
             cx.observe(&scope, |_, _, cx| cx.notify()),
             cx.subscribe_in(
@@ -73,13 +141,26 @@ impl ProjectsPanel {
             archived: Vec::new(),
             can_organize: false,
             environment: String::new(),
+            environment_id: String::new(),
+            machine: MachineKind::Desktop,
             thread_projects: Vec::new(),
+            config: SourceControlConfig::default(),
+            catalog: None,
+            grouping: DeviceSettings::grouping_overrides(),
+            global_grouping: DeviceSettings::load().project_grouping,
+            saves: HashMap::new(),
+            menu: None,
+            editor: None,
+            script_name,
+            script_preview,
+            script_command,
+            delete_script: None,
             name,
             seeded: None,
             pending: HashMap::new(),
-            removing: false,
+            removal: None,
             error: None,
-            confirm: false,
+            confirm: None,
             next_token: model::TOKEN_BASE,
             _subscriptions: subscriptions,
         }
@@ -92,44 +173,66 @@ impl ProjectsPanel {
         }
     }
 
-    pub fn set_data(
-        &mut self,
-        live: Vec<ProjectEntry>,
-        archived: Vec<ProjectEntry>,
-        can_organize: bool,
-        environment: String,
-        thread_projects: Vec<String>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.live != live
-            || self.archived != archived
-            || self.can_organize != can_organize
-            || self.environment != environment
-            || self.thread_projects != thread_projects
-        {
-            self.live = live;
-            self.archived = archived;
-            self.can_organize = can_organize;
-            self.environment = environment;
-            self.thread_projects = thread_projects;
+    pub fn set_data(&mut self, data: ProjectsData, cx: &mut Context<Self>) {
+        let ProjectsData {
+            live,
+            archived,
+            can_organize,
+            environment,
+            environment_id,
+            machine,
+            thread_projects,
+            config,
+            catalog,
+        } = data;
+        let mut changed = false;
+        macro_rules! take {
+            ($field:ident, $value:expr) => {
+                if self.$field != $value {
+                    self.$field = $value;
+                    changed = true;
+                }
+            };
+        }
+        take!(live, live);
+        take!(archived, archived);
+        take!(can_organize, can_organize);
+        take!(environment, environment);
+        take!(environment_id, environment_id);
+        take!(machine, machine);
+        take!(thread_projects, thread_projects);
+        take!(catalog, catalog);
+        if self.saves.is_empty() {
+            take!(config, config);
+        }
+        if changed {
             cx.notify();
         }
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        self.confirm = false;
+        self.confirm = None;
+        self.editor = None;
+        self.delete_script = None;
+        self.menu = None;
         self.error = None;
         self.seeded = None;
+        self.grouping = DeviceSettings::grouping_overrides();
+        self.global_grouping = DeviceSettings::load().project_grouping;
         cx.notify();
     }
 
-    /// Closes the removal confirmation; returns whether there was one, so Escape stops there.
+    /// Closes the innermost open layer (a select, a confirmation, the editor); returns whether
+    /// there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        if std::mem::take(&mut self.confirm) {
+        let closed = self.menu.take().is_some()
+            || self.confirm.take().is_some()
+            || self.delete_script.take().is_some()
+            || self.editor.take().is_some();
+        if closed {
             cx.notify();
-            return true;
         }
-        false
+        closed
     }
 
     /// Every listed project but the scratch one: the live groups, then the archived.
@@ -145,7 +248,7 @@ impl ProjectsPanel {
         self.groups().find(|entry| entry.key == key)
     }
 
-    fn send(&mut self, project_id: &str, payload: Value, failure: &'static str) {
+    fn send(&mut self, project_id: &str, payload: Value, failure: &str) -> Option<u64> {
         let token = self.next_token;
         self.next_token += 1;
         let action = Action::Call {
@@ -154,12 +257,11 @@ impl ProjectsPanel {
             payload,
         };
         match self.actions.try_send(action) {
-            Ok(()) => {
-                self.pending.insert(token, failure);
-            }
+            Ok(()) => Some(token),
             Err(_) => {
                 self.error = Some(format!("{failure}: could not send the request"));
                 eprintln!("[projects] could not send the update for {project_id}");
+                None
             }
         }
     }
@@ -175,12 +277,36 @@ impl ProjectsPanel {
         self.error = None;
         for member in members {
             let payload = model::update_payload(&member.id, command_id(), fields.clone());
-            self.send(&member.id, payload, failure);
+            if let Some(token) = self.send(&member.id, payload, failure) {
+                self.pending.insert(token, failure);
+            }
         }
         cx.notify();
     }
 
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
+        if let Some((previous, failure)) = self.saves.remove(&token) {
+            if let CallEvent::Failed(message) = event {
+                self.config = previous;
+                if self.error.is_none() {
+                    self.error = Some(format!("{failure}: {message}"));
+                }
+            } else if matches!(event, CallEvent::Progress(_)) {
+                self.saves.insert(token, (previous, failure));
+                return;
+            }
+            cx.notify();
+            return;
+        }
+        if self
+            .removal
+            .as_ref()
+            .and_then(|removal| removal.current.as_ref())
+            .is_some_and(|(current, _)| *current == token)
+        {
+            self.on_removal(event, cx);
+            return;
+        }
         let Some(failure) = self.pending.get(&token).copied() else {
             return;
         };
@@ -194,14 +320,52 @@ impl ProjectsPanel {
             }
         }
         self.pending.remove(&token);
-        if self.removing && self.pending.is_empty() {
-            self.removing = false;
-            if self.error.is_none() {
-                self.scope
-                    .update(cx, |bar, cx| bar.select_project("all", cx));
+        cx.notify();
+    }
+
+    /// One removal answered: the next member goes out, or the removal ends (the web stops at the
+    /// first failure and leaves the settings page for the list only when the whole group went).
+    fn on_removal(&mut self, event: CallEvent, cx: &mut Context<Self>) {
+        let title = self
+            .removal
+            .as_ref()
+            .and_then(|removal| removal.current.as_ref())
+            .map(|(_, title)| title.clone())
+            .unwrap_or_default();
+        match event {
+            CallEvent::Progress(_) => return,
+            CallEvent::Done(_) => self.next_removal(cx),
+            CallEvent::Failed(message) => {
+                self.removal = None;
+                self.error = Some(format!("Failed to remove \"{title}\": {message}"));
             }
         }
         cx.notify();
+    }
+
+    fn next_removal(&mut self, cx: &mut Context<Self>) {
+        let Some(removal) = self.removal.as_mut() else {
+            return;
+        };
+        let Some(member) = removal.queue.pop_front() else {
+            let whole_group = removal.whole_group;
+            self.removal = None;
+            if whole_group {
+                self.scope
+                    .update(cx, |bar, cx| bar.select_project("all", cx));
+            }
+            return;
+        };
+        let payload = model::delete_payload(&member.id, command_id());
+        let failure = format!("Failed to remove \"{}\"", member.title);
+        match self.send(&member.id, payload, &failure) {
+            Some(token) => {
+                if let Some(removal) = self.removal.as_mut() {
+                    removal.current = Some((token, member.title));
+                }
+            }
+            None => self.removal = None,
+        }
     }
 
     fn commit_name(&mut self, cx: &mut Context<Self>) {
@@ -257,20 +421,21 @@ impl ProjectsPanel {
         .detach();
     }
 
+    /// Removes the confirmed members, `removeMembers`: one `project.delete` with `force` each.
     fn remove(&mut self, cx: &mut Context<Self>) {
-        self.confirm = false;
+        let Some(members) = self.confirm.take() else {
+            return;
+        };
         let Some(entry) = self.selected(cx).cloned() else {
             return;
         };
         self.error = None;
-        self.removing = true;
-        for member in &entry.members {
-            let payload = model::delete_payload(&member.id, command_id());
-            self.send(&member.id, payload, "Failed to remove project");
-        }
-        if self.pending.is_empty() {
-            self.removing = false;
-        }
+        self.removal = Some(Removal {
+            whole_group: members.len() == entry.members.len(),
+            queue: members.into(),
+            current: None,
+        });
+        self.next_removal(cx);
         cx.notify();
     }
 
@@ -535,16 +700,28 @@ impl ProjectsPanel {
         }
         page = page.child(group(rows, cx));
 
+        page = page.child(self.new_threads(&entry, editable, window, cx));
+        page = page.child(self.actions_section(&entry, editable, window, cx));
+        page = page.child(self.checkouts_section(&entry, editable, window, cx));
+
         if editable {
             let danger = model::danger(false, members.len());
-            let remove = button("project-remove", Variant::Outline, !self.removing, cx)
-                .text_color(theme.destructive)
-                .child(Icon::new(Icons::Trash).size(px(14.)))
-                .child(danger.button)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.confirm = true;
+            let remove = button(
+                "project-remove",
+                Variant::Outline,
+                self.removal.is_none(),
+                cx,
+            )
+            .text_color(theme.destructive)
+            .child(Icon::new(Icons::Trash).size(px(14.)))
+            .child(danger.button)
+            .on_click(cx.listener({
+                let members = members.clone();
+                move |this, _, _, cx| {
+                    this.confirm = Some(members.clone());
                     cx.notify();
-                }));
+                }
+            }));
             page = page.child(section(
                 "Danger",
                 group(
@@ -566,22 +743,29 @@ impl ProjectsPanel {
         page.into_any_element()
     }
 
-    fn confirm_view(&self, view: Entity<Self>, entry: &ProjectEntry, cx: &App) -> AnyElement {
+    fn confirm_view(
+        &self,
+        view: Entity<Self>,
+        entry: &ProjectEntry,
+        targets: &[Member],
+        cx: &App,
+    ) -> AnyElement {
         let theme = Tokens::of(cx);
+        let whole = targets.len() == entry.members.len();
         let threads = self
             .thread_projects
             .iter()
-            .filter(|id| entry.members.iter().any(|m| &m.id == *id))
+            .filter(|id| targets.iter().any(|m| &m.id == *id))
             .count();
         let lines = model::confirmation(
-            &entry.members,
+            targets,
             entry.members.len(),
             false,
             &entry.title,
             Some(self.environment.as_str()),
             threads,
         );
-        let danger = model::danger(false, entry.members.len());
+        let danger = model::danger(false, if whole { entry.members.len() } else { 1 });
         let (cancel, go, dismiss) = (view.clone(), view.clone(), view);
         let destructive = theme.destructive;
         let footer = vec![
@@ -589,7 +773,7 @@ impl ProjectsPanel {
                 .child("Cancel")
                 .on_click(move |_, _, cx| {
                     cancel.update(cx, |this, cx| {
-                        this.confirm = false;
+                        this.confirm = None;
                         cx.notify();
                     })
                 })
@@ -622,7 +806,7 @@ impl ProjectsPanel {
             footer,
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
-                    this.confirm = false;
+                    this.confirm = None;
                     cx.notify();
                 })
             },
@@ -630,15 +814,19 @@ impl ProjectsPanel {
         )
     }
 
-    pub fn overlay(&mut self, _: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.confirm {
-            return None;
+    pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(view) = self.delete_script_view(cx) {
+            return Some(view);
         }
+        if let Some(view) = self.editor_view(window, cx) {
+            return Some(view);
+        }
+        let targets = self.confirm.clone()?;
         let Some(entry) = self.selected(cx).cloned() else {
-            self.confirm = false;
+            self.confirm = None;
             return None;
         };
-        Some(self.confirm_view(cx.entity(), &entry, cx))
+        Some(self.confirm_view(cx.entity(), &entry, &targets, cx))
     }
 }
 

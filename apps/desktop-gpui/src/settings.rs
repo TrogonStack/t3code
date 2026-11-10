@@ -5,6 +5,7 @@
 //! store keeps that file name and its camelCase keys, so the two stay readable by each other.
 
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const FILE: &str = "client-settings.json";
@@ -66,6 +67,15 @@ impl GroupingMode {
             Self::Repository => "repository",
             Self::RepositoryPath => "repository_path",
             Self::Separate => "separate",
+        }
+    }
+
+    /// `PROJECT_GROUPING_MODE_LABELS`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Repository => "Group by repository",
+            Self::RepositoryPath => "Group by repository path",
+            Self::Separate => "Keep separate",
         }
     }
 
@@ -308,6 +318,77 @@ impl DeviceSettings {
             }
         }
         document.to_string()
+    }
+
+    /// `sidebarProjectGroupingOverrides`: the grouping rule of single checkouts, by physical key.
+    pub fn parse_grouping_overrides(text: &str) -> BTreeMap<String, GroupingMode> {
+        let Ok(value) = serde_json::from_str::<Value>(text) else {
+            return BTreeMap::new();
+        };
+        fields(&value)
+            .and_then(|map| map.get("sidebarProjectGroupingOverrides")?.as_object())
+            .map(|overrides| {
+                overrides
+                    .iter()
+                    .filter_map(|(key, mode)| {
+                        let key = key.trim();
+                        (!key.is_empty())
+                            .then(|| {
+                                Some((key.to_owned(), GroupingMode::from_wire(mode.as_str()?)?))
+                            })
+                            .flatten()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `withProjectGroupingOverride`: `None` is "inherit". Every other key stays as it was.
+    pub fn with_grouping_override(
+        existing: Option<&str>,
+        key: &str,
+        mode: Option<GroupingMode>,
+    ) -> String {
+        let mut document = existing
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        let target = match document.get_mut("settings") {
+            Some(inner) if inner.is_object() => inner,
+            _ => &mut document,
+        };
+        if let Some(map) = target.as_object_mut() {
+            let overrides = map
+                .entry("sidebarProjectGroupingOverrides")
+                .or_insert_with(|| json!({}));
+            if !overrides.is_object() {
+                *overrides = json!({});
+            }
+            if let Some(overrides) = overrides.as_object_mut() {
+                match mode {
+                    Some(mode) => overrides.insert(key.to_owned(), json!(mode.wire())),
+                    None => overrides.remove(key),
+                };
+            }
+        }
+        document.to_string()
+    }
+
+    pub fn grouping_overrides() -> BTreeMap<String, GroupingMode> {
+        Self::path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| Self::parse_grouping_overrides(&text))
+            .unwrap_or_default()
+    }
+
+    pub fn save_grouping_override(key: &str, mode: Option<GroupingMode>) {
+        if let Some(path) = Self::path() {
+            let existing = std::fs::read_to_string(&path).ok();
+            let _ = std::fs::write(
+                path,
+                Self::with_grouping_override(existing.as_deref(), key, mode),
+            );
+        }
     }
 
     pub fn path() -> Option<PathBuf> {
@@ -923,5 +1004,31 @@ mod tests {
         );
         assert_eq!(ids("sidebar manual"), ["project-order"]);
         assert_eq!(normalize("Café  Ñandú"), "cafe nandu");
+    }
+
+    #[test]
+    fn grouping_overrides_round_trip_and_keep_other_keys() {
+        let text = r#"{"settings":{"timestampFormat":"24-hour","sidebarProjectGroupingOverrides":{"env:/code/app":"separate","bad":"nope"}}}"#;
+        let read = DeviceSettings::parse_grouping_overrides(text);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read["env:/code/app"], GroupingMode::Separate);
+
+        let written = DeviceSettings::with_grouping_override(
+            Some(text),
+            "env:/code/lib",
+            Some(GroupingMode::RepositoryPath),
+        );
+        let after = DeviceSettings::parse_grouping_overrides(&written);
+        assert_eq!(after["env:/code/lib"], GroupingMode::RepositoryPath);
+        assert!(written.contains("\"timestampFormat\""));
+
+        let cleared = DeviceSettings::with_grouping_override(Some(&written), "env:/code/lib", None);
+        assert!(!DeviceSettings::parse_grouping_overrides(&cleared).contains_key("env:/code/lib"));
+        let fresh =
+            DeviceSettings::with_grouping_override(None, "k", Some(GroupingMode::Repository));
+        assert_eq!(
+            DeviceSettings::parse_grouping_overrides(&fresh)["k"],
+            GroupingMode::Repository
+        );
     }
 }

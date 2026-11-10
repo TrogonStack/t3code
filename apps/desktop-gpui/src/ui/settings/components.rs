@@ -120,7 +120,7 @@ pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
 /// `SettingsRow` (settingsLayout.tsx): `px-4 py-3`, the columns `minmax(0,1fr) minmax(10rem,auto)`
 /// with `gap-8` from a 32rem container, stacked with `gap-3` below it.
 pub(super) fn row(
-    title: &'static str,
+    title: impl IntoElement,
     description: impl IntoElement,
     reset: Option<AnyElement>,
     control: AnyElement,
@@ -132,7 +132,7 @@ pub(super) fn row(
 
 /// A `SettingsRow` with `children`: `pt-3 pb-1` and the content under the row's columns.
 pub(super) fn row_with_preview(
-    title: &'static str,
+    title: impl IntoElement,
     description: impl IntoElement,
     reset: Option<AnyElement>,
     control: AnyElement,
@@ -144,7 +144,7 @@ pub(super) fn row_with_preview(
 }
 
 fn row_with(
-    title: &'static str,
+    title: impl IntoElement,
     description: impl IntoElement,
     reset: Option<AnyElement>,
     control: AnyElement,
