@@ -101,6 +101,11 @@ import * as PullRequestReadCache from "./PullRequestReadCache.ts";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as ViewedFiles from "./pullRequestViewedFiles.ts";
 import { toChangeBreakdown } from "./pullRequestChangeBreakdown.ts";
+import {
+  gitattributesDirectories,
+  isGeneratedPath,
+  parseGitattributes,
+} from "./pullRequestGeneratedFiles.ts";
 
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
@@ -118,6 +123,8 @@ function supersedesReading(current: PullRequestReading | undefined, next: PullRe
   return (next.observedAt ?? -Infinity) >= (current.observedAt ?? -Infinity);
 }
 
+const GITATTRIBUTES_DIRECTORY_LIMIT = 24;
+const GENERATED_PATHS_DEADLINE = "3 seconds";
 // Providers request one extra row; 99 stays within GitHub/GitLab's 100-row API limit.
 const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
 const REPOSITORY_CONCURRENCY = 12;
@@ -1952,6 +1959,49 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  // Hosts expose no attribute API, so .gitattributes is read through the file-contents read at
+  // the revision the diff names. A host without it, or any failed read, marks nothing generated.
+  const resolveGeneratedPaths = (
+    project: SupportedProject,
+    input: PullRequestDiffInput,
+    patch: string,
+  ): Effect.Effect<ReadonlyArray<string>> => {
+    const read = project.api.getDiffFileContents;
+    const paths = parseDiffFilePaths(patch).flatMap((file) => {
+      const path = file.newPath ?? file.oldPath;
+      return path === null ? [] : [path];
+    });
+    if (read === undefined || paths.length === 0) return Effect.succeed([]);
+    return Effect.forEach(
+      gitattributesDirectories(paths, GITATTRIBUTES_DIRECTORY_LIMIT),
+      (directory) => {
+        const path = directory === "" ? ".gitattributes" : `${directory}/.gitattributes`;
+        return read({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          ...(input.commit === undefined ? {} : { commit: input.commit }),
+          changeType: "new",
+          oldPath: path,
+          newPath: path,
+        }).pipe(
+          Effect.map((contents) => [parseGitattributes(directory, contents.newContents)]),
+          Effect.orElseSucceed(() => []),
+        );
+      },
+      { concurrency: 4 },
+    ).pipe(
+      Effect.map((found) => {
+        const files = found.flat();
+        return files.length === 0 ? [] : paths.filter((path) => isGeneratedPath(files, path));
+      }),
+      // Slow reads must not hold the patch back; a late answer marks nothing generated.
+      Effect.timeoutOption(GENERATED_PATHS_DEADLINE),
+      Effect.map(Option.getOrElse((): ReadonlyArray<string> => [])),
+    );
+  };
+
   const diffUncached: PullRequestService["Service"]["diff"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
@@ -1965,7 +2015,16 @@ export const make = Effect.gen(function* () {
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
                 ...(input.commit === undefined ? {} : { commit: input.commit }),
               })
-              .pipe(Effect.mapError(toPullRequestError("diff")))
+              .pipe(
+                Effect.mapError(toPullRequestError("diff")),
+                Effect.flatMap((slice) =>
+                  resolveGeneratedPaths(project, input, slice.patch).pipe(
+                    Effect.map((generatedPaths) =>
+                      generatedPaths.length === 0 ? slice : { ...slice, generatedPaths },
+                    ),
+                  ),
+                ),
+              )
           : Effect.fail(
               new PullRequestOperationError({
                 operation: "diff",

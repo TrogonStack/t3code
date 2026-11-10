@@ -36,6 +36,7 @@ const clientSettings: ClientSettings = {
   confirmThreadUnpin: false,
   contextWindowMeterEnabled: false,
   diffFilesCollapsed: true,
+  diffGeneratedFilesCollapsed: true,
   diffIgnoreWhitespace: true,
   diffLayout: "stacked",
   environmentIdentificationMode: "artwork",

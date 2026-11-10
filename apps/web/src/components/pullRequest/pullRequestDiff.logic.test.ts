@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   foldFileDiffForViewed,
   getFileViewedRange,
+  isFileCollapsedByDefault,
   isFileDiffCollapsed,
   isLineInFileDiff,
 } from "./pullRequestDiff.logic";
@@ -97,5 +98,21 @@ describe("getFileViewedRange", () => {
     expect(getFileViewedRange(files, "a.ts", null)).toEqual([files[1]]);
     expect(getFileViewedRange(files, "a.ts", "removed.ts")).toEqual([files[1]]);
     expect(getFileViewedRange(files, "removed.ts", "a.ts")).toEqual([]);
+  });
+});
+
+describe("isFileCollapsedByDefault", () => {
+  it("collapses generated files on their own setting and leaves others to the general default", () => {
+    expect(isFileCollapsedByDefault(false, true, true)).toBe(true);
+    expect(isFileCollapsedByDefault(false, true, false)).toBe(false);
+    expect(isFileCollapsedByDefault(false, false, true)).toBe(false);
+    expect(isFileCollapsedByDefault(true, false, false)).toBe(true);
+  });
+
+  it("keeps a reader's expand of a generated file", () => {
+    const defaultCollapsed = isFileCollapsedByDefault(false, true, true);
+    const defaults = { defaultCollapsed, viewed: false };
+    expect(isFileDiffCollapsed("a.lock", null, new Map([["a.lock", false]]), defaults)).toBe(false);
+    expect(isFileDiffCollapsed("a.lock", null, new Map(), defaults)).toBe(true);
   });
 });

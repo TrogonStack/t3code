@@ -21,6 +21,15 @@ export interface FileDiffFoldDefaults {
   readonly viewed: boolean;
 }
 
+/** Generated files fold by their own setting, whatever the general default says. */
+export function isFileCollapsedByDefault(
+  defaultCollapsed: boolean,
+  collapseGenerated: boolean,
+  generated: boolean,
+): boolean {
+  return defaultCollapsed || (collapseGenerated && generated);
+}
+
 function isFileDiffFoldedByDefault(
   foldOverride: DiffFoldOverride,
   { defaultCollapsed, viewed }: FileDiffFoldDefaults,
