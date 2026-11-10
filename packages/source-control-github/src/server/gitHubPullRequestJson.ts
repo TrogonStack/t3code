@@ -989,17 +989,24 @@ const stateCounts = (counts: StateCounts) =>
 export function toPullRequestWatchFingerprint(
   pr: WatchedPullRequest,
 ): GitHubPullRequestWatchFingerprint {
-  const contexts = pr.commits.nodes?.[0]?.commit.statusCheckRollup?.contexts;
+  const commit = pr.commits.nodes?.[0]?.commit;
+  const contexts = commit?.statusCheckRollup?.contexts;
+  const includesCheckState =
+    commit?.statusCheckRollup === null ||
+    (contexts?.checkRunCountsByState != null && contexts.statusContextCountsByState != null);
   return {
-    includesCheckState: true,
+    ...(includesCheckState ? { includesCheckState: true as const } : {}),
     status: [
       pr.state,
       pr.mergeable,
+      pr.mergeStateStatus,
       pr.headRefOid,
       stateCounts(contexts?.checkRunCountsByState ?? null),
       stateCounts(contexts?.statusContextCountsByState ?? null),
     ].join(" "),
     remarks: [
+      pr.updatedAt,
+      pr.totalCommentsCount,
       pr.comments.totalCount,
       newestEdit(pr.comments),
       pr.reviews?.totalCount ?? 0,

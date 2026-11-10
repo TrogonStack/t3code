@@ -1320,6 +1320,9 @@ layer("GitHubPullRequestApi.layer", (it) => {
                 pullRequest: {
                   state: "OPEN",
                   mergeable: "MERGEABLE",
+                  mergeStateStatus: "BLOCKED",
+                  updatedAt: "2026-10-01T00:00:00Z",
+                  totalCommentsCount: 0,
                   headRefOid: "abc123",
                   comments: { totalCount: 0, nodes: [] },
                   reviews: { totalCount: 0, nodes: [] },
@@ -1365,6 +1368,9 @@ layer("GitHubPullRequestApi.layer", (it) => {
     const watched = (fields: Record<string, unknown> = {}) => ({
       state: "OPEN",
       mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      updatedAt: "2026-10-01T00:00:00Z",
+      totalCommentsCount: 3,
       headRefOid: "abc123",
       comments: { totalCount: 1, nodes: [] },
       reviews: { totalCount: 2, nodes: [] },
@@ -1418,8 +1424,8 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const second = yield* poll;
         assert.deepStrictEqual(second, first);
         assert.deepStrictEqual(first, {
-          status: "OPEN MERGEABLE abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1",
-          remarks: "1  2  0",
+          status: "OPEN MERGEABLE BLOCKED abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1",
+          remarks: "2026-10-01T00:00:00Z 3 1  2  0",
           includesCheckState: true,
         });
         expect(mockedExecute).toHaveBeenCalledTimes(2);
@@ -1432,7 +1438,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
           }),
         );
         const edited = yield* poll;
-        assert.strictEqual(edited?.remarks, "1 2026-10-01T00:05:00Z 2  0");
+        assert.strictEqual(edited?.remarks, "2026-10-01T00:00:00Z 3 1 2026-10-01T00:05:00Z 2  0");
         assert.strictEqual(edited?.status, first?.status);
       }),
     );
@@ -1462,6 +1468,53 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const after = yield* poll;
         assert.notStrictEqual(after?.status, before?.status);
         assert.strictEqual(after?.remarks, before?.remarks);
+      }),
+    );
+
+    it.effect(
+      "moves the status when merge-state status changes under an unchanged pull request",
+      () =>
+        Effect.gen(function* () {
+          answerFrom(watched({ mergeStateStatus: "BLOCKED" }));
+          const before = yield* poll;
+          answerFrom(watched({ mergeStateStatus: "CLEAN" }));
+          const after = yield* poll;
+          assert.notStrictEqual(after?.status, before?.status);
+          assert.strictEqual(after?.remarks, before?.remarks);
+        }),
+    );
+
+    it.effect("moves remarks when only the pull request update time changes", () =>
+      Effect.gen(function* () {
+        answerFrom(watched({ updatedAt: "2026-10-01T00:00:00Z" }));
+        const before = yield* poll;
+        answerFrom(watched({ updatedAt: "2026-10-01T00:05:00Z" }));
+        const after = yield* poll;
+        assert.notStrictEqual(after?.remarks, before?.remarks);
+        assert.strictEqual(after?.status, before?.status);
+      }),
+    );
+
+    it.effect(
+      "moves remarks for review replies and deletions without another signal changing",
+      () =>
+        Effect.gen(function* () {
+          answerFrom(watched({ totalCommentsCount: 3 }));
+          const before = yield* poll;
+          answerFrom(watched({ totalCommentsCount: 4 }));
+          const replied = yield* poll;
+          assert.notStrictEqual(replied?.remarks, before?.remarks);
+          assert.strictEqual(replied?.status, before?.status);
+          answerFrom(watched({ totalCommentsCount: 3 }));
+          const deleted = yield* poll;
+          assert.strictEqual(deleted?.remarks, before?.remarks);
+        }),
+    );
+
+    it.effect("falls back to full reads when the aggregate comment count is unavailable", () =>
+      Effect.gen(function* () {
+        answerFrom(watched({ totalCommentsCount: null }));
+        assert.isNull(yield* poll);
       }),
     );
 
@@ -1527,6 +1580,53 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const result = yield* poll;
         expect(result?.status).toContain("IN_PROGRESS:120,SUCCESS:30");
         expect(mockedExecute).toHaveBeenCalledOnce();
+      }),
+    );
+
+    it.effect.each([
+      {
+        label: "null run counts",
+        commits: {
+          nodes: [
+            {
+              commit: {
+                statusCheckRollup: {
+                  contexts: { checkRunCountsByState: null, statusContextCountsByState: [] },
+                },
+              },
+            },
+          ],
+        },
+      },
+      {
+        label: "null status counts",
+        commits: {
+          nodes: [
+            {
+              commit: {
+                statusCheckRollup: {
+                  contexts: { checkRunCountsByState: [], statusContextCountsByState: null },
+                },
+              },
+            },
+          ],
+        },
+      },
+      { label: "null commit nodes", commits: { nodes: null } },
+      { label: "missing latest commit", commits: { nodes: [] } },
+    ] as const)("keeps opaque check state for $label", ({ commits }) =>
+      Effect.gen(function* () {
+        answerFrom(watched({ commits }));
+        const result = yield* poll;
+        assert.isNotNull(result);
+        assert.isNotTrue(result?.includesCheckState);
+      }),
+    );
+
+    it.effect("marks an explicit absence of checks as complete", () =>
+      Effect.gen(function* () {
+        answerFrom(watched({ commits: { nodes: [{ commit: { statusCheckRollup: null } }] } }));
+        assert.isTrue((yield* poll)?.includesCheckState);
       }),
     );
 

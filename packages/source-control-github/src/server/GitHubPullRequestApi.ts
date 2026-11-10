@@ -1801,7 +1801,9 @@ export const make = Effect.gen(function* () {
     return GraphQLResolver.request(lookup, watchFingerprintResolver).pipe(
       Effect.map((result) => {
         const pullRequest = result.repository?.pullRequest;
-        return pullRequest == null ? null : toPullRequestWatchFingerprint(pullRequest);
+        return pullRequest == null || pullRequest.totalCommentsCount === null
+          ? null
+          : toPullRequestWatchFingerprint(pullRequest);
       }),
       Effect.catchIf(isNotFoundOnly, () => Effect.succeed(null)),
       (effect) => batchedRead({ ...input, operation: "getPullRequestWatchFingerprint" }, effect),

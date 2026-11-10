@@ -1735,9 +1735,13 @@ describe("pull request watch fingerprints", () => {
       readonly failed: number;
       readonly commentEditedAt: string | null;
       readonly reviews: number;
+      readonly mergeStateStatus?: string;
     }) => ({
       state: "OPEN",
       mergeable: "MERGEABLE",
+      mergeStateStatus: input.mergeStateStatus ?? "BLOCKED",
+      updatedAt: "2026-10-01T00:00:00Z",
+      totalCommentsCount: 3,
       headRefOid: "abc123",
       comments: { totalCount: 1, nodes: [{ lastEditedAt: input.commentEditedAt }] },
       reviews: { totalCount: input.reviews, nodes: [] },
@@ -1766,10 +1770,12 @@ describe("pull request watch fingerprints", () => {
     const base = { running: 2, failed: 0, commentEditedAt: null, reviews: 1 };
     const before = fingerprint(base);
     const checkFinished = fingerprint({ ...base, running: 1, failed: 1 });
+    const mergeStateChanged = fingerprint({ ...base, mergeStateStatus: "CLEAN" });
     const summaryEdited = fingerprint({ ...base, commentEditedAt: "2026-10-05T23:47:43Z" });
     const replied = fingerprint({ ...base, reviews: 2 });
 
     expect(checkFinished.status).not.toBe(before.status);
+    expect(mergeStateChanged.status).not.toBe(before.status);
     expect(checkFinished.remarks).toBe(before.remarks);
     expect(summaryEdited.remarks).not.toBe(before.remarks);
     expect(summaryEdited.status).toBe(before.status);
