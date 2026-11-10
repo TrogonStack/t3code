@@ -1427,6 +1427,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
           status: "OPEN MERGEABLE BLOCKED abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1",
           remarks: "2026-10-01T00:00:00Z 3 1  2  0",
           includesCheckState: true,
+          includesRemarkState: true,
         });
         expect(mockedExecute).toHaveBeenCalledTimes(2);
         answerFrom(
@@ -1511,10 +1512,13 @@ layer("GitHubPullRequestApi.layer", (it) => {
         }),
     );
 
-    it.effect("falls back to full reads when the aggregate comment count is unavailable", () =>
+    it.effect("keeps check state when the aggregate comment count is unavailable", () =>
       Effect.gen(function* () {
         answerFrom(watched({ totalCommentsCount: null }));
-        assert.isNull(yield* poll);
+        const fingerprint = yield* poll;
+        assert.isNotNull(fingerprint);
+        assert.isTrue(fingerprint?.includesCheckState);
+        assert.isFalse(fingerprint?.includesRemarkState);
       }),
     );
 
@@ -1619,7 +1623,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
         answerFrom(watched({ commits }));
         const result = yield* poll;
         assert.isNotNull(result);
-        assert.isNotTrue(result?.includesCheckState);
+        assert.isFalse(result?.includesCheckState);
       }),
     );
 

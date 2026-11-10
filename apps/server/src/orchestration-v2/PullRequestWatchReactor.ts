@@ -160,12 +160,15 @@ function planRead(
     return { detail: read || checksDue, activity: read };
   }
   const activity =
+    fingerprint.includesRemarkState === false ||
     last.remarks !== fingerprint.remarks ||
     !last.remarksComplete ||
     now - last.at >= FINGERPRINT_REREAD_MS;
-  const settling = last.inFlight && fingerprint.includesCheckState !== true;
+  const checksNeedRead =
+    fingerprint.includesCheckState === false ||
+    (last.inFlight && fingerprint.includesCheckState !== true);
   return {
-    detail: activity || checksDue || last.status !== fingerprint.status || settling,
+    detail: activity || checksDue || last.status !== fingerprint.status || checksNeedRead,
     activity,
   };
 }
@@ -470,9 +473,10 @@ export const make = Effect.gen(function* () {
     if (
       last === undefined ||
       group.targets.some((target) => !last.watches.has(watchKey(target))) ||
+      fingerprint?.includesRemarkState === false ||
       (fingerprint !== null && last.remarks !== fingerprint.remarks)
     ) {
-      // A new watch or changed host remarks needs a fresh view of every tail.
+      // Incomplete remark state cannot establish that cached tails are unchanged.
       threadTails.delete(group.key);
     }
     const reference = referenceOf(group);
