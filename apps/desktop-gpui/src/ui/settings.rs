@@ -8,6 +8,7 @@ mod components;
 mod devices_panel;
 mod diffs_panel;
 mod labs_panel;
+mod projects_panel;
 mod providers_panel;
 mod scope_inheritance;
 mod scope_pickers;
@@ -32,6 +33,7 @@ use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
 use labs_panel::{LabsEvent, LabsPanel};
+use projects_panel::ProjectsPanel;
 use providers_panel::ProvidersPanel;
 use scope_pickers::ScopeBar;
 use secrets_panel::SecretsPanel;
@@ -178,6 +180,7 @@ pub struct SettingsDialog {
     source_control: Entity<SourceControlPanel>,
     secrets: Entity<SecretsPanel>,
     providers: Entity<ProvidersPanel>,
+    projects: Entity<ProjectsPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -198,6 +201,7 @@ impl SettingsDialog {
         let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
         let providers =
             cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
+        let projects = cx.new(|cx| ProjectsPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -234,6 +238,7 @@ impl SettingsDialog {
             source_control,
             secrets,
             providers,
+            projects,
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -257,6 +262,7 @@ impl SettingsDialog {
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.providers.update(cx, |panel, cx| panel.reload(cx));
+        self.projects.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -350,6 +356,37 @@ impl SettingsDialog {
         self.providers.update(cx, |panel, cx| {
             panel.set_data(config, instances, sources, cx)
         });
+    }
+
+    pub fn set_projects_data(
+        &mut self,
+        live: Vec<crate::projects::ProjectEntry>,
+        archived: Vec<crate::projects::ProjectEntry>,
+        can_organize: bool,
+        environment: String,
+        thread_projects: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.projects.update(cx, |panel, cx| {
+            panel.set_data(
+                live,
+                archived,
+                can_organize,
+                environment,
+                thread_projects,
+                cx,
+            )
+        });
+    }
+
+    pub fn on_projects_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.projects
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
     pub fn on_providers_call(
@@ -460,6 +497,9 @@ impl SettingsDialog {
             return;
         }
         if self.providers.update(cx, |panel, cx| panel.close_menu(cx)) {
+            return;
+        }
+        if self.projects.update(cx, |panel, cx| panel.close_menu(cx)) {
             return;
         }
         if self
@@ -633,6 +673,9 @@ impl Render for SettingsDialog {
         let providers = self
             .providers
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let projects = self
+            .projects
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -694,6 +737,7 @@ impl Render for SettingsDialog {
             .children(devices)
             .children(secrets)
             .children(providers)
+            .children(projects)
             .into_any_element()
     }
 }
@@ -1200,6 +1244,10 @@ impl SettingsDialog {
             self.providers
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.providers.clone().into_any_element()]
+        } else if self.section == Section::Projects {
+            self.projects
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.projects.clone().into_any_element()]
         } else {
             Vec::new()
         };
@@ -1211,6 +1259,7 @@ impl SettingsDialog {
                 | Section::SourceControl
                 | Section::Secrets
                 | Section::Providers
+                | Section::Projects
         );
         div()
             .w_full()

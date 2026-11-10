@@ -793,6 +793,24 @@ pub fn scope_data(
     data
 }
 
+/// Lists the attached environment's archived groups too, as the picker marks them.
+pub fn add_archived(data: &mut ScopeData, archived: &[crate::projects::ProjectEntry]) {
+    for entry in archived.iter().filter(|e| !e.scratch) {
+        if data.projects.iter().any(|p| p.key == entry.key) {
+            continue;
+        }
+        data.projects.push(Project {
+            key: entry.key.clone(),
+            name: entry.title.clone(),
+            root: entry.root.clone(),
+            initials: entry.initials.clone(),
+            color: entry.color,
+            archived: true,
+            environments: vec!["primary".to_owned()],
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,6 +1135,8 @@ mod tests {
             root: format!("/home/user/projects/{key}"),
             logical_key: logical.map(str::to_owned),
             remote: Vec::new(),
+            members: Vec::new(),
+            archived: false,
             repository: None,
         }
     }

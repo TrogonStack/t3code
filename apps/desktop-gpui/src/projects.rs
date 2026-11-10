@@ -107,6 +107,34 @@ pub struct ProjectEntry {
     pub remote: Vec<RemoteMember>,
     /// The representative's repository, which the add-to-another-machine dialog clones.
     pub repository: Option<RepositoryInfo>,
+    /// Every project of the group on the attached environment, for the Projects settings tab.
+    pub members: Vec<Member>,
+    /// Every member is archived (only the archived list carries such groups).
+    pub archived: bool,
+}
+
+/// One project of a group, as the Projects settings tab edits it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Member {
+    pub id: String,
+    pub title: String,
+    pub root: String,
+    pub pinned: bool,
+    pub archived: bool,
+    pub favicon_path: Option<String>,
+    /// `"<name> \u{b7} <color>"`, `"<text> \u{b7} <color>"` or the emoji of the icon override.
+    pub icon: Option<String>,
+}
+
+fn icon_summary(project: &Project) -> Option<String> {
+    let icon = project.project_icon.as_ref()?;
+    let text = |key: &str| icon.get(key).and_then(|v| v.as_str());
+    match text("kind")? {
+        "lucide" => Some(format!("{} \u{b7} {}", text("name")?, text("color")?)),
+        "monogram" => Some(format!("{} \u{b7} {}", text("text")?, text("color")?)),
+        "emoji" => text("emoji").map(str::to_owned),
+        _ => None,
+    }
 }
 
 /// What `project.repositoryIdentity` says about where a project came from.
@@ -403,6 +431,22 @@ pub fn build_entries<'a>(
     projects: impl IntoIterator<Item = &'a Project>,
     threads: impl IntoIterator<Item = &'a Thread>,
 ) -> Vec<ProjectEntry> {
+    ranked_entries(projects, threads, false)
+}
+
+/// The groups whose members are all archived, in the same order.
+pub fn build_archived_entries<'a>(
+    projects: impl IntoIterator<Item = &'a Project>,
+    threads: impl IntoIterator<Item = &'a Thread>,
+) -> Vec<ProjectEntry> {
+    ranked_entries(projects, threads, true)
+}
+
+fn ranked_entries<'a>(
+    projects: impl IntoIterator<Item = &'a Project>,
+    threads: impl IntoIterator<Item = &'a Thread>,
+    archived: bool,
+) -> Vec<ProjectEntry> {
     let mut latest: HashMap<&str, &str> = HashMap::new();
     for thread in threads.into_iter().filter(|t| t.archived_at.is_none()) {
         let activity = thread_activity(thread);
@@ -411,7 +455,7 @@ pub fn build_entries<'a>(
     }
     let mut ranked: Vec<(ProjectEntry, String)> = build_groups(projects)
         .into_iter()
-        .filter(|group| group.winners.iter().any(|p| p.archived_at.is_none()))
+        .filter(|group| group.winners.iter().any(|p| p.archived_at.is_none()) != archived)
         .map(|group| {
             let representative = group.winners[0];
             let label = if group.winners.len() > 1 {
@@ -445,6 +489,20 @@ pub fn build_entries<'a>(
                 root: representative.workspace_root.clone(),
                 remote: Vec::new(),
                 repository: repository_info(representative),
+                members: group
+                    .all
+                    .iter()
+                    .map(|p| Member {
+                        id: p.id.clone(),
+                        title: p.title.clone(),
+                        root: p.workspace_root.clone(),
+                        pinned: p.pinned_at.is_some(),
+                        archived: p.archived_at.is_some(),
+                        favicon_path: p.favicon_path.clone(),
+                        icon: icon_summary(p),
+                    })
+                    .collect(),
+                archived,
             };
             (entry, activity)
         })
@@ -668,6 +726,8 @@ mod tests {
             root: String::new(),
             logical_key: None,
             remote: Vec::new(),
+            members: Vec::new(),
+            archived: false,
             repository: None,
         };
         let opened = ["a", "b", "c"].map(str::to_owned);
@@ -698,6 +758,8 @@ mod tests {
             root: root.to_owned(),
             logical_key: None,
             remote: Vec::new(),
+            members: Vec::new(),
+            archived: false,
             repository: None,
         }
     }
@@ -1187,5 +1249,33 @@ mod tests {
         assert_eq!(label(&[("web", repo("k")), ("server", repo("k"))]), "web");
         // A lone project keeps its own title.
         assert_eq!(label(&[("app", named())]), "app");
+    }
+
+    #[test]
+    fn archived_groups_list_apart_and_members_carry_what_the_settings_tab_edits() {
+        let projects = [
+            project("a", "alpha", |p| {
+                p["workspaceRoot"] = "/work/alpha".into();
+                p["faviconPath"] = "icon.svg".into();
+                p["projectIcon"] = json!({"kind": "lucide", "name": "rocket", "color": "sky"});
+            }),
+            project("b", "beta", |p| {
+                p["workspaceRoot"] = "/work/beta".into();
+                p["archivedAt"] = "2026-03-01T00:00:00.000Z".into();
+                p["pinnedAt"] = "2026-03-02T00:00:00.000Z".into();
+                p["projectIcon"] = json!({"kind": "emoji", "emoji": "x"});
+            }),
+        ];
+        let live = build_entries(&projects, []);
+        let archived = build_archived_entries(&projects, []);
+        assert_eq!(live.len(), 1);
+        assert_eq!(archived.len(), 1);
+        assert!(archived[0].archived && !live[0].archived);
+        let member = &live[0].members[0];
+        assert_eq!(member.favicon_path.as_deref(), Some("icon.svg"));
+        assert_eq!(member.icon.as_deref(), Some("rocket \u{b7} sky"));
+        let gone = &archived[0].members[0];
+        assert!(gone.archived && gone.pinned);
+        assert_eq!(gone.icon.as_deref(), Some("x"));
     }
 }

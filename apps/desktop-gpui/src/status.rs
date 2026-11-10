@@ -99,6 +99,8 @@ pub struct ShellView {
     pub threads: usize,
     /// Unarchived projects in picker order, scratch included.
     pub project_entries: Vec<ProjectEntry>,
+    /// Projects whose every member is archived.
+    pub archived_entries: Vec<ProjectEntry>,
     pub rows: Vec<ThreadRow>,
 }
 

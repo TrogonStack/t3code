@@ -51,6 +51,15 @@ impl Method for ProjectsMutate {
     type Success = wire::ProjectsMutateSuccess;
 }
 
+/// `projects.mutate` with a payload the caller builds, for the settings tab.
+pub struct ProjectsMutateJson;
+
+impl Method for ProjectsMutateJson {
+    const TAG: &'static str = "projects.mutate";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `orchestration.launchThread`, a unary call that creates a thread and starts its first turn.
 pub struct OrchestrationLaunchThread;
 

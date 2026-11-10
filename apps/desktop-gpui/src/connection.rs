@@ -16,8 +16,8 @@ use crate::rpc::{
     TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::rpc::{
-    ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsReadFile, ProjectsWriteFile,
-    SubscribeProjectClones,
+    ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsMutateJson, ProjectsReadFile,
+    ProjectsWriteFile, SubscribeProjectClones,
 };
 use crate::rpc::{
     PullRequestsActivity, PullRequestsChangeBreakdown, PullRequestsChecks, PullRequestsComment,
@@ -141,6 +141,7 @@ pub enum Call {
     LaunchThread,
     DispatchCommand,
     UpdateSettings,
+    ProjectsMutate,
     /// A stream: progress events, then the result.
     RunStackedAction,
     CreateUploadUrl,
@@ -215,6 +216,7 @@ impl Call {
             Self::LaunchThread => "start the thread",
             Self::DispatchCommand => "send the command",
             Self::UpdateSettings => "update the settings",
+            Self::ProjectsMutate => "update the project",
             Self::RunStackedAction => "run the action",
             Self::CreateUploadUrl => "prepare the upload",
             Self::DeleteAttachment => "delete the attachment",
@@ -266,6 +268,7 @@ impl Call {
             Self::LaunchThread => session.request::<OrchestrationLaunchThread>(payload),
             Self::DispatchCommand => session.request::<OrchestrationDispatchCommand>(payload),
             Self::UpdateSettings => session.request::<ServerUpdateSettings>(payload),
+            Self::ProjectsMutate => session.request::<ProjectsMutateJson>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
             Self::CreateUploadUrl => session.request::<AttachmentsCreateUploadUrl>(payload),
             Self::DeleteAttachment => session.request::<AttachmentsDelete>(payload),

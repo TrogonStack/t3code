@@ -520,6 +520,11 @@ impl ScopeBar {
         cx.notify();
     }
 
+    /// Picks a project as the bar's menu does (a row of the Projects tab, or `ALL`).
+    pub fn select_project(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.pick(Axis::Project, key, cx);
+    }
+
     fn pick(&mut self, axis: Axis, value: &str, cx: &mut Context<Self>) {
         self.search = match axis {
             Axis::Project => self.search.select_project(value),

@@ -469,6 +469,7 @@ impl ShellState {
                 self.projects.values(),
                 self.threads.values().filter(|thread| is_listed(thread)),
             ),
+            archived_entries: projects::build_archived_entries(self.projects.values(), []),
             rows,
         }
     }

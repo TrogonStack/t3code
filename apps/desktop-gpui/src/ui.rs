@@ -567,13 +567,28 @@ impl MainView {
             ),
             _ => return,
         };
-        let data = crate::settings_labs::scope_data(
+        let mut data = crate::settings_labs::scope_data(
             &label,
             machine,
             &crate::config::primary_url(),
             &entries,
             &self.environments,
         );
+        let (archived, thread_projects) = match &self.status {
+            Status::Connected {
+                shell: Some(shell), ..
+            } => (
+                shell.archived_entries.clone(),
+                shell
+                    .rows
+                    .iter()
+                    .map(|row| row.project_id.clone())
+                    .collect(),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
+        crate::settings_labs::add_archived(&mut data, &archived);
+        let (live, can_organize, environment) = (entries.clone(), self.can_pin(), label.clone());
         let flags = self.providers.as_ref().map(|c| c.labs_flags());
         let devices = self.providers.as_ref().map(|c| {
             (
@@ -606,6 +621,14 @@ impl MainView {
             if let Some((config, instances, sources)) = provider_tab {
                 settings.set_providers_data(config, instances, sources, cx);
             }
+            settings.set_projects_data(
+                live,
+                archived,
+                can_organize,
+                environment,
+                thread_projects,
+                cx,
+            );
         });
     }
 
@@ -677,6 +700,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_projects::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_projects_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_providers::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_providers_call(token, event, cx)
@@ -6754,6 +6783,8 @@ mod tests {
             root: String::new(),
             logical_key: None,
             remote: Vec::new(),
+            members: Vec::new(),
+            archived: false,
             repository: None,
         }
     }
