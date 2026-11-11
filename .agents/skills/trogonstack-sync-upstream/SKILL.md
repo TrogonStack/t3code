@@ -46,6 +46,17 @@ Default to upstream's shape and re-apply the fork's intent on top of it. Concret
 
 Record every nontrivial resolution decision as you go; each one becomes a PR body bullet.
 
+### Keep the ledger honest
+
+The ledger drifts when divergences ship without an entry and when upstream catches up without anyone deleting one. Every sync reconciles it, in the same PR, so the decision is written down while the context is fresh:
+
+- Fork-only behavior you keep that has no entry: add one (product focused, per `docs/fork/README.md`), including why the fork's version is worth the sync cost.
+- An entry whose divergence upstream now covers, or that the sync reverted: delete it.
+- An entry whose reason no longer holds, or that no longer matches the code: rewrite or delete it.
+- Fork-only code you reverted to upstream's version: nothing to add to the ledger, but the PR body states what the fork did, what upstream does, and why converging was right.
+
+If you cannot tell why a divergence exists, say so in the PR body and ask rather than guessing in either direction.
+
 ### Generated files
 
 - `apps/web/src/routeTree.gen.ts` is written by the TanStack router plugin whenever Vite runs, including the test suite in step 4. Accept git's merge result for it, and if the verification run rewrites it, commit the rewritten file. Never resolve it by hand and never restore the fork's copy to quiet a diff: the merge base then carries the stale content and every later sync keeps it, which is how the generator header went missing for a week.
