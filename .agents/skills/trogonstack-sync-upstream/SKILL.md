@@ -7,7 +7,7 @@ description: Merge the latest pingdotgg/t3code upstream main into this TrogonSta
 
 This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the `upstream` remote and carries a small set of intentional divergences. Syncing is always a **merge**, never a rebase: rebasing would rewrite fork history and break published PR references.
 
-**The goal is to stay in sync with upstream.** Every fork-only behavior is a standing cost: it conflicts on every sync and drifts further over time. Keep a divergence only when it has a strong reason to exist, which means an active `docs/fork/` ledger entry. Anything without one (a stricter check, a renamed helper, a preference that upstream already covers) is not worth keeping: take upstream's version, and do not carry fork-only tweaks forward because they were there first.
+**The goal is to stay in sync with upstream.** Every fork-only behavior is a standing cost: it conflicts on every sync and drifts further over time. A ledger entry in `docs/fork/` is the strong reason to keep a divergence. Fork-only code without one is not automatically wrong, so never roll it back wholesale or by reflex. Compare it against upstream's version, then decide and say why: take upstream's, keep the fork's, or merge the two. Default to upstream when the behavior is equivalent or the fork's gain is marginal. Keep the fork's when it is clearly better, and then add a ledger entry for it or propose the change upstream. List each such comparison in the PR body.
 
 ## 1. Prepare
 
@@ -41,7 +41,7 @@ Default to upstream's shape and re-apply the fork's intent on top of it. Concret
 - If the conflicting area belongs to a ledger divergence, keep the fork behavior and adapt it to upstream's new structure. Do not silently drop a divergence.
 - If the fork's version of something is a superset of what upstream added, keep the fork's version and skip the redundant upstream piece (this happened in PR #9 with bootstrap-dispatch logic already covered by the fork's `ThreadBootstrapService`).
 - If upstream merged an equivalent of a fork divergence, take upstream's version and delete the corresponding ledger entry outright (numbers are never reused; git history is the record).
-- Everything else: take upstream. This includes fork-only code with no ledger entry, even when it merges cleanly: if upstream does the same job differently, converge on upstream's behavior rather than keeping the fork's variant.
+- Everything else: take upstream. Fork-only code with no ledger entry gets a short comparison first (what each side does and what the fork gains, if anything). If upstream does the same job, or the fork's gain is marginal, converge on upstream. If the fork's version is clearly better, keep it and either add a ledger entry or propose it upstream. Do not revert it without that comparison, and surface the call in the PR body.
 - For conflicts under `.repos/` (vendored subtrees), do not hand-merge; take either side to complete the merge, then regenerate with `vpr sync:repos` (or `vpr sync:repos --repo <id>`) so `.repos/` matches the installed dependency versions.
 
 Record every nontrivial resolution decision as you go; each one becomes a PR body bullet.
