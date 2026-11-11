@@ -443,7 +443,22 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         activeInstanceNeedsSetup,
       activeInstanceVisible:
         activeEntry !== undefined && isProviderInstancePickerVisible(activeEntry),
-      hasFavorites: favorites.length > 0,
+      hasFavorites: favorites.some((favorite) => {
+        const entry = instanceEntries.find((entry) => entry.instanceId === favorite.provider);
+        return (
+          entry !== undefined &&
+          (modelOptionsByInstance.get(favorite.provider) ?? []).some(
+            (option) =>
+              option.slug === favorite.model &&
+              shouldIncludeModelPickerOption({
+                entry,
+                option,
+                activeInstanceId: props.activeInstanceId,
+                activeModel: activeModelSlug,
+              }),
+          )
+        );
+      }),
       lastOrigin,
     });
   const favoritesSet = new Set(favorites.map((fav) => providerModelKey(fav.provider, fav.model)));
