@@ -7,6 +7,8 @@ description: Merge the latest pingdotgg/t3code upstream main into this TrogonSta
 
 This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the `upstream` remote and carries a small set of intentional divergences. Syncing is always a **merge**, never a rebase: rebasing would rewrite fork history and break published PR references.
 
+**The goal is to stay in sync with upstream.** Every fork-only behavior is a standing cost: it conflicts on every sync and drifts further over time. Keep a divergence only when it has a strong reason to exist, which means an active `docs/fork/` ledger entry. Anything without one (a stricter check, a renamed helper, a preference that upstream already covers) is not worth keeping: take upstream's version, and do not carry fork-only tweaks forward because they were there first.
+
 ## 1. Prepare
 
 Every sync runs in its own linked worktree, never in the main checkout. The main checkout is often serving the developer's live T3 Code session and carries their uncommitted work; a sync installs dependencies, rewrites the lockfile, and runs the full suite, none of which should touch that.
@@ -39,7 +41,7 @@ Default to upstream's shape and re-apply the fork's intent on top of it. Concret
 - If the conflicting area belongs to a ledger divergence, keep the fork behavior and adapt it to upstream's new structure. Do not silently drop a divergence.
 - If the fork's version of something is a superset of what upstream added, keep the fork's version and skip the redundant upstream piece (this happened in PR #9 with bootstrap-dispatch logic already covered by the fork's `ThreadBootstrapService`).
 - If upstream merged an equivalent of a fork divergence, take upstream's version and delete the corresponding ledger entry outright (numbers are never reused; git history is the record).
-- Everything else: take upstream.
+- Everything else: take upstream. This includes fork-only code with no ledger entry, even when it merges cleanly: if upstream does the same job differently, converge on upstream's behavior rather than keeping the fork's variant.
 - For conflicts under `.repos/` (vendored subtrees), do not hand-merge; take either side to complete the merge, then regenerate with `vpr sync:repos` (or `vpr sync:repos --repo <id>`) so `.repos/` matches the installed dependency versions.
 
 Record every nontrivial resolution decision as you go; each one becomes a PR body bullet.
