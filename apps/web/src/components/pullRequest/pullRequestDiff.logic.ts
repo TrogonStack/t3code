@@ -16,62 +16,29 @@ export function isLineInFileDiff(
 
 export type DiffFoldOverride = "expanded" | "folded" | null;
 
-export interface FileDiffFoldDefaults {
-  readonly defaultCollapsed: boolean;
-  readonly viewed: boolean;
-}
+/** The reader's own fold choice per file. It is absolute, so a Viewed mark loading later keeps it. */
+export type FileDiffFoldChoices = ReadonlyMap<string, boolean>;
 
-/** Generated files fold by their own setting, whatever the general default says. */
-export function isFileCollapsedByDefault(
-  defaultCollapsed: boolean,
-  collapseGenerated: boolean,
-  generated: boolean,
-): boolean {
-  return defaultCollapsed || (collapseGenerated && generated);
-}
-
-function isFileDiffFoldedByDefault(
-  foldOverride: DiffFoldOverride,
-  { defaultCollapsed, viewed }: FileDiffFoldDefaults,
-): boolean {
-  // Viewed files fold until the toolbar asks for every file one way.
-  return foldOverride === null ? defaultCollapsed || viewed : foldOverride === "folded";
-}
-
-/** Reader choices are absolute so a later viewed refresh cannot flip them. */
+/**
+ * A reader's own choice wins. Otherwise the toolbar decides, and a file still marked Viewed
+ * starts folded. Fold all and Expand all clear the choices, so later pages follow the toolbar.
+ */
 export function isFileDiffCollapsed(
   fileKey: string,
   foldOverride: DiffFoldOverride,
-  foldChoices: ReadonlyMap<string, boolean>,
-  defaults: FileDiffFoldDefaults,
+  choices: FileDiffFoldChoices,
+  viewed = false,
 ): boolean {
-  return foldChoices.get(fileKey) ?? isFileDiffFoldedByDefault(foldOverride, defaults);
+  return choices.get(fileKey) ?? (foldOverride === "folded" || viewed);
 }
 
-export function setFileDiffFold(
-  foldChoices: ReadonlyMap<string, boolean>,
+export function withFileDiffFold(
+  choices: FileDiffFoldChoices,
   fileKey: string,
   collapsed: boolean,
-): ReadonlyMap<string, boolean> {
-  if (foldChoices.get(fileKey) === collapsed) return foldChoices;
-  return new Map(foldChoices).set(fileKey, collapsed);
-}
-
-/** Lean on the default where it agrees, so a file pushed to after viewing unfolds again. */
-export function foldFileDiffForViewed(
-  foldChoices: ReadonlyMap<string, boolean>,
-  fileKey: string,
-  viewed: boolean,
-  foldOverride: DiffFoldOverride,
-  defaultCollapsed: boolean,
-): ReadonlyMap<string, boolean> {
-  if (isFileDiffFoldedByDefault(foldOverride, { defaultCollapsed, viewed }) !== viewed) {
-    return setFileDiffFold(foldChoices, fileKey, viewed);
-  }
-  if (!foldChoices.has(fileKey)) return foldChoices;
-  const next = new Map(foldChoices);
-  next.delete(fileKey);
-  return next;
+): FileDiffFoldChoices {
+  if (choices.get(fileKey) === collapsed) return choices;
+  return new Map(choices).set(fileKey, collapsed);
 }
 
 export function getFileViewedRange<T extends { readonly fileKey: string }>(
