@@ -60,9 +60,8 @@ permissions:
 jobs:
   android:
     name: Android ${{ matrix.abi }}
-    # disabled: Android and iOS builds are not used by this fork
-    if: false
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    if: github.repository == 'pingdotgg/t3code' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'android')
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -141,12 +140,14 @@ jobs:
             echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
           } >> "$GITHUB_ENV"
 
+      # Pull requests build cold: their code must not write Gradle or ccache state that
+      # the runs holding the cache login restore.
       - name: Configure Gradle and ccache
         run: |
           mkdir -p "$GRADLE_USER_HOME" "$CCACHE_DIR"
           # No daemon: nothing should hold the sticky disk open when it is committed.
           printf 'org.gradle.caching=true\norg.gradle.daemon=false\n' > "$GRADLE_USER_HOME/gradle.properties"
-          sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's|http://|https://|g' /etc/apt/ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -qq && sudo apt-get install -y -qq ccache
           ccache --zero-stats
 
@@ -210,9 +211,8 @@ jobs:
 
   ios:
     name: iOS simulator
-    # disabled: Android and iOS builds are not used by this fork
-    if: false
-    runs-on: blacksmith-12vcpu-macos-26
+    if: github.repository == 'pingdotgg/t3code' && (github.event_name != 'workflow_dispatch' || inputs.platform == 'ios')
+    runs-on: macos-26
     timeout-minutes: 60
     concurrency:
       group: mobile-dev-client-ios-${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.fingerprint || github.sha }}

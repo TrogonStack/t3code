@@ -81,6 +81,25 @@ export function manuallyResumableRun(
     : run;
 }
 
+/**
+ * Work started now would run in the project checkout, not the worktree the thread asked for. A
+ * failed or interrupted setup leaves the request standing until a worktree exists or later work
+ * has run past it.
+ */
+export function orchestrationV2WorktreePending(
+  worktreePath: string | null,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  const latest = latestExecutedRun(runs);
+  return (
+    worktreePath === null &&
+    (latest?.status === "preparing" ||
+      latest?.status === "failed" ||
+      latest?.status === "interrupted") &&
+    latest.workspacePreparation?.type === "worktree"
+  );
+}
+
 /** Held queues can execute out of ordinal order; unfinished runs count as latest. */
 export function runRanAfter(
   run: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,

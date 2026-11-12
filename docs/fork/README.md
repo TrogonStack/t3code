@@ -39,5 +39,5 @@ Each entry uses these sections:
   submitted, [#97](https://github.com/TrogonStack/t3code/pull/97)
 - **0032** [The model picker reopens where you last picked from](./0032-model-picker-reopens-where-you-left-it.md)
   active, [#103](https://github.com/TrogonStack/t3code/pull/103)
-- **0033** [More secret stores, and checking them](./0033-more-secret-stores-and-checking-them.md)
+- **0033** [More secret stores](./0033-more-secret-stores.md)
   active, [#106](https://github.com/TrogonStack/t3code/pull/106)
