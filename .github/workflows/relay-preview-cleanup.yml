@@ -40,7 +40,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment:
       name: relay-preview-cleanup
@@ -67,7 +67,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
         with:
           node-version-file: package.json
           cache: true
@@ -101,7 +101,7 @@ jobs:
   list_closed_previews:
     name: List closed relay previews
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request_target'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       numbers: ${{ steps.list.outputs.numbers }}
@@ -125,7 +125,7 @@ jobs:
     name: Retry teardown for PR ${{ matrix.number }}
     needs: list_closed_previews
     if: github.ref == 'refs/heads/main' && needs.list_closed_previews.outputs.numbers != '[]'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -180,7 +180,7 @@ jobs:
 
       - name: Setup Vite+
         if: steps.eligible.outputs.eligible == 'yes'
-        uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1.15.0
         with:
           node-version-file: package.json
           cache: true

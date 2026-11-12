@@ -16,20 +16,18 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
-  ProviderTurnId,
   type ProviderSessionId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -188,7 +186,6 @@ interface TestProviderRuntimeState {
   readonly interruptCount: number;
   readonly resumeCount: number;
   readonly unloadedNativeThreadIds: ReadonlyArray<string>;
-  readonly eagerUnloadedNativeThreadIds: ReadonlyArray<string>;
   readonly eventQueues: ReadonlyMap<
     string,
     Queue.Queue<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>
@@ -201,7 +198,6 @@ const emptyState: TestProviderRuntimeState = {
   interruptCount: 0,
   resumeCount: 0,
   unloadedNativeThreadIds: [],
-  eagerUnloadedNativeThreadIds: [],
   eventQueues: new Map(),
 };
 
@@ -450,11 +446,11 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
     readonly backgroundTasksEndWithProcess?: boolean;
     readonly hangSessionScopeClose?: boolean;
-    readonly startTurn?:
-      | Effect.Effect<void>
-      | ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
+    readonly startTurn?: Effect.Effect<void>;
     readonly interruptTurn?: Effect.Effect<void>;
     readonly beforeUnload?: Effect.Effect<void>;
+    readonly unloads?: Queue.Queue<string>;
+    readonly archive?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
     readonly spawnBeforeOpen?: boolean;
     readonly scopeCloseReached?: Deferred.Deferred<void>;
   } = {},
@@ -464,7 +460,11 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     Ref.update(state, (current) => ({
       ...current,
       closeCount: current.closeCount + 1,
-    })),
+    })).pipe(
+      Effect.andThen(
+        options.unloads === undefined ? Effect.void : Queue.offer(options.unloads, "close"),
+      ),
+    ),
   );
   // Register after countClose to wedge teardown before its finalizer, matching a provider stream that never yields.
   const hangClose = Effect.addFinalizer(() =>
@@ -563,17 +563,14 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
               ...current,
               resumeCount: current.resumeCount + 1,
             })).pipe(Effect.as(threadInput.providerThread)),
-          startTurn: (turnInput) =>
-            typeof options.startTurn === "function"
-              ? options.startTurn(turnInput)
-              : (options.startTurn ?? Effect.void),
+          startTurn: () => options.startTurn ?? Effect.void,
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
               ...current,
               interruptCount: current.interruptCount + 1,
             })).pipe(Effect.andThen(options.interruptTurn ?? Effect.void)),
-          unloadThread: ({ providerThread, eager }) =>
+          unloadThread: ({ providerThread, archive }) =>
             (options.beforeUnload ?? Effect.void).pipe(
               Effect.andThen(
                 Ref.update(state, (current) => ({
@@ -582,15 +579,17 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
                     ...current.unloadedNativeThreadIds,
                     providerThread.nativeThreadRef?.nativeId ?? "",
                   ],
-                  eagerUnloadedNativeThreadIds:
-                    eager === true
-                      ? [
-                          ...current.eagerUnloadedNativeThreadIds,
-                          providerThread.nativeThreadRef?.nativeId ?? "",
-                        ]
-                      : current.eagerUnloadedNativeThreadIds,
                 })),
               ),
+              Effect.andThen(
+                options.unloads === undefined
+                  ? Effect.void
+                  : Queue.offer(
+                      options.unloads,
+                      `${archive === true ? "archive" : "unload"}:${providerThread.nativeThreadRef?.nativeId}`,
+                    ),
+              ),
+              Effect.andThen(archive === true ? (options.archive ?? Effect.void) : Effect.void),
             ),
           respondToRuntimeRequest: () => Effect.void,
           readThreadSnapshot: () => unimplemented("readThreadSnapshot unused in test"),
@@ -628,11 +627,11 @@ function layerTest(input: {
   readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
   readonly backgroundTasksEndWithProcess?: boolean;
   readonly hangSessionScopeClose?: boolean;
-  readonly startTurn?:
-    | Effect.Effect<void>
-    | ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
+  readonly startTurn?: Effect.Effect<void>;
   readonly interruptTurn?: Effect.Effect<void>;
   readonly beforeUnload?: Effect.Effect<void>;
+  readonly unloads?: Queue.Queue<string>;
+  readonly archive?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
   readonly spawnBeforeOpen?: boolean;
   readonly scopeCloseReached?: Deferred.Deferred<void>;
   readonly serverSettingsLayer?: ReturnType<typeof ServerSettings.layerTest>;
@@ -676,6 +675,8 @@ function layerTest(input: {
       ...(input.startTurn === undefined ? {} : { startTurn: input.startTurn }),
       ...(input.interruptTurn === undefined ? {} : { interruptTurn: input.interruptTurn }),
       ...(input.beforeUnload === undefined ? {} : { beforeUnload: input.beforeUnload }),
+      ...(input.unloads === undefined ? {} : { unloads: input.unloads }),
+      ...(input.archive === undefined ? {} : { archive: input.archive }),
       ...(input.spawnBeforeOpen === undefined ? {} : { spawnBeforeOpen: input.spawnBeforeOpen }),
       ...(input.scopeCloseReached === undefined
         ? {}
@@ -1230,58 +1231,6 @@ it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
         }),
       ),
     );
-  }),
-);
-
-it.effect("ProviderSessionManagerV2 records provider session lifecycle metrics", () =>
-  Effect.gen(function* () {
-    const state = yield* Ref.make(emptyState);
-    const effect = Effect.gen(function* () {
-      const eventSink = yield* EventSink.EventSinkV2;
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-      const now = yield* DateTime.now;
-      const threadId = ThreadId.make("thread-provider-session-manager-metrics");
-      const providerSessionId = yield* idAllocator.allocate.providerSession({
-        providerInstanceId: modelSelection.instanceId,
-        threadId,
-      });
-
-      yield* eventSink.write({
-        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-      });
-      const sessionCount = (operation: string, reason?: string) =>
-        Metric.snapshot.pipe(
-          Effect.map((snapshots) => {
-            const snapshot = snapshots.find(
-              (candidate) =>
-                candidate.id === "t3_provider_sessions_total" &&
-                candidate.attributes?.provider === CODEX_DRIVER &&
-                candidate.attributes?.operation === operation &&
-                candidate.attributes?.outcome === "success" &&
-                (reason === undefined || candidate.attributes?.reason === reason),
-            );
-            return snapshot !== undefined && "count" in snapshot.state
-              ? Number(snapshot.state.count)
-              : 0;
-          }),
-        );
-      const startsBefore = yield* sessionCount("start");
-      const releasesBefore = yield* sessionCount("release", "manual_shutdown");
-
-      const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
-      yield* open;
-      yield* open;
-      yield* manager.close(providerSessionId);
-      yield* manager.close(providerSessionId);
-      yield* open;
-      yield* manager.close(providerSessionId);
-
-      assert.equal((yield* sessionCount("start")) - startsBefore, 2);
-      assert.equal((yield* sessionCount("release", "manual_shutdown")) - releasesBefore, 2);
-    });
-
-    yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 60_000 })));
   }),
 );
 
@@ -2348,6 +2297,43 @@ it.effect("ProviderSessionManagerV2 fails a turn whose provider retry never resu
   }),
 );
 
+it("ProviderSessionManagerV2 counts a delegated task as a wake only while its result can be delivered", () => {
+  const runId = RunId.make("run-delegating");
+  const thread = { archivedAt: null, deletedAt: null };
+  const task = {
+    origin: "app_owned" as const,
+    status: "running" as const,
+    runId,
+    completionDelivery: undefined,
+  };
+  const run = (disposition: "open" | "disposed") => ({
+    id: runId,
+    delegatedCompletion: { disposition, nextGeneration: 1, delivery: null },
+  });
+  assert.isTrue(
+    ProviderSessionManager.delegatedTaskWillWake({
+      thread,
+      runs: [run("open")],
+      subagents: [task],
+    }),
+  );
+  // An interrupted completion wake disposes the cohort, so the result never wakes the thread.
+  assert.isFalse(
+    ProviderSessionManager.delegatedTaskWillWake({
+      thread,
+      runs: [run("disposed")],
+      subagents: [task],
+    }),
+  );
+  assert.isFalse(
+    ProviderSessionManager.delegatedTaskWillWake({
+      thread,
+      runs: [run("open")],
+      subagents: [{ ...task, origin: "provider_native" }],
+    }),
+  );
+});
+
 it.effect(
   "ProviderSessionManagerV2 issues MCP credentials before opening and revokes them on close",
   () =>
@@ -2392,6 +2378,8 @@ it.effect(
           resolved?.capabilities,
           new Set(["preview", "orchestration", "worktree", "pull-requests"]),
         );
+
+        assert.isFalse(yield* captured!.hasPendingWake!);
 
         yield* manager.close(providerSessionId);
         assert.isUndefined(yield* mcpSessions.read(threadId));
@@ -4186,722 +4174,6 @@ it.effect(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 ignores a stray turn.terminal for a provider thread that never started a turn",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-stray-terminal",
-        });
-        const firstThreadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-stray-terminal-a",
-          projectId,
-        });
-        const secondThreadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-stray-terminal-b",
-          projectId,
-        });
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId: firstThreadId,
-        });
-        const firstProviderThread = makeProviderThread({
-          idAllocator,
-          threadId: firstThreadId,
-          providerSessionId,
-          now,
-          nativeThreadId: "native-thread-a",
-        });
-        const secondProviderThread = makeProviderThread({
-          idAllocator,
-          threadId: secondThreadId,
-          providerSessionId,
-          now,
-          nativeThreadId: "native-thread-b",
-        });
-        const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
-        const strayProviderTurnId = idAllocator.derive.providerTurn({
-          driver: CODEX_DRIVER,
-          nativeTurnId: "native-turn-stray",
-        });
-
-        yield* eventSink.write({
-          events: [
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: secondThreadId, now }),
-          ],
-        });
-        const runtime = yield* manager.open({
-          threadId: firstThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* manager.open({
-          threadId: secondThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const firstAppThread = (yield* projectionStore.getThreadProjection(firstThreadId)).thread;
-        // Only the first thread ever starts a turn. The second thread's
-        // provider thread id never calls markBusy on this session.
-        yield* runtime.startTurn({
-          appThread: firstAppThread,
-          threadId: firstThreadId,
-          runId: firstRunId,
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: idAllocator.derive.runAttempt({ runId: firstRunId, attemptOrdinal: 1 }),
-          rootNodeId: idAllocator.derive.rootNode({ runId: firstRunId }),
-          providerThread: firstProviderThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: yield* idAllocator.allocate.message({ threadId: firstThreadId, ordinal: 1 }),
-            text: "first",
-            attachments: [],
-          },
-          modelSelection,
-          runtimePolicy,
-        });
-
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        // A stray terminal for the never-busy second thread must not zero a session-wide busyCount
-        // and release the session while the first thread's turn is still running.
-        yield* Queue.offer(queue!, {
-          type: "turn.terminal",
-          driver: CODEX_DRIVER,
-          providerThreadId: secondProviderThread.id,
-          providerTurnId: strayProviderTurnId,
-          runOrdinal: 1,
-          status: "cancelled",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 0);
-
-        // The same stray terminal arriving again is also a no-op.
-        yield* Queue.offer(queue!, {
-          type: "turn.terminal",
-          driver: CODEX_DRIVER,
-          providerThreadId: secondProviderThread.id,
-          providerTurnId: strayProviderTurnId,
-          runOrdinal: 1,
-          status: "cancelled",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 0);
-      });
-
-      yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
-    }),
-);
-
-const threadUnloadCount = (mode: "eager" | "idle", outcome: string) =>
-  Metric.snapshot.pipe(
-    Effect.map((snapshots) => {
-      const snapshot = snapshots.find(
-        (candidate) =>
-          candidate.id === "t3_provider_thread_unloads_total" &&
-          candidate.attributes?.provider === CODEX_DRIVER &&
-          candidate.attributes?.mode === mode &&
-          candidate.attributes?.outcome === outcome,
-      );
-      return snapshot !== undefined && "count" in snapshot.state ? Number(snapshot.state.count) : 0;
-    }),
-  );
-
-it.effect(
-  "ProviderSessionManagerV2 unloads a delegated child's thread eagerly and well before other threads",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const parentThreadId = ThreadId.make("thread-provider-session-manager-eager-parent");
-        const normalThreadId = ThreadId.make("thread-provider-session-manager-eager-normal");
-        const childThreadId = ThreadId.make("thread-provider-session-manager-eager-child");
-        const providerSessionId = idAllocator.derive.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-        });
-        yield* eventSink.write({
-          events: [
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: normalThreadId, now }),
-            yield* makeThreadCreatedEvent({
-              idAllocator,
-              threadId: childThreadId,
-              now,
-              delegatedBy: parentThreadId,
-            }),
-          ],
-        });
-        const runtime = yield* manager.open({
-          threadId: normalThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* manager.open({
-          threadId: childThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        const runTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
-          const providerThread = makeProviderThread({
-            idAllocator,
-            threadId,
-            providerSessionId,
-            now,
-            nativeThreadId: String(threadId),
-          });
-          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
-          yield* runtime.startTurn({
-            appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
-            threadId,
-            runId,
-            runOrdinal: 1,
-            providerTurnOrdinal: 1,
-            attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-            rootNodeId: idAllocator.derive.rootNode({ runId }),
-            providerThread,
-            message: {
-              createdBy: "user",
-              creationSource: "web",
-              messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
-              text: "work",
-              attachments: [],
-            },
-            modelSelection,
-            runtimePolicy,
-          });
-          return Queue.offer(queue!, {
-            type: "turn.terminal",
-            driver: CODEX_DRIVER,
-            providerThreadId: providerThread.id,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: CODEX_DRIVER,
-              nativeTurnId: `native-turn-${threadId}`,
-            }),
-            runOrdinal: 1,
-            status: "completed",
-            failure: null,
-            threadDisposition: "reusable",
-          });
-        });
-        const finishNormal = yield* runTurn(normalThreadId);
-        const finishChild = yield* runTurn(childThreadId);
-        const unloads = Effect.map(Ref.get(state), (current) => ({
-          all: current.unloadedNativeThreadIds,
-          eager: current.eagerUnloadedNativeThreadIds,
-        }));
-        const eagerBefore = yield* threadUnloadCount("eager", "unloaded");
-        const idleBefore = yield* threadUnloadCount("idle", "unloaded");
-
-        yield* finishNormal;
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 minute");
-        yield* finishChild;
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust(
-          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS - 1),
-        );
-        assert.deepEqual(yield* unloads, { all: [], eager: [] });
-        yield* TestClock.adjust("1 millis");
-        assert.deepEqual(yield* unloads, { all: [childThreadId], eager: [childThreadId] });
-        yield* TestClock.adjust("7 minutes");
-        assert.deepEqual(yield* unloads, {
-          all: [childThreadId, normalThreadId],
-          eager: [childThreadId],
-        });
-        assert.equal((yield* threadUnloadCount("eager", "unloaded")) - eagerBefore, 1);
-        assert.equal((yield* threadUnloadCount("idle", "unloaded")) - idleBefore, 1);
-      });
-
-      yield* effect.pipe(
-        Effect.provide(layerTest({ state, idleTimeoutMs: 10 * 60_000 })),
-        Effect.scoped,
-      );
-    }),
-);
-
-it.effect(
-  "ProviderSessionManagerV2 retries a delegated child's deferred unload on its short delay and records a failed unload",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const pendingWork = yield* Ref.make(true);
-      const failUnload = yield* Ref.make(false);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const threadId = ThreadId.make("thread-provider-session-manager-deferred-unload");
-        const otherThreadId = ThreadId.make("thread-provider-session-manager-deferred-other");
-        const providerSessionId = idAllocator.derive.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-        });
-        yield* eventSink.write({
-          events: [
-            yield* makeThreadCreatedEvent({
-              idAllocator,
-              threadId,
-              now,
-              delegatedBy: ThreadId.make("thread-provider-session-manager-deferred-parent"),
-            }),
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: otherThreadId, now }),
-          ],
-        });
-        const runtime = yield* manager.open({
-          threadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* manager.open({
-          threadId: otherThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        const providerThread = makeProviderThread({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          now,
-          nativeThreadId: String(threadId),
-        });
-        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
-        yield* runtime.startTurn({
-          appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
-          threadId,
-          runId,
-          runOrdinal: 1,
-          providerTurnOrdinal: 1,
-          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-          rootNodeId: idAllocator.derive.rootNode({ runId }),
-          providerThread,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
-            text: "work",
-            attachments: [],
-          },
-          modelSelection,
-          runtimePolicy,
-        });
-        const deferredBefore = yield* threadUnloadCount("eager", "deferred");
-        const failedBefore = yield* threadUnloadCount("eager", "failed");
-        const counts = Effect.all({
-          deferred: Effect.map(threadUnloadCount("eager", "deferred"), (n) => n - deferredBefore),
-          failed: Effect.map(threadUnloadCount("eager", "failed"), (n) => n - failedBefore),
-        });
-
-        yield* Queue.offer(queue!, {
-          type: "turn.terminal",
-          driver: CODEX_DRIVER,
-          providerThreadId: providerThread.id,
-          providerTurnId: idAllocator.derive.providerTurn({
-            driver: CODEX_DRIVER,
-            nativeTurnId: "native-turn-deferred-unload",
-          }),
-          runOrdinal: 1,
-          status: "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust(
-          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
-        );
-        assert.deepEqual(yield* counts, { deferred: 1, failed: 0 });
-        yield* TestClock.adjust(
-          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
-        );
-        assert.deepEqual(yield* counts, { deferred: 2, failed: 0 });
-        yield* Ref.set(pendingWork, false);
-        yield* Ref.set(failUnload, true);
-        yield* TestClock.adjust(
-          Duration.millis(ProviderSessionManager.DELEGATED_CHILD_IDLE_TIMEOUT_MS),
-        );
-        assert.deepEqual(yield* counts, { deferred: 2, failed: 1 });
-        assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, []);
-      });
-
-      yield* effect.pipe(
-        Effect.provide(
-          layerTest({
-            state,
-            idleTimeoutMs: 10 * 60_000,
-            hasPendingBackgroundWork: Effect.succeed(true),
-            hasPendingBackgroundWorkForThread: Ref.get(pendingWork),
-            beforeUnload: Ref.get(failUnload).pipe(
-              Effect.flatMap((fail) => (fail ? Effect.die("unload failed") : Effect.void)),
-            ),
-          }),
-        ),
-        Effect.scoped,
-      );
-    }),
-);
-
-it.effect(
-  "ProviderSessionManagerV2 ignores a late turn.terminal from an earlier run on the same provider thread",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-late-terminal",
-        });
-        const threadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-late-terminal",
-          projectId,
-        });
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        const providerThread = makeProviderThread({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          now,
-          nativeThreadId: "native-thread-late-terminal",
-        });
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
-        const runtime = yield* manager.open({
-          threadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
-        const startRun = (runOrdinal: number) =>
-          Effect.gen(function* () {
-            const runId = idAllocator.derive.run({ threadId, ordinal: runOrdinal });
-            yield* runtime.startTurn({
-              appThread,
-              threadId,
-              runId,
-              runOrdinal,
-              providerTurnOrdinal: runOrdinal,
-              attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-              rootNodeId: idAllocator.derive.rootNode({ runId }),
-              providerThread,
-              message: {
-                createdBy: "user",
-                creationSource: "web",
-                messageId: yield* idAllocator.allocate.message({ threadId, ordinal: runOrdinal }),
-                text: `run ${runOrdinal}`,
-                attachments: [],
-              },
-              modelSelection,
-              runtimePolicy,
-            });
-          });
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        const terminal = (runOrdinal: number) =>
-          Queue.offer(queue!, {
-            type: "turn.terminal",
-            driver: CODEX_DRIVER,
-            providerThreadId: providerThread.id,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: CODEX_DRIVER,
-              nativeTurnId: `native-turn-late-terminal-${runOrdinal}`,
-            }),
-            runOrdinal,
-            status: "completed",
-            failure: null,
-            threadDisposition: "reusable",
-          });
-
-        yield* startRun(1);
-        yield* terminal(1);
-        yield* Effect.yieldNow;
-        yield* startRun(2);
-        // The provider repeats run 1's terminal while run 2 is in flight.
-        yield* terminal(1);
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 0);
-
-        yield* terminal(2);
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
-      });
-
-      yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
-    }),
-);
-
-it.effect(
-  "ProviderSessionManagerV2 keeps a running turn busy when an overlapping startTurn on the same provider thread fails",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const startTurnCalls = yield* Ref.make(0);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-overlapping-start",
-        });
-        const threadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-overlapping-start",
-          projectId,
-        });
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        const providerThread = makeProviderThread({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          now,
-          nativeThreadId: "native-thread-overlap",
-        });
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
-        const runtime = yield* manager.open({
-          threadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
-        const startInput = (ordinal: number) =>
-          Effect.gen(function* () {
-            const runId = idAllocator.derive.run({ threadId, ordinal });
-            return {
-              appThread,
-              threadId,
-              runId,
-              runOrdinal: ordinal,
-              providerTurnOrdinal: ordinal,
-              attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-              rootNodeId: idAllocator.derive.rootNode({ runId }),
-              providerThread,
-              message: {
-                createdBy: "user" as const,
-                creationSource: "web" as const,
-                messageId: yield* idAllocator.allocate.message({ threadId, ordinal }),
-                text: `turn ${ordinal}`,
-                attachments: [],
-              },
-              modelSelection,
-              runtimePolicy,
-            };
-          });
-
-        yield* runtime.startTurn(yield* startInput(1));
-        const overlapping = yield* runtime.startTurn(yield* startInput(2)).pipe(Effect.exit);
-        assert.isTrue(overlapping._tag === "Failure");
-
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 0);
-
-        // The failed run 2 must not leave its ordinal behind: run 1's
-        // terminal still idles the thread and lets the session release.
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        yield* Queue.offer(queue!, {
-          type: "turn.terminal",
-          driver: CODEX_DRIVER,
-          providerThreadId: providerThread.id,
-          providerTurnId: idAllocator.derive.providerTurn({
-            driver: CODEX_DRIVER,
-            nativeTurnId: "native-turn-overlap-1",
-          }),
-          runOrdinal: 1,
-          status: "completed",
-          failure: null,
-          threadDisposition: "reusable",
-        });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
-      });
-
-      yield* effect.pipe(
-        Effect.provide(
-          layerTest({
-            state,
-            idleTimeoutMs: 1000,
-            startTurn: () =>
-              Ref.getAndUpdate(startTurnCalls, (calls) => calls + 1).pipe(
-                Effect.flatMap((calls) =>
-                  calls === 0 ? Effect.void : unimplemented("overlapping turn rejected"),
-                ),
-              ),
-          }),
-        ),
-      );
-    }),
-);
-
-it.effect(
-  "ProviderSessionManagerV2 releases the session when the running turn ends while an overlapping startTurn fails",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const startTurnCalls = yield* Ref.make(0);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSink.EventSinkV2;
-        const idAllocator = yield* IdAllocator.IdAllocatorV2;
-        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-overlap-race",
-        });
-        const threadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-overlap-race",
-          projectId,
-        });
-        const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        });
-        const providerThread = makeProviderThread({
-          idAllocator,
-          threadId,
-          providerSessionId,
-          now,
-          nativeThreadId: "native-thread-overlap-race",
-        });
-        yield* eventSink.write({
-          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
-        });
-        const runtime = yield* manager.open({
-          threadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* runtime.events.pipe(Stream.runDrain, Effect.forkScoped);
-        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
-        const startInput = (ordinal: number) =>
-          Effect.gen(function* () {
-            const runId = idAllocator.derive.run({ threadId, ordinal });
-            return {
-              appThread,
-              threadId,
-              runId,
-              runOrdinal: ordinal,
-              providerTurnOrdinal: ordinal,
-              attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
-              rootNodeId: idAllocator.derive.rootNode({ runId }),
-              providerThread,
-              message: {
-                createdBy: "user" as const,
-                creationSource: "web" as const,
-                messageId: yield* idAllocator.allocate.message({ threadId, ordinal }),
-                text: `turn ${ordinal}`,
-                attachments: [],
-              },
-              modelSelection,
-              runtimePolicy,
-            };
-          });
-
-        yield* runtime.startTurn(yield* startInput(1));
-        const overlapping = yield* runtime.startTurn(yield* startInput(2)).pipe(Effect.exit);
-        assert.isTrue(overlapping._tag === "Failure");
-
-        yield* TestClock.adjust("2 seconds");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
-      });
-
-      yield* effect.pipe(
-        Effect.provide(
-          layerTest({
-            state,
-            idleTimeoutMs: 1000,
-            // Run 1's terminal lands while run 2's start is still failing.
-            startTurn: (input) =>
-              Ref.getAndUpdate(startTurnCalls, (calls) => calls + 1).pipe(
-                Effect.flatMap((calls) =>
-                  calls === 0
-                    ? Effect.void
-                    : Ref.get(state).pipe(
-                        Effect.flatMap((current) =>
-                          Queue.offer(
-                            current.eventQueues.get(
-                              String(input.providerThread.providerSessionId),
-                            )!,
-                            {
-                              type: "turn.terminal",
-                              driver: CODEX_DRIVER,
-                              providerThreadId: input.providerThread.id,
-                              providerTurnId: ProviderTurnId.make("native-turn-overlap-race-1"),
-                              runOrdinal: 1,
-                              status: "completed",
-                              failure: null,
-                              threadDisposition: "reusable",
-                            },
-                          ),
-                        ),
-                        Effect.andThen(Effect.yieldNow),
-                        Effect.andThen(Effect.yieldNow),
-                        Effect.andThen(unimplemented("overlapping turn rejected")),
-                      ),
-                ),
-              ),
-          }),
-        ),
-      );
-    }),
-);
-
 it.effect.each([
   { name: "default load key", normalizeThreadLoadModelSelection: undefined },
   {
@@ -5490,6 +4762,169 @@ it.effect(
 
         assert.deepEqual((yield* Ref.get(state)).unloadedNativeThreadIds, ["native-child-thread"]);
       }).pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })), Effect.scoped);
+    }),
+);
+
+it.effect.each([
+  { keptOpen: true, archive: "succeeds" },
+  { keptOpen: false, archive: "succeeds" },
+  { keptOpen: false, archive: "fails" },
+  { keptOpen: false, archive: "hangs" },
+] as const)(
+  "ProviderSessionManagerV2 archives an idle delegated child once its parent has the result (session kept open: $keptOpen, archive $archive)",
+  ({ keptOpen, archive }) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const unloads = yield* Queue.unbounded<string>();
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const parentThreadId = ThreadId.make("thread-provider-session-manager-archive-parent");
+        const parentRunId = idAllocator.derive.run({ threadId: parentThreadId, ordinal: 1 });
+        const providerSessionId = idAllocator.derive.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId: parentThreadId, now })],
+        });
+        let deliverPending: OrchestrationV2DomainEvent | undefined;
+        for (const delivery of ["pending", "delivered"] as const) {
+          const threadId = ThreadId.make(`thread-provider-session-manager-archive-${delivery}`);
+          const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+          const taskId = idAllocator.derive.rootNode({ runId });
+          const providerThread = makeProviderThread({
+            idAllocator,
+            threadId,
+            providerSessionId,
+            now,
+            nativeThreadId: `native-${delivery}`,
+          });
+          const created = yield* makeThreadCreatedEvent({
+            idAllocator,
+            threadId,
+            now,
+            delegatedBy: parentThreadId,
+          });
+          const taskEvent = (state: "pending" | "delivered") =>
+            Effect.gen(function* () {
+              return {
+                id: yield* idAllocator.allocate.event({ threadId: parentThreadId }),
+                type: "subagent.updated",
+                threadId: parentThreadId,
+                nodeId: taskId,
+                providerInstanceId: modelSelection.instanceId,
+                occurredAt: now,
+                payload: {
+                  id: taskId,
+                  threadId: parentThreadId,
+                  runId: parentRunId,
+                  parentNodeId: idAllocator.derive.rootNode({ runId: parentRunId }),
+                  origin: "app_owned",
+                  createdBy: "agent",
+                  driver: CODEX_DRIVER,
+                  providerInstanceId: modelSelection.instanceId,
+                  providerThreadId: null,
+                  childThreadId: threadId,
+                  nativeTaskRef: null,
+                  prompt: "Delegated work",
+                  title: null,
+                  model: null,
+                  completionDelivery: { state, observedByRunId: null },
+                  status: "completed",
+                  result: "Done.",
+                  startedAt: now,
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              } satisfies OrchestrationV2DomainEvent;
+            });
+          if (delivery === "pending") deliverPending = yield* taskEvent("delivered");
+          yield* eventSink.write({
+            events: [
+              {
+                ...created,
+                payload: { ...created.payload, forkedFrom: { type: "node", nodeId: taskId } },
+              },
+              yield* taskEvent(delivery),
+            ],
+          });
+          const runtime = yield* manager.open({
+            threadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* runtime.startTurn({
+            appThread: (yield* projectionStore.getThreadProjection(threadId)).thread,
+            threadId,
+            runId,
+            runOrdinal: 1,
+            providerTurnOrdinal: 1,
+            attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+            rootNodeId: idAllocator.derive.rootNode({ runId }),
+            providerThread,
+            message: {
+              createdBy: "agent",
+              creationSource: "server",
+              messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+              text: "Delegated work",
+              attachments: [],
+            },
+            modelSelection,
+            runtimePolicy,
+          });
+          // The pump marks the thread idle before subscribers see its terminal.
+          const subscription = yield* runtime.subscribeEvents!;
+          yield* Queue.offer((yield* Ref.get(state)).eventQueues.get(String(providerSessionId))!, {
+            type: "turn.terminal",
+            driver: CODEX_DRIVER,
+            providerThreadId: providerThread.id,
+            providerTurnId: idAllocator.derive.providerTurn({
+              driver: CODEX_DRIVER,
+              nativeTurnId: `native-turn-${delivery}`,
+            }),
+            runOrdinal: 1,
+            status: "completed",
+            failure: null,
+            threadDisposition: "reusable",
+          });
+          yield* subscription.events.pipe(Stream.runHead);
+        }
+
+        yield* TestClock.adjust("1 second");
+        assert.equal(yield* Queue.take(unloads), "archive:native-delivered");
+        if (archive !== "succeeds") {
+          if (archive === "hangs") yield* TestClock.adjust("10 seconds");
+          // An archive that never finished may have left the thread loaded.
+          assert.equal(yield* Queue.take(unloads), "unload:native-delivered");
+          return;
+        }
+        // The pending child stays loaded, and keeps the session open, until its parent takes the result.
+        yield* eventSink.write({ events: [deliverPending!] });
+        yield* TestClock.adjust("1 second");
+        assert.equal(yield* Queue.take(unloads), "archive:native-pending");
+        if (!keptOpen) assert.equal(yield* Queue.take(unloads), "close");
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 1000,
+            unloads,
+            ...(archive === "fails"
+              ? { archive: unimplemented("archive refused") }
+              : archive === "hangs"
+                ? { archive: Effect.never }
+                : {}),
+            // Another thread's work keeps the shared session open past the children's idle unloads.
+            hasPendingBackgroundWork: Effect.succeed(keptOpen),
+          }),
+        ),
+      );
     }),
 );
 

@@ -161,7 +161,7 @@ jobs:
 
       - name: Setup EAS
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # 8.2.1
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8.2.1
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_PRODUCTION_TOKEN }}
@@ -483,9 +483,8 @@ jobs:
     name: Android store build
     needs: production
     # Skipped when the production job failed: no store build after a failed OTA.
-    # disabled: Android and iOS builds are not used by this fork
-    if: false
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    if: needs.production.outputs.android_build == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
       group: mobile-android-store-build
@@ -557,7 +556,7 @@ jobs:
           rm -rf "$EAS_LOCAL_BUILD_WORKINGDIR"
           # No daemon: nothing should hold the sticky disk open when it is committed.
           printf 'org.gradle.caching=true\norg.gradle.daemon=false\n' > "$GRADLE_USER_HOME/gradle.properties"
-          sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's|http://|https://|g' /etc/apt/ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -qq && sudo apt-get install -y -qq ccache
           ccache --zero-stats
 
@@ -636,7 +635,7 @@ jobs:
       # A --path submission doesn't keep its archive on EAS; this is the only downloadable copy.
       - name: Keep the AAB
         if: steps.record.outputs.built != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-store-aab-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/t3code.aab
@@ -681,9 +680,8 @@ jobs:
     name: iOS store build
     needs: production
     # Skipped when the production job failed: no store build after a failed OTA.
-    # disabled: Android and iOS builds are not used by this fork
-    if: false
-    runs-on: blacksmith-12vcpu-macos-27
+    if: needs.production.outputs.ios_build == 'true'
+    runs-on: macos-26
     timeout-minutes: 60
     concurrency:
       group: mobile-ios-store-build

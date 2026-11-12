@@ -66,7 +66,7 @@ jobs:
 
       - name: Setup EAS
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # 8.2.1
+        uses: expo/expo-github-action@c7b66a9c327a43a8fa7c0158e7f30d6040d2481e # v8.2.1
         with:
           # eas-cli 22 renamed `project` to `app` in build JSON, and
           # continuous-deploy-fingerprint still reads `build.project.ownerAccount`.
@@ -99,7 +99,7 @@ jobs:
 
       - name: Deploy with fingerprint check
         if: steps.expo-token.outputs.present == 'true'
-        uses: expo/expo-github-action/continuous-deploy-fingerprint@eab7a230208c952974db8c3245cfd78402c7b385 # 9.0.0
+        uses: expo/expo-github-action/continuous-deploy-fingerprint@5273c2136bd09c2a341fe3340d3e767ce5a13015 # v9.0.2
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
           # The Expo action otherwise suppresses the EAS command's failure output.
@@ -124,7 +124,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       contains(github.event.pull_request.labels.*.name, '🚀 Mobile Continuous Deployment') &&
       (github.event.action != 'labeled' || github.event.label.name == '🚀 Mobile Continuous Deployment')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     concurrency:
       group: mobile-eas-preview-android-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -269,9 +269,8 @@ jobs:
   android-build:
     name: Android preview client
     needs: android
-    # disabled: Android and iOS builds are not used by this fork
-    if: false
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    if: needs.android.outputs.build == 'true'
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     concurrency:
       # One build per fingerprint; a second PR with the same one finds the tag.
@@ -355,7 +354,7 @@ jobs:
           rm -rf "$EAS_LOCAL_BUILD_WORKINGDIR"
           # No daemon: nothing should hold the sticky disk open when it is committed.
           printf 'org.gradle.caching=true\norg.gradle.daemon=false\n' > "$GRADLE_USER_HOME/gradle.properties"
-          sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
+          sudo sed -i 's|http://|https://|g' /etc/apt/ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update -qq && sudo apt-get install -y -qq ccache
           ccache --zero-stats
 
