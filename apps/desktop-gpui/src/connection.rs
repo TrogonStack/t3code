@@ -27,6 +27,9 @@ use crate::rpc::{
     PullRequestsLinkedThreads, PullRequestsList, PullRequestsListStats, PullRequestsRouting,
     PullRequestsRunAction, PullRequestsStack, PullRequestsSummary,
 };
+use crate::rpc::{
+    ScheduledTasksDelete, ScheduledTasksRunNow, ScheduledTasksSetEnabled, SubscribeScheduledTasks,
+};
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
 use crate::strip::{self, Branch};
@@ -168,6 +171,11 @@ pub enum Call {
     StartProjectClone,
     /// A stream of the clone list that never ends by itself.
     WatchProjectClones,
+    /// A stream of an environment's scheduled tasks that never ends by itself.
+    WatchScheduledTasks,
+    SetScheduledTaskEnabled,
+    RunScheduledTask,
+    DeleteScheduledTask,
     PullRequestsList,
     PullRequestsListStats,
     PullRequestsFilterOptions,
@@ -243,6 +251,10 @@ impl Call {
             Self::WriteFile => "write the file",
             Self::StartProjectClone => "start the clone",
             Self::WatchProjectClones => "watch the clones",
+            Self::WatchScheduledTasks => "load the scheduled tasks",
+            Self::SetScheduledTaskEnabled => "update the scheduled task",
+            Self::RunScheduledTask => "run the scheduled task",
+            Self::DeleteScheduledTask => "delete the scheduled task",
             Self::PullRequestsList => "list the pull requests",
             Self::PullRequestsListStats => "count the pull requests",
             Self::PullRequestsFilterOptions => "load the list filters",
@@ -299,6 +311,10 @@ impl Call {
             Self::WriteFile => session.request::<ProjectsWriteFile>(payload),
             Self::StartProjectClone => session.request::<ProjectCloneStart>(payload),
             Self::WatchProjectClones => session.request::<SubscribeProjectClones>(payload),
+            Self::WatchScheduledTasks => session.request::<SubscribeScheduledTasks>(payload),
+            Self::SetScheduledTaskEnabled => session.request::<ScheduledTasksSetEnabled>(payload),
+            Self::RunScheduledTask => session.request::<ScheduledTasksRunNow>(payload),
+            Self::DeleteScheduledTask => session.request::<ScheduledTasksDelete>(payload),
             Self::PullRequestsList => session.request::<PullRequestsList>(payload),
             Self::PullRequestsListStats => session.request::<PullRequestsListStats>(payload),
             Self::PullRequestsFilterOptions => {

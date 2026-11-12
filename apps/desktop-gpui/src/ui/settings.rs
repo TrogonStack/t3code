@@ -11,6 +11,7 @@ mod keybindings_panel;
 mod labs_panel;
 mod projects_panel;
 mod providers_panel;
+mod scheduled_tasks_panel;
 mod scope_inheritance;
 mod scope_pickers;
 mod secret_field;
@@ -38,6 +39,7 @@ use labs_panel::{LabsEvent, LabsPanel};
 pub use projects_panel::ProjectsData;
 use projects_panel::ProjectsPanel;
 use providers_panel::ProvidersPanel;
+use scheduled_tasks_panel::ScheduledTasksPanel;
 use scope_pickers::ScopeBar;
 use secrets_panel::SecretsPanel;
 use source_control_panel::SourceControlPanel;
@@ -182,6 +184,7 @@ pub struct SettingsDialog {
     devices: Entity<DevicesPanel>,
     source_control: Entity<SourceControlPanel>,
     secrets: Entity<SecretsPanel>,
+    scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
     projects: Entity<ProjectsPanel>,
     keybindings: Entity<KeybindingsPanel>,
@@ -208,6 +211,8 @@ impl SettingsDialog {
         let projects = cx.new(|cx| ProjectsPanel::new(actions.clone(), scope.clone(), window, cx));
         let keybindings =
             cx.new(|cx| KeybindingsPanel::new(actions.clone(), scope.clone(), window, cx));
+        let scheduled_tasks =
+            cx.new(|cx| ScheduledTasksPanel::new(actions.clone(), scope.clone(), cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -243,6 +248,7 @@ impl SettingsDialog {
             devices,
             source_control,
             secrets,
+            scheduled_tasks,
             providers,
             projects,
             keybindings,
@@ -268,6 +274,8 @@ impl SettingsDialog {
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
+        self.scheduled_tasks
+            .update(cx, |panel, cx| panel.reload(cx));
         self.providers.update(cx, |panel, cx| panel.reload(cx));
         self.projects.update(cx, |panel, cx| panel.reload(cx));
         self.keybindings.update(cx, |panel, cx| panel.reload(cx));
@@ -310,6 +318,30 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.labs
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_scheduled_tasks_projects(
+        &mut self,
+        projects: crate::settings_scheduled_tasks::ProjectsByEnvironment,
+        cx: &mut Context<Self>,
+    ) {
+        self.scheduled_tasks
+            .update(cx, |panel, cx| panel.set_projects(projects, cx));
+    }
+
+    pub fn reset_scheduled_tasks(&mut self, cx: &mut Context<Self>) {
+        self.scheduled_tasks
+            .update(cx, |panel, cx| panel.reload(cx));
+    }
+
+    pub fn on_scheduled_tasks_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.scheduled_tasks
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -507,6 +539,12 @@ impl SettingsDialog {
         {
             return;
         }
+        if self
+            .scheduled_tasks
+            .update(cx, |panel, cx| panel.close_menu(cx))
+        {
+            return;
+        }
         if self.providers.update(cx, |panel, cx| panel.close_menu(cx)) {
             return;
         }
@@ -687,6 +725,9 @@ impl Render for SettingsDialog {
         let secrets = self
             .secrets
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let scheduled_tasks = self
+            .scheduled_tasks
+            .update(cx, |panel, cx| panel.overlay(cx));
         let providers = self
             .providers
             .update(cx, |panel, cx| panel.overlay(window, cx));
@@ -756,6 +797,7 @@ impl Render for SettingsDialog {
             .children(confirm)
             .children(devices)
             .children(secrets)
+            .children(scheduled_tasks)
             .children(providers)
             .children(projects)
             .children(keybindings)
@@ -1261,6 +1303,10 @@ impl SettingsDialog {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.secrets.clone().into_any_element()]
+        } else if self.section == Section::ScheduledTasks {
+            self.scheduled_tasks
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.scheduled_tasks.clone().into_any_element()]
         } else if self.section == Section::Providers {
             self.providers
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
@@ -1283,6 +1329,7 @@ impl SettingsDialog {
                 | Section::Devices
                 | Section::SourceControl
                 | Section::Secrets
+                | Section::ScheduledTasks
                 | Section::Providers
                 | Section::Projects
                 | Section::Keybindings

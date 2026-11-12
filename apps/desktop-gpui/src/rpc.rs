@@ -413,6 +413,30 @@ impl Method for SubscribeProjectClones {
     type Payload = Value;
     type Success = Value;
 }
+/// `scheduledTasks.subscribe`, a stream of the task list that stays open until interrupted.
+pub struct SubscribeScheduledTasks;
+
+impl Method for SubscribeScheduledTasks {
+    const TAG: &'static str = "scheduledTasks.subscribe";
+    const STREAMING: bool = true;
+    type Payload = Value;
+    type Success = Value;
+}
+untyped_method!(
+    /// `scheduledTasks.setEnabled`: pauses or resumes a task.
+    ScheduledTasksSetEnabled,
+    "scheduledTasks.setEnabled"
+);
+untyped_method!(
+    /// `scheduledTasks.runNow`: starts a run of a task immediately.
+    ScheduledTasksRunNow,
+    "scheduledTasks.runNow"
+);
+untyped_method!(
+    /// `scheduledTasks.delete`: removes a task.
+    ScheduledTasksDelete,
+    "scheduledTasks.delete"
+);
 /// `subscribeServerConfig`: a snapshot of the server config, then its changes.
 pub struct SubscribeServerConfig;
 

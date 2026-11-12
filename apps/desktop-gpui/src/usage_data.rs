@@ -1060,6 +1060,20 @@ pub fn format_hour_short(hour_start: &str, zone: &Zone) -> String {
     }
 }
 
+/// `Intl` `dateStyle: "medium"` with `timeStyle: "short"` for `en-US`: `Nov 10, 2026, 5:13 AM`.
+pub fn format_date_time_medium(at: i64, zone: &Zone) -> String {
+    let c = zone.civil(at);
+    let twelve = if c.hour % 12 == 0 { 12 } else { c.hour % 12 };
+    format!(
+        "{} {}, {}, {twelve}:{:02}\u{202f}{}",
+        MONTHS[(c.month - 1) as usize],
+        c.day,
+        c.year,
+        c.minute,
+        if c.hour < 12 { "AM" } else { "PM" }
+    )
+}
+
 pub fn format_date_time_short(instant: &str, zone: &Zone) -> String {
     match timestamp_ms(instant) {
         Some(ms) => {

@@ -616,8 +616,17 @@ impl MainView {
             )
         });
         let project_ids = crate::settings_devices::project_ids(&entries);
+        let mut task_projects = crate::settings_scheduled_tasks::ProjectsByEnvironment::new();
+        task_projects.insert("primary".to_owned(), project_ids.clone());
+        for other in &self.environments {
+            task_projects.insert(
+                other.id.clone(),
+                crate::settings_devices::project_ids(&other.projects),
+            );
+        }
         self.settings.update(cx, |settings, cx| {
             settings.set_labs_data(data, flags, cx);
+            settings.set_scheduled_tasks_projects(task_projects, cx);
             if let Some((config, projects, sources)) = devices {
                 settings.set_devices_data(config, projects, sources, cx);
             }
@@ -723,6 +732,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_scheduled_tasks::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_scheduled_tasks_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::keybinding_rules::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_keybindings_call(token, event, cx)
@@ -805,6 +820,8 @@ impl MainView {
             self.branches_requested.clear();
             self.vcs.clear();
             self.diffs_requested.clear();
+            self.settings
+                .update(cx, |settings, cx| settings.reset_scheduled_tasks(cx));
             self.pull_request_panel
                 .update(cx, |panel, cx| panel.reset(cx));
             if self.pull_requests_open {
