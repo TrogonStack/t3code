@@ -469,6 +469,8 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
   const graphql = ["apps/server", "packages/source-control-github"].filter((dir) =>
     files.some((file) => file.startsWith(`${dir}/`)),
   );
+  // CI's Lint job also checks the RPC JSON Schema that the GPUI desktop generates its wire types from.
+  const rpcSchema = files.some((file) => file.startsWith("packages/contracts/"));
   const filters = (names: ReadonlyArray<string>) => names.flatMap((name) => ["--filter", name]);
   const typecheckWorkers = Math.min(concurrency, affected.length);
   const command = (name: string, args: ReadonlyArray<string>) => ({ name, run: vp(args) });
@@ -488,6 +490,9 @@ const checkChanged = Effect.fn("checkChanged")(function* (input: {
     ...graphql.map((dir) =>
       command(`graphql (${dir})`, ["run", "--filter", `./${dir}`, "generate", "--check"]),
     ),
+    ...(rpcSchema
+      ? [command("rpc schema", ["run", "--filter", "@t3tools/contracts", "generate", "--check"])]
+      : []),
     ...(affected.length > 0
       ? [
           {

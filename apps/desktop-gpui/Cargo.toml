@@ -1,0 +1,53 @@
+[package]
+name = "t3-desktop-gpui"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+alacritty_terminal = "=0.26.0"
+async-channel = "2.5.0"
+bytes = "1"
+futures-util = "0.3.34"
+getrandom = "0.4.3"
+gpui = { package = "gpui-pre", version = "=0.3.11" }
+gpui-component = "=0.9.0"
+gpui-kit-assets = "=0.9.0"
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit"] }
+hex = "0.4.3"
+hmac = "0.13.0"
+http-body = "1"
+image = { version = "0.25.10", default-features = false }
+libc = "0.2.191"
+markdown = "1.0.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+smallvec = "1.16.4"
+snap = "1"
+tokio = { version = "1.54.1", features = [
+  "rt-multi-thread",
+  "process",
+  "time",
+  "sync",
+  "io-util",
+  "macros",
+] }
+tokio-tungstenite = "0.30.0"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+
+[dev-dependencies]
+http-body-util = "0.1"
+prettyplease = "0.3.0"
+schemars = "0.8"
+syn = "3.0.9"
+typify = "0.10.0-alpha.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"

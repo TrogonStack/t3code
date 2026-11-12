@@ -1,0 +1,179 @@
+mod assets;
+mod attachments;
+mod auth;
+mod branch_picker;
+mod clone_flow;
+mod config;
+mod connection;
+mod credentials;
+mod details;
+mod details_card;
+mod diff;
+mod environments;
+mod git_actions;
+mod history;
+mod keybinding_rules;
+mod keybindings;
+mod minimap;
+mod model_picker;
+mod pairing;
+mod projects;
+mod providers;
+mod pull_request;
+mod ref_picker;
+mod refs;
+mod rpc;
+mod secret_source;
+mod send;
+mod server;
+mod settings;
+mod settings_appearance;
+mod settings_devices;
+mod settings_diffs;
+mod settings_labs;
+mod settings_projects;
+mod settings_providers;
+mod settings_secrets;
+mod settings_source_control;
+mod settings_typography;
+mod shell;
+mod slow_requests;
+mod status;
+mod strip;
+mod terminal;
+mod terminal_screen;
+mod terminal_state;
+mod terminal_view;
+mod thread;
+mod thread_card;
+mod toast;
+mod ui;
+mod upload;
+mod usage;
+mod usage_data;
+mod usage_limits;
+mod usage_prices;
+mod wire;
+mod workspace;
+
+use assets::AppAssets;
+use config::{Attach, Config};
+use gpui::{
+    App, AppContext as _, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, point,
+    px, size,
+};
+use gpui_component::{Root, Theme, ThemeMode, TitleBar};
+use gpui_platform::application;
+use server::Supervisor;
+use status::Status;
+use std::rc::Rc;
+use std::sync::Arc;
+use ui::MainView;
+
+fn main() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("failed to start the async runtime");
+    let (status_tx, status_rx) = async_channel::unbounded();
+    let (action_tx, action_rx) = async_channel::unbounded();
+    let attach = Attach::from_env();
+    let supervisor = if attach.is_some() {
+        None
+    } else {
+        Config::from_env().map(|config| {
+            Rc::new(Supervisor::start(
+                runtime.handle(),
+                config,
+                action_rx.clone(),
+                status_tx.clone(),
+            ))
+        })
+    };
+    let initial = if let Some(attach) = attach {
+        runtime.spawn(async move {
+            let client = auth::http_client();
+            match server::wait_until_ready(&client, &attach.http_base).await {
+                Ok(environment) => {
+                    let store: Arc<dyn credentials::CredentialStore> =
+                        Arc::new(credentials::Keychain);
+                    // The badges follow the other environments this app has paired with.
+                    tokio::spawn(environments::run(
+                        environment.id.clone(),
+                        store.clone(),
+                        status_tx.clone(),
+                    ));
+                    let unpair = std::env::args().any(|arg| arg == "--unpair");
+                    pairing::run(store, attach, &environment, unpair, &action_rx, &status_tx).await;
+                }
+                Err(message) => status::publish(&status_tx, Status::Failed(message)),
+            }
+        });
+        Status::Connecting
+    } else if supervisor.is_some() {
+        Status::Starting
+    } else {
+        Status::NotConnected
+    };
+
+    application()
+        .with_assets(AppAssets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            Theme::change(ThemeMode::Dark, None, cx);
+            cx.bind_keys(ui::usage_bindings());
+            cx.bind_keys(ui::add_to_machine_bindings());
+            cx.bind_keys(ui::settings_bindings());
+            cx.bind_keys([
+                // `CmdOrCtrl+,` of the desktop application menu (DesktopApplicationMenu.ts:174).
+                KeyBinding::new("cmd-,", ui::OpenSettings, None),
+                KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
+            ]);
+            // The web's defaults until the server sends its keybindings.
+            ui::apply_default_keybindings(cx);
+            if let Some(supervisor) = supervisor {
+                // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
+                cx.on_app_quit(move |_| {
+                    supervisor.stop();
+                    async {}
+                })
+                .detach();
+            }
+            // Electron's `DEFAULT_MAIN_WINDOW_SIZE`; the minimum width is the shipped app's, below
+            // the sidebar's overlay breakpoint.
+            let bounds = Bounds::centered(None, size(px(1100.), px(780.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(583.), px(620.))),
+                    // Electron's `trafficLightPosition`: centered in the 52px workspace top bar.
+                    titlebar: Some(TitlebarOptions {
+                        traffic_light_position: Some(point(px(16.), px(19.))),
+                        ..TitleBar::title_bar_options()
+                    }),
+                    ..TitleBar::window_options()
+                },
+                |window, cx| {
+                    let view = cx.new(|cx| {
+                        cx.spawn(async move |this, cx| {
+                            while let Ok(status) = status_rx.recv().await {
+                                let updated = this.update(cx, |view: &mut MainView, cx| {
+                                    view.set_status(status, cx)
+                                });
+                                if updated.is_err() {
+                                    break;
+                                }
+                            }
+                        })
+                        .detach();
+                        MainView::new(initial, action_tx, window, cx)
+                    });
+                    cx.new(|cx| Root::new(view, window, cx))
+                },
+            )
+            .expect("failed to open the main window");
+            cx.activate(true);
+        });
+    drop(runtime);
+}
