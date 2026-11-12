@@ -4291,6 +4291,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           NodeServices.layer,
           NodeCrypto.layer,
           Layer.mock(PullRequestService.PullRequestService)({
+            invalidate: () => Effect.void,
             detail: (input) =>
               Effect.succeed({
                 ...watchedPullRequestDetail({
@@ -4796,9 +4797,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                           : {}),
                     }),
               invalidate: () => Effect.void,
-              detail: () =>
+              detail: (input) =>
                 Effect.sync(() => {
-                  detailReads += 1;
+                  if (input.number === 15) detailReads += 1;
                   return {
                     ...watchedPullRequestDetail({
                       projectId,
@@ -4817,9 +4818,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
                     ],
                   };
                 }),
-              activity: () =>
+              activity: (input) =>
                 Effect.sync(() => {
-                  activityReads += 1;
+                  if (input.number === 15) activityReads += 1;
                   return {
                     comments:
                       commentAt === null
