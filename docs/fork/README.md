@@ -41,3 +41,5 @@ Each entry uses these sections:
   active, [#103](https://github.com/TrogonStack/t3code/pull/103)
 - **0033** [More secret stores](./0033-more-secret-stores.md)
   active, [#106](https://github.com/TrogonStack/t3code/pull/106)
+- **0034** [A pull request watch remembers your instructions](./0034-a-pull-request-watch-remembers-your-instructions.md)
+  active, [#179](https://github.com/TrogonStack/t3code/pull/179)
