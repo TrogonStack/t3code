@@ -4430,6 +4430,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           NodeServices.layer,
           NodeCrypto.layer,
           Layer.mock(PullRequestService.PullRequestService)({
+            invalidate: () => Effect.void,
             detail: (input) =>
               Effect.gen(function* () {
                 if (gate !== null) {
@@ -5834,7 +5835,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const afterEdit = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
         assert.deepEqual(
           afterEdit.messages.flatMap((message) => message.notification?.summary ?? []),
-          ["#7: checks failed, new comments", "#7: new comments"],
+          ["#7: new comments", "#7: new comments"],
         );
         assert.include(afterEdit.messages.at(-1)?.text ?? "", "Edited twelfth reply.");
       }

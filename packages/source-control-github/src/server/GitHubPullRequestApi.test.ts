@@ -1438,7 +1438,7 @@ layer("GitHubPullRequestApi.layer", (it) => {
         const second = yield* poll;
         assert.deepStrictEqual(second, first);
         assert.deepStrictEqual(first, {
-          status: "OPEN MERGEABLE BLOCKED abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1",
+          status: "OPEN MERGEABLE BLOCKED abc123 IN_PROGRESS:1,SUCCESS:1 SUCCESS:1 0",
           remarks: "2026-10-01T00:00:00Z 3 1  2  0",
           includesCheckState: true,
           includesRemarkState: true,
