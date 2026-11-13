@@ -21,7 +21,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
-import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { isConfiguredAcpRegistryAgent } from "./AddProviderInstanceDialog.logic";
 import { ProviderDriverKind } from "@t3tools/contracts";
@@ -227,20 +226,18 @@ export function AcpRegistrySearchStep({
             <p className="mt-1 text-xs text-muted-foreground">Try a broader search.</p>
           </div>
         ) : (
-          <ScrollArea scrollFade className="max-h-64">
-            <div className="pr-2.5">
-              {results.map((agent) => (
-                <AcpRegistryAgentRow
-                  agent={agent}
-                  alreadyAdded={isConfiguredAcpRegistryAgent(providerInstances, agent.id)}
-                  canAdd={canManageProviders && preparingId === null}
-                  isPreparing={preparingId === agent.id}
-                  key={agent.id}
-                  onAdd={handlePrepare}
-                />
-              ))}
-            </div>
-          </ScrollArea>
+          <div>
+            {results.map((agent) => (
+              <AcpRegistryAgentRow
+                agent={agent}
+                alreadyAdded={isConfiguredAcpRegistryAgent(providerInstances, agent.id)}
+                canAdd={canManageProviders && preparingId === null}
+                isPreparing={preparingId === agent.id}
+                key={agent.id}
+                onAdd={handlePrepare}
+              />
+            ))}
+          </div>
         )
       ) : null}
     </section>
