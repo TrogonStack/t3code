@@ -29,6 +29,8 @@ pub enum Schedule {
         run_at: String,
     },
     Webhook,
+    /// A schedule type this build does not know; the row shows and the task cannot be edited.
+    Unknown(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +82,12 @@ pub struct Task {
     pub last_run_status: RunStatus,
     pub last_run_error: Option<String>,
     pub blocked_by_policy: Option<String>,
+    /// A `threadMode` this build does not know; the editor sends it back unchanged.
+    pub thread_mode: Option<String>,
+    pub webhook_url: Option<String>,
+    pub has_secret: bool,
+    /// The task as the server sent it, for the editor.
+    pub raw: Value,
 }
 
 impl Task {
@@ -105,7 +113,7 @@ fn decode_schedule(value: &Value) -> Option<Schedule> {
                 .map(|days| days.iter().filter_map(Value::as_i64).collect())
                 .unwrap_or_default(),
         }),
-        _ => None,
+        other => Some(Schedule::Unknown(other.to_owned())),
     }
 }
 
@@ -128,10 +136,27 @@ pub fn decode_task(value: &Value) -> Option<Task> {
         },
         last_run_error: optional("lastRunError"),
         blocked_by_policy: optional("blockedByPolicy"),
+        thread_mode: value
+            .get("threadMode")
+            .filter(|mode| !mode.is_null())
+            .map(|mode| {
+                mode.as_str()
+                    .map_or_else(|| mode.to_string(), str::to_owned)
+            }),
+        webhook_url: value
+            .get("webhook")
+            .and_then(|webhook| webhook.get("url")?.as_str())
+            .map(str::to_owned),
+        has_secret: value
+            .get("webhook")
+            .and_then(|webhook| webhook.get("hasSecret")?.as_bool())
+            .unwrap_or(false),
+        raw: value.clone(),
     })
 }
 
-/// A list result or stream item; tasks this client cannot decode are dropped, as
+/// A list result or stream item. A task with a schedule or thread mode this build does not know
+/// still decodes, and the row says so; one that lacks the fields every task has is dropped, as
 /// `ForwardCompatibleArray` does.
 pub fn decode_tasks(value: &Value) -> Vec<Task> {
     value
@@ -145,6 +170,7 @@ pub fn decode_tasks(value: &Value) -> Vec<Task> {
 pub fn schedule_label(schedule: &Schedule, zone: &Zone) -> String {
     match schedule {
         Schedule::Webhook => "On webhook".to_owned(),
+        Schedule::Unknown(kind) => format!("Unsupported schedule ({kind})"),
         Schedule::Once { run_at } => match parse_timestamp(run_at) {
             Some(at) => format!("Once, {}", format_date_time_medium(at, zone)),
             None => "Once, Invalid Date".to_owned(),
@@ -293,6 +319,10 @@ mod tests {
             last_run_status: RunStatus::Never,
             last_run_error: None,
             blocked_by_policy: None,
+            thread_mode: None,
+            webhook_url: None,
+            has_secret: false,
+            raw: Value::Null,
         }
     }
 
@@ -393,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn decoding_drops_what_it_cannot_read() {
+    fn decoding_keeps_unknown_kinds_and_drops_what_it_cannot_read() {
         let value = json!({ "tasks": [
             {
                 "id": "a", "title": "A", "prompt": "do it", "enabled": true,
@@ -409,7 +439,12 @@ mod tests {
             { "title": "no id" }
         ]});
         let tasks = decode_tasks(&value);
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(
+            tasks[1].schedule,
+            Schedule::Unknown("future_kind".to_owned())
+        );
+        let tasks = [tasks[0].clone(), tasks[2].clone()];
         assert_eq!(tasks[0].last_run_status, RunStatus::Succeeded);
         assert_eq!(tasks[0].last_run_error, None);
         assert_eq!(
@@ -420,6 +455,20 @@ mod tests {
         assert_eq!(tasks[1].last_run_error.as_deref(), Some("boom"));
         assert_eq!(tasks[1].blocked_by_policy.as_deref(), Some("No"));
         assert!(decode_tasks(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn decoding_keeps_a_thread_mode_and_the_webhook_endpoint() {
+        let value = json!({ "tasks": [{
+            "id": "a", "title": "A", "enabled": true, "projectId": "p",
+            "schedule": { "type": "webhook" }, "threadMode": "fresh_session",
+            "webhook": { "path": "/h/1", "url": "https://x/h/1", "hasSecret": true }
+        }]});
+        let task = &decode_tasks(&value)[0];
+        assert_eq!(task.thread_mode.as_deref(), Some("fresh_session"));
+        assert_eq!(task.webhook_url.as_deref(), Some("https://x/h/1"));
+        assert!(task.has_secret);
+        assert_eq!(task.raw["id"], "a");
     }
 
     #[test]

@@ -28,7 +28,8 @@ use crate::rpc::{
     PullRequestsRunAction, PullRequestsStack, PullRequestsSummary,
 };
 use crate::rpc::{
-    ScheduledTasksDelete, ScheduledTasksRunNow, ScheduledTasksSetEnabled, SubscribeScheduledTasks,
+    ScheduledTasksDelete, ScheduledTasksRotateWebhookToken, ScheduledTasksRunNow,
+    ScheduledTasksSetEnabled, ScheduledTasksUpsert, SubscribeScheduledTasks,
 };
 use crate::shell::ShellState;
 use crate::status::{CallEvent, Status, StatusSender, publish};
@@ -176,6 +177,8 @@ pub enum Call {
     SetScheduledTaskEnabled,
     RunScheduledTask,
     DeleteScheduledTask,
+    UpsertScheduledTask,
+    RotateScheduledTaskWebhook,
     PullRequestsList,
     PullRequestsListStats,
     PullRequestsFilterOptions,
@@ -255,6 +258,8 @@ impl Call {
             Self::SetScheduledTaskEnabled => "update the scheduled task",
             Self::RunScheduledTask => "run the scheduled task",
             Self::DeleteScheduledTask => "delete the scheduled task",
+            Self::UpsertScheduledTask => "save the scheduled task",
+            Self::RotateScheduledTaskWebhook => "rotate the webhook URL",
             Self::PullRequestsList => "list the pull requests",
             Self::PullRequestsListStats => "count the pull requests",
             Self::PullRequestsFilterOptions => "load the list filters",
@@ -315,6 +320,10 @@ impl Call {
             Self::SetScheduledTaskEnabled => session.request::<ScheduledTasksSetEnabled>(payload),
             Self::RunScheduledTask => session.request::<ScheduledTasksRunNow>(payload),
             Self::DeleteScheduledTask => session.request::<ScheduledTasksDelete>(payload),
+            Self::UpsertScheduledTask => session.request::<ScheduledTasksUpsert>(payload),
+            Self::RotateScheduledTaskWebhook => {
+                session.request::<ScheduledTasksRotateWebhookToken>(payload)
+            }
             Self::PullRequestsList => session.request::<PullRequestsList>(payload),
             Self::PullRequestsListStats => session.request::<PullRequestsListStats>(payload),
             Self::PullRequestsFilterOptions => {

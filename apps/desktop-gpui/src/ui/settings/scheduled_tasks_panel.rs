@@ -1,7 +1,9 @@
 //! The Scheduled tasks tab's list: `ScheduledTasksSettings.tsx`. Each environment in the scope
-//! streams its tasks; a row enables, runs or deletes one. The editor is not part of this tab yet.
+//! streams its tasks; a row enables, runs, edits or deletes one, and "New task" opens the editor.
 
-use super::components::{group, section, switch};
+mod editor;
+
+use super::components::{group, section_with_action, switch};
 use super::devices_panel::widgets::{
     Variant, button, dialog_of, icon_button, menu_item, note, problem,
 };
@@ -11,6 +13,7 @@ use super::tokens::Tokens;
 use super::*;
 use crate::connection::{Action, ActionSender, Call};
 use crate::settings_labs::{Environment, Scope, resolve};
+use crate::settings_scheduled_task_editor::EditorData;
 use crate::settings_scheduled_tasks::{
     self as tasks, Badge, ProjectsByEnvironment, RunStatus, Task, matches_scope,
 };
@@ -64,6 +67,8 @@ impl Mutation {
 
 enum Pending {
     Watch(String),
+    Save,
+    Rotate,
     Mutation {
         environment: String,
         id: String,
@@ -84,6 +89,9 @@ pub struct ScheduledTasksPanel {
     next_token: u64,
     projects: ProjectsByEnvironment,
     menu: Option<Key>,
+    editor: Option<editor::Editor>,
+    inputs: editor::Inputs,
+    data: EditorData,
     confirm: Option<Key>,
     error: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -96,7 +104,12 @@ fn now_ms() -> i64 {
 }
 
 impl ScheduledTasksPanel {
-    pub fn new(actions: ActionSender, scope: Entity<ScopeBar>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        actions: ActionSender,
+        scope: Entity<ScopeBar>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscriptions = vec![cx.observe(&scope, |_, _, cx| cx.notify())];
         Self {
             actions,
@@ -109,6 +122,9 @@ impl ScheduledTasksPanel {
             next_token: tasks::TOKEN_BASE,
             projects: ProjectsByEnvironment::new(),
             menu: None,
+            editor: None,
+            inputs: editor::Inputs::new(window, cx),
+            data: EditorData::default(),
             confirm: None,
             error: None,
             _subscriptions: subscriptions,
@@ -137,13 +153,18 @@ impl ScheduledTasksPanel {
         self.pending.clear();
         self.busy.clear();
         self.menu = None;
+        self.editor = None;
         self.confirm = None;
         self.error = None;
         cx.notify();
     }
 
-    /// Closes the menu, then the confirmation; returns whether there was one, so Escape stops there.
+    /// Closes the editor's select or the editor, then the menu, then the confirmation; returns
+    /// whether there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.close_editor_layer(cx) {
+            return true;
+        }
         if self.menu.take().is_some() || self.confirm.take().is_some() {
             cx.notify();
             return true;
@@ -226,6 +247,30 @@ impl ScheduledTasksPanel {
             return;
         };
         match pending {
+            Pending::Save | Pending::Rotate => {
+                let save = matches!(pending, Pending::Save);
+                let environment = self.editor.as_ref().map(|e| e.environment.clone());
+                match event {
+                    CallEvent::Progress(_) => return,
+                    CallEvent::Failed(message) => {
+                        self.pending.remove(&token);
+                        let title = if save {
+                            "Could not save the task"
+                        } else {
+                            "Could not rotate the webhook URL"
+                        };
+                        self.editor_failed(title, &message);
+                    }
+                    CallEvent::Done(value) => {
+                        self.pending.remove(&token);
+                        match (save, environment) {
+                            (true, Some(environment)) => self.editor_saved(&environment, &value),
+                            (false, _) => self.editor_rotated(&value),
+                            _ => {}
+                        }
+                    }
+                }
+            }
             Pending::Watch(environment) => {
                 let environment = environment.clone();
                 match event {
@@ -546,56 +591,70 @@ impl ScheduledTasksPanel {
                 .size(px(16.))
                 .rotate(gpui::radians(std::f32::consts::FRAC_PI_2)),
         );
-        let menu = {
-            let opened = view.clone();
-            let (open_key, change_key) = (key.clone(), key.clone());
-            let (environment, id, webhook) =
-                (environment.to_owned(), task.id.clone(), task.is_webhook());
-            Popover::new(("scheduled-task-menu", index))
-                .anchor(Anchor::TopRight)
-                .offset(px(4.))
-                .open(self.menu.as_ref() == Some(&open_key) && !busy)
-                .p_0()
-                .appearance(false)
-                .on_open_change(move |next, _, cx| {
-                    let key = change_key.clone();
-                    opened.update(cx, |this, cx| {
-                        this.menu = next.then_some(key);
-                        cx.notify();
+        let menu =
+            {
+                let opened = view.clone();
+                let (open_key, change_key) = (key.clone(), key.clone());
+                let (environment, id, webhook) =
+                    (environment.to_owned(), task.id.clone(), task.is_webhook());
+                let editable = !matches!(task.schedule, tasks::Schedule::Unknown(_));
+                Popover::new(("scheduled-task-menu", index))
+                    .anchor(Anchor::TopRight)
+                    .offset(px(4.))
+                    .open(self.menu.as_ref() == Some(&open_key) && !busy)
+                    .p_0()
+                    .appearance(false)
+                    .on_open_change(move |next, _, cx| {
+                        let key = change_key.clone();
+                        opened.update(cx, |this, cx| {
+                            this.menu = next.then_some(key);
+                            cx.notify();
+                        })
                     })
-                })
-                .trigger(PopTrigger::new(more))
-                .content(move |_, _, cx| {
-                    let mut menu = popup_shell(cx).min_w(px(160.)).p_1();
-                    if !webhook {
-                        let (view, environment, id) =
-                            (view.clone(), environment.clone(), id.clone());
-                        menu = menu.child(
-                            menu_item(("scheduled-task-run", index), "Run now", false, cx)
+                    .trigger(PopTrigger::new(more))
+                    .content(move |_, _, cx| {
+                        let mut menu = popup_shell(cx).min_w(px(160.)).p_1();
+                        if editable {
+                            let (view, environment, id) =
+                                (view.clone(), environment.clone(), id.clone());
+                            menu = menu.child(
+                                menu_item(("scheduled-task-edit", index), "Edit", false, cx)
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.menu = None;
+                                            this.open_edit(&environment, &id, window, cx)
+                                        })
+                                    }),
+                            );
+                        }
+                        if !webhook {
+                            let (view, environment, id) =
+                                (view.clone(), environment.clone(), id.clone());
+                            menu = menu.child(
+                                menu_item(("scheduled-task-run", index), "Run now", false, cx)
+                                    .on_click(move |_, _, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.menu = None;
+                                            this.run_now(&environment, &id, cx)
+                                        })
+                                    }),
+                            );
+                        }
+                        let (view, key) = (view.clone(), (environment.clone(), id.clone()));
+                        menu.child(
+                            menu_item(("scheduled-task-delete", index), "Delete", true, cx)
                                 .on_click(move |_, _, cx| {
+                                    let key = key.clone();
                                     view.update(cx, |this, cx| {
                                         this.menu = None;
-                                        this.run_now(&environment, &id, cx)
+                                        this.confirm = Some(key);
+                                        cx.notify();
                                     })
                                 }),
-                        );
-                    }
-                    let (view, key) = (view.clone(), (environment.clone(), id.clone()));
-                    menu.child(
-                        menu_item(("scheduled-task-delete", index), "Delete", true, cx).on_click(
-                            move |_, _, cx| {
-                                let key = key.clone();
-                                view.update(cx, |this, cx| {
-                                    this.menu = None;
-                                    this.confirm = Some(key);
-                                    cx.notify();
-                                })
-                            },
-                        ),
-                    )
-                    .into_any_element()
-                })
-        };
+                        )
+                        .into_any_element()
+                    })
+            };
         let controls = h_flex()
             .flex_shrink_0()
             .gap_2()
@@ -750,8 +809,11 @@ impl ScheduledTasksPanel {
         ))
     }
 
-    /// The delete confirmation, over a backdrop.
-    pub fn overlay(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The editor, else the delete confirmation, over a backdrop.
+    pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if let Some(editor) = self.editor_overlay(window, cx) {
+            return Some(editor);
+        }
         let key = self.confirm.clone()?;
         let view = cx.entity();
         let element = self.confirm_view(&view, &key, cx);
@@ -792,6 +854,16 @@ impl Render for ScheduledTasksPanel {
                 ));
             }
         }
-        section("Scheduled tasks", group(rows, cx))
+        let view = cx.entity();
+        let add = button(
+            "scheduled-task-new",
+            Variant::Outline,
+            self.can_create(cx),
+            cx,
+        )
+        .child("New task")
+        .on_click(move |_, window, cx| view.update(cx, |this, cx| this.open_new(window, cx)))
+        .into_any_element();
+        section_with_action("Scheduled tasks", Some(add), group(rows, cx))
     }
 }

@@ -994,6 +994,48 @@ impl Zone {
         }
     }
 
+    /// `YYYY-MM-DDTHH:MM` in this zone, as a `datetime-local` input holds it.
+    pub fn local_input_value(&self, instant_ms: i64) -> String {
+        let c = self.civil(instant_ms);
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}",
+            c.year, c.month, c.day, c.hour, c.minute
+        )
+    }
+
+    /// The instant a `datetime-local` text names in this zone. A time the zone skips is `None`;
+    /// in an hour that repeats, the offset of `prefer` wins, else the earlier instant.
+    pub fn parse_local(&self, text: &str, prefer: Option<i64>) -> Option<i64> {
+        let bytes = text.as_bytes();
+        let shaped = bytes.len() == 16
+            && bytes.iter().enumerate().all(|(i, b)| match i {
+                4 | 7 => *b == b'-',
+                10 => *b == b'T',
+                13 => *b == b':',
+                _ => b.is_ascii_digit(),
+            });
+        if !shaped {
+            return None;
+        }
+        let naive = crate::usage::parse_timestamp(text)?;
+        let mut candidates: Vec<i64> = [-DAY_MS, DAY_MS]
+            .iter()
+            .map(|shift| naive - self.offset_ms(naive + shift))
+            .filter(|at| self.local_input_value(*at) == text)
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+        prefer
+            .map(|saved| self.offset_ms(saved))
+            .and_then(|offset| {
+                candidates
+                    .iter()
+                    .copied()
+                    .find(|at| self.offset_ms(*at) == offset)
+            })
+            .or_else(|| candidates.first().copied())
+    }
+
     fn civil(&self, instant_ms: i64) -> Civil {
         let local = instant_ms + self.offset_ms(instant_ms);
         let days = local.div_euclid(DAY_MS);

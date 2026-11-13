@@ -433,6 +433,16 @@ untyped_method!(
     "scheduledTasks.runNow"
 );
 untyped_method!(
+    /// `scheduledTasks.upsert`: creates a task, or replaces the one `id` names.
+    ScheduledTasksUpsert,
+    "scheduledTasks.upsert"
+);
+untyped_method!(
+    /// `scheduledTasks.rotateWebhookToken`: issues a new webhook URL, which ends the old one.
+    ScheduledTasksRotateWebhookToken,
+    "scheduledTasks.rotateWebhookToken"
+);
+untyped_method!(
     /// `scheduledTasks.delete`: removes a task.
     ScheduledTasksDelete,
     "scheduledTasks.delete"

@@ -212,7 +212,7 @@ impl SettingsDialog {
         let keybindings =
             cx.new(|cx| KeybindingsPanel::new(actions.clone(), scope.clone(), window, cx));
         let scheduled_tasks =
-            cx.new(|cx| ScheduledTasksPanel::new(actions.clone(), scope.clone(), cx));
+            cx.new(|cx| ScheduledTasksPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
         let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
             let LabsEvent::OpenSection(section) = event;
@@ -328,6 +328,15 @@ impl SettingsDialog {
     ) {
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.set_projects(projects, cx));
+    }
+
+    pub fn set_scheduled_tasks_editor_data(
+        &mut self,
+        data: crate::settings_scheduled_task_editor::EditorData,
+        cx: &mut Context<Self>,
+    ) {
+        self.scheduled_tasks
+            .update(cx, |panel, cx| panel.set_editor_data(data, cx));
     }
 
     pub fn reset_scheduled_tasks(&mut self, cx: &mut Context<Self>) {
@@ -727,7 +736,7 @@ impl Render for SettingsDialog {
             .update(cx, |panel, cx| panel.overlay(window, cx));
         let scheduled_tasks = self
             .scheduled_tasks
-            .update(cx, |panel, cx| panel.overlay(cx));
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         let providers = self
             .providers
             .update(cx, |panel, cx| panel.overlay(window, cx));

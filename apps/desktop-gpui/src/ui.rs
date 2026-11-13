@@ -624,9 +624,11 @@ impl MainView {
                 crate::settings_devices::project_ids(&other.projects),
             );
         }
+        let editor_data = self.scheduled_task_editor_data(&entries);
         self.settings.update(cx, |settings, cx| {
             settings.set_labs_data(data, flags, cx);
             settings.set_scheduled_tasks_projects(task_projects, cx);
+            settings.set_scheduled_tasks_editor_data(editor_data, cx);
             if let Some((config, projects, sources)) = devices {
                 settings.set_devices_data(config, projects, sources, cx);
             }
@@ -2018,6 +2020,72 @@ impl MainView {
             Status::Connected { shell, .. } => shell.as_ref(),
             _ => None,
         }
+    }
+
+    fn scheduled_task_editor_data(
+        &self,
+        primary: &[crate::projects::ProjectEntry],
+    ) -> crate::settings_scheduled_task_editor::EditorData {
+        use crate::settings_scheduled_task_editor as ed;
+        let options = |entries: &[crate::projects::ProjectEntry]| -> Vec<ed::ProjectOption> {
+            entries
+                .iter()
+                .filter(|entry| !entry.scratch)
+                .flat_map(|entry| {
+                    entry.members.iter().map(|member| ed::ProjectOption {
+                        id: member.id.clone(),
+                        title: if member.title.is_empty() {
+                            entry.title.clone()
+                        } else {
+                            member.title.clone()
+                        },
+                        pinned: member.pinned,
+                        archived: member.archived,
+                    })
+                })
+                .collect()
+        };
+        let mut data = ed::EditorData::default();
+        data.projects.insert("primary".to_owned(), options(primary));
+        for other in &self.environments {
+            data.projects
+                .insert(other.id.clone(), options(&other.projects));
+        }
+        if let Some(catalog) = &self.providers {
+            data.models = catalog
+                .picker(None)
+                .into_iter()
+                .filter(|instance| instance.unavailable.is_none())
+                .map(|instance| ed::ModelGroup {
+                    instance_id: instance.instance_id,
+                    name: instance.name,
+                    models: instance
+                        .models
+                        .into_iter()
+                        .map(|model| (model.slug, model.label, model.legacy))
+                        .collect(),
+                })
+                .collect();
+            let configured = catalog
+                .trigger_for(None, None)
+                .map(|trigger| (trigger.instance_id, trigger.slug));
+            data.default_model = ed::default_model(&[configured], &data.instances());
+        }
+        if let Status::Connected {
+            shell: Some(shell), ..
+        } = &self.status
+        {
+            data.threads = shell
+                .rows
+                .iter()
+                .map(|row| ed::ThreadOption {
+                    id: row.id.clone(),
+                    project_id: row.project_id.clone(),
+                    title: row.title.clone(),
+                })
+                .collect();
+        }
+        data
     }
 
     fn can_pin(&self) -> bool {
