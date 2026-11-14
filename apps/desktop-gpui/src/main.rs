@@ -26,6 +26,8 @@ mod providers;
 mod pull_request;
 mod ref_picker;
 mod refs;
+#[allow(dead_code)] // consumed by route selection in a later slice
+mod relay;
 mod rpc;
 mod secret_source;
 mod send;
