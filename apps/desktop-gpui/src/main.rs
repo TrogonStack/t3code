@@ -7,6 +7,8 @@ mod config;
 mod connection;
 mod credentials;
 mod details;
+#[allow(dead_code)] // consumed by the relay client in the next slice
+mod dpop;
 mod details_card;
 mod diff;
 mod environments;
