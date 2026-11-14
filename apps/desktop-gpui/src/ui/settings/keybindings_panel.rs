@@ -1042,6 +1042,13 @@ impl KeybindingsPanel {
             .id("when-popover")
             .max_h(available.max(px(160.)))
             .overflow_y_scroll()
+            .on_scroll_wheel(cx.listener(|this, _, _, cx| {
+                if let Some(edit) = &mut this.when_edit
+                    && edit.pick.take().is_some()
+                {
+                    cx.notify();
+                }
+            }))
             .w(px(WHEN_WIDTH))
             .p(px(16.))
             .gap(px(12.))
