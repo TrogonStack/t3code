@@ -3,6 +3,7 @@
 //! `sortLogicalProjectsForSidebar` (Sidebar.logic.ts) and `buildSidebarProjectPickerEntries`
 //! (sidebarProjectGrouping.ts). Each row is a group of projects that share a repository.
 
+use crate::favicon::FaviconRef;
 use crate::status::ThreadRow;
 use crate::wire::generated::RepositoryIdentity;
 use crate::wire::{Project, Thread};
@@ -92,10 +93,8 @@ pub struct ProjectEntry {
     pub member_ids: Vec<String>,
     /// The group label (`deriveProjectGroupLabel`).
     pub title: String,
-    /// From the representative: its monogram override, else its title.
-    pub initials: String,
-    /// Index into the shared palette.
-    pub color: usize,
+    /// The representative's icon, drawn as `ProjectFavicon` does.
+    pub icon: ProjectIcon,
     /// Any member is pinned.
     pub pinned: bool,
     pub scratch: bool,
@@ -180,11 +179,93 @@ impl ProjectEntry {
     pub fn target<'a>(&'a self, active_id: Option<&'a str>) -> &'a str {
         active_id.filter(|id| self.contains(id)).unwrap_or(&self.id)
     }
+}
 
-    /// The badge text color for the theme (gray for the scratch project, whose server-set icon is gray); the badge background is this at 14% alpha.
-    pub fn color_hex(&self, dark: bool) -> u32 {
-        let (_, light, night) = COLORS[if self.scratch { 0 } else { self.color }];
-        if dark { night } else { light }
+/// The palette color for the theme, as `projectIconColorClassName` picks it.
+pub fn palette_hex(index: usize, dark: bool) -> u32 {
+    let (_, light, night) = COLORS[index % COLORS.len()];
+    if dark { night } else { light }
+}
+
+/// What `ProjectFavicon` draws for a project, by the project's icon override.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IconKind {
+    /// The project's favicon, else the monogram of its title.
+    Auto,
+    Monogram {
+        text: String,
+        color: usize,
+    },
+    Emoji(String),
+    /// A lucide icon by kebab-case name; an unknown name draws `folder-code`.
+    Lucide {
+        name: String,
+        color: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectIcon {
+    pub kind: IconKind,
+    /// The monogram `deriveProjectIdentity` gives the title: the fallback of an automatic icon.
+    pub fallback: (String, usize),
+    /// Where the automatic icon's favicon is fetched.
+    pub favicon: Option<FaviconRef>,
+}
+
+impl ProjectIcon {
+    /// An automatic icon for a name, as for a project the shell has not described.
+    pub fn for_title(title: &str) -> Self {
+        Self {
+            kind: IconKind::Auto,
+            fallback: (initials(title), color_index(title)),
+            favicon: None,
+        }
+    }
+
+    fn of(project: &Project) -> Self {
+        let kind = icon_kind(project).unwrap_or_else(|| {
+            if is_scratch(project) {
+                IconKind::Lucide {
+                    name: "message-square-dashed".to_owned(),
+                    color: 0,
+                }
+            } else {
+                IconKind::Auto
+            }
+        });
+        let workspace_root = project.workspace_root.trim();
+        Self {
+            favicon: (!workspace_root.is_empty()).then(|| FaviconRef {
+                cwd: project.workspace_root.clone(),
+                path: project.favicon_path.clone(),
+            }),
+            kind,
+            ..Self::for_title(&project.title)
+        }
+    }
+}
+
+/// The override the project carries; `None` for an automatic icon or one this app cannot read.
+fn icon_kind(project: &Project) -> Option<IconKind> {
+    let icon = project.project_icon.as_ref()?;
+    let text = |key: &str| icon.get(key).and_then(|v| v.as_str());
+    let color = || {
+        COLORS
+            .iter()
+            .position(|(name, ..)| Some(*name) == text("color"))
+    };
+    match text("kind")? {
+        "monogram" => Some(IconKind::Monogram {
+            text: text("text")?.to_owned(),
+            color: color()?,
+        }),
+        "emoji" => Some(IconKind::Emoji(text("emoji")?.to_owned())),
+        "lucide" => Some(IconKind::Lucide {
+            name: text("name")?.to_owned(),
+            color: color()?,
+        }),
+        _ => None,
     }
 }
 
@@ -248,18 +329,6 @@ fn logical_key(project: &Project) -> Option<String> {
         .as_ref()
         .map_or(&identity.canonical_key, |origin| &origin.canonical_key);
     (!key.is_empty() && !key.contains('\0')).then(|| key.clone())
-}
-
-/// A monogram icon override wins, as in `ProjectFavicon`; other icon kinds fall back to the derived one.
-fn monogram_override(project: &Project) -> Option<(String, usize)> {
-    let icon = project.project_icon.as_ref()?;
-    if icon.get("kind")?.as_str()? != "monogram" {
-        return None;
-    }
-    let text = icon.get("text")?.as_str()?.to_owned();
-    let color = icon.get("color")?.as_str()?;
-    let index = COLORS.iter().position(|(name, ..)| *name == color)?;
-    Some((text, index))
 }
 
 /// The server creates the scratch project at `<base dir>/scratch` titled "No project", and the
@@ -470,12 +539,6 @@ fn ranked_entries<'a>(
             } else {
                 representative.title.clone()
             };
-            let (initials, color) = monogram_override(representative).unwrap_or_else(|| {
-                (
-                    initials(&representative.title),
-                    color_index(&representative.title),
-                )
-            });
             let activity = group
                 .all
                 .iter()
@@ -489,8 +552,7 @@ fn ranked_entries<'a>(
                 id: representative.id.clone(),
                 member_ids: group.all.iter().map(|p| p.id.clone()).collect(),
                 title: label,
-                initials,
-                color,
+                icon: ProjectIcon::of(representative),
                 pinned: group.winners.iter().any(|p| p.pinned_at.is_some()),
                 scratch: is_scratch(representative),
                 root: representative.workspace_root.clone(),
@@ -726,8 +788,7 @@ mod tests {
             id: id.to_owned(),
             member_ids: vec![id.to_owned()],
             title: id.to_owned(),
-            initials: String::new(),
-            color: 0,
+            icon: ProjectIcon::for_title(""),
             pinned,
             scratch: false,
             root: String::new(),
@@ -758,8 +819,7 @@ mod tests {
             id: members[0].to_owned(),
             member_ids: members.iter().map(|id| (*id).to_owned()).collect(),
             title: key.to_owned(),
-            initials: String::new(),
-            color: 0,
+            icon: ProjectIcon::for_title(""),
             pinned: false,
             scratch,
             root: root.to_owned(),
@@ -924,18 +984,61 @@ mod tests {
     }
 
     #[test]
-    fn monogram_icon_overrides_the_derived_badge() {
-        let overridden = project("p", "atlas", |p| {
-            p["projectIcon"] = json!({"kind": "monogram", "text": "ZZ", "color": "rose"});
+    fn icon_overrides_decode_by_kind() {
+        let of = |icon: serde_json::Value| {
+            let project = project("p", "atlas", |p| p["projectIcon"] = icon);
+            build_entries([&project], [])[0].icon.clone()
+        };
+        let rose = COLORS
+            .iter()
+            .position(|(name, ..)| *name == "rose")
+            .unwrap();
+        assert_eq!(
+            of(json!({"kind": "monogram", "text": "ZZ", "color": "rose"})).kind,
+            IconKind::Monogram {
+                text: "ZZ".into(),
+                color: rose
+            }
+        );
+        assert_eq!(
+            of(json!({"kind": "lucide", "name": "star", "color": "rose"})).kind,
+            IconKind::Lucide {
+                name: "star".into(),
+                color: rose
+            }
+        );
+        assert_eq!(
+            of(json!({"kind": "emoji", "emoji": "x"})).kind,
+            IconKind::Emoji("x".into())
+        );
+        // An override this app cannot read is an automatic icon, with the title's monogram.
+        let unknown = of(json!({"kind": "monogram", "text": "ZZ", "color": "mauve"}));
+        assert_eq!(unknown.kind, IconKind::Auto);
+        assert_eq!(unknown.fallback.0, "AS");
+    }
+
+    #[test]
+    fn automatic_icons_look_up_the_favicon_at_the_workspace_root() {
+        let with_path = project("p", "atlas", |p| p["faviconPath"] = json!("public/f.svg"));
+        let icon = build_entries([&with_path], [])[0].icon.clone();
+        let favicon = icon.favicon.unwrap();
+        assert_eq!(favicon.path.as_deref(), Some("public/f.svg"));
+        assert!(!favicon.cwd.is_empty());
+    }
+
+    #[test]
+    fn the_scratch_project_draws_its_dashed_icon() {
+        let scratch = project("s", SCRATCH_TITLE, |p| {
+            p["workspaceRoot"] = json!("/base/scratch");
         });
-        let lucide = project("q", "atlas", |p| {
-            p["projectIcon"] = json!({"kind": "lucide", "name": "star", "color": "rose"});
-        });
-        let entries = build_entries([&overridden, &lucide], []);
-        let by_id = |id: &str| entries.iter().find(|e| e.id == id).unwrap();
-        assert_eq!(by_id("p").initials, "ZZ");
-        assert_eq!(COLORS[by_id("p").color].0, "rose");
-        assert_eq!(by_id("q").initials, "AS");
+        let icon = build_entries([&scratch], [])[0].icon.clone();
+        assert_eq!(
+            icon.kind,
+            IconKind::Lucide {
+                name: "message-square-dashed".into(),
+                color: 0
+            }
+        );
     }
 
     #[test]
@@ -1194,7 +1297,7 @@ mod tests {
         assert_eq!(entries[1].key, "\0path:/work/lone");
         assert_eq!(entries[1].logical_key, None);
         // The icon comes from the representative: root-dup has none, so its title is used.
-        assert_eq!(group.initials, "T3");
+        assert_eq!(group.icon.fallback.0, "T3");
 
         let mixed = [
             project("a", "a", |p| {

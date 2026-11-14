@@ -1,5 +1,6 @@
 //! The authenticated RPC WebSocket: connect, keep alive, reconnect.
 
+use crate::asset_fetch::Fetcher;
 use crate::auth::{self, AuthError, Credential};
 use crate::details::VcsStatus;
 use crate::diff;
@@ -7,10 +8,10 @@ use crate::keybindings::Keybindings;
 use crate::projects::MachineKind;
 use crate::providers::Catalog;
 use crate::rpc::{
-    AttachmentsCreateUploadUrl, AttachmentsDelete, DeviceConfigure, DeviceEasAccount, DeviceList,
-    DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
-    OrchestrationLaunchThread, PING_FRAME, PreviewClearProfile, ProjectsMutate,
-    ProviderConsumeResetCredit, ReviewGetDiffPreview, ServerCheckSecretSource,
+    AssetsCreateUrl, AttachmentsCreateUploadUrl, AttachmentsDelete, DeviceConfigure,
+    DeviceEasAccount, DeviceList, DeviceTestHost, Event, GitRunStackedAction,
+    OrchestrationDispatchCommand, OrchestrationLaunchThread, PING_FRAME, PreviewClearProfile,
+    ProjectsMutate, ProviderConsumeResetCredit, ReviewGetDiffPreview, ServerCheckSecretSource,
     ServerDiscoverSourceControl, ServerGetConfig, ServerGetUsageSummary,
     ServerListOnePasswordAccounts, ServerListTextGeneratorModels, ServerRefreshProviders,
     ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
@@ -121,6 +122,12 @@ pub enum Action {
         path: std::path::PathBuf,
         mime: String,
     },
+    /// Downloads a signed asset URL; the outcome comes back as `Status::Call` with `token`, as
+    /// `{ "type": <content type>, "data": <base64> }`.
+    Fetch {
+        token: u64,
+        relative_url: String,
+    },
     /// A request the details card makes; the outcome comes back as `Status::Call` with `token`.
     Call {
         token: u64,
@@ -155,6 +162,8 @@ pub enum Call {
     /// A stream: progress events, then the result.
     RunStackedAction,
     CreateUploadUrl,
+    /// `assets.createUrl`: the signed URL of a project's favicon.
+    CreateAssetUrl,
     DeleteAttachment,
     GetUsageSummary,
     RefreshUsageRates,
@@ -208,6 +217,7 @@ impl Action {
             Self::SetProjectPinned { pinned: false, .. } => "unpin project",
             Self::AddProject { .. } => "add the project",
             Self::LoadBranch { .. } => "load the branch",
+            Self::Fetch { .. } => "load the asset",
             Self::SelectThread(_) => "open the thread",
             Self::WatchVcs(_) => "watch the version control status",
             Self::LoadDiff { .. } => "load the diff",
@@ -240,6 +250,7 @@ impl Call {
             Self::ProjectsMutate => "update the project",
             Self::RunStackedAction => "run the action",
             Self::CreateUploadUrl => "prepare the upload",
+            Self::CreateAssetUrl => "load the project icon",
             Self::DeleteAttachment => "delete the attachment",
             Self::GetUsageSummary => "load usage",
             Self::RefreshUsageRates => "refresh usage rates",
@@ -302,6 +313,7 @@ impl Call {
             Self::ProjectsMutate => session.request::<ProjectsMutateJson>(payload),
             Self::RunStackedAction => session.request::<GitRunStackedAction>(payload),
             Self::CreateUploadUrl => session.request::<AttachmentsCreateUploadUrl>(payload),
+            Self::CreateAssetUrl => session.request::<AssetsCreateUrl>(payload),
             Self::DeleteAttachment => session.request::<AttachmentsDelete>(payload),
             Self::GetUsageSummary => session.request::<ServerGetUsageSummary>(payload),
             Self::RefreshUsageRates => session.request::<ServerRefreshUsageRates>(payload),
@@ -482,6 +494,7 @@ pub async fn run(
 ) -> Ended {
     let client = auth::http_client();
     let uploader = Uploader::new(client.clone(), http_base);
+    let fetcher = Fetcher::new(client.clone(), http_base);
     let mut bearer: Option<String> = None;
     // Outlives a socket: a reconnect subscribes to the thread again.
     let mut selected: Option<String> = None;
@@ -506,7 +519,7 @@ pub async fn run(
                 let failure = serve(
                     socket,
                     environment,
-                    &uploader,
+                    (&uploader, &fetcher),
                     actions,
                     (&mut selected, &mut watched, &mut terminal),
                     status,
@@ -629,7 +642,7 @@ async fn connect(
 async fn serve(
     socket: Socket,
     environment: &Environment,
-    uploader: &Uploader,
+    (uploader, fetcher): (&Uploader, &Fetcher),
     actions: &ActionReceiver,
     (selected, watched, wanted_terminal): (
         &mut Option<String>,
@@ -767,6 +780,10 @@ async fn serve(
                 let request = match &action {
                     Action::Upload { token, relative_url, path, mime } => {
                         uploader.start(*token, relative_url, path.clone(), mime.clone(), status);
+                        continue;
+                    }
+                    Action::Fetch { token, relative_url } => {
+                        fetcher.start(*token, relative_url, status);
                         continue;
                     }
                     Action::SelectThread(id) => {

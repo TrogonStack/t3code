@@ -823,9 +823,7 @@ pub struct ProjectOption {
     pub archived: bool,
     /// The project's checkout, which the base branch picker lists refs of.
     pub root: String,
-    /// The monogram of the project's group: its initials and palette index.
-    pub initials: String,
-    pub color: usize,
+    pub icon: crate::projects::ProjectIcon,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

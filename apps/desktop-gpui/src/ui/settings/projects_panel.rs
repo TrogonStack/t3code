@@ -547,9 +547,6 @@ impl ProjectsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Tokens::of(cx);
-        let mono = cx.theme().mono_font_family.clone();
-        let color: gpui::Hsla =
-            gpui::rgb(crate::settings_labs::avatar_color(entry.color, theme.dark)).into();
         let key = entry.scope_key().to_owned();
         let hover = theme.accent;
         let secondary = self.list_secondary(entry, cx);
@@ -582,7 +579,7 @@ impl ProjectsPanel {
                     pick(event, window, cx);
                 }
             })
-            .child(monogram(&entry.initials, color, 16., &mono).text_size(px(16. * 8.25 / 16.)))
+            .child(project_icon(&entry.icon, 16., cx))
             .child(
                 v_flex()
                     .min_w_0()
@@ -598,9 +595,11 @@ impl ProjectsPanel {
                     .when(!secondary.is_empty(), |column| {
                         column.child(
                             div()
+                                .id(("settings-project-secondary", index))
                                 .truncate()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
+                                .tooltip(tooltip(secondary.clone()))
                                 .child(secondary),
                         )
                     }),
@@ -723,16 +722,13 @@ impl ProjectsPanel {
                     cx,
                 )
             });
-        let mono = cx.theme().mono_font_family.clone();
-        let color: gpui::Hsla =
-            gpui::rgb(crate::settings_labs::avatar_color(entry.color, theme.dark)).into();
         let icon_description = members
             .first()
             .map_or_else(|| "Automatic".to_owned(), model::icon_description);
         let icon_controls = h_flex()
             .gap_2()
             .items_center()
-            .child(monogram(&entry.initials, color, 24., &mono))
+            .child(project_icon(&entry.icon, 24., cx))
             .child(button("project-icon-choose", Variant::Outline, false, cx).child("Choose icon"))
             .child(button("project-file-choose", Variant::Outline, false, cx).child("Choose file"));
         rows.push(

@@ -133,7 +133,6 @@ impl RenderOnce for Trigger {
 
 /// The icon of a choice: `size-3.5`.
 fn icon(kind: &ChoiceIcon, cx: &App) -> Option<AnyElement> {
-    let theme = Tokens::of(cx);
     match kind {
         ChoiceIcon::None => None,
         ChoiceIcon::Layers => Some(
@@ -148,15 +147,7 @@ fn icon(kind: &ChoiceIcon, cx: &App) -> Option<AnyElement> {
                 .child(Icon::new(machine_icon(*machine)).size(px(14.)))
                 .into_any_element(),
         ),
-        ChoiceIcon::Project { initials, color } => {
-            let color: gpui::Hsla = gpui::rgb(labs::avatar_color(*color, theme.dark)).into();
-            let mono = cx.theme().mono_font_family.clone();
-            Some(
-                monogram(initials, color, 14., &mono)
-                    .text_size(px(14. * 8.25 / 16.))
-                    .into_any_element(),
-            )
-        }
+        ChoiceIcon::Project(icon) => Some(project_icon(icon, 14., cx)),
     }
 }
 
@@ -597,10 +588,7 @@ impl ScopeBar {
             style: PickerStyle::default(),
             id: "settings-scope-project",
             label: labs::project_label(&self.search, &self.data),
-            icon: selected.map(|p| ChoiceIcon::Project {
-                initials: p.initials.clone(),
-                color: p.color,
-            }),
+            icon: selected.map(|p| ChoiceIcon::Project(p.icon.clone())),
             all: Some(Choice {
                 value: ALL.to_owned(),
                 label: "All projects".to_owned(),

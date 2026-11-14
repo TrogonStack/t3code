@@ -1,4 +1,4 @@
-use crate::assets::{MESSAGE_SQUARE_DASHED, STAGE_DEV, STAGE_DEV_BUTTON, chip_icon, provider_icon};
+use crate::assets::{STAGE_DEV, STAGE_DEV_BUTTON, chip_icon, provider_icon};
 use crate::attachments::{self, Upload};
 use crate::branch_picker::{self, BranchPicker};
 use crate::connection::{Action, ActionSender, Call, command_id, new_project_id};
@@ -24,6 +24,7 @@ use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
 use crate::toast::{Kind as ToastKind, Toast, ToastHost, ToastId};
+use crate::ui::project_icon::project_icon;
 use crate::ui::settings::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use crate::workspace::{self, Choice, Draft};
 use gpui::{
@@ -61,6 +62,7 @@ mod add_to_machine;
 mod composer_menu;
 mod keymap;
 mod model_popover;
+mod project_icon;
 mod pull_request_panel;
 mod pull_requests_page;
 mod right_panel;
@@ -364,6 +366,7 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::favicon::init(actions.clone(), cx);
         let project_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search projects..."));
         cx.subscribe(&project_search, |_, _, event: &InputEvent, cx| {
@@ -759,6 +762,10 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::favicon::TOKEN_BASE {
+                crate::favicon::on_call(token, event, cx);
+                return;
+            }
             if token >= crate::settings_browser::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_browser_call(token, event, cx)
@@ -867,6 +874,7 @@ impl MainView {
             return;
         }
         if matches!(status, Status::Connecting) {
+            crate::favicon::reset(cx);
             self.branches_requested.clear();
             self.vcs.clear();
             self.diffs_requested.clear();
@@ -2112,8 +2120,7 @@ impl MainView {
                         pinned: member.pinned,
                         archived: member.archived,
                         root: member.root.clone(),
-                        initials: entry.initials.clone(),
-                        color: entry.color,
+                        icon: entry.icon.clone(),
                     })
                 })
                 .collect()
@@ -2847,11 +2854,10 @@ impl MainView {
             .shell()
             .map_or_else(Vec::new, |shell| shell.project_entries.clone());
         let scope = self.scope();
-        let dark = cx.theme().is_dark();
-        let scoped: Vec<(String, u32)> = entries
+        let scoped: Vec<_> = entries
             .iter()
             .filter(|entry| scope.contains(&entry.key))
-            .map(|entry| (entry.initials.clone(), entry.color_hex(dark)))
+            .map(|entry| entry.icon.clone())
             .collect();
         let label = {
             let names: Vec<&str> = entries
@@ -2889,9 +2895,8 @@ impl MainView {
                 let query = search.read(cx).value();
                 let listed = projects::picker_entries(&entries, None, &query);
                 let theme = cx.theme();
-                let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
+                let muted = theme.muted_foreground;
                 let (hover, selected, border) = (theme.list_hover, theme.list_active, theme.border);
-                let mono = theme.mono_font_family.clone();
                 let row = |id: SharedString, active: bool, key: Option<String>| {
                     let view = view.clone();
                     h_flex()
@@ -2913,14 +2918,13 @@ impl MainView {
                 };
                 let all = "all projects".contains(query.trim().to_lowercase().as_str());
                 let rows = listed.iter().enumerate().map(|(index, entry)| {
-                    let color: Hsla = rgb(entry.color_hex(dark)).into();
                     let active = scope.contains(&entry.key);
                     row(
                         format!("scope-{index}").into(),
                         active,
                         Some(entry.key.clone()),
                     )
-                    .child(monogram(&entry.initials, color, 20., &mono))
+                    .child(project_icon(&entry.icon, 20., cx))
                     .child(
                         div()
                             .flex_1()
@@ -3789,32 +3793,9 @@ impl MainView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let (foreground, muted, dark) = (theme.foreground, theme.muted_foreground, theme.is_dark());
-        let mono = theme.mono_font_family.clone();
+        let (foreground, muted) = (theme.foreground, theme.muted_foreground);
         let project = active.map(|entry| {
-            let color: Hsla = rgb(entry.color_hex(dark)).into();
-            let icon = if entry.scratch {
-                Icon::empty()
-                    .path(MESSAGE_SQUARE_DASHED)
-                    .size(px(14.))
-                    .text_color(color)
-                    .into_any_element()
-            } else {
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_center()
-                    .size(px(14.))
-                    .rounded(px(3.5))
-                    .bg(color.opacity(0.14))
-                    .text_color(color)
-                    .text_size(px(7.21875))
-                    .font_weight(FontWeight::BOLD)
-                    .font_family(mono)
-                    .child(entry.initials.clone())
-                    .into_any_element()
-            };
+            let icon = project_icon(&entry.icon, 14., cx);
             h_flex()
                 .gap_3()
                 .child(
@@ -3909,15 +3890,13 @@ impl MainView {
                     listed = projects::order_while_open(listed, order);
                 }
                 let theme = cx.theme();
-                let (dark, muted) = (theme.is_dark(), theme.muted_foreground);
+                let muted = theme.muted_foreground;
                 let (hover, selected) = (theme.list_hover, theme.list_active);
-                let mono = theme.mono_font_family.clone();
                 let (border, ring) = (theme.border, theme.ring);
                 let rows = listed.iter().enumerate().map(|(index, entry)| {
                     let (view, id) = (view.clone(), entry.target(active_id.as_deref()).to_owned());
                     let (actions, pin_ids) = (actions.clone(), entry.member_ids.clone());
                     let pinned = entry.pinned;
-                    let color: Hsla = rgb(entry.color_hex(dark)).into();
                     let active = active_id.as_deref().is_some_and(|id| entry.contains(id));
                     h_flex()
                         .id(("project", index))
@@ -3930,21 +3909,7 @@ impl MainView {
                         .cursor_pointer()
                         .when(active, |row| row.bg(selected))
                         .hover(move |style| style.bg(hover))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_shrink_0()
-                                .items_center()
-                                .justify_center()
-                                .size(px(20.))
-                                .rounded(px(5.))
-                                .bg(color.opacity(0.14))
-                                .text_color(color)
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::BOLD)
-                                .font_family(mono.clone())
-                                .child(entry.initials.clone()),
-                        )
+                        .child(project_icon(&entry.icon, 20., cx))
                         .child(
                             div()
                                 .flex_1()
@@ -5591,28 +5556,11 @@ fn header_icon_button(
     ghost_icon_button(id, Icon::new(icon).size_4(), label, enabled, cx)
 }
 
-/// A project's monogram badge: its initials on the project color at 14%.
-fn monogram(initials: &str, color: Hsla, size: f32, font: &SharedString) -> gpui::Div {
-    div()
-        .flex()
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .size(px(size))
-        .rounded(px(size / 4.))
-        .bg(color.opacity(0.14))
-        .text_color(color)
-        .text_size(px(size / 2.))
-        .font_weight(FontWeight::BOLD)
-        .font_family(font.clone())
-        .child(initials.to_owned())
-}
-
 /// The scope menu's header button: the filter icon, or the badges of the scoped projects.
 #[derive(IntoElement)]
 struct ScopeTrigger {
     label: SharedString,
-    scoped: Vec<(String, u32)>,
+    scoped: Vec<crate::projects::ProjectIcon>,
     open: bool,
 }
 
@@ -5646,15 +5594,14 @@ impl RenderOnce for ScopeTrigger {
                 cx,
             );
         }
-        let mono = cx.theme().mono_font_family.clone();
         // Two badges at most, overlapped, as the web's stacked favicons.
         let size = if self.scoped.len() > 1 { 14. } else { 16. };
-        let badges = h_flex().children(self.scoped.iter().take(2).enumerate().map(
-            |(index, (initials, color))| {
-                monogram(initials, rgb(*color).into(), size, &mono)
+        let badges =
+            h_flex().children(self.scoped.iter().take(2).enumerate().map(|(index, icon)| {
+                div()
                     .when(index > 0, |badge| badge.ml(px(-6.)))
-            },
-        ));
+                    .child(project_icon(icon, size, cx))
+            }));
         ghost_icon_button("filter-projects", badges, self.label, true, cx)
     }
 }
@@ -6141,32 +6088,12 @@ fn top_status_icon(status: TopStatus) -> Icons {
     }
 }
 
-/// The project avatar at the favicon's `size-4`: the monogram on its tinted square.
-fn project_badge(entry: Option<&ProjectEntry>, dark: bool, mono: gpui::SharedString) -> gpui::Div {
-    let badge = div().flex_shrink_0().size_4();
-    let Some(entry) = entry else {
-        return badge;
-    };
-    let color: Hsla = rgb(entry.color_hex(dark)).into();
-    if entry.scratch {
-        return badge.child(
-            Icon::empty()
-                .path(MESSAGE_SQUARE_DASHED)
-                .size_4()
-                .text_color(color),
-        );
+/// The project avatar at `size` px (the favicon's `size-4` is 16).
+fn project_badge(entry: Option<&ProjectEntry>, size: f32, cx: &App) -> AnyElement {
+    match entry {
+        Some(entry) => project_icon(&entry.icon, size, cx),
+        None => div().flex_shrink_0().size(px(size)).into_any_element(),
     }
-    badge
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.))
-        .bg(color.opacity(0.14))
-        .text_color(color)
-        .text_size(px(8.25))
-        .font_weight(FontWeight::BOLD)
-        .font_family(mono)
-        .child(entry.initials.clone())
 }
 
 /// The web's `PULL_REQUEST_STATE_PRESENTATION` tones.
@@ -6566,9 +6493,7 @@ impl Render for ThreadHoverCard {
         let mut rows = v_flex().gap(px(6.)).pl(px(2.)).text_xs().text_color(muted);
         if let Some((entry, name)) = &card.project {
             rows = rows.child(row(
-                project_badge(entry.as_ref(), dark, theme.mono_font_family.clone())
-                    .size(px(12.))
-                    .into_any_element(),
+                project_badge(entry.as_ref(), 12., cx),
                 label(text, name.clone()),
             ));
         }
@@ -6747,7 +6672,7 @@ fn thread_row(
                         .flex_shrink_0()
                         .items_center()
                         .gap(px(6.))
-                        .child(project_badge(project, dark, theme.mono_font_family.clone()))
+                        .child(project_badge(project, 16., cx))
                         .child(
                             div()
                                 .flex_1()
@@ -6978,8 +6903,7 @@ mod tests {
             id: id.to_owned(),
             member_ids: vec![id.to_owned()],
             title: id.to_owned(),
-            initials: "XX".to_owned(),
-            color: 0,
+            icon: crate::projects::ProjectIcon::for_title(""),
             pinned: false,
             scratch,
             root: String::new(),

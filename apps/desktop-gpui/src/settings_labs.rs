@@ -11,7 +11,7 @@
 //!   `simlockDeviceHostsEnabled`. None is in `PROJECT_SCOPED_SERVER_SETTING_KEYS`, so a project
 //!   scope cannot write them.
 
-use crate::projects::{COLORS, MachineKind};
+use crate::projects::{MachineKind, ProjectIcon};
 use crate::settings::{SearchItem, Section};
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
@@ -324,9 +324,7 @@ pub struct Project {
     pub key: String,
     pub name: String,
     pub root: String,
-    pub initials: String,
-    /// Index into the shared palette.
-    pub color: usize,
+    pub icon: ProjectIcon,
     pub archived: bool,
     /// The environments with a member of the group.
     pub environments: Vec<String>,
@@ -444,7 +442,7 @@ pub enum ChoiceIcon {
     None,
     Layers,
     Machine(MachineKind),
-    Project { initials: String, color: usize },
+    Project(ProjectIcon),
 }
 
 /// `settingsScopeEnvironmentAddress`: the URL's host (`new URL(url).host`), else the URL as given,
@@ -573,10 +571,7 @@ pub fn project_choices(search: &ScopeSearch, data: &ScopeData) -> Vec<Choice> {
                 label: project.name.clone(),
                 secondary,
                 offline: false,
-                icon: ChoiceIcon::Project {
-                    initials: project.initials.clone(),
-                    color: project.color,
-                },
+                icon: ChoiceIcon::Project(project.icon.clone()),
             }
         })
         .collect()
@@ -653,12 +648,6 @@ pub fn filter<'a>(choices: &'a [Choice], query: &str) -> Vec<&'a Choice> {
         .collect()
 }
 
-/// The tile's color: palette index to its `(light, dark)` Tailwind shades.
-pub fn avatar_color(index: usize, dark: bool) -> u32 {
-    let (_, light, night) = COLORS[index % COLORS.len()];
-    if dark { night } else { light }
-}
-
 #[cfg(test)]
 /// The Labs search entries that match `query`, in rank order.
 pub fn search_hits(query: &str) -> Vec<&'static str> {
@@ -701,8 +690,7 @@ pub fn scope_data(
                     key,
                     name: entry.title.clone(),
                     root: entry.root.clone(),
-                    initials: entry.initials.clone(),
-                    color: entry.color,
+                    icon: entry.icon.clone(),
                     archived: false,
                     environments: vec![env.to_owned()],
                 }),
@@ -738,8 +726,7 @@ pub fn add_archived(data: &mut ScopeData, archived: &[crate::projects::ProjectEn
             key: entry.scope_key().to_owned(),
             name: entry.title.clone(),
             root: entry.root.clone(),
-            initials: entry.initials.clone(),
-            color: entry.color,
+            icon: entry.icon.clone(),
             archived: true,
             environments: vec!["primary".to_owned()],
         });
@@ -778,8 +765,7 @@ mod tests {
             key: key.to_owned(),
             name: name.to_owned(),
             root: format!("/home/user/projects/{key}"),
-            initials: crate::projects::initials(name),
-            color: crate::projects::color_index(name),
+            icon: ProjectIcon::for_title(name),
             archived: false,
             environments: environments.iter().map(|s| (*s).to_owned()).collect(),
         }
@@ -1027,8 +1013,14 @@ mod tests {
             crate::projects::color_index(" Example "),
             crate::projects::color_index("example")
         );
-        assert_ne!(avatar_color(5, false), avatar_color(5, true));
-        assert_eq!(avatar_color(18, false), avatar_color(0, false));
+        assert_ne!(
+            crate::projects::palette_hex(5, false),
+            crate::projects::palette_hex(5, true)
+        );
+        assert_eq!(
+            crate::projects::palette_hex(18, false),
+            crate::projects::palette_hex(0, false)
+        );
     }
 
     #[test]
@@ -1080,8 +1072,7 @@ mod tests {
             id: key.to_owned(),
             member_ids: vec![key.to_owned()],
             title: key.to_owned(),
-            initials: "EX".to_owned(),
-            color: 0,
+            icon: crate::projects::ProjectIcon::for_title(""),
             pinned: false,
             scratch,
             root: format!("/home/user/projects/{key}"),

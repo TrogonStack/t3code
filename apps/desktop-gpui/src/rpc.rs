@@ -168,6 +168,15 @@ impl Method for DeviceEasAccount {
     type Success = Value;
 }
 
+/// `assets.createUrl`, which mints the signed URL of an asset such as a project's favicon.
+pub struct AssetsCreateUrl;
+
+impl Method for AssetsCreateUrl {
+    const TAG: &'static str = "assets.createUrl";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `attachments.createUploadUrl`, which mints the signed URL an attachment is posted to.
 pub struct AttachmentsCreateUploadUrl;
 

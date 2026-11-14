@@ -1,3 +1,4 @@
+mod asset_fetch;
 mod assets;
 mod attachments;
 mod auth;
@@ -14,6 +15,7 @@ mod details_card;
 mod diff;
 mod dpop;
 mod environments;
+mod favicon;
 mod git_actions;
 mod history;
 mod keybinding_rules;

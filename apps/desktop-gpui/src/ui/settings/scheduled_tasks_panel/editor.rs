@@ -798,10 +798,7 @@ impl ScheduledTasksPanel {
                 scope_pickers::Picker {
                     id: "scheduled-task-project",
                     label: project_label,
-                    icon: selected_project.map(|p| ChoiceIcon::Project {
-                        initials: p.initials.clone(),
-                        color: p.color,
-                    }),
+                    icon: selected_project.map(|p| ChoiceIcon::Project(p.icon.clone())),
                     all: None,
                     choices: projects
                         .iter()
@@ -810,10 +807,7 @@ impl ScheduledTasksPanel {
                             label: p.title.clone(),
                             secondary: p.root.clone(),
                             offline: false,
-                            icon: ChoiceIcon::Project {
-                                initials: p.initials.clone(),
-                                color: p.color,
-                            },
+                            icon: ChoiceIcon::Project(p.icon.clone()),
                         })
                         .collect(),
                     selected: draft.project_id.clone(),

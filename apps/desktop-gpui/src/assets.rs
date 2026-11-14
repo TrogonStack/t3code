@@ -435,6 +435,19 @@ pub fn source_control_icon(kind: &str, dark: bool) -> Option<&'static str> {
     .map(|(path, _)| *path)
 }
 
+/// The asset path of a project's lucide icon, `folder-code` (the web's fallback) for an unknown name.
+pub fn lucide_path(name: &str) -> SharedString {
+    let path = format!("icons/{name}.svg");
+    let known =
+        !name.contains(['/', '.']) && AppAssets.load(&path).is_ok_and(|bytes| bytes.is_some());
+    if known {
+        path
+    } else {
+        "icons/folder-code.svg".to_owned()
+    }
+    .into()
+}
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
@@ -480,9 +493,13 @@ impl AssetSource for AppAssets {
         if let Some((_, bytes)) = EDITOR_ICONS.iter().find(|(known, _)| *known == path) {
             return Ok(Some(Cow::Borrowed(bytes)));
         }
-        match ExtraIcons.load(path)? {
-            Some(bytes) => Ok(Some(bytes)),
-            None => gpui_kit_assets::Assets.load(path),
+        if let Some(bytes) = ExtraIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        // A project's lucide icon is any of the catalog's, which only `AllAssets` embeds.
+        match gpui_kit_assets::Assets.load(path) {
+            Ok(Some(bytes)) => Ok(Some(bytes)),
+            _ => gpui_kit_assets::AllAssets.load(path),
         }
     }
 
@@ -508,6 +525,18 @@ impl AssetSource for AppAssets {
 mod tests {
     use super::*;
     use gpui_kit_assets::IconName;
+
+    #[test]
+    fn lucide_names_resolve_or_fall_back_to_folder_code() {
+        assert_eq!(lucide_path("star"), "icons/star.svg");
+        assert_eq!(
+            lucide_path("message-square-dashed"),
+            "icons/message-square-dashed.svg"
+        );
+        assert_eq!(lucide_path("not-an-icon"), "icons/folder-code.svg");
+        assert_eq!(lucide_path("../secret"), "icons/folder-code.svg");
+        assert!(AppAssets.load("icons/folder-code.svg").unwrap().is_some());
+    }
 
     #[test]
     fn every_chip_icon_loads() {
