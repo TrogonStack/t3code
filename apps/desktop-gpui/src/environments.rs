@@ -359,6 +359,10 @@ async fn follow(store: Arc<dyn CredentialStore>, mut target: Target, status: Sta
     initial.url = url.lock().map(|url| url.clone()).unwrap_or_default();
     initial.saved = target.saved.is_some();
     initial.relay_listed = target.relay.is_some();
+    initial.relay_url = target
+        .relay
+        .as_ref()
+        .map(|listed| listed.endpoint.http_base_url.clone());
     if !environment_prefs::load().enabled(&id) {
         initial.phase = Phase::Available;
     }

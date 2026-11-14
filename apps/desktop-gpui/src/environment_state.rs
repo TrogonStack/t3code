@@ -36,6 +36,8 @@ pub struct EnvState {
     pub saved: bool,
     /// T3 Connect lists it for the signed-in account (the relay route).
     pub relay_listed: bool,
+    /// The T3 Connect endpoint's http base, when it lists this environment.
+    pub relay_url: Option<String>,
     pub server_version: Option<String>,
 }
 
@@ -53,6 +55,7 @@ impl EnvState {
             via: None,
             saved: false,
             relay_listed: false,
+            relay_url: None,
             server_version: None,
         }
     }
