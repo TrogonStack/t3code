@@ -274,6 +274,16 @@ impl Field {
         }
     }
 
+    /// The Default layer: file-backed keys show `PROJECT_FILE_BACKED_SETTINGS`'s built-in, not the
+    /// schema's null.
+    pub fn built_in(self) -> Value {
+        match self {
+            Self::ThreadEnvMode => json!("local"),
+            Self::Submodules => json!("recursive"),
+            _ => self.default_value(),
+        }
+    }
+
     const ALL: [Self; 36] = [
         Self::AutoPull,
         Self::AgentCredits,
@@ -795,7 +805,7 @@ pub fn layers(
     out.push(Layer {
         kind: LayerKind::Default,
         label: "Default".to_owned(),
-        value: describe(field, &field.default_value()),
+        value: describe(field, &field.built_in()),
         effective: !from_project && !environment_set,
         set: true,
     });
@@ -1361,6 +1371,10 @@ mod tests {
         assert_eq!(style_index(&json!("custom")), 2);
     }
 
+    fn layers_of(field: Field, config: &SourceControlConfig) -> String {
+        layers(field, "Mac", false, None, config).last().unwrap().value.clone()
+    }
+
     #[test]
     fn layers_mark_the_effective_one() {
         let config = SourceControlConfig::from_settings(&json!({"defaultAutoPull": true}));
@@ -1368,6 +1382,9 @@ mod tests {
         assert_eq!(layers.len(), 3);
         assert!(layers[1].effective && layers[1].value == "On");
         assert!(!layers[2].effective && layers[2].value == "Off");
+        let unset = SourceControlConfig::from_settings(&json!({}));
+        assert_eq!(layers_of(Field::Submodules, &unset), "Recursive");
+        assert_eq!(layers_of(Field::ThreadEnvMode, &unset), "Local");
         let (state, _) = inheritance(Field::AutoPull, true, false, true, "Mac");
         assert_eq!(state, State::Inherited);
     }
