@@ -136,64 +136,69 @@ fn main() {
         Status::NotConnected
     };
 
-    application()
-        .with_assets(AppAssets)
-        .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
-            settings_typography::TypographySettings::load().apply_to_theme(cx);
-            cx.bind_keys(ui::usage_bindings());
-            cx.bind_keys(ui::add_to_machine_bindings());
-            cx.bind_keys(ui::settings_bindings());
-            cx.bind_keys([
-                // `CmdOrCtrl+,` of the desktop application menu (DesktopApplicationMenu.ts:174).
-                KeyBinding::new("cmd-,", ui::OpenSettings, None),
-                KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
-            ]);
-            // The web's defaults until the server sends its keybindings.
-            ui::apply_default_keybindings(cx);
-            if let Some(supervisor) = supervisor {
-                // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
-                cx.on_app_quit(move |_| {
-                    supervisor.stop();
-                    async {}
-                })
-                .detach();
-            }
-            // Electron's `DEFAULT_MAIN_WINDOW_SIZE`; the minimum width is the shipped app's, below
-            // the sidebar's overlay breakpoint.
-            let bounds = Bounds::centered(None, size(px(1100.), px(780.)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    window_min_size: Some(size(px(583.), px(620.))),
-                    // Electron's `trafficLightPosition`: centered in the 52px workspace top bar.
-                    titlebar: Some(TitlebarOptions {
-                        traffic_light_position: Some(point(px(16.), px(19.))),
-                        ..TitleBar::title_bar_options()
-                    }),
-                    ..TitleBar::window_options()
-                },
-                |window, cx| {
-                    let view = cx.new(|cx| {
-                        cx.spawn(async move |this, cx| {
-                            while let Ok(status) = status_rx.recv().await {
-                                let updated = this.update(cx, |view: &mut MainView, cx| {
-                                    view.set_status(status, cx)
-                                });
-                                if updated.is_err() {
-                                    break;
-                                }
+    let app = application().with_assets(AppAssets);
+    // The system browser returns the Clerk sign-in through the registered URL scheme.
+    app.on_open_urls(|urls| {
+        for url in urls {
+            cloud::service().deliver_url(&url);
+        }
+    });
+    runtime.spawn(cloud::service().restore());
+    app.run(move |cx: &mut App| {
+        gpui_component::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        settings_typography::TypographySettings::load().apply_to_theme(cx);
+        cx.bind_keys(ui::usage_bindings());
+        cx.bind_keys(ui::add_to_machine_bindings());
+        cx.bind_keys(ui::settings_bindings());
+        cx.bind_keys([
+            // `CmdOrCtrl+,` of the desktop application menu (DesktopApplicationMenu.ts:174).
+            KeyBinding::new("cmd-,", ui::OpenSettings, None),
+            KeyBinding::new("escape", ui::DismissSidebar, Some(ui::OVERLAY_CONTEXT)),
+        ]);
+        // The web's defaults until the server sends its keybindings.
+        ui::apply_default_keybindings(cx);
+        if let Some(supervisor) = supervisor {
+            // The grace period outlasts gpui's quit timeout, so block here instead of awaiting.
+            cx.on_app_quit(move |_| {
+                supervisor.stop();
+                async {}
+            })
+            .detach();
+        }
+        // Electron's `DEFAULT_MAIN_WINDOW_SIZE`; the minimum width is the shipped app's, below
+        // the sidebar's overlay breakpoint.
+        let bounds = Bounds::centered(None, size(px(1100.), px(780.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(583.), px(620.))),
+                // Electron's `trafficLightPosition`: centered in the 52px workspace top bar.
+                titlebar: Some(TitlebarOptions {
+                    traffic_light_position: Some(point(px(16.), px(19.))),
+                    ..TitleBar::title_bar_options()
+                }),
+                ..TitleBar::window_options()
+            },
+            |window, cx| {
+                let view = cx.new(|cx| {
+                    cx.spawn(async move |this, cx| {
+                        while let Ok(status) = status_rx.recv().await {
+                            let updated = this
+                                .update(cx, |view: &mut MainView, cx| view.set_status(status, cx));
+                            if updated.is_err() {
+                                break;
                             }
-                        })
-                        .detach();
-                        MainView::new(initial, action_tx, window, cx)
-                    });
-                    cx.new(|cx| Root::new(view, window, cx))
-                },
-            )
-            .expect("failed to open the main window");
-            cx.activate(true);
-        });
+                        }
+                    })
+                    .detach();
+                    MainView::new(initial, action_tx, window, cx)
+                });
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        )
+        .expect("failed to open the main window");
+        cx.activate(true);
+    });
     drop(runtime);
 }
