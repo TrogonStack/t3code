@@ -126,6 +126,7 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
+            settings_typography::TypographySettings::load().apply_to_theme(cx);
             cx.bind_keys(ui::usage_bindings());
             cx.bind_keys(ui::add_to_machine_bindings());
             cx.bind_keys(ui::settings_bindings());

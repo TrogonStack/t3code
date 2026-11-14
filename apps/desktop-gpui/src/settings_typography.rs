@@ -5,8 +5,11 @@
 //! the one device file.
 
 use crate::settings::{SearchItem, Section};
+use gpui::{App, px};
+use gpui_component::Theme;
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// `DEFAULT_*_FONT_SIZE` and their bounds (settings.ts:160-196).
 pub const INTERFACE_SIZE: SizeRange = SizeRange::new(12, 20, 16);
@@ -253,15 +256,80 @@ impl TypographySettings {
     }
 }
 
+/// The web's `DEFAULT_CODE_FONT_STACK` without its trailing generic (appearanceFonts.ts:17-18).
+const CODE_FONT_STACK: &[&str] = &[
+    "SF Mono",
+    "SFMono-Regular",
+    "Menlo",
+    "Consolas",
+    "Liberation Mono",
+];
+
+/// The families installed on the machine, listed once per process (about 100ms on macOS).
+pub fn installed_families(cx: &App) -> &'static [String] {
+    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
+    NAMES.get_or_init(|| cx.text_system().all_font_names())
+}
+
+/// The first installed family of a CSS-style comma list, as the browser picks it.
+fn first_installed<'a>(
+    families: impl IntoIterator<Item = &'a str>,
+    installed: &[String],
+) -> Option<String> {
+    families
+        .into_iter()
+        .map(|raw| raw.trim().trim_matches(|c| c == '"' || c == '\'').trim())
+        .find(|family| !family.is_empty() && installed.iter().any(|name| name == family))
+        .map(str::to_owned)
+}
+
 /// What the picker shows for the default family: `resolveDefaultFamilyLabel` over the web's
-/// default stacks, which resolves to the Apple faces on macOS and to the web's fallback labels
-/// elsewhere (TypographySettings.tsx:48-49, appearanceFonts.ts:243-250).
-pub fn default_family_label(monospace: bool) -> &'static str {
-    match (cfg!(target_os = "macos"), monospace) {
-        (true, false) => "SF Pro",
-        (true, true) => "SF Mono",
-        (false, false) => "System default",
-        (false, true) => "System monospace",
+/// default stacks, so a Mac without SF Mono registered shows the Menlo the web renders with
+/// (TypographySettings.tsx:48-52, appearanceFonts.ts:279-295).
+pub fn default_family_label(monospace: bool, installed: &[String]) -> String {
+    let resolved = monospace
+        .then(|| first_installed(CODE_FONT_STACK.iter().copied(), installed))
+        .flatten();
+    resolved.unwrap_or_else(|| {
+        match (cfg!(target_os = "macos"), monospace) {
+            (true, false) => "SF Pro",
+            (true, true) => "SF Mono",
+            (false, false) => "System default",
+            (false, true) => "System monospace",
+        }
+        .to_owned()
+    })
+}
+
+impl TypographySettings {
+    /// The family a slot renders with: its custom list's first installed family, else the
+    /// default stack's. `None` keeps the theme's own default, since GPUI panics on a family it
+    /// cannot find.
+    fn rendered_family(&self, slot: Slot, installed: &[String]) -> Option<String> {
+        first_installed(self.family(slot).split(','), installed).or_else(|| {
+            slot.requires_monospace()
+                .then(|| first_installed(CODE_FONT_STACK.iter().copied(), installed))
+                .flatten()
+        })
+    }
+
+    /// Puts these values on the theme, as the web sets its font variables from the same keys
+    /// (`applyAppearanceFontVariables`): interface family and size, and the code font, which the
+    /// terminal follows unless fonts are separate.
+    pub fn apply_to_theme(&self, cx: &mut App) {
+        let installed = installed_families(cx);
+        let sans = self.rendered_family(Slot::Interface, installed);
+        let mono = self.rendered_family(Slot::Code, installed);
+        let theme = Theme::global_mut(cx);
+        if let Some(sans) = sans {
+            theme.font_family = sans.into();
+        }
+        if let Some(mono) = mono {
+            theme.mono_font_family = mono.into();
+        }
+        theme.font_size = px(self.size(Slot::Interface) as f32);
+        theme.mono_font_size = px(self.size(Slot::Code) as f32);
+        cx.refresh_windows();
     }
 }
 
@@ -382,6 +450,23 @@ mod tests {
         s.separate = true;
         assert_eq!(s.terminal_slot(), Slot::Terminal);
         assert_eq!(s.prompt_font(), (Slot::Prompt, 14.));
+    }
+
+    #[test]
+    fn families_resolve_against_installed_fonts_like_the_web_stack() {
+        let installed = ["Menlo".to_owned(), "Fira Code".to_owned()];
+        assert_eq!(default_family_label(true, &installed), "Menlo");
+        let mut s = TypographySettings::default();
+        assert_eq!(
+            s.rendered_family(Slot::Code, &installed).as_deref(),
+            Some("Menlo")
+        );
+        s.set_family(Slot::Code, "\"Missing Mono\", 'Fira Code'");
+        assert_eq!(
+            s.rendered_family(Slot::Code, &installed).as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(s.rendered_family(Slot::Interface, &installed), None);
     }
 
     #[test]

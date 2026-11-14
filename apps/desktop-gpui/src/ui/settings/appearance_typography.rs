@@ -13,7 +13,9 @@ use super::scope_pickers::{Picker, PickerStyle, picker};
 use super::tokens::Tokens;
 use super::*;
 use crate::settings_labs::{Choice, ChoiceIcon};
-use crate::settings_typography::{Slot, TypographySettings, default_family_label};
+use crate::settings_typography::{
+    Slot, TypographySettings, default_family_label, installed_families,
+};
 use gpui::{
     FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent, StyledText, UnderlineStyle, rgb,
 };
@@ -128,14 +130,12 @@ impl AppearanceTypography {
                 cx.notify();
             }
         });
-        let families = cx
-            .text_system()
-            .all_font_names()
-            .into_iter()
+        let families = installed_families(cx)
+            .iter()
             .filter(|name| !name.starts_with('.'))
             .map(|name| Choice {
                 value: name.clone(),
-                label: name,
+                label: name.clone(),
                 secondary: String::new(),
                 offline: false,
                 icon: ChoiceIcon::None,
@@ -218,6 +218,7 @@ impl AppearanceTypography {
     fn update(&mut self, change: impl FnOnce(&mut TypographySettings), cx: &mut Context<Self>) {
         change(&mut self.settings);
         self.settings.save();
+        self.settings.apply_to_theme(cx);
         cx.notify();
     }
 
@@ -295,18 +296,19 @@ impl AppearanceTypography {
     }
 
     /// The family a slot's picker offers as its default.
-    fn default_label(&self, slot: Slot) -> String {
+    fn default_label(&self, slot: Slot, cx: &App) -> String {
+        let installed = installed_families(cx);
         match slot {
-            Slot::Interface => default_family_label(false).to_owned(),
+            Slot::Interface => default_family_label(false, installed),
             Slot::Prompt => {
                 let sans = self.settings.family(Slot::Interface);
                 if sans.is_empty() {
-                    default_family_label(false).to_owned()
+                    default_family_label(false, installed)
                 } else {
                     sans.to_owned()
                 }
             }
-            Slot::Code | Slot::Terminal => default_family_label(true).to_owned(),
+            Slot::Code | Slot::Terminal => default_family_label(true, installed),
         }
     }
 
@@ -314,7 +316,7 @@ impl AppearanceTypography {
         let view = cx.entity();
         let open = self.font_open == Some(slot);
         let family = self.settings.family(slot).to_owned();
-        let default = self.default_label(slot);
+        let default = self.default_label(slot, cx);
         let label = if family.is_empty() {
             default.clone()
         } else {
