@@ -99,7 +99,9 @@ struct CachedToken {
 fn usable(token: &CachedToken, thumbprint: &str, scopes: &[&str], now_ms: u64) -> bool {
     token.thumbprint == thumbprint
         && token.expires_at_ms > now_ms + EXPIRY_GUARD_MS
-        && scopes.iter().all(|scope| token.scopes.iter().any(|have| have == scope))
+        && scopes
+            .iter()
+            .all(|scope| token.scopes.iter().any(|have| have == scope))
 }
 
 fn scope_set_equals(granted: &str, requested: &[&str]) -> bool {
@@ -113,7 +115,11 @@ fn scope_set_equals(granted: &str, requested: &[&str]) -> bool {
 }
 
 /// The form body of the RFC 8693 exchange.
-fn exchange_form(clerk_token: &str, relay_url: &str, scopes: &[&str]) -> Vec<(&'static str, String)> {
+fn exchange_form(
+    clerk_token: &str,
+    relay_url: &str,
+    scopes: &[&str],
+) -> Vec<(&'static str, String)> {
     vec![
         ("grant_type", GRANT_TYPE.to_owned()),
         ("subject_token", clerk_token.to_owned()),
@@ -155,10 +161,17 @@ impl RelayClient {
         format!("{}{path}", self.relay_url)
     }
 
-    fn proof(&self, method: &str, url: &str, access_token: Option<&str>) -> Result<String, RelayError> {
+    fn proof(
+        &self,
+        method: &str,
+        url: &str,
+        access_token: Option<&str>,
+    ) -> Result<String, RelayError> {
         let now = crate::auth::now_ms() / 1_000;
         let jti = random_jti().map_err(RelayError::Failed)?;
-        self.key.proof(method, url, access_token, now, &jti).map_err(RelayError::Failed)
+        self.key
+            .proof(method, url, access_token, now, &jti)
+            .map_err(RelayError::Failed)
     }
 
     fn cached(&self, scopes: &[&str]) -> Option<CachedToken> {
@@ -178,7 +191,11 @@ impl RelayClient {
         }
     }
 
-    async fn access_token(&self, clerk_token: &str, scopes: &[&str]) -> Result<CachedToken, RelayError> {
+    async fn access_token(
+        &self,
+        clerk_token: &str,
+        scopes: &[&str],
+    ) -> Result<CachedToken, RelayError> {
         if let Some(token) = self.cached(scopes) {
             return Ok(token);
         }
@@ -197,12 +214,13 @@ impl RelayClient {
             return Err(RelayError::Rejected(status.as_u16()));
         }
         if !status.is_success() {
-            return Err(RelayError::Failed(format!("relay token exchange returned {status}")));
+            return Err(RelayError::Failed(format!(
+                "relay token exchange returned {status}"
+            )));
         }
-        let body: TokenResponse = response
-            .json()
-            .await
-            .map_err(|error| RelayError::Failed(format!("relay token response unreadable: {error}")))?;
+        let body: TokenResponse = response.json().await.map_err(|error| {
+            RelayError::Failed(format!("relay token response unreadable: {error}"))
+        })?;
         if !scope_set_equals(&body.scope, scopes) {
             return Err(RelayError::Failed(
                 "Relay granted unexpected DPoP access token scopes.".to_owned(),
@@ -260,7 +278,10 @@ impl RelayClient {
     }
 
     /// `GET /v1/environments` with the Clerk token as a bearer.
-    pub async fn list_environments(&self, clerk_token: &str) -> Result<Vec<RelayEnvironment>, RelayError> {
+    pub async fn list_environments(
+        &self,
+        clerk_token: &str,
+    ) -> Result<Vec<RelayEnvironment>, RelayError> {
         let response = self
             .http
             .get(self.url("/v1/environments"))
@@ -301,7 +322,9 @@ impl RelayClient {
             .await?;
         let status = response.status();
         if !status.is_success() {
-            return Err(RelayError::Failed(format!("relay connect returned {status}")));
+            return Err(RelayError::Failed(format!(
+                "relay connect returned {status}"
+            )));
         }
         response
             .json()
@@ -344,7 +367,11 @@ mod tests {
     #[test]
     fn the_exchange_form_names_the_relay_as_the_resource() {
         let form = exchange_form("jwt", "https://relay.t3.codes", &[CONNECT_SCOPE]);
-        let get = |key: &str| form.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str());
+        let get = |key: &str| {
+            form.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+        };
         assert_eq!(get("grant_type"), Some(GRANT_TYPE));
         assert_eq!(get("resource"), Some("https://relay.t3.codes"));
         assert_eq!(get("scope"), Some("environment:connect"));
@@ -354,12 +381,18 @@ mod tests {
 
     #[test]
     fn the_connect_body_binds_the_thumbprint_and_optional_device() {
-        assert_eq!(connect_body(None, "tp"), serde_json::json!({ "clientKeyThumbprint": "tp" }));
+        assert_eq!(
+            connect_body(None, "tp"),
+            serde_json::json!({ "clientKeyThumbprint": "tp" })
+        );
         assert_eq!(
             connect_body(Some("dev"), "tp"),
             serde_json::json!({ "clientKeyThumbprint": "tp", "deviceId": "dev" })
         );
-        assert_eq!(connect_body(Some(""), "tp"), serde_json::json!({ "clientKeyThumbprint": "tp" }));
+        assert_eq!(
+            connect_body(Some(""), "tp"),
+            serde_json::json!({ "clientKeyThumbprint": "tp" })
+        );
     }
 
     #[test]

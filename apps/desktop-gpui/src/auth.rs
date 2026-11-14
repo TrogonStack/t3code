@@ -94,6 +94,9 @@ pub enum Credential {
     DesktopSecret(String),
     Pairing(String),
     Bearer(String),
+    /// A DPoP-bound session, obtained through the T3 Connect relay or a cached DPoP token.
+    #[allow(dead_code)] // constructed by route selection in a later slice
+    Dpop(crate::auth_dpop::DpopSession),
 }
 
 impl Credential {
@@ -101,6 +104,7 @@ impl Credential {
         match self {
             Self::DesktopSecret(secret) => bootstrap_token(secret, now_ms()),
             Self::Pairing(token) | Self::Bearer(token) => token.clone(),
+            Self::Dpop(session) => session.access_token.clone(),
         }
     }
 }
@@ -129,6 +133,12 @@ pub async fn exchange_session(
     if let Credential::Bearer(token) = credential {
         return Ok(Session {
             token: token.clone(),
+            expires_in_secs: None,
+        });
+    }
+    if let Credential::Dpop(session) = credential {
+        return Ok(Session {
+            token: session.access_token.clone(),
             expires_in_secs: None,
         });
     }

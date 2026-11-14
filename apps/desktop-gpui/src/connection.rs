@@ -425,24 +425,38 @@ impl Backoff {
 }
 
 fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
-    let ws_base = http_base
-        .strip_prefix("https://")
-        .map(|rest| format!("wss://{rest}"))
-        .or_else(|| {
-            http_base
-                .strip_prefix("http://")
-                .map(|rest| format!("ws://{rest}"))
-        })
-        .ok_or_else(|| format!("unsupported server URL: {http_base}"))?;
+    socket_url_with(http_base, ticket, "direct")
+}
+
+/// `base` may be an http(s) or ws(s) origin; the RPC socket lives at its `/ws` path.
+fn socket_url_with(
+    base: &str,
+    ticket: &str,
+    connection_method: &str,
+) -> Result<reqwest::Url, String> {
+    let ws_base = [
+        ("https://", "wss://"),
+        ("http://", "ws://"),
+        ("wss://", "wss://"),
+        ("ws://", "ws://"),
+    ]
+    .iter()
+    .find_map(|(from, to)| base.strip_prefix(from).map(|rest| format!("{to}{rest}")))
+    .ok_or_else(|| format!("unsupported server URL: {base}"))?;
+    let trimmed = ws_base.trim_end_matches('/');
+    let endpoint = match reqwest::Url::parse(trimmed) {
+        Ok(url) if url.path() != "/" && !url.path().is_empty() => trimmed.to_owned(),
+        _ => format!("{trimmed}/ws"),
+    };
     reqwest::Url::parse_with_params(
-        &format!("{}/ws", ws_base.trim_end_matches('/')),
+        &endpoint,
         [
             ("orchestrationProtocol", ORCHESTRATION_PROTOCOL_VERSION),
             ("wsTicket", ticket),
             ("clientSurface", "desktop"),
             ("clientDeviceType", "desktop"),
             ("clientAppVersion", env!("CARGO_PKG_VERSION")),
-            ("connectionMethod", "direct"),
+            ("connectionMethod", connection_method),
             // Without it the server shows every secret reference as a redacted literal.
             ("clientCapabilities", "settingsSecretReferences"),
         ],
@@ -530,12 +544,12 @@ impl From<String> for ConnectError {
     }
 }
 
-async fn connect(
+async fn bearer_socket_url(
     client: &reqwest::Client,
     http_base: &str,
     credential: &Credential,
     bearer: &mut Option<String>,
-) -> Result<Socket, ConnectError> {
+) -> Result<reqwest::Url, ConnectError> {
     let token = match bearer {
         Some(token) => token.clone(),
         None => {
@@ -559,7 +573,47 @@ async fn connect(
             return Err(ConnectError::Failed(error.to_string()));
         }
     };
-    let url = socket_url(http_base, &ticket)?;
+    Ok(socket_url(http_base, &ticket)?)
+}
+
+/// A DPoP session's ticket and upgrade proof. A 401 or 403 means the token is spent, which ends
+/// the run so the caller can mint a new one.
+async fn dpop_socket_url(
+    client: &reqwest::Client,
+    http_base: &str,
+    session: &crate::auth_dpop::DpopSession,
+) -> Result<reqwest::Url, ConnectError> {
+    let ticket = match crate::auth_dpop::issue_dpop_ws_ticket(
+        client,
+        http_base,
+        &session.key,
+        &session.access_token,
+    )
+    .await
+    {
+        Ok(ticket) => ticket,
+        Err(AuthError::Rejected(_)) => return Err(ConnectError::SessionRejected),
+        Err(error) => return Err(ConnectError::Failed(error.to_string())),
+    };
+    let ws_base = session.ws_base.as_deref().unwrap_or(http_base);
+    let mut url = socket_url_with(ws_base, &ticket, session.connection_method)?;
+    let proof = crate::auth_dpop::upgrade_proof(&session.key, &url, &ticket)
+        .map_err(|error| ConnectError::Failed(error.to_string()))?;
+    url.query_pairs_mut().append_pair("dpop", &proof);
+    Ok(url)
+}
+
+async fn connect(
+    client: &reqwest::Client,
+    http_base: &str,
+    credential: &Credential,
+    bearer: &mut Option<String>,
+) -> Result<Socket, ConnectError> {
+    let url = if let Credential::Dpop(session) = credential {
+        dpop_socket_url(client, http_base, session).await?
+    } else {
+        bearer_socket_url(client, http_base, credential, bearer).await?
+    };
     // Browsers cap neither frames nor messages, and shell snapshots outgrow tungstenite's 16 MiB default.
     let config = WebSocketConfig::default()
         .max_frame_size(None)
@@ -1659,5 +1713,16 @@ mod tests {
             "clientCapabilities".into(),
             "settingsSecretReferences".into()
         )));
+    }
+
+    #[test]
+    fn relay_sockets_keep_a_ws_base_path_and_name_the_method() {
+        let url = socket_url_with("wss://env.relay.example", "t", "relay").expect("url");
+        assert_eq!(url.scheme(), "wss");
+        assert_eq!(url.path(), "/ws");
+        assert!(url.query_pairs().any(|(k, v)| k == "connectionMethod" && v == "relay"));
+        let custom = socket_url_with("wss://h.example/socket", "t", "relay").expect("url");
+        assert_eq!(custom.path(), "/socket");
+        assert!(socket_url_with("ftp://h", "t", "relay").is_err());
     }
 }

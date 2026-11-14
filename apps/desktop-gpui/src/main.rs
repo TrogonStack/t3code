@@ -1,16 +1,18 @@
 mod assets;
 mod attachments;
 mod auth;
+#[allow(dead_code)] // consumed by route selection in a later slice
+mod auth_dpop;
 mod branch_picker;
 mod clone_flow;
 mod config;
 mod connection;
 mod credentials;
 mod details;
-#[allow(dead_code)] // consumed by the relay client in the next slice
-mod dpop;
 mod details_card;
 mod diff;
+#[allow(dead_code)] // consumed by the relay client in the next slice
+mod dpop;
 mod environments;
 mod git_actions;
 mod history;

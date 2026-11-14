@@ -88,7 +88,10 @@ impl DpopKey {
             B64.encode(payload.to_string())
         );
         let signature: Signature = self.signing.sign(signing_input.as_bytes());
-        Ok(format!("{signing_input}.{}", B64.encode(signature.to_bytes())))
+        Ok(format!(
+            "{signing_input}.{}",
+            B64.encode(signature.to_bytes())
+        ))
     }
 }
 
@@ -119,7 +122,13 @@ mod tests {
     fn proof_verifies_and_carries_claims() {
         let key = DpopKey::generate().unwrap();
         let proof = key
-            .proof("post", "https://relay.example/v1/x?a=1#f", Some("tok"), 1_700_000_000, "j1")
+            .proof(
+                "post",
+                "https://relay.example/v1/x?a=1#f",
+                Some("tok"),
+                1_700_000_000,
+                "j1",
+            )
             .unwrap();
         let parts: Vec<&str> = proof.split('.').collect();
         let header = decode(parts[0]);
@@ -137,8 +146,7 @@ mod tests {
         sec1.extend(B64.decode(jwk["x"].as_str().unwrap()).unwrap());
         sec1.extend(B64.decode(jwk["y"].as_str().unwrap()).unwrap());
         let verifying = VerifyingKey::from_sec1_bytes(&sec1).unwrap();
-        let signature =
-            Signature::from_slice(&B64.decode(parts[2]).unwrap()).unwrap();
+        let signature = Signature::from_slice(&B64.decode(parts[2]).unwrap()).unwrap();
         verifying
             .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
             .unwrap();
@@ -148,7 +156,11 @@ mod tests {
     fn no_ath_without_token_and_bad_url_fails() {
         let key = DpopKey::generate().unwrap();
         let proof = key.proof("GET", "https://a.test/p", None, 1, "j").unwrap();
-        assert!(decode(proof.split('.').nth(1).unwrap()).get("ath").is_none());
+        assert!(
+            decode(proof.split('.').nth(1).unwrap())
+                .get("ath")
+                .is_none()
+        );
         assert!(key.proof("GET", "not a url", None, 1, "j").is_err());
     }
 
@@ -170,6 +182,9 @@ mod tests {
             jwk["x"].as_str().unwrap(),
             jwk["y"].as_str().unwrap()
         );
-        assert_eq!(key.thumbprint(), B64.encode(Sha256::digest(canonical.as_bytes())));
+        assert_eq!(
+            key.thumbprint(),
+            B64.encode(Sha256::digest(canonical.as_bytes()))
+        );
     }
 }
