@@ -3,7 +3,7 @@
 //! more than six options is a combobox with a search field (`w-80`); a shorter one is a menu
 //! (`w-72`) with a separator under the "all" entry.
 
-use super::components::tab_stop;
+use super::components::{KeyHandler, SelectTrigger, tab_stop};
 use super::tokens::Tokens;
 use super::*;
 use crate::settings_labs::{self as labs, ALL, Choice, ChoiceIcon, ScopeData, ScopeSearch};
@@ -36,6 +36,12 @@ pub(super) struct Picker {
 pub(super) struct PickerStyle {
     pub trigger_width: Option<f32>,
     pub fonts: bool,
+    /// The trigger is a form select of this width (the task editor's fields), not the outline
+    /// button, and `label` reads as a placeholder when `placeholder` is set.
+    pub select_width: Option<f32>,
+    pub placeholder: bool,
+    /// Always a combobox with a search field, however few the choices.
+    pub always_search: bool,
 }
 
 /// `Button variant="outline" size="sm"` with `min-w-0 max-w-72`.
@@ -317,9 +323,41 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
     };
     let on_change = spec.on_open.clone();
     let fonts = spec.style.fonts;
-    let combobox = fonts || labs::searchable(spec.choices.len());
+    let combobox = fonts || spec.style.always_search || labs::searchable(spec.choices.len());
     let popover_id = ElementId::from((spec.id, 1usize));
-    Popover::new(popover_id)
+    let select_trigger = spec.style.select_width.map(|width| {
+        let muted = Tokens::of(cx).muted_foreground;
+        let on_open = spec.on_open.clone();
+        let on_key: KeyHandler = Rc::new(move |event, window, cx| {
+            if matches!(
+                event.keystroke.key.as_str(),
+                "enter" | "space" | "down" | "up"
+            ) {
+                cx.stop_propagation();
+                on_open(true, window, cx);
+            }
+        });
+        let mut select = SelectTrigger::new(
+            id.clone(),
+            spec.label.clone(),
+            width,
+            tab_stop(&id, window, cx),
+            on_key,
+        );
+        if let Some(lead) = spec.icon.as_ref().and_then(|kind| icon(kind, cx)) {
+            select = select.leading(lead);
+        }
+        if spec.style.placeholder {
+            select = select.content(
+                div()
+                    .text_color(muted)
+                    .child(spec.label.clone())
+                    .into_any_element(),
+            );
+        }
+        select
+    });
+    let popover = Popover::new(popover_id)
         .anchor(if fonts {
             Anchor::TopRight
         } else {
@@ -330,7 +368,6 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
         .p_0()
         .appearance(false)
         .on_open_change(move |opened, window, cx| on_change(*opened, window, cx))
-        .trigger(trigger)
         .content(move |_, _, cx| {
             let mut all: Vec<Choice> = spec.all.iter().cloned().collect();
             all.extend(spec.choices.iter().cloned());
@@ -429,8 +466,12 @@ pub(super) fn picker(spec: Picker, window: &mut Window, cx: &mut App) -> AnyElem
                             .child(empty_text),
                     )
                 })
-        })
-        .into_any_element()
+        });
+    match select_trigger {
+        Some(select) => popover.trigger(select),
+        None => popover.trigger(trigger),
+    }
+    .into_any_element()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

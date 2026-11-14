@@ -360,6 +360,7 @@ impl AppearanceTypography {
             style: PickerStyle {
                 trigger_width: Some(FAMILY_WIDTH),
                 fonts: true,
+                ..Default::default()
             },
         };
         picker(spec, window, cx)

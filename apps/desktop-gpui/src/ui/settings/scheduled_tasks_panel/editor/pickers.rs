@@ -18,6 +18,7 @@ pub(crate) struct Pickers {
     pub model_search: Entity<InputState>,
     pub ref_search: Entity<InputState>,
     pub thread_search: Entity<InputState>,
+    pub project_search: Entity<InputState>,
     pub pick: State,
     pub keys: Option<Subscription>,
     /// The stars as the user left them, until the catalog says the same.
@@ -38,6 +39,7 @@ impl Pickers {
         let model_search = search("Search models...", window, cx);
         let ref_search = search("Search refs...", window, cx);
         let thread_search = search("Search all threads...", window, cx);
+        let project_search = search("Search projects", window, cx);
         let subscriptions = vec![
             cx.subscribe(&ref_search, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -45,6 +47,11 @@ impl Pickers {
                 }
             }),
             cx.subscribe(&thread_search, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+            cx.subscribe(&project_search, |_, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
@@ -59,6 +66,7 @@ impl Pickers {
             model_search,
             ref_search,
             thread_search,
+            project_search,
             pick: State::default(),
             keys: None,
             favorites: None,

@@ -2077,6 +2077,8 @@ impl MainView {
                         pinned: member.pinned,
                         archived: member.archived,
                         root: member.root.clone(),
+                        initials: entry.initials.clone(),
+                        color: entry.color,
                     })
                 })
                 .collect()

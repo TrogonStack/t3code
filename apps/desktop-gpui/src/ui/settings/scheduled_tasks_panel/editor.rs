@@ -9,6 +9,8 @@ use crate::settings_scheduled_task_editor::{
     self as ed, Draft, EditorData, Encoding, Failure, FilterOp, Mode, Model, ProjectChoice,
     Workspace,
 };
+use crate::settings_labs::{Choice, ChoiceIcon};
+use crate::ui::settings::scope_pickers;
 use gpui::ClipboardItem;
 use gpui_component::input::{InputState, Textarea, TextareaState};
 
@@ -785,51 +787,72 @@ impl ScheduledTasksPanel {
             cx,
         ));
 
-        let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
-        let project_options: Vec<Opt> = projects
-            .iter()
-            .map(|project| {
-                let duplicated = projects
-                    .iter()
-                    .filter(|other| other.title == project.title)
-                    .count()
-                    > 1;
-                Opt {
-                    label: project.title.clone(),
-                    secondary: duplicated.then(|| project.root.clone()),
-                    lead: None,
-                }
-            })
-            .collect();
         let (project_label, project_placeholder) =
             Self::project_label(&projects, &draft.project_id);
+        let selected_project = projects.iter().find(|p| p.id == draft.project_id);
+        let project_search = self.pickers.project_search.clone();
         let project = field_of(
             "Project",
             None,
-            Self::select(
-                view,
-                Sel {
-                    id: "scheduled-task-project".into(),
-                    menu: Menu::Project,
-                    highlight: self.highlight(),
+            scope_pickers::picker(
+                scope_pickers::Picker {
+                    id: "scheduled-task-project",
+                    label: project_label,
+                    icon: selected_project.map(|p| ChoiceIcon::Project {
+                        initials: p.initials.clone(),
+                        color: p.color,
+                    }),
+                    all: None,
+                    choices: projects
+                        .iter()
+                        .map(|p| Choice {
+                            value: p.id.clone(),
+                            label: p.title.clone(),
+                            secondary: p.root.clone(),
+                            offline: false,
+                            icon: ChoiceIcon::Project {
+                                initials: p.initials.clone(),
+                                color: p.color,
+                            },
+                        })
+                        .collect(),
+                    selected: draft.project_id.clone(),
                     open: menu == Some(Menu::Project),
-                    disabled: false,
-                    lead: None,
-                    current: project_label,
-                    placeholder: project_placeholder,
-                    selected: project_ids.iter().position(|id| *id == draft.project_id),
-                    options: project_options,
-                    width: HALF_WIDTH,
+                    query: project_search.read(cx).value().to_string(),
+                    search: project_search.clone(),
+                    on_open: {
+                        let view = view.clone();
+                        Rc::new(move |next, window, cx| {
+                            view.update(cx, |this, cx| {
+                                this.set_menu(Menu::Project, next, cx);
+                                if next {
+                                    let input = this.pickers.project_search.clone();
+                                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                                    let handle = input.focus_handle(cx);
+                                    window.focus(&handle, cx);
+                                }
+                            })
+                        })
+                    },
+                    on_pick: {
+                        let view = view.clone();
+                        Rc::new(move |id, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.edit(cx, |editor| {
+                                    ed::change_project(&mut editor.draft, &id);
+                                    editor.base_remote = None;
+                                });
+                                this.lookup_base(cx);
+                            })
+                        })
+                    },
+                    style: scope_pickers::PickerStyle {
+                        select_width: Some(HALF_WIDTH),
+                        placeholder: project_placeholder,
+                        always_search: true,
+                        ..Default::default()
+                    },
                 },
-                Rc::new(move |this, index, _, cx| {
-                    if let Some(id) = project_ids.get(index).cloned() {
-                        this.edit(cx, |editor| {
-                            ed::change_project(&mut editor.draft, &id);
-                            editor.base_remote = None;
-                        });
-                        this.lookup_base(cx);
-                    }
-                }),
                 window,
                 cx,
             ),
