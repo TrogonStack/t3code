@@ -15,6 +15,8 @@ mod details;
 mod details_card;
 mod diff;
 mod dpop;
+mod environment_prefs;
+mod environment_state;
 mod environments;
 mod favicon;
 mod git_actions;
