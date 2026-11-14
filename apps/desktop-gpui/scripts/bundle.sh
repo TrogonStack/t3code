@@ -23,8 +23,22 @@ fi
 
 app="$here/target/bundle/$profile/$name.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$here/target/$profile/$binary" "$app/Contents/MacOS/$binary"
+
+# The GPUI app ships under the beta icon in every profile until it replaces the Electron app.
+icons="$here/target/bundle/AppIcon.iconset"
+if [ ! -f "$here/target/bundle/AppIcon.icns" ] || [ "$here/resources/app-icon-beta.png" -nt "$here/target/bundle/AppIcon.icns" ]; then
+  rm -rf "$icons" && mkdir -p "$icons"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$here/resources/app-icon-beta.png" --out "$icons/icon_${size}x${size}.png" >/dev/null
+    double=$((size * 2))
+    sips -z "$double" "$double" "$here/resources/app-icon-beta.png" --out "$icons/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$icons" -o "$here/target/bundle/AppIcon.icns"
+  rm -rf "$icons"
+fi
+cp "$here/target/bundle/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -33,6 +47,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>$binary</string>
   <key>CFBundleIdentifier</key><string>$identifier</string>
   <key>CFBundleName</key><string>$name</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>NSHighResolutionCapable</key><true/>
