@@ -34,6 +34,7 @@ mod relay;
 mod routes;
 mod rpc;
 mod secret_source;
+mod secret_store;
 mod send;
 mod server;
 mod settings;

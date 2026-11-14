@@ -8,8 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Keychain service every item is stored under; the account is the environment id.
-#[cfg(target_os = "macos")]
+/// Secret-store service every item is stored under; the account is the environment id.
 const SERVICE: &str = "T3 Code (GPUI) Environment Sessions";
 
 /// What `exchange_bearer` saved for one environment. The token is a secret: `Debug` hides it.
@@ -59,94 +58,29 @@ pub trait CredentialStore: Send + Sync {
     fn list(&self) -> Result<Vec<StoredCredential>, String>;
 }
 
-#[cfg(target_os = "macos")]
-pub use keychain::Keychain;
-
-#[cfg(target_os = "macos")]
-mod keychain {
-    use super::{CredentialStore, SERVICE, StoredCredential};
-    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
-    use security_framework::passwords::{
-        delete_generic_password, get_generic_password, set_generic_password,
-    };
-
-    /// `errSecItemNotFound`.
-    const NOT_FOUND: i32 = -25300;
-
-    pub struct Keychain;
-
-    fn describe(error: security_framework::base::Error) -> String {
-        format!("Keychain: {error}")
-    }
-
-    impl CredentialStore for Keychain {
-        fn load(&self, environment_id: &str) -> Result<Option<StoredCredential>, String> {
-            match get_generic_password(SERVICE, environment_id) {
-                Ok(bytes) => StoredCredential::decode(&bytes).map(Some),
-                Err(error) if error.code() == NOT_FOUND => Ok(None),
-                Err(error) => Err(describe(error)),
-            }
-        }
-
-        fn save(&self, credential: &StoredCredential) -> Result<(), String> {
-            set_generic_password(SERVICE, &credential.environment_id, &credential.encode()?)
-                .map_err(describe)
-        }
-
-        fn delete(&self, environment_id: &str) -> Result<(), String> {
-            match delete_generic_password(SERVICE, environment_id) {
-                Ok(()) => Ok(()),
-                Err(error) if error.code() == NOT_FOUND => Ok(()),
-                Err(error) => Err(describe(error)),
-            }
-        }
-
-        fn list(&self) -> Result<Vec<StoredCredential>, String> {
-            let found = ItemSearchOptions::new()
-                .class(ItemClass::generic_password())
-                .service(SERVICE)
-                .load_attributes(true)
-                .limit(Limit::All)
-                .search();
-            let results = match found {
-                Ok(results) => results,
-                Err(error) if error.code() == NOT_FOUND => return Ok(Vec::new()),
-                Err(error) => return Err(describe(error)),
-            };
-            let mut credentials = Vec::new();
-            for result in results {
-                let Some(account) = result
-                    .simplify_dict()
-                    .and_then(|attributes| attributes.get("acct").cloned())
-                else {
-                    continue;
-                };
-                if let Ok(Some(credential)) = self.load(&account) {
-                    credentials.push(credential);
-                }
-            }
-            Ok(credentials)
-        }
-    }
-}
-
-/// No Keychain here: every call says so, and the app asks for pairing on each launch.
-#[cfg(not(target_os = "macos"))]
+/// The platform secret store; see `secret_store` for where debug builds keep it.
 pub struct Keychain;
 
-#[cfg(not(target_os = "macos"))]
 impl CredentialStore for Keychain {
-    fn load(&self, _: &str) -> Result<Option<StoredCredential>, String> {
-        Err("saved pairings need the macOS Keychain".to_owned())
+    fn load(&self, environment_id: &str) -> Result<Option<StoredCredential>, String> {
+        crate::secret_store::get(SERVICE, environment_id)?
+            .map(|bytes| StoredCredential::decode(&bytes))
+            .transpose()
     }
-    fn save(&self, _: &StoredCredential) -> Result<(), String> {
-        Err("saved pairings need the macOS Keychain".to_owned())
+
+    fn save(&self, credential: &StoredCredential) -> Result<(), String> {
+        crate::secret_store::set(SERVICE, &credential.environment_id, &credential.encode()?)
     }
-    fn delete(&self, _: &str) -> Result<(), String> {
-        Ok(())
+
+    fn delete(&self, environment_id: &str) -> Result<(), String> {
+        crate::secret_store::delete(SERVICE, environment_id)
     }
+
     fn list(&self) -> Result<Vec<StoredCredential>, String> {
-        Ok(Vec::new())
+        Ok(crate::secret_store::accounts(SERVICE)?
+            .iter()
+            .filter_map(|account| self.load(account).ok().flatten())
+            .collect())
     }
 }
 
@@ -254,10 +188,9 @@ mod tests {
         assert_eq!(store.list().expect("list"), vec![sample("b")]);
     }
 
-    /// Talks to the real login Keychain: `cargo test -- --ignored keychain`.
-    #[cfg(target_os = "macos")]
+    /// Talks to the real secret store: `cargo test -- --ignored keychain`.
     #[test]
-    #[ignore = "touches the login Keychain"]
+    #[ignore = "touches the real secret store"]
     fn keychain_saves_lists_and_deletes() {
         let id = format!("smoke-test-{}", std::process::id());
         let store = Keychain;

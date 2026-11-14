@@ -279,58 +279,31 @@ pub trait AccountStore: Send + Sync {
     fn clear(&self) -> Result<(), String>;
 }
 
-#[cfg(target_os = "macos")]
+/// The account in the platform secret store; see `secret_store` for debug builds.
 pub struct KeychainAccount;
 
-#[cfg(target_os = "macos")]
 impl KeychainAccount {
     const SERVICE: &'static str = "T3 Code (GPUI) Cloud Account";
     const ACCOUNT: &'static str = "clerk";
-    const NOT_FOUND: i32 = -25300;
 }
 
-#[cfg(target_os = "macos")]
 impl AccountStore for KeychainAccount {
     fn load(&self) -> Result<Option<Account>, String> {
-        use security_framework::passwords::get_generic_password;
-        match get_generic_password(Self::SERVICE, Self::ACCOUNT) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|_| "the stored account is unreadable".to_owned()),
-            Err(error) if error.code() == Self::NOT_FOUND => Ok(None),
-            Err(error) => Err(format!("Keychain: {error}")),
-        }
+        crate::secret_store::get(Self::SERVICE, Self::ACCOUNT)?
+            .map(|bytes| {
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| "the stored account is unreadable".to_owned())
+            })
+            .transpose()
     }
 
     fn save(&self, account: &Account) -> Result<(), String> {
         let bytes = serde_json::to_vec(account).map_err(|error| error.to_string())?;
-        security_framework::passwords::set_generic_password(Self::SERVICE, Self::ACCOUNT, &bytes)
-            .map_err(|error| format!("Keychain: {error}"))
+        crate::secret_store::set(Self::SERVICE, Self::ACCOUNT, &bytes)
     }
 
     fn clear(&self) -> Result<(), String> {
-        use security_framework::passwords::delete_generic_password;
-        match delete_generic_password(Self::SERVICE, Self::ACCOUNT) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == Self::NOT_FOUND => Ok(()),
-            Err(error) => Err(format!("Keychain: {error}")),
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub struct KeychainAccount;
-
-#[cfg(not(target_os = "macos"))]
-impl AccountStore for KeychainAccount {
-    fn load(&self) -> Result<Option<Account>, String> {
-        Ok(None)
-    }
-    fn save(&self, _: &Account) -> Result<(), String> {
-        Err("T3 Connect sign-in needs the macOS Keychain".to_owned())
-    }
-    fn clear(&self) -> Result<(), String> {
-        Ok(())
+        crate::secret_store::delete(Self::SERVICE, Self::ACCOUNT)
     }
 }
 
@@ -525,25 +498,15 @@ pub fn device_key() -> Arc<crate::dpop::DpopKey> {
     .clone()
 }
 
-#[cfg(target_os = "macos")]
 fn load_or_create_device_key() -> Result<crate::dpop::DpopKey, String> {
-    use security_framework::passwords::{get_generic_password, set_generic_password};
     const SERVICE: &str = "T3 Code (GPUI) Device Key";
     const ACCOUNT: &str = "dpop";
-    match get_generic_password(SERVICE, ACCOUNT) {
-        Ok(bytes) => return crate::dpop::DpopKey::from_bytes(&bytes),
-        Err(error) if error.code() == -25300 => {}
-        Err(error) => return Err(format!("Keychain: {error}")),
+    if let Some(bytes) = crate::secret_store::get(SERVICE, ACCOUNT)? {
+        return crate::dpop::DpopKey::from_bytes(&bytes);
     }
     let key = crate::dpop::DpopKey::generate()?;
-    set_generic_password(SERVICE, ACCOUNT, &key.to_bytes())
-        .map_err(|error| format!("Keychain: {error}"))?;
+    crate::secret_store::set(SERVICE, ACCOUNT, &key.to_bytes())?;
     Ok(key)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn load_or_create_device_key() -> Result<crate::dpop::DpopKey, String> {
-    Err("the device key needs the macOS Keychain".to_owned())
 }
 
 static RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
