@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+mod browser;
 mod model_chip;
 mod snooze;
 mod threads;
@@ -37,6 +38,7 @@ pub enum Page {
     Threads,
     Worktrees,
     Voice,
+    Browser,
 }
 
 /// The select of a row, with its menu.
@@ -52,10 +54,16 @@ enum Pick {
     Shortcut,
     Destination,
     Prompt,
+    LinkTarget,
+    SearchEngine,
+    Viewport,
+    Zoom,
+    Appearance,
+    FrameRate,
 }
 
 impl Pick {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 16] = [
         Self::Permissions,
         Self::Workspace,
         Self::Streaming,
@@ -66,6 +74,12 @@ impl Pick {
         Self::Shortcut,
         Self::Destination,
         Self::Prompt,
+        Self::LinkTarget,
+        Self::SearchEngine,
+        Self::Viewport,
+        Self::Zoom,
+        Self::Appearance,
+        Self::FrameRate,
     ];
 
     /// The `selected` of a select whose setting is unset: no menu row, and the trigger says why.
@@ -118,6 +132,30 @@ impl Pick {
                 "settings-cleanup-instructions",
                 "settings-cleanup-instructions-select",
             ),
+            Self::LinkTarget => (
+                "settings-browser-link-target",
+                "settings-browser-link-target-select",
+            ),
+            Self::SearchEngine => (
+                "settings-browser-search-engine",
+                "settings-browser-search-engine-select",
+            ),
+            Self::Viewport => (
+                "settings-browser-default-viewport",
+                "settings-browser-default-viewport-select",
+            ),
+            Self::Zoom => (
+                "settings-browser-default-zoom",
+                "settings-browser-default-zoom-select",
+            ),
+            Self::Appearance => (
+                "settings-browser-default-appearance",
+                "settings-browser-default-appearance-select",
+            ),
+            Self::FrameRate => (
+                "settings-browser-recording-frame-rate",
+                "settings-browser-recording-frame-rate-select",
+            ),
         }
     }
 
@@ -139,8 +177,21 @@ impl Pick {
             Self::BranchMode => Self::labels_of(&crate::settings_worktrees::BRANCH_MODES),
             Self::KeepWhen => Self::labels_of(&crate::settings_worktrees::KEEP_WHEN),
             Self::CleanupMode => Self::labels_of(&crate::settings_worktrees::CLEANUP_MODES),
-            Self::Shortcut | Self::Destination | Self::Prompt => Vec::new(),
+            _ => Vec::new(),
         }
+    }
+
+    /// Whether the select writes a device setting of the Browser tab.
+    fn is_browser(self) -> bool {
+        matches!(
+            self,
+            Self::LinkTarget
+                | Self::SearchEngine
+                | Self::Viewport
+                | Self::Zoom
+                | Self::Appearance
+                | Self::FrameRate
+        )
     }
 
     fn labels_of(options: &[(&'static str, &'static str)]) -> Vec<&'static str> {
@@ -159,7 +210,7 @@ impl Pick {
             Self::KeepWhen => Field::StorageCleanup,
             Self::CleanupMode => Field::WorktreeCleanup,
             // The voice picks write device settings, never a server field.
-            Self::Shortcut | Self::Destination | Self::Prompt => Field::SpeechWords,
+            _ => Field::SpeechWords,
         }
     }
 
@@ -177,7 +228,7 @@ impl Pick {
                 "custom" => json!({"mode": "custom", "rules": {}}),
                 _ => return None,
             },
-            Self::Shortcut | Self::Destination | Self::Prompt => return None,
+            _ => return None,
         })
     }
 
@@ -193,7 +244,7 @@ impl Pick {
             Self::BranchMode => crate::settings_worktrees::branch_mode_index(value),
             Self::KeepWhen => crate::settings_worktrees::keep_when_index(text),
             Self::CleanupMode => crate::settings_worktrees::cleanup_mode_index(value),
-            Self::Shortcut | Self::Destination | Self::Prompt => 0,
+            _ => 0,
         }
     }
 }
@@ -221,11 +272,20 @@ impl Rule {
     }
 }
 
-/// What a single line field holds: a setting, or one of the cleanup rules.
+/// A device text field of the Browser tab.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    CustomUrl,
+    Width,
+    Height,
+}
+
+/// What a single line field holds: a setting, one of the cleanup rules, or a Browser field.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
     Field(Field),
     Rule(Rule),
+    Browser(Cell),
 }
 
 impl From<Field> for Key {
@@ -320,6 +380,7 @@ pub struct ScopedPanel {
     correction: Entity<InputState>,
     chips: model_chip::Chips,
     snooze: snooze::Snooze,
+    browser: browser::State,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -437,6 +498,7 @@ impl ScopedPanel {
             correction,
             chips,
             snooze: snooze::Snooze::default(),
+            browser: browser::State::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -473,6 +535,9 @@ impl ScopedPanel {
         let _ = self.snooze.close();
         self.advanced_open = false;
         self.cleanup_open = false;
+        if self.page == Page::Browser {
+            self.reload_browser();
+        }
         if self.page == Page::Voice {
             self.voice = VoiceSettings::load();
             self.grants = Grants::load();
@@ -490,7 +555,7 @@ impl ScopedPanel {
             cx.notify();
             return true;
         }
-        if self.chips.close() || self.snooze.close() {
+        if self.close_browser_menus() || self.chips.close() || self.snooze.close() {
             cx.notify();
             return true;
         }
@@ -504,6 +569,10 @@ impl ScopedPanel {
 
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
         if matches!(event, CallEvent::Progress(_)) {
+            return;
+        }
+        if self.browser_settled(token, &event) {
+            cx.notify();
             return;
         }
         if self
@@ -611,6 +680,7 @@ impl ScopedPanel {
                 }
                 self.sync_lines(&ctx, window, cx);
             }
+            Key::Browser(cell) => self.commit_cell(cell, &text, window, cx),
             Key::Field(field) => {
                 let change = match field {
                     Field::SettleDays => match crate::settings_threads::parse_settle_days(&text) {
@@ -677,6 +747,7 @@ impl ScopedPanel {
                 .as_u64()
                 .map(|days| days.to_string())
                 .unwrap_or_default(),
+            Key::Browser(cell) => self.cell_text(cell),
             Key::Field(Field::SettleDays) => self
                 .value(Field::SettleDays, ctx)
                 .as_u64()
@@ -721,6 +792,7 @@ impl ScopedPanel {
             Pick::Shortcut | Pick::Destination | Pick::Prompt => {
                 self.pick_voice(pick, index, window, cx)
             }
+            _ if pick.is_browser() => self.pick_browser(pick, index, &ctx, cx),
             Pick::KeepWhen => {
                 if let Some(value) = pick.value(index) {
                     self.write_rules("worktreeKeepWhen", value, &ctx, cx);
@@ -1125,6 +1197,14 @@ impl ScopedPanel {
                 (Key::Field(Field::SettleDays), ""),
             ],
             Page::Voice => &[],
+            Page::Browser => &[
+                (
+                    Key::Browser(Cell::CustomUrl),
+                    "https://example.com/search?q=%s",
+                ),
+                (Key::Browser(Cell::Width), ""),
+                (Key::Browser(Cell::Height), ""),
+            ],
             Page::Worktrees => &[
                 (Key::Field(Field::WorktreesDir), "Default"),
                 (Key::Field(Field::BranchPrefix), "No prefix"),
@@ -1140,7 +1220,7 @@ impl ScopedPanel {
                 Field::TitleInstructions,
                 "Keep titles to a few words. Lead with the main subject.",
             )],
-            Page::Voice => &[],
+            Page::Voice | Page::Browser => &[],
             Page::Worktrees => &[(
                 Field::BranchInstructions,
                 "Use julius/ followed by the issue ID and a short description.",
@@ -1163,6 +1243,10 @@ impl Render for ScopedPanel {
             Page::Voice => {
                 self.sync_voice(window, cx);
                 page.children(self.voice(&ctx, window, cx))
+            }
+            Page::Browser => {
+                self.sync_names(window, cx);
+                page.children(self.browser(&ctx, window, cx))
             }
         }
     }

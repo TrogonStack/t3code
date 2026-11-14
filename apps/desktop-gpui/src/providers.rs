@@ -348,6 +348,8 @@ struct EnvironmentCapabilities {
     file_attachments: Option<FileAttachments>,
     #[serde(default, rename = "usageModelAliases")]
     usage_model_aliases: bool,
+    #[serde(default, rename = "serverBrowser")]
+    server_browser: bool,
 }
 
 #[derive(Deserialize)]
@@ -366,6 +368,8 @@ pub struct Catalog {
     max_file_upload_bytes: Option<u64>,
     /// `environment.capabilities.usageModelAliases`.
     usage_model_aliases: bool,
+    /// `environment.capabilities.serverBrowser`: the server runs browser tabs and owns profile data.
+    server_browser: bool,
     /// The Devices tab's keys.
     devices: crate::settings_devices::DeviceConfig,
     /// The Source control tab's keys.
@@ -498,6 +502,9 @@ impl Catalog {
             usage_model_aliases: environment
                 .as_ref()
                 .is_some_and(|environment| environment.capabilities.usage_model_aliases),
+            server_browser: environment
+                .as_ref()
+                .is_some_and(|environment| environment.capabilities.server_browser),
             max_file_upload_bytes: environment
                 .and_then(|environment| environment.capabilities.file_attachments)
                 .map(|files| files.max_upload_bytes),
@@ -563,6 +570,11 @@ impl Catalog {
     /// The attached environment's Source control settings.
     pub fn source_control(&self) -> &crate::settings_source_control::SourceControlConfig {
         &self.source_control
+    }
+
+    /// Whether the attached environment runs server browsers (`capabilities.serverBrowser`).
+    pub fn server_browser(&self) -> bool {
+        self.server_browser
     }
 
     /// The attached environment's secret providers.

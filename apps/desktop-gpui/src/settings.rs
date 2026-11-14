@@ -904,6 +904,7 @@ pub fn searchable() -> &'static [SearchItem] {
             .chain(crate::settings_threads::THREADS_ITEMS)
             .chain(crate::settings_worktrees::WORKTREES_ITEMS)
             .chain(crate::settings_voice::VOICE_ITEMS)
+            .chain(crate::settings_browser::BROWSER_ITEMS)
             .chain(crate::settings_snapshot::SNAPSHOT_ITEMS)
             .copied()
             .collect()

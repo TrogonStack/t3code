@@ -219,6 +219,7 @@ pub struct SettingsDialog {
     threads: Entity<ScopedPanel>,
     worktrees: Entity<ScopedPanel>,
     voice: Entity<ScopedPanel>,
+    browser: Entity<ScopedPanel>,
     secrets: Entity<SecretsPanel>,
     scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
@@ -267,6 +268,16 @@ impl SettingsDialog {
             ScopedPanel::new(
                 Page::Voice,
                 crate::settings_voice::TOKEN_BASE,
+                actions.clone(),
+                scope.clone(),
+                window,
+                cx,
+            )
+        });
+        let browser = cx.new(|cx| {
+            ScopedPanel::new(
+                Page::Browser,
+                crate::settings_browser::TOKEN_BASE,
                 actions.clone(),
                 scope.clone(),
                 window,
@@ -323,6 +334,7 @@ impl SettingsDialog {
             threads,
             worktrees,
             voice,
+            browser,
             secrets,
             scheduled_tasks,
             providers,
@@ -354,6 +366,7 @@ impl SettingsDialog {
         self.threads.update(cx, |panel, cx| panel.reload(cx));
         self.worktrees.update(cx, |panel, cx| panel.reload(cx));
         self.voice.update(cx, |panel, cx| panel.reload(cx));
+        self.browser.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.reload(cx));
@@ -542,6 +555,29 @@ impl SettingsDialog {
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
+    pub fn set_browser_data(
+        &mut self,
+        config: crate::settings_source_control::SourceControlConfig,
+        projects: crate::settings_devices::ProjectIds,
+        server_browser: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.browser.update(cx, |panel, cx| {
+            panel.set_data(config, projects, cx);
+            panel.set_browser_data(server_browser, cx);
+        });
+    }
+
+    pub fn on_browser_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.browser
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
     pub fn set_secrets_data(
         &mut self,
         config: crate::settings_secrets::Config,
@@ -721,6 +757,12 @@ impl SettingsDialog {
         }
         if self
             .voice
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .browser
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -923,6 +965,9 @@ impl Render for SettingsDialog {
         let projects = self
             .projects
             .update(cx, |panel, cx| panel.overlay(window, cx));
+        let browser = self
+            .browser
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -986,6 +1031,7 @@ impl Render for SettingsDialog {
             .children(scheduled_tasks)
             .children(providers)
             .children(projects)
+            .children(browser)
             .children(snapshot)
             .into_any_element()
     }
@@ -1497,6 +1543,10 @@ impl SettingsDialog {
         } else if self.section == Section::Voice {
             self.voice.update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.voice.clone().into_any_element()]
+        } else if self.section == Section::Browser {
+            self.browser
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.browser.clone().into_any_element()]
         } else if self.section == Section::Secrets {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
@@ -1535,6 +1585,7 @@ impl SettingsDialog {
                 | Section::Threads
                 | Section::Worktrees
                 | Section::Voice
+                | Section::Browser
                 | Section::Secrets
                 | Section::ScheduledTasks
                 | Section::Providers

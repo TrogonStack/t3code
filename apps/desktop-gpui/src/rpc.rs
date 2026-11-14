@@ -87,6 +87,15 @@ impl Method for ServerUpdateSettings {
     type Success = Value;
 }
 
+/// `preview.clearProfile`, which deletes a browser profile's cookies and cache on the server.
+pub struct PreviewClearProfile;
+
+impl Method for PreviewClearProfile {
+    const TAG: &'static str = "preview.clearProfile";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `device.list`, the Device panel's host and platform state.
 pub struct DeviceList;
 

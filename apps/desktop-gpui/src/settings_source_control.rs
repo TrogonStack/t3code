@@ -168,6 +168,8 @@ pub enum Field {
     /// The Voice tab's keys: the shared dictionary and the cleanup model.
     SpeechWords,
     SpeechCleanupModel,
+    /// The Browser tab's `enableAgentBrowserAccess`.
+    AgentBrowserAccess,
 }
 
 impl Field {
@@ -209,6 +211,7 @@ impl Field {
             Self::WorktreeCleanup => "worktreeCleanup",
             Self::SpeechWords => "speechProjectCustomWords",
             Self::SpeechCleanupModel => "speechPostProcessingModelSelection",
+            Self::AgentBrowserAccess => "enableAgentBrowserAccess",
         }
     }
 
@@ -264,13 +267,14 @@ impl Field {
             Self::StartFromOrigin => json!(true),
             Self::Submodules | Self::WorktreeCleanup | Self::SpeechCleanupModel => Value::Null,
             Self::SpeechWords => json!([]),
+            Self::AgentBrowserAccess => json!(true),
             Self::BranchMode => json!("static"),
             Self::BranchPrefix => json!("t3"),
             Self::StorageCleanup => crate::settings_worktrees::default_storage_cleanup(),
         }
     }
 
-    const ALL: [Self; 35] = [
+    const ALL: [Self; 36] = [
         Self::AutoPull,
         Self::AgentCredits,
         Self::MergeMethod,
@@ -306,6 +310,7 @@ impl Field {
         Self::WorktreeCleanup,
         Self::SpeechWords,
         Self::SpeechCleanupModel,
+        Self::AgentBrowserAccess,
     ];
 }
 

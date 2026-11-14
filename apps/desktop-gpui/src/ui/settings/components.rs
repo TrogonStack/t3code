@@ -788,7 +788,18 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
                 .child(Icon::new(icon).size(px(16.)))
                 .child(label.clone())
                 .into_any_element(),
-            (None, None) => label.clone().into_any_element(),
+            // A tab splits a label from the muted detail at the item's end (the viewport presets).
+            (None, None) => match label.split_once('\t') {
+                Some((name, detail)) => h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(name.to_owned())
+                    .child(div().text_xs().text_color(muted).child(detail.to_owned()))
+                    .into_any_element(),
+                None => label.clone().into_any_element(),
+            },
         };
         items.push(
             div()

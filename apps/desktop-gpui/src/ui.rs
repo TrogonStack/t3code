@@ -609,6 +609,7 @@ impl MainView {
         let projects_catalog = self.providers.clone();
         let threads_catalog = self.providers.clone();
         let secrets = self.providers.as_ref().map(|c| c.secrets().clone());
+        let server_browser = self.providers.as_ref().is_some_and(|c| c.server_browser());
         let provider_tab = self.providers.as_ref().map(|c| {
             (
                 c.secrets().clone(),
@@ -639,6 +640,7 @@ impl MainView {
                 settings.set_threads_catalog(threads_catalog.clone(), cx);
                 settings.set_worktrees_data(config.clone(), project_ids.clone(), cx);
                 settings.set_voice_data(config.clone(), project_ids.clone(), cx);
+                settings.set_browser_data(config.clone(), project_ids.clone(), server_browser, cx);
                 settings.set_source_control_data(config, project_ids, cx);
             }
             if let Some(config) = secrets {
@@ -740,6 +742,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_browser::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_browser_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_voice::TOKEN_BASE {
                 self.settings
                     .update(cx, |settings, cx| settings.on_voice_call(token, event, cx));
@@ -2064,6 +2072,7 @@ impl MainView {
                         },
                         pinned: member.pinned,
                         archived: member.archived,
+                        root: member.root.clone(),
                     })
                 })
                 .collect()
@@ -2075,6 +2084,8 @@ impl MainView {
                 .insert(other.id.clone(), options(&other.projects));
         }
         if let Some(catalog) = &self.providers {
+            data.picker = catalog.picker(None);
+            data.favorites = catalog.favorites();
             data.models = catalog
                 .picker(None)
                 .into_iter()

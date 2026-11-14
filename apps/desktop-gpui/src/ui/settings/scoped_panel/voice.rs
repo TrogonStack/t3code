@@ -44,6 +44,7 @@ impl ScopedPanel {
                 .map(|(_, label)| label)
                 .collect(),
             Pick::Prompt => vec!["Built-in".to_owned(), "Custom".to_owned()],
+            _ if pick.is_browser() => Self::browser_labels(pick),
             _ => pick.labels().into_iter().map(str::to_owned).collect(),
         }
     }
@@ -69,6 +70,7 @@ impl ScopedPanel {
             Pick::Destination if self.destinations(cx).len() > 1 => {
                 vec![(1, "On an environment".into())]
             }
+            Pick::Viewport => vec![(2, "Standard".into())],
             _ => Vec::new(),
         }
     }
@@ -102,6 +104,7 @@ impl ScopedPanel {
     ) -> String {
         match pick {
             Pick::Shortcut => voice::SHORTCUTS[selected.min(2)].1.to_owned(),
+            Pick::Viewport => self.browser.settings.viewport.label(),
             _ => labels
                 .get(selected)
                 .cloned()

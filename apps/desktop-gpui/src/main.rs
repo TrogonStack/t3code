@@ -30,6 +30,7 @@ mod send;
 mod server;
 mod settings;
 mod settings_appearance;
+mod settings_browser;
 mod settings_devices;
 mod settings_diffs;
 mod settings_labs;

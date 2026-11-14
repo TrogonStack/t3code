@@ -471,7 +471,7 @@ impl VoiceSettings {
     }
 }
 
-fn home() -> Option<PathBuf> {
+pub(crate) fn home() -> Option<PathBuf> {
     let home = std::env::var(crate::config::ENV_HOME).ok()?;
     (!home.trim().is_empty()).then(|| PathBuf::from(home))
 }
@@ -485,7 +485,7 @@ pub struct Grants {
     pub cleanup: bool,
 }
 
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     let mut bytes = [0u8; 16];
     let _ = getrandom::fill(&mut bytes);
     bytes[6] = bytes[6] & 0x0f | 0x40;
