@@ -3,7 +3,9 @@
 //! `server.removeKeybinding`; the config stream brings the result back. The web's visual `when`
 //! tree is a text expression here, parsed with the same grammar.
 
-use super::components::{group, popup_shell, section};
+use super::components::{
+    KeyHandler, SelectTrigger, group, popup_shell, row as settings_row, section, tab_stop,
+};
 use super::devices_panel::widgets::{
     Variant, button, dialog_of, field, icon_button, menu_item, note, problem, warning,
 };
@@ -21,6 +23,11 @@ use gpui::{ElementId, Keystroke, MouseDownEvent, Subscription, deferred};
 use gpui_component::input::{InputEvent, InputState};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::rc::Rc;
+
+/// `w-44` and `w-56` (KeybindingsSettings.tsx:1245-1250).
+const KEY_INPUT_WIDTH: f32 = 176.;
+const COMMAND_WIDTH: f32 = 224.;
 
 fn eid(prefix: &str, id: &str) -> ElementId {
     ElementId::from(SharedString::from(format!("{prefix}-{id}")))
@@ -491,7 +498,9 @@ impl KeybindingsPanel {
             }))
     }
 
-    fn key_cell(
+    /// `Input size="sm" font="mono"` (input.tsx:12-60): a `rounded-lg border` box, `h-7`, `text-sm`,
+    /// the placeholder in `--placeholder` (muted-foreground). Focus paints the ring while recording.
+    fn key_input(
         &self,
         id: ElementId,
         target: Target,
@@ -501,35 +510,55 @@ impl KeybindingsPanel {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = Tokens::of(cx);
         let recording = self.recording.as_ref() == Some(&target);
-        let content = if recording {
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Press shortcut")
-                .into_any_element()
+        let (text, color) = if recording {
+            ("Press shortcut", theme.muted_foreground)
         } else if key.is_empty() {
-            div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Unassigned")
-                .into_any_element()
+            ("Unassigned", theme.muted_foreground)
         } else {
-            Self::pill(key, cx).into_any_element()
+            (key, theme.foreground)
+        };
+        let background = if theme.dark {
+            theme.input.opacity(0.32)
+        } else {
+            theme.background
+        };
+        let shadow = if recording {
+            vec![gpui::BoxShadow {
+                color: theme.ring.opacity(0.24),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(3.),
+                inset: true,
+            }]
+        } else {
+            vec![gpui::BoxShadow {
+                color: gpui::black().opacity(0.05),
+                offset: gpui::point(px(0.), px(1.)),
+                blur_radius: px(2.),
+                spread_radius: px(0.),
+                inset: false,
+            }]
         };
         div()
             .id(id)
+            .w(px(KEY_INPUT_WIDTH))
             .h(px(28.))
-            .min_w(px(112.))
-            .px_2()
+            .flex_shrink_0()
             .flex()
             .items_center()
-            .justify_center()
+            .px(px(9.))
             .rounded(px(8.))
             .border_1()
             .border_color(if recording { theme.ring } else { theme.input })
-            .when(editable, |cell| cell.cursor_pointer())
+            .bg(background)
+            .shadow(shadow)
+            .text_sm()
+            .font_family(cx.theme().mono_font_family.clone())
+            .text_color(color)
+            .truncate()
+            .when(editable, |cell| cell.cursor_text())
             .when(!editable, |cell| cell.opacity(0.64))
-            .child(content)
+            .child(text.to_owned())
             .when(editable, |cell| {
                 cell.on_click(
                     cx.listener(move |this, _, _, cx| this.start_recording(target.clone(), cx)),
@@ -537,7 +566,45 @@ impl KeybindingsPanel {
             })
     }
 
-    fn when_button(
+    /// The saved shortcut as a button (`KeybindingKeyControl`, KeybindingsSettings.tsx:826-840):
+    /// `h-7 rounded-md px-1.5`, a transparent border that shows on hover with `bg-accent`.
+    fn key_pill(
+        &self,
+        id: ElementId,
+        target: Target,
+        key: &str,
+        editable: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = Tokens::of(cx);
+        let (border, accent) = (theme.border.opacity(0.7), theme.accent);
+        div()
+            .id(id)
+            .h(px(28.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .px(px(6.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .when(editable, |cell| {
+                cell.cursor_pointer()
+                    .hover(move |style| style.border_color(border).bg(accent))
+            })
+            .when(!editable, |cell| cell.opacity(0.64))
+            .child(Self::pill(key, cx))
+            .when(editable, |cell| {
+                cell.on_click(
+                    cx.listener(move |this, _, _, cx| this.start_recording(target.clone(), cx)),
+                )
+            })
+    }
+
+    /// `WhenClauseControl`'s trigger (KeybindingsSettings.tsx:1033-1058): `Button size="micro"`
+    /// (`h-5 rounded-sm px-[5px] text-[11px] gap-1`), `ghost` once a condition is set and
+    /// `ghost-muted` for "Always", the expression in mono, and a 12px chevron at 60% opacity.
+    fn when_trigger(
         &self,
         id: ElementId,
         target: Target,
@@ -547,27 +614,111 @@ impl KeybindingsPanel {
     ) -> gpui::Stateful<gpui::Div> {
         let theme = Tokens::of(cx);
         let current = when.to_owned();
-        let label = if when.is_empty() {
-            "Always".to_owned()
-        } else {
+        let set = !when.is_empty();
+        let label = if set {
             when.to_owned()
+        } else {
+            "Always".to_owned()
         };
         let accent = theme.accent;
+        let foreground = theme.foreground;
         div()
             .id(id)
-            .max_w_full()
-            .truncate()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .when(editable, |link| {
-                link.cursor_pointer().hover(move |style| style.bg(accent))
+            .h(px(20.))
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(5.))
+            .rounded(px(4.))
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .text_size(px(11.))
+            .line_height(px(16.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(if set {
+                theme.foreground
+            } else {
+                theme.muted_foreground
             })
-            .child(format!("When: {label}"))
+            .when(editable, |link| {
+                link.cursor_pointer().hover(move |style| {
+                    let style = style.bg(accent);
+                    if set {
+                        style
+                    } else {
+                        style.text_color(foreground)
+                    }
+                })
+            })
+            .when(!editable, |link| link.opacity(0.64))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .opacity(0.6)
+                    .child(Icon::new(Icons::ChevronDown).size(px(12.))),
+            )
             .when(editable, |link| {
                 link.on_click(cx.listener(move |this, _, window, cx| {
                     this.open_when(target.clone(), current.clone(), window, cx)
                 }))
             })
+    }
+
+    /// The "When" line shared by both row kinds: `flex h-6 gap-1.5`, a `text-xs` label at 70%.
+    fn when_line(&self, trigger: gpui::Stateful<gpui::Div>, cx: &App) -> gpui::Div {
+        h_flex()
+            .h(px(24.))
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .text_xs()
+                    .line_height(px(12.))
+                    .text_color(Tokens::of(cx).muted_foreground.opacity(0.7))
+                    .child("When"),
+            )
+            .child(trigger)
+    }
+
+    /// `KeybindingConflictWarning`: a warning icon whose tooltip carries the conflict.
+    fn conflict_icon(
+        id: ElementId,
+        conflicts: &[String],
+        cx: &App,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        if conflicts.is_empty() {
+            return None;
+        }
+        let mut names = conflicts
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if conflicts.len() > 3 {
+            names.push_str(", and more");
+        }
+        let text = format!("Conflicts with {names}. {CONFLICT_TIP}");
+        Some(
+            div()
+                .id(id)
+                .size(px(20.))
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .text_color(warning(&Tokens::of(cx)))
+                .tooltip(tooltip(text))
+                .child(Icon::new(Icons::TriangleAlert).size(px(14.))),
+        )
     }
 
     fn row_menu(&self, row: &Row, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -646,9 +797,10 @@ impl KeybindingsPanel {
         let when = self.when_drafts.get(&row.id).unwrap_or(&row.when).clone();
         let dirty = key != row.key || when != row.when;
         let conflicts = conflict_labels(all, &row.id, &key, &when, is_mac());
+        let target = Target::Row(row.id.clone());
         let badge = (row.source != Source::Default).then(|| {
             div()
-                .px_1p5()
+                .px(px(5.))
                 .rounded(px(4.))
                 .border_1()
                 .border_color(theme.border)
@@ -656,25 +808,28 @@ impl KeybindingsPanel {
                 .text_color(theme.muted_foreground)
                 .child(row.source.label())
         });
-        let conflict = (!conflicts.is_empty()).then(|| {
-            let mut names = conflicts
-                .iter()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ");
-            if conflicts.len() > 3 {
-                names.push_str(", and more");
-            }
-            div()
-                .id(eid("keybinding-conflict", &row.id))
-                .text_xs()
-                .text_color(warning(&theme))
-                .tooltip(tooltip(CONFLICT_TIP))
-                .child(format!("Conflicts with {names}."))
-        });
+        let title = h_flex()
+            .gap_2()
+            .min_w_0()
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(command_label(&row.command)),
+            )
+            .children(badge);
+        let when_line = self.when_line(
+            self.when_trigger(
+                eid("keybinding-when", &row.id),
+                target.clone(),
+                &when,
+                editable,
+                cx,
+            ),
+            cx,
+        );
         let save = dirty.then(|| {
-            let target = row.clone();
+            let saved = row.clone();
             button(
                 eid("keybinding-save", &row.id),
                 Variant::Primary,
@@ -684,91 +839,91 @@ impl KeybindingsPanel {
             .child("Save")
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.editable(cx) {
-                    this.save_row(&target, cx)
+                    this.save_row(&saved, cx)
                 }
             }))
         });
-        h_flex()
-            .px_4()
-            .py_3()
-            .gap_3()
-            .items_start()
-            .justify_between()
-            .child(
-                v_flex()
-                    .min_w_0()
-                    .flex_1()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_sm()
-                                    .child(command_label(&row.command)),
-                            )
-                            .children(badge),
-                    )
-                    .child(self.when_button(
-                        eid("keybinding-when", &row.id),
-                        Target::Row(row.id.clone()),
-                        &when,
-                        editable,
-                        cx,
-                    ))
-                    .children(conflict),
-            )
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .gap_2()
-                    .child(self.key_cell(
-                        eid("keybinding-key", &row.id),
-                        Target::Row(row.id.clone()),
-                        &key,
-                        editable,
-                        cx,
-                    ))
-                    .children(save)
-                    .children(editable.then(|| self.row_menu(row, cx)).flatten()),
-            )
+        let recording = self.recording.as_ref() == Some(&target);
+        let key_id = eid("keybinding-key", &row.id);
+        let key_control = if !recording && key == row.key && !key.is_empty() && !dirty {
+            self.key_pill(key_id, target, &key, editable, cx)
+                .mr(px(-6.))
+        } else {
+            self.key_input(key_id, target, &key, editable, cx)
+        };
+        // Hidden until the row is hovered, and kept while its popup is open.
+        let group = SharedString::from(format!("keybinding-row-{}", row.id));
+        let menu = editable
+            .then(|| self.row_menu(row, cx))
+            .flatten()
+            .map(|menu| {
+                let open = self.menu.as_deref() == Some(row.id.as_str());
+                div()
+                    .opacity(if open { 1. } else { 0. })
+                    .group_hover(group.clone(), |style| style.opacity(1.))
+                    .child(menu)
+            });
+        let control = h_flex()
+            .flex_wrap()
+            .items_center()
+            .justify_end()
+            .gap(px(6.))
+            .children(Self::conflict_icon(
+                eid("keybinding-conflict", &row.id),
+                &conflicts,
+                cx,
+            ))
+            .children(menu)
+            .children(save)
+            .child(key_control)
+            .into_any_element();
+        div()
+            .group(group)
+            .child(settings_row(title, when_line, None, control, self.wide, cx))
             .into_any_element()
     }
 
-    fn command_select(&self, new: &NewRow, cx: &mut Context<Self>) -> AnyElement {
+    /// `NewKeybindingCommandSelect`: `Select size="sm"` at `w-56`, its list under the trigger.
+    fn command_select(
+        &self,
+        new: &NewRow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Tokens::of(cx);
-        let label = new
-            .command
-            .as_deref()
-            .map(command_label)
-            .unwrap_or_else(|| "Command".to_owned());
-        let trigger = button("keybinding-command", Variant::Outline, true, cx)
-            .w(px(220.))
-            .justify_between()
-            .child(
-                div()
-                    .truncate()
-                    .text_color(if new.command.is_some() {
-                        theme.foreground
-                    } else {
-                        theme.muted_foreground
-                    })
-                    .child(label),
-            )
-            .child(Icon::new(Icons::ChevronDown).size(px(14.)))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.picking = !this.picking;
-                cx.notify();
-            }));
+        let view = cx.entity();
+        let id = ElementId::from("keybinding-command");
+        let handle = tab_stop(&id, window, cx);
+        let on_key: KeyHandler = Rc::new({
+            let view = view.clone();
+            move |event, _, cx| {
+                if matches!(
+                    event.keystroke.key.as_str(),
+                    "enter" | "space" | "down" | "up"
+                ) {
+                    cx.stop_propagation();
+                    view.update(cx, |this, cx| {
+                        this.picking = true;
+                        cx.notify();
+                    });
+                }
+            }
+        });
+        let value = match new.command.as_deref() {
+            Some(command) => div().child(command_label(command)).into_any_element(),
+            None => div()
+                .text_color(theme.muted_foreground)
+                .child("Command")
+                .into_any_element(),
+        };
+        let trigger = SelectTrigger::new(id, "", COMMAND_WIDTH, handle, on_key)
+            .content(value)
+            .open(self.picking);
         let popup = self.picking.then(|| {
-            let view = cx.entity();
             let options = command_options(&self.keybindings.rules);
-            let mut list = popup_shell(220., cx)
+            let mut list = popup_shell(COMMAND_WIDTH, cx)
                 .id("keybinding-commands")
-                .max_h(px(320.))
+                .max_h(px(288.))
                 .overflow_y_scroll();
             for (index, command) in options.into_iter().enumerate() {
                 let view = view.clone();
@@ -807,78 +962,104 @@ impl KeybindingsPanel {
         });
         div()
             .relative()
-            .child(trigger)
+            .flex_shrink_0()
+            .child(
+                div()
+                    .id("keybinding-command-trigger")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.picking = !this.picking;
+                        cx.notify();
+                    }))
+                    .child(trigger),
+            )
             .children(popup)
             .into_any_element()
     }
 
-    fn new_row_view(&self, new: &NewRow, editable: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// `NewKeybindingSettingsRow` (KeybindingsSettings.tsx:1224-1255): a `bg-muted/15` row with the
+    /// title and When line at the left and, at the right, the command select, a conflict
+    /// warning, the shortcut input, Save and an icon-only cancel.
+    fn new_row_view(
+        &self,
+        new: &NewRow,
+        all: &[Row],
+        editable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Tokens::of(cx);
         let ready = editable
             && self.pending.is_empty()
             && new.command.is_some()
             && !new.key.trim().is_empty();
-        h_flex()
-            .px_4()
-            .py_3()
-            .gap_3()
-            .items_start()
-            .justify_between()
+        let conflicts = conflict_labels(all, "new", &new.key, &new.when, is_mac());
+        let when_line = self.when_line(
+            self.when_trigger(
+                "keybinding-new-when".into(),
+                Target::New,
+                &new.when,
+                editable,
+                cx,
+            ),
+            cx,
+        );
+        let control = h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(self.command_select(new, window, cx))
+            .children(Self::conflict_icon(
+                "keybinding-new-conflict".into(),
+                &conflicts,
+                cx,
+            ))
+            .child(self.key_input(
+                "keybinding-new-key".into(),
+                Target::New,
+                &new.key,
+                editable,
+                cx,
+            ))
             .child(
-                v_flex()
-                    .min_w_0()
-                    .flex_1()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("New keybinding"),
-                    )
-                    .child(self.command_select(new, cx))
-                    .child(self.when_button(
-                        "keybinding-new-when".into(),
-                        Target::New,
-                        &new.when,
-                        editable,
-                        cx,
-                    )),
+                button("keybinding-new-save", Variant::Primary, ready, cx)
+                    .child("Save")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.editable(cx) {
+                            this.save_new(cx)
+                        }
+                    })),
             )
             .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .gap_2()
-                    .child(self.key_cell(
-                        "keybinding-new-key".into(),
-                        Target::New,
-                        &new.key,
-                        editable,
-                        cx,
-                    ))
-                    .child(
-                        button("keybinding-new-save", Variant::Primary, ready, cx)
-                            .child("Save")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.editable(cx) {
-                                    this.save_new(cx)
-                                }
-                            })),
-                    )
-                    .child(
-                        button("keybinding-new-cancel", Variant::Outline, true, cx)
-                            .child("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.new = None;
-                                this.picking = false;
-                                this.recording = None;
-                                this._keys = None;
-                                cx.notify();
-                            })),
-                    ),
+                icon_button(
+                    "keybinding-new-cancel",
+                    Variant::GhostMuted,
+                    self.pending.is_empty(),
+                    cx,
+                )
+                .tooltip(tooltip("Cancel"))
+                .child(Icon::new(IconName::Close).size(px(14.)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.new = None;
+                    this.picking = false;
+                    this.recording = None;
+                    this._keys = None;
+                    cx.notify();
+                })),
             )
+            .into_any_element();
+        div()
+            .bg(theme.muted.opacity(0.15))
+            .child(row(
+                "New keybinding",
+                when_line,
+                None,
+                control,
+                self.wide,
+                cx,
+            ))
             .into_any_element()
     }
 }
-
 impl Render for KeybindingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Tokens::of(cx);
@@ -942,7 +1123,7 @@ impl Render for KeybindingsPanel {
             );
         }
         if let Some(new) = &self.new {
-            rows.push(self.new_row_view(new, editable, cx));
+            rows.push(self.new_row_view(new, &all, editable, window, cx));
         }
         if sections.is_empty() {
             rows.push(
