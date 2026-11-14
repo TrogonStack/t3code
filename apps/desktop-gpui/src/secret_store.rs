@@ -3,6 +3,10 @@
 //! Release builds use the login Keychain. Debug builds use an owner-only file in the dev state dir:
 //! macOS keys a Keychain grant to a build without an Apple Team ID by its code hash, so every
 //! recompile would ask again no matter how often "Always Allow" is clicked.
+//!
+//! TODO: the dev file is plaintext, weaker than Electron dev's safeStorage. Fix by signing dev
+//! builds with an Apple Development identity (stable Team ID) and moving both profiles to one
+//! Keychain-held key that encrypts a secrets file, like `apps/desktop`'s `ElectronSafeStorage`.
 
 pub fn get(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
     imp::get(service, account)
