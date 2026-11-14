@@ -9,6 +9,7 @@ mod cloud;
 mod config;
 mod confirm;
 mod connection;
+mod connection_diagnosis;
 mod credentials;
 mod details;
 mod details_card;
