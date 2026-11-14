@@ -1454,7 +1454,7 @@ impl ConnectionsPanel {
                             ),
                         )
                         .destructive()
-                        .confirm_label("Remove")
+                        .confirm_label("Confirm")
                         .busy(busy),
                         move |_, cx| accept.update(cx, |this, cx| this.remove(id.clone(), cx)),
                         move |_, cx| {
