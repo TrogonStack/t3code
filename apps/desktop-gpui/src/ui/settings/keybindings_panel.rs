@@ -1036,7 +1036,12 @@ impl KeybindingsPanel {
                 .text_color(theme.destructive)
                 .child("Fix the expression above to continue editing visually.")
         });
+        let available =
+            window.viewport_size().height - self.when_trigger.get().bottom() - px(32. + 8.);
         let card = popup_shell(WHEN_WIDTH, cx)
+            .id("when-popover")
+            .max_h(available.max(px(160.)))
+            .overflow_y_scroll()
             .w(px(WHEN_WIDTH))
             .p(px(16.))
             .gap(px(12.))
