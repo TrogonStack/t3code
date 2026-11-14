@@ -648,6 +648,7 @@ impl SourceControlPanel {
                     &Menu {
                         icons: Vec::new(),
                         headings: Vec::new(),
+                        descriptions: Vec::new(),
                         id,
                         labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,

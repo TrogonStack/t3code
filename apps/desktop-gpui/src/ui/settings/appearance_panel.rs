@@ -359,6 +359,7 @@ impl AppearancePanel {
                     &Menu {
                         icons: Vec::new(),
                         headings: Vec::new(),
+                        descriptions: Vec::new(),
                         id: choice.id(),
                         labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,

@@ -120,6 +120,24 @@ impl ProvidersPanel {
         instances
     }
 
+    /// The task picker's instances, for the Threads tab's text generation row.
+    pub fn text_targets(&self) -> Vec<PickerInstance> {
+        self.task_instances()
+    }
+
+    /// Asks for the models of every enabled generator, as opening the picker does.
+    pub fn warm_text_targets(&mut self) -> Vec<PickerInstance> {
+        let ids: Vec<String> = ext::text_generators(&self.settings)
+            .into_iter()
+            .filter(TextGenerator::enabled)
+            .map(|generator| generator.id)
+            .collect();
+        for id in ids {
+            self.ensure_models(&id);
+        }
+        self.task_instances()
+    }
+
     pub(super) fn task_chosen(&self, instances: &[PickerInstance], index: usize) -> Chosen {
         let (instance, slug) =
             ext::task_selection(&self.settings, TASKS[index].0).unwrap_or_default();

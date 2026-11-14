@@ -8,6 +8,13 @@ use super::*;
 use crate::settings_voice::{self as voice, Mic, Word};
 
 const SUCCESS: u32 = 0x10b981;
+/// `runtimeModeConfig` icons, in `RUNTIME_MODES` order.
+const PERMISSION_ICONS: [Icons; 4] = [
+    Icons::Lock,
+    Icons::PenLine,
+    Icons::ShieldCheck,
+    Icons::ShieldOff,
+];
 const UNAVAILABLE: &str = "Chosen environment (unavailable)";
 
 impl ScopedPanel {
@@ -52,6 +59,7 @@ impl ScopedPanel {
                     Some(_) => Some(Icons::Monitor),
                 })
                 .collect(),
+            Pick::Permissions => PERMISSION_ICONS.iter().copied().map(Some).collect(),
             _ => Vec::new(),
         }
     }
@@ -65,14 +73,24 @@ impl ScopedPanel {
         }
     }
 
-    pub(super) fn trigger_icon(&self, pick: Pick) -> Option<Icons> {
-        (pick == Pick::Destination).then(|| {
-            if self.grants.destination.is_some() {
-                Icons::Monitor
-            } else {
-                Icons::MicOff
-            }
-        })
+    pub(super) fn trigger_icon(&self, pick: Pick, selected: usize) -> Option<Icons> {
+        match pick {
+            Pick::Destination if self.grants.destination.is_some() => Some(Icons::Monitor),
+            Pick::Destination => Some(Icons::MicOff),
+            Pick::Permissions => PERMISSION_ICONS.get(selected).copied(),
+            _ => None,
+        }
+    }
+
+    /// The muted second line of a menu item (the permissions select's `runtimeModeConfig` text).
+    pub(super) fn menu_descriptions(&self, pick: Pick) -> Vec<Option<SharedString>> {
+        match pick {
+            Pick::Permissions => crate::settings_threads::RUNTIME_MODES
+                .iter()
+                .map(|mode| Some(mode.description.into()))
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     pub(super) fn trigger_label(

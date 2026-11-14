@@ -230,6 +230,7 @@ pub struct SettingsDialog {
     scroll: ScrollHandle,
     _search_events: Subscription,
     _labs_events: Subscription,
+    _text_targets: Subscription,
 }
 
 impl SettingsDialog {
@@ -285,6 +286,11 @@ impl SettingsDialog {
             let LabsEvent::OpenSection(section) = event;
             this.select_section(*section, cx);
         });
+        let text_targets = cx.observe(&providers, |this, providers, cx| {
+            let targets = providers.read(cx).text_targets();
+            this.threads
+                .update(cx, |panel, cx| panel.set_text_targets(targets, cx));
+        });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search"));
         let events = cx.subscribe_in(
             &search,
@@ -328,6 +334,7 @@ impl SettingsDialog {
             scroll: ScrollHandle::new(),
             _search_events: events,
             _labs_events: labs_events,
+            _text_targets: text_targets,
         }
     }
 
@@ -351,6 +358,11 @@ impl SettingsDialog {
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.reload(cx));
         self.providers.update(cx, |panel, cx| panel.reload(cx));
+        let generators = self
+            .providers
+            .update(cx, |panel, _| panel.warm_text_targets());
+        self.threads
+            .update(cx, |panel, cx| panel.set_text_targets(generators, cx));
         self.projects.update(cx, |panel, cx| panel.reload(cx));
         self.keybindings.update(cx, |panel, cx| panel.reload(cx));
         self.snapshot.update(cx, |panel, cx| panel.reload(cx));
@@ -469,6 +481,15 @@ impl SettingsDialog {
     ) {
         self.threads
             .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn set_threads_catalog(
+        &mut self,
+        catalog: Option<crate::providers::Catalog>,
+        cx: &mut Context<Self>,
+    ) {
+        self.threads
+            .update(cx, |panel, cx| panel.set_catalog(catalog, cx));
     }
 
     pub fn on_threads_call(
@@ -1652,6 +1673,7 @@ impl SettingsDialog {
                 let menu = Menu {
                     icons: Vec::new(),
                     headings: Vec::new(),
+                    descriptions: Vec::new(),
                     id: pick.id(),
                     labels: labels.iter().map(|l| l.to_string().into()).collect(),
                     selected,

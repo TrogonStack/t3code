@@ -1424,6 +1424,15 @@ pub struct Controls {
     pub others: Vec<Control>,
     /// The footer's speed segments: a service tier, or Standard and Fast.
     pub speed: Option<Control>,
+    /// What the settings' `TraitsPicker` pill shows and lists.
+    pub traits: Traits,
+}
+
+/// `TraitsPicker`: the pill's label and its menu groups, selects first, then flags as On and Off.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Traits {
+    pub label: String,
+    pub groups: Vec<Control>,
 }
 
 impl Controls {
@@ -1455,6 +1464,7 @@ impl Controls {
             speed: speeds
                 .first()
                 .and_then(|descriptor| control(descriptor, selection, true)),
+            traits: Traits::of(descriptors, selection),
         }
     }
 
@@ -1494,6 +1504,161 @@ impl Controls {
 
 pub fn is_fast_label(label: &str) -> bool {
     label == "Fast" || label == "Ultrafast"
+}
+
+impl Traits {
+    fn of(descriptors: &[Descriptor], selection: Option<&Selection>) -> Self {
+        let selects = descriptors
+            .iter()
+            .filter(|descriptor| matches!(descriptor, Descriptor::Select { .. }));
+        let flags = descriptors
+            .iter()
+            .filter(|descriptor| matches!(descriptor, Descriptor::Boolean { .. }));
+        Self {
+            label: traits_label(descriptors, selection),
+            groups: selects
+                .chain(flags)
+                .filter_map(|descriptor| control(descriptor, selection, false))
+                .collect(),
+        }
+    }
+}
+
+/// The select's chosen option id: the selection, else the descriptor's value, else its default.
+fn chosen_option(
+    id: &str,
+    options: &[Choice],
+    current_value: &Option<String>,
+    selection: Option<&Selection>,
+) -> Option<String> {
+    selection
+        .and_then(|selection| selection.option(id))
+        .or_else(|| current_value.clone())
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| option.is_default)
+                .map(|option| option.id.clone())
+        })
+}
+
+fn flag_on(id: &str, current_value: Option<bool>, selection: Option<&Selection>) -> bool {
+    selection
+        .and_then(|selection| selection.option(id))
+        .map(|value| value == "true")
+        .or(current_value)
+        == Some(true)
+}
+
+/// `buildTraitsTriggerDisplay` (modelTraits.ts): each option's current label joined with " · ",
+/// the Fast and Ultrafast tiers folded into the reasoning label.
+fn traits_label(descriptors: &[Descriptor], selection: Option<&Selection>) -> String {
+    let mut fallback: Option<String> = None;
+    let mut speed: Option<&str> = None;
+    let mut reasoning_at: Option<usize> = None;
+    let mut labels: Vec<String> = Vec::new();
+    for descriptor in descriptors {
+        match descriptor {
+            Descriptor::Boolean {
+                id, current_value, ..
+            } if id == "fastMode" => {
+                speed = flag_on(id, *current_value, selection).then_some("Fast");
+                fallback = Some(speed.unwrap_or("Normal").to_owned());
+                continue;
+            }
+            Descriptor::Boolean {
+                id,
+                label,
+                current_value,
+            } if id == "ultracode" => {
+                if flag_on(id, *current_value, selection) {
+                    labels.push(label.clone());
+                }
+                continue;
+            }
+            Descriptor::Select {
+                id,
+                options,
+                current_value,
+                ..
+            } if id == "serviceTier" => {
+                let current = chosen_option(id, options, current_value, selection);
+                let fast = options.iter().find(|option| option.label == "Fast");
+                let ultrafast = options.iter().find(|option| option.label == "Ultrafast");
+                let current = current.as_deref();
+                if ((fast.is_some() || ultrafast.is_some()) && current == Some("default"))
+                    || fast.is_some_and(|tier| current == Some(tier.id.as_str()))
+                    || ultrafast.is_some_and(|tier| current == Some(tier.id.as_str()))
+                {
+                    speed = if ultrafast.is_some_and(|tier| current == Some(tier.id.as_str())) {
+                        Some("Ultrafast")
+                    } else if fast.is_some_and(|tier| current == Some(tier.id.as_str())) {
+                        Some("Fast")
+                    } else {
+                        None
+                    };
+                    fallback = Some(
+                        options
+                            .iter()
+                            .find(|option| Some(option.id.as_str()) == current)
+                            .map_or("Normal", |option| option.label.as_str())
+                            .to_owned(),
+                    );
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        let label = match descriptor {
+            Descriptor::Boolean {
+                id,
+                label,
+                current_value,
+            } => Some(format!(
+                "{label} {}",
+                if flag_on(id, *current_value, selection) {
+                    "On"
+                } else {
+                    "Off"
+                }
+            )),
+            Descriptor::Select {
+                id,
+                label,
+                options,
+                current_value,
+                ..
+            } => chosen_option(id, options, current_value, selection)
+                .and_then(|current| {
+                    options
+                        .iter()
+                        .find(|option| option.id == current)
+                        .map(|option| option.label.clone())
+                })
+                .or_else(|| (id == "thinking").then(|| label.clone())),
+        };
+        if let Some(label) = label.filter(|label| !label.is_empty()) {
+            if reasoning_at.is_none()
+                && matches!(descriptor, Descriptor::Select { .. })
+                && is_reasoning(descriptor)
+            {
+                reasoning_at = Some(labels.len());
+            }
+            labels.push(label);
+        }
+    }
+    if labels.is_empty()
+        && let Some(fallback) = fallback
+    {
+        return fallback;
+    }
+    if let Some(speed) = speed {
+        match reasoning_at {
+            Some(at) => labels[at] = format!("{} {speed}", labels[at]),
+            None => labels.push(speed.to_owned()),
+        }
+    }
+    labels.join(" \u{b7} ")
 }
 
 /// A select's choices (minus the ones a prompt prefix selects) or a flag, with the current one marked.
@@ -1626,6 +1791,50 @@ mod tests {
 
     fn catalog(providers: Vec<Value>, settings: Value) -> Catalog {
         Catalog::decode(json!({"providers": providers, "settings": settings})).unwrap()
+    }
+
+    fn descriptors(value: Value) -> Vec<Descriptor> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn the_traits_pill_joins_each_options_label() {
+        let found = descriptors(json!([
+            {"type": "select", "id": "reasoningEffort", "label": "Reasoning",
+             "options": [
+                {"id": "low", "label": "Low"},
+                {"id": "medium", "label": "Medium", "isDefault": true}
+             ]},
+            {"type": "boolean", "id": "fastMode", "label": "Fast Mode", "currentValue": false},
+        ]));
+        assert_eq!(traits_label(&found, None), "Medium");
+        let picked = Selection {
+            instance_id: Some("codex".into()),
+            provider: None,
+            model: "gpt".into(),
+            options: json!([{"id": "reasoningEffort", "value": "low"}]),
+        };
+        assert_eq!(traits_label(&found, Some(&picked)), "Low");
+        let fast = Selection {
+            options: json!([{"id": "fastMode", "value": "true"}]),
+            ..picked
+        };
+        assert_eq!(traits_label(&found, Some(&fast)), "Medium Fast");
+    }
+
+    #[test]
+    fn the_traits_menu_lists_selects_before_flags() {
+        let found = descriptors(json!([
+            {"type": "boolean", "id": "thinking", "label": "Thinking", "currentValue": true},
+            {"type": "select", "id": "effort", "label": "Effort",
+             "options": [{"id": "a", "label": "A", "isDefault": true}]},
+        ]));
+        let ids: Vec<_> = Traits::of(&found, None)
+            .groups
+            .into_iter()
+            .map(|group| group.id)
+            .collect();
+        assert_eq!(ids, ["effort", "thinking"]);
     }
 
     #[test]

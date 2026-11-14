@@ -111,6 +111,7 @@ pub const THREADS_ITEMS: &[SearchItem] = &[
 pub struct RuntimeMode {
     pub value: &'static str,
     pub label: &'static str,
+    pub description: &'static str,
 }
 
 /// `runtimeModeConfig`, in the order the select lists them.
@@ -118,18 +119,22 @@ pub const RUNTIME_MODES: [RuntimeMode; 4] = [
     RuntimeMode {
         value: "approval-required",
         label: "Supervised",
+        description: "Ask before commands and file changes.",
     },
     RuntimeMode {
         value: "auto-accept-edits",
         label: "Auto-accept edits",
+        description: "Auto-approve edits, ask before other actions.",
     },
     RuntimeMode {
         value: "auto",
         label: "Auto",
+        description: "Supported providers approve routine actions; others still ask.",
     },
     RuntimeMode {
         value: DEFAULT_RUNTIME_MODE,
         label: "Full access",
+        description: "Allow commands and edits without prompts.",
     },
 ];
 
@@ -237,6 +242,7 @@ fn capitalize(word: &str) -> String {
 }
 
 /// What a row of the options list reads, for example "In 3 hours" or "Monday at 09:00".
+#[cfg(test)]
 pub fn preset_label(preset: &Value) -> String {
     if preset.get("kind").and_then(Value::as_str) == Some("after") {
         format!("In {}", duration(preset["minutes"].as_u64().unwrap_or(0)))
@@ -273,6 +279,288 @@ pub fn next_candidate(presets: &[Value]) -> Value {
         .find(|candidate| !used.contains(&preset_id(candidate)))
         .unwrap_or_else(|| json!({"kind": "after", "minutes": 60}))
 }
+
+/// `SnoozePreset`: one resolved menu option.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    pub id: String,
+    pub label: String,
+    pub when: String,
+    pub wake: i64,
+}
+
+fn local_tm(secs: i64) -> libc::tm {
+    let secs: libc::time_t = secs;
+    // SAFETY: `tm` is plain data and `localtime_r` writes only through the pointers given.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&secs, &mut tm);
+        tm
+    }
+}
+
+/// `12:01 PM`: the hour without a leading zero, as the web's default time formatter.
+pub fn clock(secs: i64) -> String {
+    let tm = local_tm(secs);
+    let hour = if tm.tm_hour % 12 == 0 {
+        12
+    } else {
+        tm.tm_hour % 12
+    };
+    format!(
+        "{hour}:{:02} {}",
+        tm.tm_min,
+        if tm.tm_hour < 12 { "AM" } else { "PM" }
+    )
+}
+
+/// A time input's text for `HH:MM`: `06:00 PM`.
+pub fn time_text(time: &str) -> String {
+    let (hour, minute) = parse_clock(time).unwrap_or((0, 0));
+    let shown = if hour % 12 == 0 { 12 } else { hour % 12 };
+    format!(
+        "{shown:02}:{minute:02} {}",
+        if hour < 12 { "AM" } else { "PM" }
+    )
+}
+
+fn parse_clock(text: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = (text.get(..2)?.parse().ok()?, text.get(3..5)?.parse().ok()?);
+    (text.as_bytes().get(2) == Some(&b':') && hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+/// What a time input commits: `18:00`, `6:00 pm` and `06:00 PM` all read as `18:00`.
+pub fn parse_time(text: &str) -> Option<String> {
+    let text = text.trim().to_lowercase();
+    let (body, meridiem) = match text.strip_suffix("pm") {
+        Some(body) => (body.trim(), Some(true)),
+        None => match text.strip_suffix("am") {
+            Some(body) => (body.trim(), Some(false)),
+            None => (text.as_str(), None),
+        },
+    };
+    let (hour, minute) = body.split_once(':')?;
+    let (hour, minute): (u32, u32) = (hour.trim().parse().ok()?, minute.trim().parse().ok()?);
+    let hour = match meridiem {
+        Some(pm) if (1..=12).contains(&hour) => hour % 12 + if pm { 12 } else { 0 },
+        Some(_) => return None,
+        None => hour,
+    };
+    (hour < 24 && minute < 60).then(|| format!("{hour:02}:{minute:02}"))
+}
+
+const WEEKDAYS: [&str; 7] = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+];
+
+/// `snoozePresetDaysAhead`.
+fn days_ahead(day: &str, weekday: i32) -> i32 {
+    match day {
+        "today" => 0,
+        "tomorrow" => 1,
+        _ => {
+            let target = WEEKDAYS.iter().position(|d| *d == day).unwrap_or(0) as i32;
+            match (target - weekday).rem_euclid(7) {
+                0 => 7,
+                ahead => ahead,
+            }
+        }
+    }
+}
+
+/// `snoozePresetLabel`: labels follow the actual day gap.
+fn day_label(day: &str, time: &str, ahead: i32) -> String {
+    let hour: u32 = time.get(..2).and_then(|h| h.parse().ok()).unwrap_or(0);
+    match ahead {
+        0 if hour < 12 => "This morning".into(),
+        0 if hour < 17 => "This afternoon".into(),
+        0 => "This evening".into(),
+        1 => "Tomorrow".into(),
+        _ if day == "monday" => "Next week".into(),
+        7 => format!("Next {}", capitalize(day)),
+        _ => capitalize(day),
+    }
+}
+
+/// `resolveSnoozePreset`.
+pub fn resolve_preset(preset: &Value, now: i64) -> Option<Resolved> {
+    let id = preset_id(preset);
+    let (wake, label, names_day) = if preset.get("kind").and_then(Value::as_str) == Some("after") {
+        let minutes = preset["minutes"].as_u64().unwrap_or(0);
+        let label = format!("In {}", duration(minutes));
+        (now + minutes as i64 * 60, label, false)
+    } else {
+        let (day, time) = (
+            preset["day"].as_str().unwrap_or_default(),
+            preset["time"].as_str().unwrap_or_default(),
+        );
+        let (hour, minute) = parse_clock(time)?;
+        let mut tm = local_tm(now);
+        let ahead = days_ahead(day, tm.tm_wday);
+        tm.tm_mday += ahead;
+        (tm.tm_hour, tm.tm_min, tm.tm_sec) = (hour as i32, minute as i32, 0);
+        tm.tm_isdst = -1;
+        // SAFETY: `tm` is a valid, initialised `tm`; `mktime` normalises it in place.
+        let wake = unsafe { libc::mktime(&mut tm) } as i64;
+        // A today option whose time has passed is left out until tomorrow.
+        if wake <= now {
+            return None;
+        }
+        let label = day_label(day, time, ahead);
+        let names = label != "Next week";
+        (wake, label, names)
+    };
+    let (then, today) = (local_tm(wake), local_tm(now));
+    let same_day = (then.tm_year, then.tm_yday) == (today.tm_year, today.tm_yday);
+    let time = clock(wake);
+    let when = if names_day || same_day {
+        time
+    } else {
+        let name = capitalize(WEEKDAYS[then.tm_wday as usize]);
+        format!("{} {time}", &name[..3])
+    };
+    Some(Resolved {
+        id,
+        label,
+        when,
+        wake,
+    })
+}
+
+/// `resolveSnoozePresets`: soonest first, one row per wake minute.
+pub fn menu_now(presets: &[Value], now: i64) -> Vec<Resolved> {
+    let mut resolved: Vec<Resolved> = presets
+        .iter()
+        .filter_map(|preset| resolve_preset(preset, now))
+        .collect();
+    resolved.sort_by_key(|preset| preset.wake.div_euclid(60));
+    let mut seen = Vec::new();
+    resolved.retain(|preset| {
+        let minute = preset.wake.div_euclid(60);
+        let fresh = !seen.contains(&minute);
+        seen.push(minute);
+        fresh
+    });
+    resolved
+}
+
+/// The "Menu now" line's entries: a repeated label names its time too.
+pub fn menu_order(menu: &[Resolved]) -> Vec<String> {
+    menu.iter()
+        .map(|preset| {
+            if menu
+                .iter()
+                .filter(|other| other.label == preset.label)
+                .count()
+                > 1
+            {
+                format!("{} {}", preset.label, preset.when)
+            } else {
+                preset.label.clone()
+            }
+        })
+        .collect()
+}
+
+/// What sits beside a row: the menu entry it makes, or why it makes none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Preview {
+    Menu { label: String, when: String },
+    Note(&'static str),
+}
+
+pub fn previews(presets: &[Value], now: i64) -> Vec<Preview> {
+    let (mut ids, mut wakes) = (Vec::new(), Vec::new());
+    presets
+        .iter()
+        .map(|preset| {
+            let Some(resolved) = resolve_preset(preset, now) else {
+                return Preview::Note("Passed for today");
+            };
+            if ids.contains(&resolved.id) {
+                return Preview::Note("Duplicate of an option above");
+            }
+            if wakes.contains(&resolved.wake) {
+                return Preview::Note("Same time as an option above");
+            }
+            ids.push(resolved.id);
+            wakes.push(resolved.wake);
+            Preview::Menu {
+                label: resolved.label,
+                when: resolved.when,
+            }
+        })
+        .collect()
+}
+
+/// `splitMinutes`: the largest unit that divides evenly, as an amount and a unit index
+/// (0 minutes, 1 hours, 2 days).
+pub fn split_minutes(minutes: u64) -> (u64, usize) {
+    if minutes > 0 && minutes.is_multiple_of(24 * 60) {
+        (minutes / (24 * 60), 2)
+    } else if minutes > 0 && minutes.is_multiple_of(60) {
+        (minutes / 60, 1)
+    } else {
+        (minutes, 0)
+    }
+}
+
+pub const UNIT_MINUTES: [u64; 3] = [1, 60, 24 * 60];
+
+/// `WHEN_VALUES`: "after", then the `SnoozePresetDay` literals.
+pub const WHEN_VALUES: [&str; 10] = [
+    "after",
+    "today",
+    "tomorrow",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+];
+
+pub const WHEN_LABELS: [&str; 10] = [
+    "In",
+    "Today",
+    "Tomorrow",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// `withWhen`: a duration keeps its minutes, a set time its time; switching kind takes the
+/// remembered value of the other.
+pub fn with_when(preset: &Value, when: &str, minutes: u64, time: &str) -> Value {
+    let after = preset.get("kind").and_then(Value::as_str) == Some("after");
+    if when == "after" {
+        return if after {
+            preset.clone()
+        } else {
+            json!({"kind": "after", "minutes": minutes})
+        };
+    }
+    let time = if after {
+        time.to_owned()
+    } else {
+        preset["time"].as_str().unwrap_or(time).to_owned()
+    };
+    json!({"kind": "at", "day": when, "time": time})
+}
+
+/// `MAX_SNOOZE_PRESET_MINUTES`.
+pub const MAX_PRESET_MINUTES: u64 = 30 * 24 * 60;
 
 /// The amount of `sidebarAutoSettleAfterDays` as the number field commits it: a whole number
 /// from 1 to 90, else nothing is written.
@@ -354,5 +642,68 @@ mod tests {
         assert_eq!(streaming_label("paragraph"), "Show finished paragraphs");
         assert_eq!(streaming_label("x"), "Show finished paragraphs");
         assert_eq!(workspace_index("worktree"), 1);
+    }
+
+    #[test]
+    fn day_gaps_name_the_option() {
+        assert_eq!(days_ahead("monday", 0), 1);
+        assert_eq!(days_ahead("monday", 1), 7);
+        assert_eq!(days_ahead("friday", 2), 3);
+        assert_eq!(days_ahead("today", 4), 0);
+        assert_eq!(day_label("monday", "09:00", 1), "Tomorrow");
+        assert_eq!(day_label("monday", "09:00", 7), "Next week");
+        assert_eq!(day_label("friday", "09:00", 7), "Next Friday");
+        assert_eq!(day_label("friday", "09:00", 3), "Friday");
+        assert_eq!(day_label("today", "18:00", 0), "This evening");
+        assert_eq!(day_label("today", "08:00", 0), "This morning");
+        assert_eq!(day_label("today", "13:00", 0), "This afternoon");
+    }
+
+    #[test]
+    fn durations_resolve_from_now_and_dedupe_by_minute() {
+        let now = 1_700_000_000;
+        let hour = resolve_preset(&json!({"kind": "after", "minutes": 60}), now).unwrap();
+        assert_eq!((hour.label.as_str(), hour.wake), ("In 1 hour", now + 3600));
+        let twin = [
+            json!({"kind": "after", "minutes": 60}),
+            json!({"kind": "after", "minutes": 60}),
+        ];
+        assert_eq!(menu_now(&twin, now).len(), 1);
+        assert_eq!(
+            previews(&twin, now)[1],
+            Preview::Note("Duplicate of an option above")
+        );
+    }
+
+    #[test]
+    fn time_inputs_read_both_clocks() {
+        assert_eq!(time_text("18:00"), "06:00 PM");
+        assert_eq!(time_text("00:30"), "12:30 AM");
+        assert_eq!(parse_time("06:00 PM").as_deref(), Some("18:00"));
+        assert_eq!(parse_time("6:05 am").as_deref(), Some("06:05"));
+        assert_eq!(parse_time("12:00 AM").as_deref(), Some("00:00"));
+        assert_eq!(parse_time("17:45").as_deref(), Some("17:45"));
+        assert_eq!(parse_time("25:00"), None);
+        assert_eq!(parse_time("soon"), None);
+    }
+
+    #[test]
+    fn switching_kind_keeps_the_other_kinds_value() {
+        let after = json!({"kind": "after", "minutes": 180});
+        assert_eq!(
+            with_when(&after, "friday", 60, "07:30"),
+            json!({"kind": "at", "day": "friday", "time": "07:30"})
+        );
+        let at = json!({"kind": "at", "day": "friday", "time": "07:30"});
+        assert_eq!(
+            with_when(&at, "after", 45, "09:00"),
+            json!({"kind": "after", "minutes": 45})
+        );
+        assert_eq!(
+            with_when(&at, "monday", 45, "09:00"),
+            json!({"kind": "at", "day": "monday", "time": "07:30"})
+        );
+        assert_eq!(split_minutes(2880), (2, 2));
+        assert_eq!(split_minutes(90), (90, 0));
     }
 }

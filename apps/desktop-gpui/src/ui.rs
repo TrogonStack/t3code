@@ -607,6 +607,7 @@ impl MainView {
         let source_control = self.providers.as_ref().map(|c| c.source_control().clone());
         let projects_config = source_control.clone().unwrap_or_default();
         let projects_catalog = self.providers.clone();
+        let threads_catalog = self.providers.clone();
         let secrets = self.providers.as_ref().map(|c| c.secrets().clone());
         let provider_tab = self.providers.as_ref().map(|c| {
             (
@@ -635,6 +636,7 @@ impl MainView {
             }
             if let Some(config) = source_control {
                 settings.set_threads_data(config.clone(), project_ids.clone(), cx);
+                settings.set_threads_catalog(threads_catalog.clone(), cx);
                 settings.set_worktrees_data(config.clone(), project_ids.clone(), cx);
                 settings.set_voice_data(config.clone(), project_ids.clone(), cx);
                 settings.set_source_control_data(config, project_ids, cx);

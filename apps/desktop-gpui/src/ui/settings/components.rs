@@ -680,6 +680,8 @@ pub(super) struct Menu {
     pub labels: Vec<SharedString>,
     pub icons: Vec<Option<Icons>>,
     pub headings: Vec<(usize, SharedString)>,
+    /// A muted second line under an item's label.
+    pub descriptions: Vec<Option<SharedString>>,
     pub selected: usize,
     pub highlighted: usize,
     pub width: f32,
@@ -728,6 +730,7 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
         labels,
         icons,
         headings,
+        descriptions,
         selected,
         highlighted,
         width,
@@ -758,14 +761,34 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
         }
         let pick = on_pick.clone();
         let hover = on_hover.clone();
-        let content = match icons.get(index).cloned().flatten() {
-            Some(icon) => h_flex()
+        let described = descriptions.get(index).cloned().flatten();
+        let content = match (icons.get(index).cloned().flatten(), described) {
+            (icon, Some(description)) => v_flex()
+                .gap(px(2.))
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .when_some(icon, |row, icon| {
+                            row.child(Icon::new(icon).size(px(14.)).text_color(muted))
+                        })
+                        .child(div().font_weight(FontWeight::MEDIUM).child(label.clone())),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .line_height(px(16.))
+                        .text_color(muted)
+                        .child(description),
+                )
+                .into_any_element(),
+            (Some(icon), None) => h_flex()
                 .items_center()
                 .gap_2()
                 .child(Icon::new(icon).size(px(16.)))
                 .child(label.clone())
                 .into_any_element(),
-            None => label.clone().into_any_element(),
+            (None, None) => label.clone().into_any_element(),
         };
         items.push(
             div()

@@ -23,6 +23,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+mod model_chip;
+mod snooze;
 mod threads;
 mod voice;
 mod worktrees;
@@ -316,6 +318,8 @@ pub struct ScopedPanel {
     editors: [Editor; 2],
     instructions: Entity<TextareaState>,
     correction: Entity<InputState>,
+    chips: model_chip::Chips,
+    snooze: snooze::Snooze,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -410,6 +414,7 @@ impl ScopedPanel {
                 }
             },
         ));
+        let (chips, _) = model_chip::Chips::new(window, cx);
         Self {
             actions,
             scope,
@@ -430,6 +435,8 @@ impl ScopedPanel {
             editors,
             instructions,
             correction,
+            chips,
+            snooze: snooze::Snooze::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -462,6 +469,8 @@ impl ScopedPanel {
     /// Closes menus and folds, as the settings page opens.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.menu = None;
+        let _ = self.chips.close();
+        let _ = self.snooze.close();
         self.advanced_open = false;
         self.cleanup_open = false;
         if self.page == Page::Voice {
@@ -481,6 +490,10 @@ impl ScopedPanel {
             cx.notify();
             return true;
         }
+        if self.chips.close() || self.snooze.close() {
+            cx.notify();
+            return true;
+        }
         let Some((pick, _)) = self.menu.take() else {
             return false;
         };
@@ -491,6 +504,13 @@ impl ScopedPanel {
 
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
         if matches!(event, CallEvent::Progress(_)) {
+            return;
+        }
+        if self
+            .chips
+            .settled(token, matches!(event, CallEvent::Failed(_)))
+        {
+            cx.notify();
             return;
         }
         let Some(previous) = self.pending.remove(&token) else {
@@ -944,16 +964,21 @@ impl ScopedPanel {
             self.triggers[pick.index()].clone(),
             on_key,
         );
-        if let Some(icon) = self.trigger_icon(pick) {
+        if let Some(icon) = self.trigger_icon(pick, selected) {
             trigger = trigger.leading(
                 div()
                     .mr(px(2.))
                     .flex_shrink_0()
-                    .child(Icon::new(icon).size(px(16.)))
+                    .child(Icon::new(icon).size(px(if pick == Pick::Permissions {
+                        14.
+                    } else {
+                        16.
+                    })))
                     .into_any_element(),
             );
         }
         let (icons, headings) = (self.menu_icons(pick, cx), self.menu_headings(pick, cx));
+        let descriptions = self.menu_descriptions(pick);
         if why.is_some() {
             return Self::inert(id, why, trigger.into_any_element());
         }
@@ -1003,11 +1028,17 @@ impl ScopedPanel {
                     &Menu {
                         icons: icons.clone(),
                         headings: headings.clone(),
+                        descriptions: descriptions.clone(),
                         id,
                         labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,
                         highlighted,
-                        width,
+                        // `min-w-64` on the permissions items.
+                        width: if pick == Pick::Permissions {
+                            width.max(256.)
+                        } else {
+                            width
+                        },
                         on_pick: on_pick.clone(),
                         on_hover: on_hover.clone(),
                     },

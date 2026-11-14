@@ -2,11 +2,11 @@
 //! `ProjectDefaultsSettings` and `SnoozePresetsRow`.
 
 use super::super::components::disclosure;
-use super::super::devices_panel::widgets::{Variant, button, icon_button};
+use super::model_chip::Slot;
 use super::*;
 use crate::settings_threads as threads;
 
-const RESET: &str = "Reset to default";
+pub(super) const RESET: &str = "Reset to default";
 
 impl ScopedPanel {
     pub(super) fn threads(
@@ -54,13 +54,15 @@ impl ScopedPanel {
         section("New projects", group(vec![row], cx)).into_any_element()
     }
 
-    /// A model selection's name; the web's picker is not ported.
-    fn model_text(&self, field: Field, ctx: &Ctx, none: &'static str) -> String {
-        sc::model_label(&self.value(field, ctx)).unwrap_or_else(|| none.to_owned())
-    }
-
-    fn new_threads(&self, ctx: &Ctx, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn new_threads(
+        &mut self,
+        ctx: &Ctx,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let project = ctx.in_project;
+        let default_chips = self.model_chips(Slot::Default, ctx, cx);
+        let fallback_chips = self.model_chips(Slot::Fallback, ctx, cx);
         let model = self.value(Field::DefaultModel, ctx);
         let mut rows = vec![self.setting(
             ids!("default-model"),
@@ -81,7 +83,7 @@ impl ScopedPanel {
                 window,
                 cx,
             ),
-            Self::label_control(self.model_text(Field::DefaultModel, ctx, "Automatic"), cx),
+            default_chips,
             None,
             ctx,
             window,
@@ -101,7 +103,7 @@ impl ScopedPanel {
                     window,
                     cx,
                 ),
-                Self::label_control(self.model_text(Field::FallbackModel, ctx, "None"), cx),
+                fallback_chips,
                 None,
                 ctx,
                 window,
@@ -173,122 +175,6 @@ impl ScopedPanel {
             cx,
         ));
         section("New threads", group(rows, cx)).into_any_element()
-    }
-
-    fn snooze(&self, ctx: &Ctx, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let field = Field::SnoozePresets;
-        let presets = self
-            .value(field, ctx)
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let defaults = threads::default_presets()
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let reset = (!threads::same_presets(&presets, &defaults) && self.gate(field, cx).is_none())
-            .then(|| {
-                self.reset_with(
-                    "settings-snooze-reset",
-                    RESET,
-                    vec![(field, None)],
-                    window,
-                    cx,
-                )
-            });
-        let inert = self.gate(field, cx).is_some();
-        let theme = Tokens::of(cx);
-        let view = cx.entity();
-        let mut list = v_flex().gap(px(6.)).pt_3().pb_2();
-        for (index, preset) in presets.iter().enumerate() {
-            let view = view.clone();
-            let kept: Vec<Value> = presets
-                .iter()
-                .enumerate()
-                .filter(|(other, _)| *other != index)
-                .map(|(_, preset)| preset.clone())
-                .collect();
-            list = list.child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(threads::preset_label(preset)),
-                    )
-                    .child(
-                        icon_button(
-                            ("settings-snooze-remove", index),
-                            Variant::GhostMuted,
-                            !inert,
-                            cx,
-                        )
-                        .tooltip(tooltip(format!("Remove snooze option {}", index + 1)))
-                        .when(!inert, |remove| {
-                            remove.on_click(move |_, _, cx| {
-                                let kept = kept.clone();
-                                view.update(cx, |this, cx| {
-                                    this.write(vec![(field, Some(Value::Array(kept)))], cx)
-                                })
-                            })
-                        })
-                        .child(Icon::new(Icons::X).size(px(14.))),
-                    ),
-            );
-        }
-        let full = presets.len() >= threads::MAX_PRESETS;
-        let next = threads::next_candidate(&presets);
-        let mut grown = presets.clone();
-        grown.push(next);
-        let add_view = view.clone();
-        list = list.child(
-            h_flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    button(
-                        "settings-snooze-add",
-                        Variant::GhostMuted,
-                        !full && !inert,
-                        cx,
-                    )
-                    .when(!full && !inert, |add| {
-                        add.on_click(move |_, _, cx| {
-                            let grown = grown.clone();
-                            add_view.update(cx, |this, cx| {
-                                this.write(vec![(field, Some(Value::Array(grown)))], cx)
-                            })
-                        })
-                    })
-                    .child(Icon::new(Icons::Plus).size(px(14.)))
-                    .child("Add option"),
-                )
-                .when(full, |footer| {
-                    footer.child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("Up to {} options", threads::MAX_PRESETS)),
-                    )
-                }),
-        );
-        let row = self.setting(
-            ids!("snooze-options"),
-            "Snooze options",
-            "Choices in every snooze menu, listed soonest first. Weekdays mean the next one after today.",
-            field,
-            reset,
-            div().into_any_element(),
-            Some(list.into_any_element()),
-            ctx,
-            window,
-            cx,
-        );
-        section("Snooze", group(vec![row], cx)).into_any_element()
     }
 
     fn usage_limits(&self, ctx: &Ctx, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -432,20 +318,16 @@ impl ScopedPanel {
     }
 
     fn text_generation(
-        &self,
+        &mut self,
         ctx: &Ctx,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let model = if ctx.connected {
-            self.model_text(Field::TextModel, ctx, "Automatic")
-        } else {
-            "Connect an environment to choose its text generation model.".to_owned()
-        };
+        let chips = self.model_chips(Slot::Text, ctx, cx);
         let mut rows = vec![self.setting(
             ids!("text-generation-model"),
             "Text generation model",
-            "Used for thread titles and other generated text on connected devices with this provider. Source control can override it.",
+            "For thread titles and other generated text. Source control has its own setting. Text generators from Providers also appear here.",
             Field::TextModel,
             if ctx.connected {
                 self.reset(
@@ -459,7 +341,7 @@ impl ScopedPanel {
             } else {
                 None
             },
-            Self::label_control(model, cx),
+            chips,
             None,
             ctx,
             window,
