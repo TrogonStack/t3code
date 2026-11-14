@@ -511,6 +511,41 @@ impl Cloud {
     }
 }
 
+/// This install's DPoP key, kept in the Keychain so the relay sees one stable device. A Keychain
+/// that cannot be used leaves a key for this process only, and says so.
+pub fn device_key() -> Arc<crate::dpop::DpopKey> {
+    static KEY: OnceLock<Arc<crate::dpop::DpopKey>> = OnceLock::new();
+    KEY.get_or_init(|| match load_or_create_device_key() {
+        Ok(key) => Arc::new(key),
+        Err(message) => {
+            eprintln!("[cloud] using a temporary device key: {message}");
+            Arc::new(crate::dpop::DpopKey::generate().expect("the system can generate keys"))
+        }
+    })
+    .clone()
+}
+
+#[cfg(target_os = "macos")]
+fn load_or_create_device_key() -> Result<crate::dpop::DpopKey, String> {
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+    const SERVICE: &str = "T3 Code (GPUI) Device Key";
+    const ACCOUNT: &str = "dpop";
+    match get_generic_password(SERVICE, ACCOUNT) {
+        Ok(bytes) => return crate::dpop::DpopKey::from_bytes(&bytes),
+        Err(error) if error.code() == -25300 => {}
+        Err(error) => return Err(format!("Keychain: {error}")),
+    }
+    let key = crate::dpop::DpopKey::generate()?;
+    set_generic_password(SERVICE, ACCOUNT, &key.to_bytes())
+        .map_err(|error| format!("Keychain: {error}"))?;
+    Ok(key)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_or_create_device_key() -> Result<crate::dpop::DpopKey, String> {
+    Err("the device key needs the macOS Keychain".to_owned())
+}
+
 /// Opens `url` in the default browser, as Electron's `shell.openExternal` does.
 pub fn open_in_browser(url: &str) {
     let program = if cfg!(target_os = "macos") {

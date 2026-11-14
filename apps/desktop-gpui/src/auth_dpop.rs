@@ -35,16 +35,14 @@ impl std::fmt::Debug for DpopSession {
     }
 }
 
-/// A freshly exchanged token and its lifetime.
+/// A freshly exchanged token. It lives an hour; a rejected one is replaced by a new exchange.
 pub struct DpopToken {
     pub access_token: String,
-    pub expires_in_secs: u64,
 }
 
 #[derive(Deserialize)]
 struct TokenResult {
     access_token: String,
-    expires_in: u64,
 }
 
 #[derive(Deserialize)]
@@ -91,7 +89,6 @@ pub async fn exchange_dpop_token(
     let result: TokenResult = response.error_for_status()?.json().await?;
     Ok(DpopToken {
         access_token: result.access_token,
-        expires_in_secs: result.expires_in,
     })
 }
 

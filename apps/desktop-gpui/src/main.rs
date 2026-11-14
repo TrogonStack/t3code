@@ -1,11 +1,10 @@
 mod assets;
 mod attachments;
 mod auth;
-#[allow(dead_code)] // consumed by route selection in a later slice
 mod auth_dpop;
 mod branch_picker;
 mod clone_flow;
-#[allow(dead_code)] // consumed by the account service in the next slice
+#[allow(dead_code)] // the sign-in entry points land with the Connections panel next
 mod cloud;
 mod config;
 mod confirm;
@@ -14,7 +13,6 @@ mod credentials;
 mod details;
 mod details_card;
 mod diff;
-#[allow(dead_code)] // consumed by the relay client in the next slice
 mod dpop;
 mod environments;
 mod git_actions;
@@ -31,8 +29,8 @@ mod providers;
 mod pull_request;
 mod ref_picker;
 mod refs;
-#[allow(dead_code)] // consumed by route selection in a later slice
 mod relay;
+mod routes;
 mod rpc;
 mod secret_source;
 mod send;

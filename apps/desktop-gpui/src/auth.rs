@@ -95,7 +95,6 @@ pub enum Credential {
     Pairing(String),
     Bearer(String),
     /// A DPoP-bound session, obtained through the T3 Connect relay or a cached DPoP token.
-    #[allow(dead_code)] // constructed by route selection in a later slice
     Dpop(crate::auth_dpop::DpopSession),
 }
 

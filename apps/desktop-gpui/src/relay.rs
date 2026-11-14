@@ -16,6 +16,7 @@ pub const DEFAULT_RELAY_URL: &str = "https://relay.t3.codes";
 /// The public client id the web and desktop clients use.
 pub const CLIENT_ID: &str = "t3-web";
 pub const CONNECT_SCOPE: &str = "environment:connect";
+#[cfg(test)]
 pub const STATUS_SCOPE: &str = "environment:status";
 
 const EXPIRY_GUARD_MS: u64 = 5_000;
