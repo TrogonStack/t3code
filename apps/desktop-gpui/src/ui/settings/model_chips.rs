@@ -1,17 +1,24 @@
-//! The model rows of the Threads tab: `ProviderModelPicker` and `TraitsPicker` behind the compact
-//! `SETTINGS_PICKER_TRIGGER_CLASSNAME` pills (ProjectDefaultsSettings.tsx, SettingsPanels.tsx
-//! "Text generation model"). The model pill opens the composer's model popover; the effort pill
-//! lists each option of the model as radio rows.
+//! The model rows of the Threads and Projects tabs: `ProviderModelPicker` and `TraitsPicker` behind
+//! the compact `SETTINGS_PICKER_TRIGGER_CLASSNAME` pills (ProjectDefaultsSettings.tsx,
+//! ProjectSettingsPanel.tsx, SettingsPanels.tsx "Text generation model"). The model pill opens the
+//! composer's model popover; the effort pill lists each option of the model as radio rows. A panel
+//! hosts them by implementing `ChipHost`.
 
-use super::super::components::popup_shell;
+use super::components::popup_shell;
+use super::tokens::Tokens;
 use super::*;
 use crate::model_picker::{self, Focus, Origin, State, Tab};
 use crate::providers::{
     Catalog, Control, Controls, Mark, Pick as Choice, PickerInstance, Traits, Trigger, with_option,
 };
+use crate::settings_source_control::{Field, SourceControlConfig};
 use crate::ui::model_popover::{Act, Host, Panel};
-use gpui::{Anchor, Keystroke};
+use gpui::{Anchor, Keystroke, Subscription};
+use gpui_component::input::InputState;
 use gpui_component::popover::Popover;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 /// The three rows that pick a model.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -54,9 +61,9 @@ pub(super) struct Chips {
 }
 
 impl Chips {
-    pub(super) fn new(
+    pub(super) fn new<T: 'static>(
         window: &mut Window,
-        cx: &mut Context<ScopedPanel>,
+        cx: &mut Context<T>,
     ) -> (Self, Entity<InputState>) {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search models..."));
         (
@@ -73,6 +80,29 @@ impl Chips {
             },
             search,
         )
+    }
+
+    /// Takes the catalog; returns whether it changed.
+    pub(super) fn set_catalog(&mut self, catalog: Option<Catalog>) -> bool {
+        if self.catalog == catalog {
+            return false;
+        }
+        if self.stars.is_empty()
+            && let (Some(local), Some(catalog)) = (&self.favorites, &catalog)
+            && *local == catalog.favorites()
+        {
+            self.favorites = None;
+        }
+        self.catalog = catalog;
+        true
+    }
+
+    pub(super) fn set_text_targets(&mut self, targets: Vec<PickerInstance>) -> bool {
+        let changed = self.text != targets;
+        if changed {
+            self.text = targets;
+        }
+        changed
     }
 
     /// Closes the pickers; returns whether one was open.
@@ -97,7 +127,7 @@ impl Chips {
 }
 
 /// What a pill shows for the chosen model.
-struct Active {
+pub(super) struct Active {
     mark: Mark,
     label: SharedString,
     instance: String,
@@ -108,37 +138,42 @@ struct Active {
     unset: bool,
 }
 
-fn project(ctx: &Ctx) -> Option<String> {
-    ctx.in_project
-        .then(|| ctx.members.first().cloned())
-        .flatten()
+/// What the chips need of the scope they sit in.
+pub(super) struct ChipCtx {
+    pub in_project: bool,
+    pub members: Vec<String>,
+    pub connected: bool,
 }
 
-impl ScopedPanel {
-    pub fn set_catalog(&mut self, catalog: Option<Catalog>, cx: &mut Context<Self>) {
-        if self.chips.catalog == catalog {
-            return;
-        }
-        if self.chips.stars.is_empty()
-            && let (Some(local), Some(catalog)) = (&self.chips.favorites, &catalog)
-            && *local == catalog.favorites()
-        {
-            self.chips.favorites = None;
-        }
-        self.chips.catalog = catalog;
-        cx.notify();
+impl ChipCtx {
+    fn project(&self) -> Option<String> {
+        self.in_project
+            .then(|| self.members.first().cloned())
+            .flatten()
     }
+}
 
-    pub fn set_text_targets(&mut self, targets: Vec<PickerInstance>, cx: &mut Context<Self>) {
-        if self.chips.text != targets {
-            self.chips.text = targets;
-            cx.notify();
-        }
+/// A panel that shows the model chips: it owns their state and the settings they write.
+pub(super) trait ChipHost: Render + Sized + 'static {
+    fn chips(&self) -> &Chips;
+    fn chips_mut(&mut self) -> &mut Chips;
+    fn chip_ctx(&self, cx: &App) -> ChipCtx;
+    fn chip_config(&self) -> &SourceControlConfig;
+    /// Saves `changes` in the current scope (optimistic, put back when the call fails).
+    fn chip_write(&mut self, changes: Vec<(Field, Option<Value>)>, cx: &mut Context<Self>);
+    /// Sends a settings patch that is not a field write; returns its token.
+    fn chip_call(&mut self, payload: Value) -> Option<u64>;
+    /// A chip popover opened: the panel closes its own menus.
+    fn chip_opened(&mut self) {}
+
+    fn chip_value(&self, field: Field, ctx: &ChipCtx) -> Value {
+        self.chip_config()
+            .effective(field, &ctx.members, ctx.in_project)
     }
 
     fn favorites(&self) -> Vec<(String, String)> {
-        self.chips.favorites.clone().unwrap_or_else(|| {
-            self.chips
+        self.chips().favorites.clone().unwrap_or_else(|| {
+            self.chips()
                 .catalog
                 .as_ref()
                 .map(Catalog::favorites)
@@ -146,10 +181,10 @@ impl ScopedPanel {
         })
     }
 
-    fn chip_instances(&self, slot: Slot, ctx: &Ctx) -> Vec<PickerInstance> {
-        let mut instances = match (slot, &self.chips.catalog) {
-            (Slot::Text, _) => self.chips.text.clone(),
-            (_, Some(catalog)) => catalog.picker(project(ctx).as_deref()),
+    fn chip_instances(&self, slot: Slot, ctx: &ChipCtx) -> Vec<PickerInstance> {
+        let mut instances = match (slot, &self.chips().catalog) {
+            (Slot::Text, _) => self.chips().text.clone(),
+            (_, Some(catalog)) => catalog.picker(ctx.project().as_deref()),
             (_, None) => Vec::new(),
         };
         let favorites = self.favorites();
@@ -163,8 +198,8 @@ impl ScopedPanel {
         instances
     }
 
-    fn chip_selection(&self, slot: Slot, ctx: &Ctx) -> Option<Choice> {
-        let value = self.value(slot.field(), ctx);
+    fn chip_selection(&self, slot: Slot, ctx: &ChipCtx) -> Option<Choice> {
+        let value = self.chip_value(slot.field(), ctx);
         let instance = value.get("instanceId").or_else(|| value.get("provider"))?;
         Some(Choice {
             instance_id: instance.as_str()?.to_owned(),
@@ -177,10 +212,15 @@ impl ScopedPanel {
         })
     }
 
-    fn chip_active(&self, slot: Slot, ctx: &Ctx, instances: &[PickerInstance]) -> Option<Active> {
+    fn chip_active(
+        &self,
+        slot: Slot,
+        ctx: &ChipCtx,
+        instances: &[PickerInstance],
+    ) -> Option<Active> {
         let picked = self.chip_selection(slot, ctx);
-        let project = project(ctx);
-        let catalog = self.chips.catalog.as_ref();
+        let project = ctx.project();
+        let catalog = self.chips().catalog.as_ref();
         if slot == Slot::Text {
             let picked = picked?;
             let found = instances
@@ -234,8 +274,8 @@ impl ScopedPanel {
         })
     }
 
-    fn chip_tab(&self, slot: Slot, ctx: &Ctx, instances: &[PickerInstance]) -> Tab {
-        self.chips.pick.tab.clone().unwrap_or_else(|| {
+    fn chip_tab(&self, slot: Slot, ctx: &ChipCtx, instances: &[PickerInstance]) -> Tab {
+        self.chips().pick.tab.clone().unwrap_or_else(|| {
             Tab::Instance(
                 self.chip_active(slot, ctx, instances)
                     .map(|active| active.instance)
@@ -246,19 +286,19 @@ impl ScopedPanel {
 
     fn set_chips(&mut self, open: Option<Slot>, traits: Option<Slot>, cx: &mut Context<Self>) {
         if open.is_some() || traits.is_some() {
-            self.menu = None;
+            self.chip_opened();
         }
         if open.is_none() {
-            self.chips.keys = None;
+            self.chips_mut().keys = None;
         }
-        self.chips.open = open;
-        self.chips.traits_open = traits;
+        self.chips_mut().open = open;
+        self.chips_mut().traits_open = traits;
         cx.notify();
     }
 
     /// Opens on the active model's rail entry, or on Favorites (`initialModelPickerProvider`).
     fn open_chip(&mut self, slot: Slot, window: &mut Window, cx: &mut Context<Self>) {
-        let ctx = self.ctx(cx);
+        let ctx = self.chip_ctx(cx);
         let instances = self.chip_instances(slot, &ctx);
         let (instance, model) = self
             .chip_active(slot, &ctx, &instances)
@@ -267,7 +307,7 @@ impl ScopedPanel {
         let visible = instances
             .iter()
             .any(|i| i.instance_id == instance && i.unavailable.is_none());
-        let origin = self.chips.pick.origin;
+        let origin = self.chips_mut().pick.origin;
         let has_favorites = !self.favorites().is_empty();
         let tab = model_picker::initial_tab(&instance, visible, has_favorites, origin);
         let expanded = model_picker::starts_expanded(&instances, &instance, &model);
@@ -276,7 +316,7 @@ impl ScopedPanel {
             .iter()
             .position(|row| row.instance.instance_id == instance && row.model.slug == model)
             .unwrap_or(0);
-        self.chips.pick = State {
+        self.chips_mut().pick = State {
             tab: Some(tab),
             expanded,
             highlight,
@@ -285,7 +325,7 @@ impl ScopedPanel {
         };
         self.set_chips(Some(slot), None, cx);
         let view = cx.weak_entity();
-        self.chips.keys = Some(cx.intercept_keystrokes(move |event, window, cx| {
+        self.chips_mut().keys = Some(cx.intercept_keystrokes(move |event, window, cx| {
             let handled = view
                 .update(cx, |this, cx| this.chip_key(&event.keystroke, window, cx))
                 .unwrap_or(false);
@@ -293,30 +333,30 @@ impl ScopedPanel {
                 cx.stop_propagation();
             }
         }));
-        let search = self.chips.search.clone();
+        let search = self.chips_mut().search.clone();
         search.update(cx, |state, cx| state.set_value("", window, cx));
         window.focus(&search.focus_handle(cx), cx);
     }
 
     fn chip_switch_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
-        self.chips
+        self.chips()
             .search
             .update(cx, |state, cx| state.set_value("", window, cx));
-        self.chips.pick.tab = Some(tab);
-        self.chips.pick.expanded = false;
-        self.chips.pick.highlight = 0;
-        self.chips.pick.focus = Focus::List;
+        self.chips_mut().pick.tab = Some(tab);
+        self.chips_mut().pick.expanded = false;
+        self.chips_mut().pick.highlight = 0;
+        self.chips_mut().pick.focus = Focus::List;
         cx.notify();
     }
 
     fn chip_older(&mut self, slot: Slot, cx: &mut Context<Self>) {
-        self.chips.pick.expanded = !self.chips.pick.expanded;
-        let ctx = self.ctx(cx);
+        self.chips_mut().pick.expanded = !self.chips_mut().pick.expanded;
+        let ctx = self.chip_ctx(cx);
         let instances = self.chip_instances(slot, &ctx);
         let tab = self.chip_tab(slot, &ctx, &instances);
-        let query = self.chips.search.read(cx).value();
-        self.chips.pick.highlight =
-            model_picker::listing(&instances, &tab, &query, self.chips.pick.expanded)
+        let query = self.chips_mut().search.read(cx).value();
+        self.chips_mut().pick.highlight =
+            model_picker::listing(&instances, &tab, &query, self.chips_mut().pick.expanded)
                 .rows
                 .len();
         cx.notify();
@@ -333,26 +373,17 @@ impl ScopedPanel {
         } else {
             next.retain(|k| *k != key);
         }
-        let token = self.next_token;
-        self.next_token += 1;
-        let sent = self
-            .actions
-            .try_send(Action::Call {
-                token,
-                call: Call::UpdateSettings,
-                payload: crate::send::favorite_payload(instance, slug, favorite),
-            })
-            .is_ok();
-        if sent {
-            self.chips.stars.insert(token, before);
-            self.chips.favorites = Some(next);
+        let sent = self.chip_call(crate::send::favorite_payload(instance, slug, favorite));
+        if let Some(token) = sent {
+            self.chips_mut().stars.insert(token, before);
+            self.chips_mut().favorites = Some(next);
         }
         cx.notify();
     }
 
     fn chip_pick(&mut self, slot: Slot, instance: &str, slug: &str, cx: &mut Context<Self>) {
-        let ctx = self.ctx(cx);
-        self.chips.pick.origin = Some(if self.chips.pick.tab == Some(Tab::Favorites) {
+        let ctx = self.chip_ctx(cx);
+        self.chips_mut().pick.origin = Some(if self.chips_mut().pick.tab == Some(Tab::Favorites) {
             Origin::Favorites
         } else {
             Origin::Instance
@@ -362,7 +393,7 @@ impl ScopedPanel {
             .is_some_and(|current| current.instance_id == instance && current.model == slug);
         if !same {
             let value = json!({"instanceId": instance, "model": slug});
-            self.write(vec![(slot.field(), Some(value))], cx);
+            self.chip_write(vec![(slot.field(), Some(value))], cx);
         }
         self.set_chips(None, None, cx);
     }
@@ -375,7 +406,7 @@ impl ScopedPanel {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let ctx = self.ctx(cx);
+        let ctx = self.chip_ctx(cx);
         let instances = self.chip_instances(slot, &ctx);
         if let Some(active) = self.chip_active(slot, &ctx, &instances) {
             let options = with_option(&active.options, id, value);
@@ -384,7 +415,7 @@ impl ScopedPanel {
                 "model": active.slug,
                 "options": options,
             });
-            self.write(vec![(slot.field(), Some(selection))], cx);
+            self.chip_write(vec![(slot.field(), Some(selection))], cx);
         }
         self.set_chips(None, None, cx);
     }
@@ -397,15 +428,16 @@ impl ScopedPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(slot) = self.chips.open else {
+        let Some(slot) = self.chips_mut().open else {
             return false;
         };
-        let ctx = self.ctx(cx);
+        let ctx = self.chip_ctx(cx);
         let instances = self.chip_instances(slot, &ctx);
         let tab = self.chip_tab(slot, &ctx, &instances);
-        let search = self.chips.search.read(cx);
+        let search = self.chips_mut().search.read(cx);
         let (query, cursor) = (search.value(), search.cursor());
-        let listing = model_picker::listing(&instances, &tab, &query, self.chips.pick.expanded);
+        let listing =
+            model_picker::listing(&instances, &tab, &query, self.chips_mut().pick.expanded);
         let key = keystroke.key.as_str();
         let modifiers = keystroke.modifiers;
         if modifiers.platform && !modifiers.alt && !modifiers.control {
@@ -427,13 +459,13 @@ impl ScopedPanel {
             "up" => -1,
             _ => 0,
         };
-        match (self.chips.pick.focus, key) {
+        match (self.chips_mut().pick.focus, key) {
             (Focus::List, "down" | "up") => {
-                self.chips.pick.highlight =
-                    model_picker::step(self.chips.pick.highlight, listing.items(), delta);
+                self.chips_mut().pick.highlight =
+                    model_picker::step(self.chips_mut().pick.highlight, listing.items(), delta);
             }
             (Focus::List, "enter") => {
-                let at = self.chips.pick.highlight;
+                let at = self.chips_mut().pick.highlight;
                 if let Some(row) = listing.rows.get(at) {
                     if row.usable() {
                         let (instance, model) =
@@ -444,13 +476,13 @@ impl ScopedPanel {
                     self.chip_older(slot, cx);
                 }
             }
-            (Focus::List, "left") if cursor == 0 => self.chips.pick.focus = Focus::Sidebar,
+            (Focus::List, "left") if cursor == 0 => self.chips_mut().pick.focus = Focus::Sidebar,
             (Focus::Sidebar, "down" | "up") => {
                 let next = model_picker::adjacent_tab(&instances, &tab, delta);
                 self.chip_switch_tab(next, window, cx);
-                self.chips.pick.focus = Focus::Sidebar;
+                self.chips_mut().pick.focus = Focus::Sidebar;
             }
-            (Focus::Sidebar, "right" | "enter") => self.chips.pick.focus = Focus::List,
+            (Focus::Sidebar, "right" | "enter") => self.chips_mut().pick.focus = Focus::List,
             _ => return false,
         }
         cx.notify();
@@ -458,12 +490,8 @@ impl ScopedPanel {
     }
 
     /// The model pill and, when the model has options, the effort pill beside it.
-    pub(super) fn model_chips(
-        &mut self,
-        slot: Slot,
-        ctx: &Ctx,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn model_chips(&mut self, slot: Slot, cx: &mut Context<Self>) -> AnyElement {
+        let ctx = &self.chip_ctx(cx);
         let instances = self.chip_instances(slot, ctx);
         let theme = Tokens::of(cx);
         let muted = |text: &'static str| {
@@ -485,8 +513,8 @@ impl ScopedPanel {
             return muted("No providers available");
         };
         let view = cx.entity();
-        let open = self.chips.open == Some(slot);
-        let search = self.chips.search.clone();
+        let open = self.chips_mut().open == Some(slot);
+        let search = self.chips_mut().search.clone();
         let trigger = Pill {
             id: ("settings-model-pill", slot.id()),
             mark: Some(active.mark.clone()),
@@ -511,9 +539,9 @@ impl ScopedPanel {
                 host,
                 search: search.clone(),
                 tab: self.chip_tab(slot, ctx, &instances),
-                expanded: self.chips.pick.expanded,
-                highlight: self.chips.pick.highlight,
-                focus: self.chips.pick.focus,
+                expanded: self.chips_mut().pick.expanded,
+                highlight: self.chips_mut().pick.highlight,
+                focus: self.chips_mut().pick.focus,
                 effort: 0,
                 footer: None,
                 trigger: Trigger {
@@ -546,7 +574,7 @@ impl ScopedPanel {
                     view.update(cx, |this, cx| {
                         if *next {
                             this.open_chip(slot, window, cx);
-                        } else if this.chips.open == Some(slot) {
+                        } else if this.chips().open == Some(slot) {
                             this.set_chips(None, None, cx);
                         }
                     })
@@ -560,7 +588,7 @@ impl ScopedPanel {
         let shows_traits =
             !active.traits.groups.is_empty() && !(slot == Slot::Fallback && active.unset);
         let traits = shows_traits.then(|| {
-            let open = self.chips.traits_open == Some(slot);
+            let open = self.chips_mut().traits_open == Some(slot);
             let groups = active.traits.groups.clone();
             let menu_view = view.clone();
             Popover::new(("settings-traits-picker", slot.id()))
@@ -575,7 +603,7 @@ impl ScopedPanel {
                     move |next, _, cx| {
                         view.update(cx, |this, cx| {
                             let next = next.then_some(slot);
-                            if next.is_some() || this.chips.traits_open == Some(slot) {
+                            if next.is_some() || this.chips().traits_open == Some(slot) {
                                 this.set_chips(None, next, cx);
                             }
                         })
@@ -603,7 +631,12 @@ impl ScopedPanel {
 }
 
 /// `TraitsMenuContent`: a header per option, then its choices (a flag as On and Off).
-fn traits_menu(view: &Entity<ScopedPanel>, slot: Slot, groups: &[Control], cx: &App) -> AnyElement {
+fn traits_menu<T: ChipHost>(
+    view: &Entity<T>,
+    slot: Slot,
+    groups: &[Control],
+    cx: &App,
+) -> AnyElement {
     let theme = Tokens::of(cx);
     let muted = theme.muted_foreground;
     let mut shell = popup_shell(160., cx);

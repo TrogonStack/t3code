@@ -9,6 +9,7 @@ mod devices_panel;
 mod diffs_panel;
 mod keybindings_panel;
 mod labs_panel;
+mod model_chips;
 mod projects_panel;
 mod providers_panel;
 mod scheduled_tasks_panel;

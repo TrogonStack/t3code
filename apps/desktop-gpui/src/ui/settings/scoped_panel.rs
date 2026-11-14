@@ -7,6 +7,7 @@ use super::components::{
     HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, Toggle, group,
     reset_button_labeled, section, select_menu, switch,
 };
+use super::model_chips::{ChipCtx, ChipHost, Chips};
 use super::scope_inheritance::{Marker, marker_row_with};
 use super::scope_pickers::ScopeBar;
 use super::secret_field::sm_field;
@@ -24,7 +25,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 mod browser;
-mod model_chip;
 mod snooze;
 mod threads;
 mod voice;
@@ -378,7 +378,7 @@ pub struct ScopedPanel {
     editors: [Editor; 2],
     instructions: Entity<TextareaState>,
     correction: Entity<InputState>,
-    chips: model_chip::Chips,
+    chips: Chips,
     snooze: snooze::Snooze,
     browser: browser::State,
     _subscriptions: Vec<Subscription>,
@@ -475,7 +475,7 @@ impl ScopedPanel {
                 }
             },
         ));
-        let (chips, _) = model_chip::Chips::new(window, cx);
+        let (chips, _) = Chips::new(window, cx);
         Self {
             actions,
             scope,
@@ -614,6 +614,26 @@ impl ScopedPanel {
             label: environment.map_or_else(|| "Environment".to_owned(), |e| e.label.clone()),
             machine: environment.map_or(crate::projects::MachineKind::Desktop, |e| e.machine),
             connected: data.environments.iter().any(|e| e.connected),
+        }
+    }
+
+    pub fn set_catalog(
+        &mut self,
+        catalog: Option<crate::providers::Catalog>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chips.set_catalog(catalog) {
+            cx.notify();
+        }
+    }
+
+    pub fn set_text_targets(
+        &mut self,
+        targets: Vec<crate::providers::PickerInstance>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.chips.set_text_targets(targets) {
+            cx.notify();
         }
     }
 
@@ -1249,5 +1269,47 @@ impl Render for ScopedPanel {
                 page.children(self.browser(&ctx, window, cx))
             }
         }
+    }
+}
+
+impl ChipHost for ScopedPanel {
+    fn chips(&self) -> &Chips {
+        &self.chips
+    }
+
+    fn chips_mut(&mut self) -> &mut Chips {
+        &mut self.chips
+    }
+
+    fn chip_ctx(&self, cx: &App) -> ChipCtx {
+        let ctx = self.ctx(cx);
+        ChipCtx {
+            in_project: ctx.in_project,
+            members: ctx.members,
+            connected: ctx.connected,
+        }
+    }
+
+    fn chip_config(&self) -> &SourceControlConfig {
+        &self.config
+    }
+
+    fn chip_write(&mut self, changes: Vec<(Field, Option<Value>)>, cx: &mut Context<Self>) {
+        self.write(changes, cx);
+    }
+
+    fn chip_call(&mut self, payload: Value) -> Option<u64> {
+        let token = self.next_token;
+        self.next_token += 1;
+        let action = Action::Call {
+            token,
+            call: Call::UpdateSettings,
+            payload,
+        };
+        self.actions.try_send(action).ok().map(|()| token)
+    }
+
+    fn chip_opened(&mut self) {
+        self.menu = None;
     }
 }

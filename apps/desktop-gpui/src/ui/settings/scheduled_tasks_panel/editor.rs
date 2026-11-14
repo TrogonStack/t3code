@@ -5,11 +5,11 @@ mod pickers;
 mod widgets;
 
 use super::*;
+use crate::settings_labs::{Choice, ChoiceIcon};
 use crate::settings_scheduled_task_editor::{
     self as ed, Draft, EditorData, Encoding, Failure, FilterOp, Mode, Model, ProjectChoice,
     Workspace,
 };
-use crate::settings_labs::{Choice, ChoiceIcon};
 use crate::ui::settings::scope_pickers;
 use gpui::ClipboardItem;
 use gpui_component::input::{InputState, Textarea, TextareaState};

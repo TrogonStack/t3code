@@ -6,6 +6,7 @@
 
 use super::components::{group, reset_button_labeled, row, section, switch, tab_stop};
 use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem};
+use super::model_chips::{ChipCtx, ChipHost, Chips};
 use super::scope_pickers::ScopeBar;
 use super::secret_field::sm_field;
 use super::tokens::Tokens;
@@ -86,7 +87,7 @@ pub struct ProjectsPanel {
     /// The project of every listed thread, for the removal's thread count.
     thread_projects: Vec<String>,
     config: SourceControlConfig,
-    catalog: Option<Catalog>,
+    chips: Chips,
     /// Client-side grouping rules by physical key, and the global rule they fall back to.
     grouping: BTreeMap<String, GroupingMode>,
     global_grouping: GroupingMode,
@@ -123,6 +124,7 @@ impl ProjectsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (chips, _) = Chips::new(window, cx);
         let name = cx.new(|cx| InputState::new(window, cx).placeholder("Project name"));
         let script_name = cx.new(|cx| InputState::new(window, cx).placeholder("Test"));
         let script_preview =
@@ -155,7 +157,7 @@ impl ProjectsPanel {
             machine: MachineKind::Desktop,
             thread_projects: Vec::new(),
             config: SourceControlConfig::default(),
-            catalog: None,
+            chips,
             grouping: DeviceSettings::grouping_overrides(),
             global_grouping: DeviceSettings::load().project_grouping,
             saves: HashMap::new(),
@@ -215,7 +217,7 @@ impl ProjectsPanel {
         take!(environment_id, environment_id);
         take!(machine, machine);
         take!(thread_projects, thread_projects);
-        take!(catalog, catalog);
+        changed |= self.chips.set_catalog(catalog);
         take!(keybindings, keybindings);
         if self.saves.is_empty() {
             take!(config, config);
@@ -230,6 +232,7 @@ impl ProjectsPanel {
         self.editor = None;
         self.delete_script = None;
         self.menu = None;
+        let _ = self.chips.close();
         self.error = None;
         self.seeded = None;
         self.grouping = DeviceSettings::grouping_overrides();
@@ -240,7 +243,8 @@ impl ProjectsPanel {
     /// Closes the innermost open layer (a select, a confirmation, the editor); returns whether
     /// there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        let closed = self.menu.take().is_some()
+        let closed = self.chips.close()
+            || self.menu.take().is_some()
             || self.confirm.take().is_some()
             || self.delete_script.take().is_some()
             || self.editor.take().is_some();
@@ -300,6 +304,14 @@ impl ProjectsPanel {
     }
 
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
+        if !matches!(event, CallEvent::Progress(_))
+            && self
+                .chips
+                .settled(token, matches!(event, CallEvent::Failed(_)))
+        {
+            cx.notify();
+            return;
+        }
         if let Some((previous, failure)) = self.saves.remove(&token) {
             let follow = self.follow.remove(&token);
             if let CallEvent::Failed(message) = event {
@@ -904,5 +916,48 @@ impl Render for ProjectsPanel {
         };
         let editable = !entry.members.is_empty();
         self.detail(entry, editable, window, cx)
+    }
+}
+
+impl ChipHost for ProjectsPanel {
+    fn chips(&self) -> &Chips {
+        &self.chips
+    }
+
+    fn chips_mut(&mut self) -> &mut Chips {
+        &mut self.chips
+    }
+
+    fn chip_ctx(&self, cx: &App) -> ChipCtx {
+        ChipCtx {
+            in_project: true,
+            members: self.selected(cx).map(Self::member_ids).unwrap_or_default(),
+            connected: true,
+        }
+    }
+
+    fn chip_config(&self) -> &SourceControlConfig {
+        &self.config
+    }
+
+    fn chip_write(&mut self, changes: Vec<(Field, Option<Value>)>, cx: &mut Context<Self>) {
+        if let Some(entry) = self.selected(cx).cloned() {
+            self.write_settings(&entry, changes, "Failed to save model", cx);
+        }
+    }
+
+    fn chip_call(&mut self, payload: Value) -> Option<u64> {
+        let token = self.next_token;
+        self.next_token += 1;
+        let action = Action::Call {
+            token,
+            call: Call::UpdateSettings,
+            payload,
+        };
+        self.actions.try_send(action).ok().map(|()| token)
+    }
+
+    fn chip_opened(&mut self) {
+        self.menu = None;
     }
 }

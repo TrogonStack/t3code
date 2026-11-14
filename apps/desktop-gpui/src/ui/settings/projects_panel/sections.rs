@@ -1,5 +1,6 @@
 //! The New threads, Actions and Checkouts sections of a project, and the action editor.
 
+use super::model_chips::Slot;
 use super::*;
 use crate::settings_source_control as sc;
 use crate::ui::settings::components::{
@@ -33,7 +34,7 @@ fn marker_id(row: &'static str) -> &'static str {
 }
 
 impl ProjectsPanel {
-    fn member_ids(entry: &ProjectEntry) -> Vec<String> {
+    pub(super) fn member_ids(entry: &ProjectEntry) -> Vec<String> {
         entry.members.iter().map(|m| m.id.clone()).collect()
     }
 
@@ -344,44 +345,9 @@ impl ProjectsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let members = Self::member_ids(entry);
-        let first = members.first().cloned();
         let wide = self.wide;
 
-        let value = self.config.effective(Field::DefaultModel, &members, true);
-        let pick =
-            value
-                .get("instanceId")
-                .and_then(Value::as_str)
-                .map(|id| crate::providers::Pick {
-                    instance_id: id.to_owned(),
-                    model: value
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned(),
-                    options: value
-                        .get("options")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default(),
-                });
-        let trigger = self
-            .catalog
-            .as_ref()
-            .and_then(|catalog| catalog.trigger_for(first.as_deref(), pick.as_ref()));
-        let theme = Tokens::of(cx);
-        let model_label = match trigger {
-            Some(t) => match t.effort {
-                Some(effort) => format!("{} \u{b7} {effort}", t.model),
-                None => t.model,
-            },
-            None => "Automatic".to_owned(),
-        };
-        let model_control = div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child(model_label)
-            .into_any_element();
+        let model_control = self.model_chips(Slot::Default, cx);
         let model_reset = editable
             .then(|| {
                 self.reset_for(

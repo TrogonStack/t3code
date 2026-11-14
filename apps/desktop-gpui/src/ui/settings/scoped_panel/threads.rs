@@ -2,7 +2,7 @@
 //! `ProjectDefaultsSettings` and `SnoozePresetsRow`.
 
 use super::super::components::disclosure;
-use super::model_chip::Slot;
+use super::super::model_chips::{ChipHost, Slot};
 use super::*;
 use crate::settings_threads as threads;
 
@@ -61,8 +61,8 @@ impl ScopedPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let project = ctx.in_project;
-        let default_chips = self.model_chips(Slot::Default, ctx, cx);
-        let fallback_chips = self.model_chips(Slot::Fallback, ctx, cx);
+        let default_chips = self.model_chips(Slot::Default, cx);
+        let fallback_chips = self.model_chips(Slot::Fallback, cx);
         let model = self.value(Field::DefaultModel, ctx);
         let mut rows = vec![self.setting(
             ids!("default-model"),
@@ -323,7 +323,7 @@ impl ScopedPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let chips = self.model_chips(Slot::Text, ctx, cx);
+        let chips = self.model_chips(Slot::Text, cx);
         let mut rows = vec![self.setting(
             ids!("text-generation-model"),
             "Text generation model",
