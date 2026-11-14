@@ -15,6 +15,7 @@ use super::*;
 use crate::connection::{Action, ActionSender, Call};
 use crate::settings_labs::{Scope, resolve};
 use crate::settings_source_control::{self as sc, Field, SourceControlConfig};
+use crate::settings_voice::{Grants, VoiceSettings};
 use crate::status::CallEvent;
 use gpui::{FocusHandle, KeyDownEvent, Subscription};
 use gpui_component::input::{InputEvent, InputState, Textarea, TextareaState};
@@ -23,6 +24,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 mod threads;
+mod voice;
 mod worktrees;
 
 /// `max-w-2xl`.
@@ -32,6 +34,7 @@ const TEXT_AREA_MAX: f32 = 672.;
 pub enum Page {
     Threads,
     Worktrees,
+    Voice,
 }
 
 /// The select of a row, with its menu.
@@ -44,10 +47,13 @@ enum Pick {
     BranchMode,
     KeepWhen,
     CleanupMode,
+    Shortcut,
+    Destination,
+    Prompt,
 }
 
 impl Pick {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 10] = [
         Self::Permissions,
         Self::Workspace,
         Self::Streaming,
@@ -55,6 +61,9 @@ impl Pick {
         Self::BranchMode,
         Self::KeepWhen,
         Self::CleanupMode,
+        Self::Shortcut,
+        Self::Destination,
+        Self::Prompt,
     ];
 
     /// The `selected` of a select whose setting is unset: no menu row, and the trigger says why.
@@ -95,6 +104,18 @@ impl Pick {
                 "settings-worktree-cleanup-mode",
                 "settings-worktree-cleanup-mode-select",
             ),
+            Self::Shortcut => (
+                "settings-dictation-shortcut",
+                "settings-dictation-shortcut-select",
+            ),
+            Self::Destination => (
+                "settings-transcribe-with",
+                "settings-transcribe-with-select",
+            ),
+            Self::Prompt => (
+                "settings-cleanup-instructions",
+                "settings-cleanup-instructions-select",
+            ),
         }
     }
 
@@ -116,6 +137,7 @@ impl Pick {
             Self::BranchMode => Self::labels_of(&crate::settings_worktrees::BRANCH_MODES),
             Self::KeepWhen => Self::labels_of(&crate::settings_worktrees::KEEP_WHEN),
             Self::CleanupMode => Self::labels_of(&crate::settings_worktrees::CLEANUP_MODES),
+            Self::Shortcut | Self::Destination | Self::Prompt => Vec::new(),
         }
     }
 
@@ -134,6 +156,8 @@ impl Pick {
             Self::KeepWhen if in_project => Field::WorktreeCleanup,
             Self::KeepWhen => Field::StorageCleanup,
             Self::CleanupMode => Field::WorktreeCleanup,
+            // The voice picks write device settings, never a server field.
+            Self::Shortcut | Self::Destination | Self::Prompt => Field::SpeechWords,
         }
     }
 
@@ -151,6 +175,7 @@ impl Pick {
                 "custom" => json!({"mode": "custom", "rules": {}}),
                 _ => return None,
             },
+            Self::Shortcut | Self::Destination | Self::Prompt => return None,
         })
     }
 
@@ -166,6 +191,7 @@ impl Pick {
             Self::BranchMode => crate::settings_worktrees::branch_mode_index(value),
             Self::KeepWhen => crate::settings_worktrees::keep_when_index(text),
             Self::CleanupMode => crate::settings_worktrees::cleanup_mode_index(value),
+            Self::Shortcut | Self::Destination | Self::Prompt => 0,
         }
     }
 }
@@ -238,6 +264,31 @@ struct Ctx {
     connected: bool,
 }
 
+/// Which dictionary an editor changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dictionary {
+    Mine,
+    Shared,
+}
+
+impl Dictionary {
+    const ALL: [Self; 2] = [Self::Mine, Self::Shared];
+
+    fn index(self) -> usize {
+        match self {
+            Self::Mine => 0,
+            Self::Shared => 1,
+        }
+    }
+}
+
+/// A dictionary's add field and its alias field, with the word being given an alias.
+struct Editor {
+    draft: Entity<InputState>,
+    alias: Entity<InputState>,
+    alias_for: Option<usize>,
+}
+
 /// A single line field of the tab and the setting it commits to.
 struct Line {
     key: Key,
@@ -260,6 +311,11 @@ pub struct ScopedPanel {
     cleanup_open: bool,
     lines: Vec<Line>,
     areas: Vec<(Field, Entity<TextareaState>)>,
+    voice: VoiceSettings,
+    grants: Grants,
+    editors: [Editor; 2],
+    instructions: Entity<TextareaState>,
+    correction: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -305,6 +361,55 @@ impl ScopedPanel {
             ));
             areas.push((*field, area));
         }
+        let editors = Dictionary::ALL.map(|which| {
+            let draft = cx.new(|cx| {
+                InputState::new(window, cx).placeholder("Add words, separated by commas")
+            });
+            let alias = cx.new(|cx| InputState::new(window, cx).placeholder("Misspelling"));
+            subscriptions.push(cx.subscribe_in(
+                &draft,
+                window,
+                move |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.add_words(which, window, cx);
+                    }
+                },
+            ));
+            subscriptions.push(cx.subscribe_in(
+                &alias,
+                window,
+                move |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { .. } => this.add_alias(which, window, cx),
+                    InputEvent::Blur => this.cancel_alias(which, cx),
+                    _ => {}
+                },
+            ));
+            Editor {
+                draft,
+                alias,
+                alias_for: None,
+            }
+        });
+        let instructions = cx.new(|cx| TextareaState::new(window, cx).auto_grow(4, 8));
+        subscriptions.push(cx.subscribe_in(
+            &instructions,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.change_instructions(cx);
+                }
+            },
+        ));
+        let correction = cx.new(|cx| InputState::new(window, cx).placeholder("sorry"));
+        subscriptions.push(cx.subscribe_in(
+            &correction,
+            window,
+            |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    this.commit_correction(cx);
+                }
+            },
+        ));
         Self {
             actions,
             scope,
@@ -320,6 +425,11 @@ impl ScopedPanel {
             cleanup_open: false,
             lines,
             areas,
+            voice: VoiceSettings::load(),
+            grants: Grants::load(),
+            editors,
+            instructions,
+            correction,
             _subscriptions: subscriptions,
         }
     }
@@ -354,11 +464,23 @@ impl ScopedPanel {
         self.menu = None;
         self.advanced_open = false;
         self.cleanup_open = false;
+        if self.page == Page::Voice {
+            self.voice = VoiceSettings::load();
+            self.grants = Grants::load();
+            for editor in &mut self.editors {
+                editor.alias_for = None;
+            }
+        }
         cx.notify();
     }
 
     /// Closes an open menu; returns whether there was one, so Escape stops there.
     pub fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(editor) = self.editors.iter_mut().find(|e| e.alias_for.is_some()) {
+            editor.alias_for = None;
+            cx.notify();
+            return true;
+        }
         let Some((pick, _)) = self.menu.take() else {
             return false;
         };
@@ -564,7 +686,7 @@ impl ScopedPanel {
     }
 
     fn open_menu(&mut self, pick: Pick, selected: usize, cx: &mut Context<Self>) {
-        let selected = if selected < pick.labels().len() {
+        let selected = if selected < self.menu_labels(pick, cx).len() {
             selected
         } else {
             0
@@ -576,6 +698,9 @@ impl ScopedPanel {
     fn pick(&mut self, pick: Pick, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let ctx = self.ctx(cx);
         match pick {
+            Pick::Shortcut | Pick::Destination | Pick::Prompt => {
+                self.pick_voice(pick, index, window, cx)
+            }
             Pick::KeepWhen => {
                 if let Some(value) = pick.value(index) {
                     self.write_rules("worktreeKeepWhen", value, &ctx, cx);
@@ -596,7 +721,7 @@ impl ScopedPanel {
         let Some((pick, highlighted)) = self.menu else {
             return;
         };
-        let count = pick.labels().len();
+        let count = self.menu_labels(pick, cx).len().max(1);
         let next = match event.keystroke.key.as_str() {
             "down" => (highlighted + 1) % count,
             "up" => (highlighted + count - 1) % count,
@@ -792,7 +917,7 @@ impl ScopedPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (id, popover) = pick.ids();
-        let labels = pick.labels();
+        let labels = self.menu_labels(pick, cx);
         let view = cx.entity();
         let on_key: KeyHandler = {
             let view = view.clone();
@@ -814,7 +939,7 @@ impl ScopedPanel {
         };
         let trigger = SelectTrigger::new(
             id,
-            labels.get(selected).copied().unwrap_or(unset),
+            self.trigger_label(pick, selected, &labels, unset),
             width,
             self.triggers[pick.index()].clone(),
             on_key,
@@ -867,7 +992,7 @@ impl ScopedPanel {
                 select_menu(
                     &Menu {
                         id,
-                        labels: labels.clone(),
+                        labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,
                         highlighted,
                         width,
@@ -956,6 +1081,7 @@ impl ScopedPanel {
                 (Key::Field(Field::BaseDirectory), "~/"),
                 (Key::Field(Field::SettleDays), ""),
             ],
+            Page::Voice => &[],
             Page::Worktrees => &[
                 (Key::Field(Field::WorktreesDir), "Default"),
                 (Key::Field(Field::BranchPrefix), "No prefix"),
@@ -971,6 +1097,7 @@ impl ScopedPanel {
                 Field::TitleInstructions,
                 "Keep titles to a few words. Lead with the main subject.",
             )],
+            Page::Voice => &[],
             Page::Worktrees => &[(
                 Field::BranchInstructions,
                 "Use julius/ followed by the issue ID and a short description.",
@@ -990,6 +1117,10 @@ impl Render for ScopedPanel {
         match self.page {
             Page::Threads => page.children(self.threads(&ctx, window, cx)),
             Page::Worktrees => page.children(self.worktrees(&ctx, window, cx)),
+            Page::Voice => {
+                self.sync_voice(window, cx);
+                page.children(self.voice(&ctx, window, cx))
+            }
         }
     }
 }

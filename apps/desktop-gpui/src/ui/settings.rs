@@ -215,6 +215,7 @@ pub struct SettingsDialog {
     source_control: Entity<SourceControlPanel>,
     threads: Entity<ScopedPanel>,
     worktrees: Entity<ScopedPanel>,
+    voice: Entity<ScopedPanel>,
     secrets: Entity<SecretsPanel>,
     scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
@@ -251,6 +252,16 @@ impl SettingsDialog {
             ScopedPanel::new(
                 Page::Worktrees,
                 crate::settings_worktrees::TOKEN_BASE,
+                actions.clone(),
+                scope.clone(),
+                window,
+                cx,
+            )
+        });
+        let voice = cx.new(|cx| {
+            ScopedPanel::new(
+                Page::Voice,
+                crate::settings_voice::TOKEN_BASE,
                 actions.clone(),
                 scope.clone(),
                 window,
@@ -301,6 +312,7 @@ impl SettingsDialog {
             source_control,
             threads,
             worktrees,
+            voice,
             secrets,
             scheduled_tasks,
             providers,
@@ -329,6 +341,7 @@ impl SettingsDialog {
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.threads.update(cx, |panel, cx| panel.reload(cx));
         self.worktrees.update(cx, |panel, cx| panel.reload(cx));
+        self.voice.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.reload(cx));
@@ -479,6 +492,26 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.worktrees
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_voice_data(
+        &mut self,
+        config: crate::settings_source_control::SourceControlConfig,
+        projects: crate::settings_devices::ProjectIds,
+        cx: &mut Context<Self>,
+    ) {
+        self.voice
+            .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn on_voice_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.voice
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -646,6 +679,12 @@ impl SettingsDialog {
         }
         if self
             .worktrees
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .voice
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -1216,6 +1255,7 @@ impl SettingsDialog {
             Section::Chat => Icon::new(Icons::MessageSquareText),
             Section::Diffs => Icon::new(Icons::FileDiff),
             Section::Keybindings => Icon::new(Icons::Keyboard),
+            Section::Voice => Icon::new(Icons::Mic),
             Section::SnapShot => Icon::empty().path(SNAP_SHOT),
             Section::Providers => Icon::new(Icons::Bot),
             Section::Threads => Icon::new(Icons::MessagesSquare),
@@ -1414,6 +1454,9 @@ impl SettingsDialog {
             self.worktrees
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.worktrees.clone().into_any_element()]
+        } else if self.section == Section::Voice {
+            self.voice.update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.voice.clone().into_any_element()]
         } else if self.section == Section::Secrets {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
@@ -1445,6 +1488,7 @@ impl SettingsDialog {
                 | Section::SourceControl
                 | Section::Threads
                 | Section::Worktrees
+                | Section::Voice
                 | Section::Secrets
                 | Section::ScheduledTasks
                 | Section::Providers
@@ -1582,7 +1626,7 @@ impl SettingsDialog {
             .content(move |_, _, cx| {
                 let menu = Menu {
                     id: pick.id(),
-                    labels: labels.clone(),
+                    labels: labels.iter().map(|l| l.to_string().into()).collect(),
                     selected,
                     highlighted,
                     width: pick.width(),

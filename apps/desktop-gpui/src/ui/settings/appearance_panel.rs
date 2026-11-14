@@ -358,7 +358,7 @@ impl AppearancePanel {
                 select_menu(
                     &Menu {
                         id: choice.id(),
-                        labels: labels.clone(),
+                        labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,
                         highlighted,
                         width: 160.,

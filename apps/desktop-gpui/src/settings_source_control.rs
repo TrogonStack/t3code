@@ -165,6 +165,9 @@ pub enum Field {
     StorageCleanup,
     /// A project's cleanup policy, `worktreeCleanup`.
     WorktreeCleanup,
+    /// The Voice tab's keys: the shared dictionary and the cleanup model.
+    SpeechWords,
+    SpeechCleanupModel,
 }
 
 impl Field {
@@ -204,6 +207,8 @@ impl Field {
             Self::BranchInstructions => "branchNameInstructions",
             Self::StorageCleanup => "storageCleanup",
             Self::WorktreeCleanup => "worktreeCleanup",
+            Self::SpeechWords => "speechProjectCustomWords",
+            Self::SpeechCleanupModel => "speechPostProcessingModelSelection",
         }
     }
 
@@ -230,6 +235,7 @@ impl Field {
                 | Self::SnoozePresets
                 | Self::WorktreesDir
                 | Self::StorageCleanup
+                | Self::SpeechCleanupModel
         )
     }
 
@@ -256,14 +262,15 @@ impl Field {
             Self::Streaming => json!("paragraph"),
             Self::WorktreesDir | Self::BranchInstructions => json!(""),
             Self::StartFromOrigin => json!(true),
-            Self::Submodules | Self::WorktreeCleanup => Value::Null,
+            Self::Submodules | Self::WorktreeCleanup | Self::SpeechCleanupModel => Value::Null,
+            Self::SpeechWords => json!([]),
             Self::BranchMode => json!("static"),
             Self::BranchPrefix => json!("t3"),
             Self::StorageCleanup => crate::settings_worktrees::default_storage_cleanup(),
         }
     }
 
-    const ALL: [Self; 33] = [
+    const ALL: [Self; 35] = [
         Self::AutoPull,
         Self::AgentCredits,
         Self::MergeMethod,
@@ -297,6 +304,8 @@ impl Field {
         Self::BranchInstructions,
         Self::StorageCleanup,
         Self::WorktreeCleanup,
+        Self::SpeechWords,
+        Self::SpeechCleanupModel,
     ];
 }
 

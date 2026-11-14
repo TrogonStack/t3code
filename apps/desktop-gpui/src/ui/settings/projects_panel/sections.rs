@@ -286,7 +286,7 @@ impl ProjectsPanel {
                 select_menu(
                     &Menu {
                         id: item_id,
-                        labels: labels.clone(),
+                        labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,
                         highlighted,
                         width,

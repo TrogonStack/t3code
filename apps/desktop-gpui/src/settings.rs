@@ -317,7 +317,7 @@ impl Default for DeviceSettings {
 }
 
 /// The document is bare or wrapped as `{"settings": {...}}` (`decodeClientSettingsJson`).
-fn fields(value: &Value) -> Option<&Map<String, Value>> {
+pub(crate) fn fields(value: &Value) -> Option<&Map<String, Value>> {
     let object = value.as_object()?;
     match object.get("settings") {
         Some(Value::Object(inner)) => Some(inner),
@@ -605,6 +605,7 @@ pub enum Section {
     Chat,
     Diffs,
     Keybindings,
+    Voice,
     SnapShot,
     Providers,
     Threads,
@@ -632,6 +633,7 @@ impl Section {
             Self::Chat => "Chat",
             Self::Diffs => "Diffs & pull requests",
             Self::Keybindings => "Keybindings",
+            Self::Voice => "Voice",
             Self::SnapShot => "SnapShots",
             Self::Providers => "Providers",
             Self::Threads => "Threads",
@@ -667,6 +669,7 @@ pub const NAV_GROUPS: &[NavGroup] = &[
             Section::Chat,
             Section::Diffs,
             Section::Keybindings,
+            Section::Voice,
             Section::SnapShot,
         ],
     },
@@ -900,6 +903,7 @@ pub fn searchable() -> &'static [SearchItem] {
             .chain(crate::settings_source_control::SOURCE_CONTROL_ITEMS)
             .chain(crate::settings_threads::THREADS_ITEMS)
             .chain(crate::settings_worktrees::WORKTREES_ITEMS)
+            .chain(crate::settings_voice::VOICE_ITEMS)
             .copied()
             .collect()
     })
@@ -1194,13 +1198,16 @@ mod tests {
             .iter()
             .flat_map(|group| group.sections.iter().copied())
             .collect();
-        assert_eq!(all.len(), 21);
+        assert_eq!(all.len(), 22);
         assert_eq!(all[0], Section::General);
         assert_eq!(all[all.len() - 1], Section::Archived);
+        let at = |section| all.iter().position(|s| *s == section);
+        assert_eq!(at(Section::Voice), at(Section::Keybindings).map(|i| i + 1));
+        assert_eq!(at(Section::SnapShot), at(Section::Voice).map(|i| i + 1));
         let mut unique = all.clone();
         unique.sort_by_key(|section| section.label());
         unique.dedup();
-        assert_eq!(unique.len(), 21);
+        assert_eq!(unique.len(), 22);
     }
 
     #[test]

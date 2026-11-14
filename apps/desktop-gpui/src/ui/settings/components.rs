@@ -537,7 +537,7 @@ impl RenderOnce for SelectTrigger {
 /// backdrop blur is unsupported.
 pub(super) struct Menu {
     pub id: &'static str,
-    pub labels: Vec<&'static str>,
+    pub labels: Vec<SharedString>,
     pub selected: usize,
     pub highlighted: usize,
     pub width: f32,
@@ -621,7 +621,7 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
             })
             .on_click(move |_, window, cx| pick(index, window, cx))
             .when(check, |item| item.justify_between().gap_4())
-            .child(*label)
+            .child(label.clone())
             .when(check && index == selected, |item| {
                 item.child(Icon::new(IconName::Check).size(px(16.)))
             })
@@ -734,7 +734,10 @@ pub(super) fn disclosure(
 
 /// `Button variant="outline" size="xs"` at the desktop size: `h-6 gap-1 px-[7px] text-xs`, the
 /// icon 14px in `--contrast-muted-foreground`. The caller adds the icon and label as children.
-pub(super) fn outline_button(id: &'static str, cx: &App) -> gpui::Stateful<gpui::Div> {
+pub(super) fn outline_button(
+    id: impl Into<gpui::ElementId>,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
     let theme = Tokens::of(cx);
     let (background, hover) = if theme.dark {
         (theme.input.opacity(0.32), theme.input.opacity(0.64))

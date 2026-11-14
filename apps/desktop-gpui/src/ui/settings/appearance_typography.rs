@@ -434,7 +434,7 @@ impl AppearanceTypography {
                 select_menu(
                     &Menu {
                         id,
-                        labels: labels.clone(),
+                        labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,
                         highlighted,
                         width: SIZE_WIDTH,
