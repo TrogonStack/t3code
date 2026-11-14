@@ -138,7 +138,7 @@ function matchDevBackends(command, args) {
   return (
     NodeChildProcess.spawnSync(command, [...args, "-f", "--", devBackendPattern(desktopDir)], {
       stdio: "ignore",
-    }).status === 0
+    })?.status === 0
   );
 }
 

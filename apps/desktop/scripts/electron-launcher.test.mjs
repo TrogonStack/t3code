@@ -172,7 +172,7 @@ async function startupCleanupPattern(desktopDir) {
   await runDevElectronStartup({
     desktopDir,
     spawnSync: (command, args) => {
-      if (command === "pkill" && args.includes("-f")) pattern = args.at(-1);
+      if (command === "pkill" && args.includes("-f")) pattern ??= args.at(-1);
     },
   });
   assert.isString(pattern);

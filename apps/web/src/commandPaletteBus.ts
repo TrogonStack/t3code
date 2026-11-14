@@ -9,11 +9,6 @@ export interface CommandPaletteLinkedThreads {
 
 export interface CommandPaletteOpenDetail {
   readonly open?: "add-project" | "new-thread-in";
-  /**
-   * Prefills the add project path so the palette opens on a confirmation of
-   * that folder. Ignored by the other intents.
-   */
-  readonly path?: string;
   readonly query?: string;
   readonly linkedThreads?: CommandPaletteLinkedThreads;
 }
@@ -25,10 +20,7 @@ export function openCommandPalette(detail: CommandPaletteOpenDetail = {}): void 
   if (detail.open === "new-thread-in") {
     dispatchCommandPalette({ _tag: "OpenNewThreadIn" });
   } else if (detail.open === "add-project") {
-    dispatchCommandPalette({
-      _tag: "OpenAddProject",
-      ...(detail.path ? { path: detail.path } : {}),
-    });
+    dispatchCommandPalette({ _tag: "OpenAddProject" });
   } else if (detail.query !== undefined) {
     dispatchCommandPalette({
       _tag: "OpenSearch",

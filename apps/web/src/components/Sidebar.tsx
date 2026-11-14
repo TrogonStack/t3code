@@ -250,8 +250,6 @@ import {
 } from "./ui/combobox";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
-import { resolveDroppedFolderPath } from "./chat/folderDrop";
-import { makeProjectFolderDropHandlers } from "./sidebar/projectFolderDrop";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import {
@@ -944,13 +942,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     reportFailure: false,
   });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
-    onCopy: ({ path }) => {
-      toastManager.add({
-        type: "success",
-        title: "Path copied",
-        description: path,
-      });
-    },
     onError: (error) => {
       toastManager.add(
         stackedThreadToast({
@@ -963,13 +954,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   });
   const { copyToClipboard: copyBranchToClipboard } = useCopyToClipboard<{ branch: string }>({
     target: "branch name",
-    onCopy: ({ branch }) => {
-      toastManager.add({
-        type: "success",
-        title: "Branch copied",
-        description: branch,
-      });
-    },
     onError: (error) => {
       toastManager.add(
         stackedThreadToast({
@@ -981,13 +965,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
-    onCopy: ({ threadId }) => {
-      toastManager.add({
-        type: "success",
-        title: "Thread ID copied",
-        description: threadId,
-      });
-    },
     onError: (error) => {
       toastManager.add(
         stackedThreadToast({
@@ -1078,37 +1055,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
   const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
-  const [isProjectFolderDragActive, setIsProjectFolderDragActive] = useState(false);
-  // Only the desktop shell can turn a dropped folder into a path, so browser
-  // clients keep the platform's own drag behavior rather than lighting up a
-  // target that could never resolve one.
-  const canDropProjectFolders =
-    typeof window !== "undefined" && window.desktopBridge?.getPathForFile !== undefined;
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- listens on window for a drag that ends outside the sidebar so the drop target does not stay lit
-  useEffect(() => {
-    if (!isProjectFolderDragActive) return;
-    const clearProjectFolderDrag = () => setIsProjectFolderDragActive(false);
-    window.addEventListener("dragend", clearProjectFolderDrag);
-    return () => window.removeEventListener("dragend", clearProjectFolderDrag);
-  }, [isProjectFolderDragActive]);
-  const projectFolderDropHandlers = makeProjectFolderDropHandlers({
-    setDragActive: setIsProjectFolderDragActive,
-    resolveDroppedFolderPath: (file) =>
-      resolveDroppedFolderPath(file, window.desktopBridge?.getPathForFile),
-    addProjectAtPath: (path) => openCommandPalette({ open: "add-project", path }),
-    rejectDrop: (reason) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: reason === "no-folder" ? "Drop a folder" : "Could not read that folder",
-          description:
-            reason === "no-folder"
-              ? "A project starts from a folder, not a file."
-              : "Use Add project to pick it instead.",
-        }),
-      );
-    },
-  });
   const routeThreadRef = resolveActiveThreadRouteRef(
     routeTarget,
     routeDraftThread,
@@ -3011,10 +2957,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         ref={sidebarContentRef}
-        // min-h-full keeps the folder drop target the full height of the list
-        // area, so an empty sidebar is still a target worth aiming at.
-        className="relative min-h-full"
-        {...(canDropProjectFolders ? projectFolderDropHandlers : {})}
+        className="min-h-full"
         fixedHeader={
           <SidebarGroup className="z-[1]">
             <SidebarThreadHeader
@@ -3348,7 +3291,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     <PlusIcon className="-mx-0.5 size-3" />
                     Add project
                   </button>
-                  {canDropProjectFolders ? <span>or drop a folder here</span> : null}
                 </>
               ) : scopedProjectGroups.length > 0 ? (
                 <>
@@ -3710,12 +3652,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             </TooltipProvider>
           ) : null}
         </SidebarGroup>
-        {isProjectFolderDragActive ? (
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0 rounded-lg bg-primary/[0.04] outline-2 outline-dashed -outline-offset-4 outline-primary/50"
-          />
-        ) : null}
       </SidebarContent>
       <SidebarChromeFooter />
     </SidebarFolderDrop>

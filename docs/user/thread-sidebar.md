@@ -13,10 +13,11 @@ Its branch and workspace mode come from your configured defaults. To continue in
 an existing worktree, use **New thread in this worktree** from the branch toolbar.
 
 On mobile, **New thread** starts in the current thread's project, or else in the
-last project you opened or chose on that device. If neither is available, the
-project picker opens. Turn off **Settings → General → Use last project** to
-choose a project every time. When you pick a project that is on more than one
-machine, the thread starts on a connected one if any is connected.
+project the thread list is filtered to, or else in the last project you opened
+or chose on that device. If none is available, the project picker opens. Turn
+off **Settings → General → Use last project** to choose a project every time.
+When you pick a project that is on more than one machine, the thread starts on
+a connected one if any is connected.
 
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
@@ -56,18 +57,6 @@ To send the same prompt to several models on web or desktop, **Shift-click** mod
 in a new thread's model picker to add or remove them. A regular click returns to a
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
-
-## Add a project by dropping a folder
-
-In the desktop app, drag a folder from your file manager onto the sidebar. T3 Code opens **Add
-project** with that folder already filled in, so you confirm it with **Add** or Enter. An empty
-sidebar says so next to its **Add project** button.
-
-The folder is added to this device's environment, the one the desktop app runs itself. To add a
-folder that lives on another machine, use **Add project** and browse that environment instead.
-
-Browsers do not tell an app where a dropped folder lives on disk, so the sidebar in a browser tab
-is not a drop target. Use **Add project** there.
 
 ## Pin and reorder threads
 
@@ -261,8 +250,8 @@ thread** from its long-press menu on mobile.
 keeps the provider's explanation. Retry after the limit resets, or switch to
 another provider instance.
 Press **Resume** in an empty composer to continue a limited or interrupted turn
-manually. Do this when the provider reports no reset time, because nothing
-continues the turn on its own.
+manually when the provider supports native continuation, or send a message to continue.
+Do this when the provider reports no reset time, because nothing continues the turn on its own.
 Queued messages stay saved while the limit blocks the thread. They run after
 the continuation finishes. If the queue was held by a restart, resume it then.
 

@@ -89,20 +89,6 @@ describe("reduceCommandPaletteUiState", () => {
     ).toBeNull();
   });
 
-  it("carries a dropped folder path on the add project intent", () => {
-    expect(
-      reduceCommandPaletteUiState(
-        { open: false, mode: "command", openIntent: null, session: 0 },
-        { _tag: "OpenAddProject", path: "/repos/api" },
-      ),
-    ).toEqual({
-      open: true,
-      mode: "command",
-      openIntent: { kind: "add-project", path: "/repos/api" },
-      session: 1,
-    });
-  });
-
   it("keeps the session across mode switches so only intents start the palette over", () => {
     let state: CommandPaletteUiState = {
       open: false,

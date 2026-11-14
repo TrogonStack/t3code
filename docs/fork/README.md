@@ -27,8 +27,8 @@ Each entry uses these sections:
 
 ## Ledger
 
-- **0008** [Drop a folder on the sidebar to add a project](./0008-drop-a-folder-to-add-a-project.md)
-  active, [#17](https://github.com/TrogonStack/t3code/pull/17)
+active, [#17](https://github.com/TrogonStack/t3code/pull/17)
+
 - **0010** [Pull request conventions of our own](./0010-fork-pull-request-conventions.md)
   active, [#19](https://github.com/TrogonStack/t3code/pull/19)
 - **0017** [A revoked Claude token reads as revoked](./0017-a-revoked-claude-token-reads-as-revoked.md)
