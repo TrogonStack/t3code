@@ -1720,7 +1720,10 @@ mod tests {
         let url = socket_url_with("wss://env.relay.example", "t", "relay").expect("url");
         assert_eq!(url.scheme(), "wss");
         assert_eq!(url.path(), "/ws");
-        assert!(url.query_pairs().any(|(k, v)| k == "connectionMethod" && v == "relay"));
+        assert!(
+            url.query_pairs()
+                .any(|(k, v)| k == "connectionMethod" && v == "relay")
+        );
         let custom = socket_url_with("wss://h.example/socket", "t", "relay").expect("url");
         assert_eq!(custom.path(), "/socket");
         assert!(socket_url_with("ftp://h", "t", "relay").is_err());

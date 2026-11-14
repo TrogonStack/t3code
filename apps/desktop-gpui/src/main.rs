@@ -5,6 +5,8 @@ mod auth;
 mod auth_dpop;
 mod branch_picker;
 mod clone_flow;
+#[allow(dead_code)] // consumed by the account service in the next slice
+mod cloud;
 mod config;
 mod confirm;
 mod connection;
