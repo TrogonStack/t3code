@@ -86,7 +86,6 @@ import { previewBridge } from "./preview/previewBridge";
 import {
   useDeferredValue,
   useEffect,
-  useEffectEvent,
   useId,
   useReducer,
   useRef,
@@ -289,8 +288,6 @@ const NEW_THREAD_IN_GROUP = "projects";
 function openIntentView(intent: CommandPaletteOpenIntent | null): CommandPaletteView | null {
   switch (intent?.kind) {
     case "add-project":
-      // A dropped folder skips the entry view and opens straight on its confirmation.
-      if (intent.path) return null;
       return {
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: [{ value: ADD_PROJECT_ENTRY_GROUP, label: "", items: [] }],
@@ -984,15 +981,8 @@ function OpenCommandPaletteDialog(props: {
     }
   }
 
-  /**
-   * `prefilledPath` opens the browser already pointed at a folder, so the user
-   * confirms that path instead of navigating to it.
-   */
-  const startAddProjectBrowse = async (
-    environmentId: EnvironmentId,
-    prefilledPath?: string,
-  ): Promise<void> => {
-    const initialQuery = prefilledPath ?? getAddProjectInitialQueryForEnvironment(environmentId);
+  const startAddProjectBrowse = async (environmentId: EnvironmentId): Promise<void> => {
+    const initialQuery = getAddProjectInitialQueryForEnvironment(environmentId);
     const initialBrowsePath = getBrowseDirectoryPath(initialQuery);
     const browseCwd = getBrowseCwdForEnvironment(environmentId);
     const view: CommandPaletteView = {
@@ -1289,87 +1279,6 @@ function OpenCommandPaletteDialog(props: {
         );
     }
   };
-
-  /** Matches a WSL UNC path to the backend running its distro and rewrites it as a Linux path. */
-  const resolveWslProjectTarget = async (path: string, knownWslState: DesktopWslState | null) => {
-    const wslState =
-      knownWslState ?? (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
-    let primaryRunningDistro: string | null = null;
-    try {
-      primaryRunningDistro =
-        window.desktopBridge
-          ?.getLocalEnvironmentBootstraps()
-          .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
-        null;
-    } catch {}
-    return resolveWslProjectSelection(
-      path,
-      applyWslEnvironmentConfiguration(
-        environments.flatMap((environment) => {
-          const backendId = desktopLocalBackendId(environment.entry.target);
-          if (!backendId) {
-            return [];
-          }
-
-          const bootstrap = desktopLocalBootstraps.find(
-            (candidate) => candidate.httpBaseUrl === environment.displayUrl,
-          );
-          const runningDistro = bootstrap?.runningDistro ?? null;
-          return [{ environmentId: environment.environmentId, backendId, runningDistro }];
-        }),
-        primaryEnvironmentId,
-        wslState,
-        primaryRunningDistro,
-      ),
-    );
-  };
-
-  /** Opens the add-project confirmation for a dropped folder, skipping the environment and source pickers. */
-  const startAddProjectAtPath = async (path: string): Promise<void> => {
-    if (parseWslUncPath(path)) {
-      const selection = await resolveWslProjectTarget(path, null);
-      if (!selection) {
-        setOpen(false);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not add WSL project",
-            description: "Start the matching WSL backend, then drop the folder again.",
-          }),
-        );
-        return;
-      }
-      void startAddProjectBrowse(selection.environmentId, selection.linuxPath);
-      return;
-    }
-    const environment = environments.find(
-      (candidate) => candidate.environmentId === primaryEnvironmentId,
-    );
-    if (!primaryEnvironmentId || !canCreateProjectInEnvironment(environment?.connection.phase)) {
-      // The drop opened the palette only for this surface, so failing closes it.
-      setOpen(false);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Environment unavailable",
-          description: `${environment?.label ?? "This device"} is not connected.`,
-        }),
-      );
-      return;
-    }
-    void startAddProjectBrowse(primaryEnvironmentId, path);
-  };
-  const droppedFolderPath =
-    !props.initialContext && props.openIntent?.kind === "add-project"
-      ? props.openIntent.path
-      : undefined;
-  const openDroppedFolder = useEffectEvent((path: string) => {
-    void startAddProjectAtPath(path);
-  });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- A dropped folder resolves its environment asynchronously and can close the palette with a toast, neither of which may run during render.
-  useEffect(() => {
-    if (droppedFolderPath) openDroppedFolder(droppedFolderPath);
-  }, [droppedFolderPath]);
 
   const openNewProjectFlow = () => {
     const firstOption = newProjectEnvironmentOptions[0];
@@ -2872,7 +2781,37 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
     if (parseWslUncPath(pickedPath)) {
-      const selection = await resolveWslProjectTarget(pickedPath, desktopWslState);
+      if (desktopWslState === null) {
+        desktopWslState = (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
+      }
+      let primaryRunningDistro: string | null = null;
+      try {
+        primaryRunningDistro =
+          window.desktopBridge
+            ?.getLocalEnvironmentBootstraps()
+            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
+          null;
+      } catch {}
+      const selection = resolveWslProjectSelection(
+        pickedPath,
+        applyWslEnvironmentConfiguration(
+          environments.flatMap((environment) => {
+            const backendId = desktopLocalBackendId(environment.entry.target);
+            if (!backendId) {
+              return [];
+            }
+
+            const bootstrap = desktopLocalBootstraps.find(
+              (candidate) => candidate.httpBaseUrl === environment.displayUrl,
+            );
+            const runningDistro = bootstrap?.runningDistro ?? null;
+            return [{ environmentId: environment.environmentId, backendId, runningDistro }];
+          }),
+          primaryEnvironmentId,
+          desktopWslState ?? null,
+          primaryRunningDistro,
+        ),
+      );
       if (!selection) {
         toastManager.add(
           stackedThreadToast({

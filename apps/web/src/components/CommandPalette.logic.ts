@@ -74,9 +74,7 @@ export function browseInputEndPaddingClass(input: {
 export type SearchOverlayMode = "command" | "files" | "content";
 
 export type CommandPaletteOpenIntent =
-  /** An add-project `path` prefills the surface with a folder to confirm. */
-  | { readonly kind: "add-project"; readonly path?: string }
-  | { readonly kind: "new-thread-in" | "change-theme" }
+  | { readonly kind: "add-project" | "new-thread-in" | "change-theme" }
   | {
       readonly kind: "search";
       readonly query: string;
@@ -102,7 +100,7 @@ export type CommandPaletteUiAction =
       readonly query: string;
       readonly linkedThreads?: CommandPaletteLinkedThreads;
     }
-  | { readonly _tag: "OpenAddProject"; readonly path?: string }
+  | { readonly _tag: "OpenAddProject" }
   | { readonly _tag: "OpenNewThreadIn" }
   | { readonly _tag: "OpenChangeTheme" }
   | {
@@ -157,7 +155,7 @@ export function reduceCommandPaletteUiState(
         ...(action.linkedThreads ? { linkedThreads: action.linkedThreads } : {}),
       });
     case "OpenAddProject":
-      return openWithIntent({ kind: "add-project", ...(action.path ? { path: action.path } : {}) });
+      return openWithIntent({ kind: "add-project" });
     case "OpenNewThreadIn":
       return openWithIntent({ kind: "new-thread-in" });
     case "OpenChangeTheme":

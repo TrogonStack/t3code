@@ -58,18 +58,6 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
-## Add a project by dropping a folder
-
-In the desktop app, drag a folder from your file manager onto the sidebar. T3 Code opens **Add
-project** with that folder already filled in, so you confirm it with **Add** or Enter. An empty
-sidebar says so next to its **Add project** button.
-
-The folder is added to this device's environment, the one the desktop app runs itself. To add a
-folder that lives on another machine, use **Add project** and browse that environment instead.
-
-Browsers do not tell an app where a dropped folder lives on disk, so the sidebar in a browser tab
-is not a drop target. Use **Add project** there.
-
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.
