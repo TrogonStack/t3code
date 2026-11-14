@@ -47,6 +47,37 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# An ad-hoc signature pins the Keychain's "Always Allow" to one build's hash, so every rebuild asks
+# again. Signing each build with one local certificate keeps the app's identity, and the grant.
+if [ "$profile" = "debug" ]; then
+  cert="T3 Code GPUI Dev Signing"
+  if ! security find-identity -p codesigning 2>/dev/null | grep -q "\"$cert\""; then
+    work="$(mktemp -d)"
+    pass="$(openssl rand -hex 16)"
+    cat > "$work/req.cnf" <<CNF
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = $cert
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+CNF
+    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$work/req.cnf" \
+      -keyout "$work/key.pem" -out "$work/cert.pem" >/dev/null 2>&1
+    # macOS only reads the legacy SHA1/3DES PKCS12 encoding, not OpenSSL 3's default.
+    openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "$cert" \
+      -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1 \
+      -passout "pass:$pass" -out "$work/cert.p12" >/dev/null 2>&1
+    security import "$work/cert.p12" -P "$pass" -T /usr/bin/codesign >/dev/null
+    rm -rf "$work"
+  fi
+  codesign --force --sign "$cert" --identifier "$identifier" "$app" >/dev/null 2>&1
+fi
+
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 [ -x "$lsregister" ] && "$lsregister" -f "$app" >/dev/null 2>&1 || true
 
