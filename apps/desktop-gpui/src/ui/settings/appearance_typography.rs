@@ -17,7 +17,8 @@ use crate::settings_typography::{
     Slot, TypographySettings, default_family_label, installed_families,
 };
 use gpui::{
-    FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent, StyledText, UnderlineStyle, rgb,
+    FocusHandle, FontWeight, HighlightStyle, Hsla, KeyDownEvent, Rgba, StyledText, UnderlineStyle,
+    rgb,
 };
 use std::rc::Rc;
 
@@ -838,107 +839,327 @@ fn code_background(theme: &Tokens) -> Hsla {
     theme.background.blend(theme.card.opacity(0.9))
 }
 
-/// `CodeFontPreview`: the unified diff of `src/formatUser.ts`.
+/// `color-mix(in lab, a share_of_a%, b)`: CSS Lab (D50) interpolation, as Pierre's diff tokens use.
+fn lab_mix(a: Hsla, b: Hsla, share_of_a: f32) -> Hsla {
+    const TO_XYZ: [[f32; 3]; 3] = [
+        [0.412_390_8, 0.357_584_34, 0.180_480_8],
+        [0.212_639, 0.715_168_7, 0.072_192_32],
+        [0.019_330_82, 0.119_194_78, 0.950_532_15],
+    ];
+    const D65_TO_D50: [[f32; 3]; 3] = [
+        [1.047_929_8, 0.022_946_794, -0.050_192_23],
+        [0.029_627_816, 0.990_434_5, -0.017_073_825],
+        [-0.009_243_058, 0.015_055_145, 0.751_874_3],
+    ];
+    const D50_TO_D65: [[f32; 3]; 3] = [
+        [0.955_473_4, -0.023_098_537, 0.063_259_31],
+        [-0.028_369_707, 1.009_995_5, 0.021_041_399],
+        [0.012_314_002, -0.020_507_697, 1.330_366],
+    ];
+    const FROM_XYZ: [[f32; 3]; 3] = [
+        [3.240_97, -1.537_383_2, -0.498_610_76],
+        [-0.969_243_65, 1.875_967_5, 0.041_555_06],
+        [0.055_630_08, -0.203_976_96, 1.056_971_5],
+    ];
+    const WHITE: [f32; 3] = [0.964_295_7, 1., 0.825_104_6];
+    const EPSILON: f32 = 216. / 24_389.;
+    const KAPPA: f32 = 24_389. / 27.;
+
+    fn apply(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+        m.map(|row| row[0] * v[0] + row[1] * v[1] + row[2] * v[2])
+    }
+    fn to_lab(color: Hsla) -> [f32; 3] {
+        let c = Rgba::from(color);
+        let linear = [c.r, c.g, c.b].map(|v| {
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        });
+        let xyz = apply(&D65_TO_D50, apply(&TO_XYZ, linear));
+        let f = [0, 1, 2].map(|i| {
+            let t = xyz[i] / WHITE[i];
+            if t > EPSILON {
+                t.cbrt()
+            } else {
+                (KAPPA * t + 16.) / 116.
+            }
+        });
+        [
+            116. * f[1] - 16.,
+            500. * (f[0] - f[1]),
+            200. * (f[1] - f[2]),
+        ]
+    }
+    fn from_lab(lab: [f32; 3]) -> Hsla {
+        let fy = (lab[0] + 16.) / 116.;
+        let f = [fy + lab[1] / 500., fy, fy - lab[2] / 200.];
+        let xyz = [0, 1, 2].map(|i| {
+            let cubed = f[i].powi(3);
+            let t = if cubed > EPSILON {
+                cubed
+            } else {
+                (116. * f[i] - 16.) / KAPPA
+            };
+            t * WHITE[i]
+        });
+        let [r, g, b] = apply(&FROM_XYZ, apply(&D50_TO_D65, xyz)).map(|v| {
+            let v = v.clamp(0., 1.);
+            if v <= 0.003_130_8 {
+                v * 12.92
+            } else {
+                1.055 * v.powf(1. / 2.4) - 0.055
+            }
+        });
+        Rgba { r, g, b, a: 1. }.into()
+    }
+    let (a, b) = (to_lab(a), to_lab(b));
+    from_lab([0, 1, 2].map(|i| a[i] * share_of_a + b[i] * (1. - share_of_a)))
+}
+
+/// The tokens of Pierre's `pierre-dark` and `t3-light` themes that the preview's tokens use
+/// (`@pierre/highlights` themes, light darkened by `readableSyntaxColor`).
+struct Syntax {
+    keyword: Hsla,
+    function: Hsla,
+    punctuation: Hsla,
+    parameter: Hsla,
+    kind: Hsla,
+    property: Hsla,
+    string: Hsla,
+    comment: Hsla,
+}
+
+/// Git colors the theme hands Pierre as `--diffs-{addition,deletion,modified}-color`.
+struct GitColors {
+    addition: Hsla,
+    deletion: Hsla,
+    modified: Hsla,
+}
+
+/// `CodeFontPreview`: Pierre's unified diff of `src/formatUser.ts`, one 20px row per line
+/// (`--diffs-line-height`), a 4ch gutter with a 2px seam, `data-indicators="bars"`.
 fn diff_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
     let theme = Tokens::of(cx);
     let dark = theme.dark;
     let pick = |light: u32, night: u32| -> Hsla { rgb(if dark { night } else { light }).into() };
-    let keyword = pick(0xd52c36, 0xff678d);
-    let function = pick(0x7b43f8, 0x9d6afb);
-    let kind = pick(0x1ca1c7, 0x08c0ef);
-    let string = pick(0x199f43, 0x5ecc71);
-    let comment = pick(0x84848a, 0x84848a);
-    let add = pick(0x199f43, 0x5ecc71);
-    let del = pick(0xd52c36, 0xff6762);
+    let syntax = Syntax {
+        keyword: pick(0xb12251, 0xff678d),
+        function: pick(0x693acf, 0x9d6afb),
+        punctuation: pick(0x4b4b4b, 0x636363),
+        parameter: pick(0x4b4b4b, 0xa3a3a3),
+        kind: pick(0x912ba7, 0xd568ea),
+        property: pick(0x8f4e17, 0xffa359),
+        string: pick(0x106a2b, 0x5ecc71),
+        comment: pick(0x5c5c5c, 0x737373),
+    };
+    let git = GitColors {
+        addition: pick(0x18a46c, 0x07c480),
+        deletion: pick(0xd52c36, 0xff2e3f),
+        modified: pick(0x009fff, 0x009fff),
+    };
+    let bg = code_background(&theme);
     let fg = theme.foreground;
-    let height = size * 1.5;
-    let code_row = |number: &'static str, background: Option<Hsla>, text: StyledText| {
+    let number = lab_mix(fg, bg, 0.65);
+    // Gutter cells mix 91% (85% dark) of the surface with the base, rows 88% (80%).
+    let (gutter_share, line_share, emphasis) = if dark {
+        (0.85, 0.8, 0.2)
+    } else {
+        (0.91, 0.88, 0.15)
+    };
+    let ch = cx
+        .text_system()
+        .advance(
+            cx.text_system().resolve_font(&gpui::font(family.clone())),
+            px(size),
+            '0',
+        )
+        .map_or(size * 0.6, |advance| f32::from(advance.width));
+    let row_height = 20.;
+
+    let row = |digit: &'static str, base: Option<Hsla>, dashed: bool, text: StyledText| {
+        let (gutter_bg, line_bg, digit_color) = match base {
+            Some(base) => (
+                lab_mix(bg, base, gutter_share),
+                lab_mix(bg, base, line_share),
+                base,
+            ),
+            None => (bg, bg, number),
+        };
+        let bar = base.map(|base| {
+            let mut bar = v_flex()
+                .absolute()
+                .top_0()
+                .left_0()
+                .w(px(4.))
+                .h(px(row_height));
+            if dashed {
+                let gap = lab_mix(bg, base, line_share);
+                for _ in 0..(row_height / 2.) as usize {
+                    bar = bar
+                        .child(div().h(px(1.)).bg(base))
+                        .child(div().h(px(1.)).bg(gap));
+                }
+                bar
+            } else {
+                bar.bg(base)
+            }
+        });
         h_flex()
-            .h(px(height))
+            .h(px(row_height))
             .items_center()
-            .when_some(background, |row, color| row.bg(color))
             .child(
                 div()
-                    .w(px(size * 3.))
+                    .relative()
                     .flex_shrink_0()
-                    .pr_2()
-                    .text_right()
-                    .text_color(theme.muted_foreground)
-                    .child(number),
+                    .h_full()
+                    .w(px(ch * 4.))
+                    .pr(px(ch))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .bg(gutter_bg)
+                    .text_color(digit_color)
+                    .when_some(bar, |cell, bar| cell.child(bar))
+                    .child(digit),
             )
-            .child(div().whitespace_nowrap().child(text))
+            .child(div().flex_shrink_0().w(px(2.)).h_full().bg(bg))
+            .child(
+                div()
+                    .flex_1()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .px(px(ch))
+                    .bg(line_bg)
+                    .whitespace_nowrap()
+                    .child(text),
+            )
     };
-    let removed = code_row(
+
+    let s = &syntax;
+    let p = s.punctuation;
+    let removed_emphasis = git.deletion.opacity(emphasis);
+    let removed_line = lab_mix(bg, git.deletion, line_share);
+    let added_emphasis = git.addition.opacity(emphasis);
+    let added_line = lab_mix(bg, git.addition, line_share);
+    let del_span =
+        |text: &'static str, color: Hsla| seg(text, color).on(removed_line.blend(removed_emphasis));
+    let add_span =
+        |text: &'static str, color: Hsla| seg(text, color).on(added_line.blend(added_emphasis));
+    let removed = row(
         "2",
-        Some(del.opacity(0.12)),
+        Some(git.deletion),
+        true,
         line(vec![
-            seg("  ", fg),
-            seg("return", keyword),
-            seg(" user.name.", fg),
-            seg("toUpperCase", function),
-            seg("();", fg),
+            seg("  return ", s.keyword),
+            seg("user", s.property),
+            seg(".", p),
+            seg("name", s.property),
+            seg(".", p),
+            del_span("toUpperCase", s.function),
+            del_span("()", p),
+            del_span(";", p),
         ]),
     );
-    let added = code_row(
+    let added = row(
         "2",
-        Some(add.opacity(0.12)),
+        Some(git.addition),
+        false,
         line(vec![
-            seg("  ", fg),
-            seg("return", keyword),
-            seg(" ", fg),
-            seg("`${user.name} <${user.email}>`", string),
-            seg("; ", fg),
-            seg("// 0O 1lI", comment),
+            seg("  return ", s.keyword),
+            add_span("`", s.string),
+            add_span("${", s.keyword),
+            seg("user", s.property),
+            seg(".", p),
+            seg("name", s.property),
+            add_span("}", s.keyword),
+            add_span(" <", s.string),
+            add_span("${", s.keyword),
+            add_span("user", s.property),
+            add_span(".", p),
+            add_span("email", s.property),
+            add_span("}", s.keyword),
+            add_span(">`", s.string),
+            add_span(";", p),
+            add_span(" ", p),
+            add_span("// 0O 1lI", s.comment),
         ]),
     );
     v_flex()
         .mt_1()
         .mb_2()
         .overflow_hidden()
-        .rounded(px(8.))
-        .border_1()
-        .border_color(theme.border)
-        .bg(code_background(&theme))
-        .font_family(family)
+        .bg(bg)
         .text_size(px(size))
+        .line_height(px(row_height))
         .text_color(fg)
         .child(
             h_flex()
-                .h(px(size * 2.4))
+                .h(px(row_height + 24.))
                 .items_center()
-                .gap_2()
-                .px_3()
-                .font_weight(FontWeight::MEDIUM)
-                .child(Icon::new(Icons::File).size(px(size)))
+                .gap(px(8.))
+                .px(px(16.))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(16.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .size(px(13.))
+                                .rounded_full()
+                                .border(px(1.5))
+                                .border_color(git.modified)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(div().size(px(6.)).rounded_full().bg(git.modified)),
+                        ),
+                )
                 .child("src/formatUser.ts")
                 .child(div().flex_1())
-                .child(div().text_color(del).child("-1"))
-                .child(div().text_color(add).child("+1")),
+                .child(
+                    h_flex()
+                        .gap(px(ch))
+                        .font_family(family.clone())
+                        .child(div().text_color(git.deletion).child("-1"))
+                        .child(div().text_color(git.addition).child("+1")),
+                ),
         )
-        .child(code_row(
-            "1",
-            None,
-            line(vec![
-                seg("export", keyword),
-                seg(" ", fg),
-                seg("function", keyword),
-                seg(" ", fg),
-                seg("formatUser", function),
-                seg("(", fg),
-                seg("user", fg),
-                seg(": ", fg),
-                seg("User", kind),
-                seg(") {", fg),
-            ]),
-        ))
-        .child(removed)
-        .child(added)
-        .child(code_row("3", None, line(vec![seg("}", fg)])))
+        .child(
+            v_flex()
+                .font_family(family)
+                .pb(px(8.))
+                .child(row(
+                    "1",
+                    None,
+                    false,
+                    line(vec![
+                        seg("export ", s.keyword),
+                        seg("function ", s.keyword),
+                        seg("formatUser", s.function),
+                        seg("(", p),
+                        seg("user", s.parameter),
+                        seg(": ", s.keyword),
+                        seg("User", s.kind),
+                        seg(") {", p),
+                    ]),
+                ))
+                .child(removed)
+                .child(added)
+                .child(row("3", None, false, line(vec![seg("}", p)]))),
+        )
         .into_any_element()
 }
 
-/// The ANSI colors the transcript uses, as a terminal theme paints them.
+/// The ANSI colors the transcript uses: `TERMINAL_PALETTES` (ThreadTerminalDrawer.tsx:239-276),
+/// indices 0 (black), 2 (green), 6 (cyan), 4 (blue), 1 (red) and 3 (yellow).
 struct Ansi {
+    black: Hsla,
     green: Hsla,
     cyan: Hsla,
     blue: Hsla,
@@ -949,20 +1170,40 @@ struct Ansi {
 fn ansi(dark: bool) -> Ansi {
     let pick = |light: u32, night: u32| -> Hsla { rgb(if dark { night } else { light }).into() };
     Ansi {
-        green: pick(0x2f7d32, 0x98c379),
-        cyan: pick(0x0e7490, 0x56b6c2),
-        blue: pick(0x2457c5, 0x61afef),
-        red: pick(0xc0392b, 0xe06c75),
-        yellow: pick(0x9a6700, 0xe5c07b),
+        black: pick(0x000000, 0x000000),
+        green: pick(0x107c10, 0x0dbc79),
+        cyan: pick(0x0598bc, 0x11a8cd),
+        blue: pick(0x0451a5, 0x2472c8),
+        red: pick(0xcd3131, 0xcd3131),
+        yellow: pick(0x949800, 0xe5e510),
     }
 }
 
-/// `TerminalFontPreview`: the transcript in a `rounded-lg border` box that fits its rows.
+/// `TerminalFontPreview`: the transcript on a Ghostty surface (`CONTENT_PADDING` 4, cells
+/// `round(size * 1.35)` tall) in a `rounded-lg border` box that fits its rows.
 fn terminal_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
     let theme = Tokens::of(cx);
     let c = ansi(theme.dark);
     let fg = theme.foreground;
-    let dim: Hsla = fg.opacity(0.6);
+    let bg = theme.background;
+    // libghostty draws SGR 2 as `(fg * 155 + bg * 100) / 255`.
+    let dim: Hsla = {
+        let (f, b) = (Rgba::from(fg), Rgba::from(bg));
+        let mix = |f: f32, b: f32| (f * 155. + b * 100.) / 255.;
+        Rgba {
+            r: mix(f.r, b.r),
+            g: mix(f.g, b.g),
+            b: mix(f.b, b.b),
+            a: 1.,
+        }
+        .into()
+    };
+    let cursor: Hsla = if theme.dark {
+        rgb(0xb4cbff)
+    } else {
+        rgb(0x26384e)
+    }
+    .into();
     let prompt = || {
         vec![
             seg("\u{2192}", c.green).bold(),
@@ -979,8 +1220,6 @@ fn terminal_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
     };
     let mut first = prompt();
     first.push(seg("vpr dev", fg));
-    let mut last = prompt();
-    last.push(seg(" ", fg).on(fg.opacity(0.8)));
     let lines: Vec<Vec<Seg>> = vec![
         first,
         vec![],
@@ -1023,7 +1262,7 @@ fn terminal_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
         vec![],
         vec![
             seg("  ", fg),
-            seg(" READY ", gpui::black()).on(c.green),
+            seg(" READY ", c.black).on(c.green),
             seg(" ", fg),
             seg("watching for changes, press", dim),
             seg(" ", fg),
@@ -1032,27 +1271,48 @@ fn terminal_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
             seg("to quit", dim),
         ],
         vec![],
-        last,
+        prompt(),
     ];
     debug_assert_eq!(lines.len(), TERMINAL_ROWS);
-    let height = (size * 1.2).ceil();
+    let height = (size * 1.35).round().max(1.);
+    let cell_width = cx
+        .text_system()
+        .advance(
+            cx.text_system().resolve_font(&gpui::font(family.clone())),
+            px(size),
+            'M',
+        )
+        .map_or(size * 0.6, |advance| f32::from(advance.width));
+    let last = lines.len() - 1;
     v_flex()
         .mt_1()
         .mb_2()
-        .h(px(height * TERMINAL_ROWS as f32 + 2.))
+        .h(px(height * TERMINAL_ROWS as f32 + 8. + 2.))
+        .p(px(4.))
         .overflow_hidden()
         .rounded(px(8.))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.background)
+        .bg(bg)
         .font_family(family)
         .text_size(px(size))
         .text_color(fg)
-        .children(lines.into_iter().map(|segments| {
-            div()
+        .children(lines.into_iter().enumerate().map(|(index, segments)| {
+            h_flex()
                 .h(px(height))
+                .flex_shrink_0()
+                .items_center()
                 .whitespace_nowrap()
                 .child(line(segments))
+                .when(index == last, |row| {
+                    row.child(
+                        div()
+                            .w(px(cell_width))
+                            .h(px(height))
+                            .border_1()
+                            .border_color(cursor),
+                    )
+                })
         }))
         .into_any_element()
 }
