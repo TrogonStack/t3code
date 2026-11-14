@@ -186,6 +186,7 @@ pub struct SettingsDialog {
     devices: Entity<DevicesPanel>,
     source_control: Entity<SourceControlPanel>,
     threads: Entity<ScopedPanel>,
+    worktrees: Entity<ScopedPanel>,
     secrets: Entity<SecretsPanel>,
     scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
@@ -212,6 +213,16 @@ impl SettingsDialog {
             ScopedPanel::new(
                 Page::Threads,
                 crate::settings_threads::TOKEN_BASE,
+                actions.clone(),
+                scope.clone(),
+                window,
+                cx,
+            )
+        });
+        let worktrees = cx.new(|cx| {
+            ScopedPanel::new(
+                Page::Worktrees,
+                crate::settings_worktrees::TOKEN_BASE,
                 actions.clone(),
                 scope.clone(),
                 window,
@@ -261,6 +272,7 @@ impl SettingsDialog {
             devices,
             source_control,
             threads,
+            worktrees,
             secrets,
             scheduled_tasks,
             providers,
@@ -288,6 +300,7 @@ impl SettingsDialog {
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
         self.threads.update(cx, |panel, cx| panel.reload(cx));
+        self.worktrees.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.reload(cx));
@@ -418,6 +431,26 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.threads
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_worktrees_data(
+        &mut self,
+        config: crate::settings_source_control::SourceControlConfig,
+        projects: crate::settings_devices::ProjectIds,
+        cx: &mut Context<Self>,
+    ) {
+        self.worktrees
+            .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn on_worktrees_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.worktrees
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -579,6 +612,12 @@ impl SettingsDialog {
         }
         if self
             .threads
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .worktrees
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -1353,6 +1392,10 @@ impl SettingsDialog {
             self.threads
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.threads.clone().into_any_element()]
+        } else if self.section == Section::Worktrees {
+            self.worktrees
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.worktrees.clone().into_any_element()]
         } else if self.section == Section::Secrets {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
@@ -1383,6 +1426,7 @@ impl SettingsDialog {
                 | Section::Devices
                 | Section::SourceControl
                 | Section::Threads
+                | Section::Worktrees
                 | Section::Secrets
                 | Section::ScheduledTasks
                 | Section::Providers

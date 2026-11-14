@@ -39,6 +39,7 @@ mod settings_secrets;
 mod settings_source_control;
 mod settings_threads;
 mod settings_typography;
+mod settings_worktrees;
 mod shell;
 mod slow_requests;
 mod status;

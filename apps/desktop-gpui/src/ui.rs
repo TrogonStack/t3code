@@ -634,6 +634,7 @@ impl MainView {
             }
             if let Some(config) = source_control {
                 settings.set_threads_data(config.clone(), project_ids.clone(), cx);
+                settings.set_worktrees_data(config.clone(), project_ids.clone(), cx);
                 settings.set_source_control_data(config, project_ids, cx);
             }
             if let Some(config) = secrets {
@@ -735,6 +736,12 @@ impl MainView {
             return cx.notify();
         }
         if let Status::Call { token, event } = status {
+            if token >= crate::settings_worktrees::TOKEN_BASE {
+                self.settings.update(cx, |settings, cx| {
+                    settings.on_worktrees_call(token, event, cx)
+                });
+                return;
+            }
             if token >= crate::settings_threads::TOKEN_BASE {
                 self.settings.update(cx, |settings, cx| {
                     settings.on_threads_call(token, event, cx)

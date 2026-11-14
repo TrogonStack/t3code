@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 mod threads;
+mod worktrees;
 
 /// `max-w-2xl`.
 const TEXT_AREA_MAX: f32 = 672.;
@@ -30,6 +31,7 @@ const TEXT_AREA_MAX: f32 = 672.;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Threads,
+    Worktrees,
 }
 
 /// The select of a row, with its menu.
@@ -38,10 +40,22 @@ enum Pick {
     Permissions,
     Workspace,
     Streaming,
+    Submodules,
+    BranchMode,
+    KeepWhen,
+    CleanupMode,
 }
 
 impl Pick {
-    const ALL: [Self; 3] = [Self::Permissions, Self::Workspace, Self::Streaming];
+    const ALL: [Self; 7] = [
+        Self::Permissions,
+        Self::Workspace,
+        Self::Streaming,
+        Self::Submodules,
+        Self::BranchMode,
+        Self::KeepWhen,
+        Self::CleanupMode,
+    ];
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|pick| *pick == self).unwrap_or(0)
@@ -62,6 +76,22 @@ impl Pick {
                 "settings-response-streaming",
                 "settings-response-streaming-select",
             ),
+            Self::Submodules => (
+                "settings-worktree-submodules",
+                "settings-worktree-submodules-select",
+            ),
+            Self::BranchMode => (
+                "settings-worktree-branch-naming",
+                "settings-worktree-branch-naming-select",
+            ),
+            Self::KeepWhen => (
+                "settings-worktree-keep-when",
+                "settings-worktree-keep-when-select",
+            ),
+            Self::CleanupMode => (
+                "settings-worktree-cleanup-mode",
+                "settings-worktree-cleanup-mode-select",
+            ),
         }
     }
 
@@ -79,24 +109,46 @@ impl Pick {
                 .iter()
                 .map(|(_, label, _)| *label)
                 .collect(),
+            Self::Submodules => Self::labels_of(&crate::settings_worktrees::SUBMODULES),
+            Self::BranchMode => Self::labels_of(&crate::settings_worktrees::BRANCH_MODES),
+            Self::KeepWhen => Self::labels_of(&crate::settings_worktrees::KEEP_WHEN),
+            Self::CleanupMode => Self::labels_of(&crate::settings_worktrees::CLEANUP_MODES),
         }
     }
 
-    fn field(self) -> Field {
+    fn labels_of(options: &[(&'static str, &'static str)]) -> Vec<&'static str> {
+        options.iter().map(|(_, label)| *label).collect()
+    }
+
+    /// The setting a menu row writes, which also decides whether the control is inert.
+    fn field(self, in_project: bool) -> Field {
         match self {
             Self::Permissions => Field::RuntimeMode,
             Self::Workspace => Field::ThreadEnvMode,
             Self::Streaming => Field::Streaming,
+            Self::Submodules => Field::Submodules,
+            Self::BranchMode => Field::BranchMode,
+            Self::KeepWhen if in_project => Field::WorktreeCleanup,
+            Self::KeepWhen => Field::StorageCleanup,
+            Self::CleanupMode => Field::WorktreeCleanup,
         }
     }
 
-    /// The wire value of a menu row.
-    fn value(self, index: usize) -> Value {
-        match self {
+    /// What a menu row writes; `None` removes the setting.
+    fn value(self, index: usize) -> Option<Value> {
+        Some(match self {
             Self::Permissions => json!(crate::settings_threads::RUNTIME_MODES[index].value),
             Self::Workspace => json!(crate::settings_threads::WORKSPACES[index]),
             Self::Streaming => json!(crate::settings_threads::STREAMING_MODES[index].0),
-        }
+            Self::Submodules => json!(crate::settings_worktrees::SUBMODULES[index].0),
+            Self::BranchMode => json!(crate::settings_worktrees::BRANCH_MODES[index].0),
+            Self::KeepWhen => json!(crate::settings_worktrees::KEEP_WHEN[index].0),
+            Self::CleanupMode => match crate::settings_worktrees::CLEANUP_MODES[index].0 {
+                "off" => json!({"mode": "off"}),
+                "custom" => json!({"mode": "custom", "rules": {}}),
+                _ => return None,
+            },
+        })
     }
 
     fn selected(self, value: &Value) -> usize {
@@ -105,7 +157,53 @@ impl Pick {
             Self::Permissions => crate::settings_threads::runtime_mode_index(text),
             Self::Workspace => crate::settings_threads::workspace_index(text),
             Self::Streaming => crate::settings_threads::streaming_index(text),
+            Self::Submodules => crate::settings_worktrees::submodules_index(value),
+            Self::BranchMode => crate::settings_worktrees::branch_mode_index(value),
+            Self::KeepWhen => crate::settings_worktrees::keep_when_index(text),
+            Self::CleanupMode => crate::settings_worktrees::cleanup_mode_index(value),
         }
+    }
+}
+
+/// A retention field of the cleanup rules.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rule {
+    AfterDays,
+    SettledDays,
+}
+
+impl Rule {
+    fn wire(self) -> &'static str {
+        match self {
+            Self::AfterDays => "worktreeAfterDays",
+            Self::SettledDays => "worktreeSettledAfterDays",
+        }
+    }
+
+    fn minimum(self) -> u32 {
+        match self {
+            Self::AfterDays => 1,
+            Self::SettledDays => 0,
+        }
+    }
+}
+
+/// What a single line field holds: a setting, or one of the cleanup rules.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Key {
+    Field(Field),
+    Rule(Rule),
+}
+
+impl From<Field> for Key {
+    fn from(field: Field) -> Self {
+        Self::Field(field)
+    }
+}
+
+impl From<Rule> for Key {
+    fn from(rule: Rule) -> Self {
+        Self::Rule(rule)
     }
 }
 
@@ -137,7 +235,7 @@ struct Ctx {
 
 /// A single line field of the tab and the setting it commits to.
 struct Line {
-    field: Field,
+    key: Key,
     input: Entity<InputState>,
 }
 
@@ -154,6 +252,7 @@ pub struct ScopedPanel {
     menu: Option<(Pick, usize)>,
     triggers: [FocusHandle; Pick::ALL.len()],
     advanced_open: bool,
+    cleanup_open: bool,
     lines: Vec<Line>,
     areas: Vec<(Field, Entity<TextareaState>)>,
     _subscriptions: Vec<Subscription>,
@@ -171,21 +270,18 @@ impl ScopedPanel {
         let mut subscriptions = vec![cx.observe(&scope, |_, _, cx| cx.notify())];
         let mut lines = Vec::new();
         let mut areas = Vec::new();
-        for (field, placeholder) in Self::line_fields(page) {
+        for (key, placeholder) in Self::line_fields(page) {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(*placeholder));
             subscriptions.push(cx.subscribe_in(
                 &input,
                 window,
                 move |this, _, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                        this.commit_line(*field, window, cx);
+                        this.commit_line(*key, window, cx);
                     }
                 },
             ));
-            lines.push(Line {
-                field: *field,
-                input,
-            });
+            lines.push(Line { key: *key, input });
         }
         for (field, placeholder) in Self::area_fields(page) {
             let area = cx.new(|cx| {
@@ -216,6 +312,7 @@ impl ScopedPanel {
             menu: None,
             triggers: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             advanced_open: false,
+            cleanup_open: false,
             lines,
             areas,
             _subscriptions: subscriptions,
@@ -251,6 +348,7 @@ impl ScopedPanel {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.menu = None;
         self.advanced_open = false;
+        self.cleanup_open = false;
         cx.notify();
     }
 
@@ -352,25 +450,65 @@ impl ScopedPanel {
 
     /// Saves a single line field when it lost focus or Enter was pressed and it differs from the
     /// setting. A number that does not parse is dropped, and the field shows the setting again.
-    fn commit_line(&mut self, field: Field, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(line) = self.lines.iter().find(|line| line.field == field) else {
+    fn commit_line(&mut self, key: Key, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(line) = self.lines.iter().find(|line| line.key == key) else {
             return;
         };
         let text = line.input.read(cx).value().trim().to_owned();
         let ctx = self.ctx(cx);
-        let change = match field {
-            Field::SettleDays => match crate::settings_threads::parse_settle_days(&text) {
-                Some(days) if self.value(field, &ctx).as_u64() != Some(u64::from(days)) => {
-                    Some(json!(days))
+        match key {
+            Key::Rule(rule) => {
+                let days = crate::settings_worktrees::clamp_days(&text, rule.minimum());
+                if days.is_some() && days.map(u64::from) != self.rules(&ctx)[rule.wire()].as_u64() {
+                    return self.write_rules(rule.wire(), json!(days), &ctx, cx);
                 }
-                _ => None,
-            },
-            _ => (text != self.text(field, &ctx)).then(|| json!(text)),
-        };
-        match change {
-            Some(value) => self.write(vec![(field, Some(value))], cx),
-            None => self.sync_lines(&ctx, window, cx),
+                self.sync_lines(&ctx, window, cx);
+            }
+            Key::Field(field) => {
+                let change = match field {
+                    Field::SettleDays => match crate::settings_threads::parse_settle_days(&text) {
+                        Some(days) if self.value(field, &ctx).as_u64() != Some(u64::from(days)) => {
+                            Some(json!(days))
+                        }
+                        _ => None,
+                    },
+                    _ => (text != self.text(field, &ctx)).then(|| json!(text)),
+                };
+                match change {
+                    Some(value) => self.write(vec![(field, Some(value))], cx),
+                    None => self.sync_lines(&ctx, window, cx),
+                }
+            }
         }
+    }
+
+    /// The cleanup rules the scope shows: a project's policy over the machine's rules.
+    fn rules(&self, ctx: &Ctx) -> serde_json::Map<String, Value> {
+        let storage = self.config.environment_value(Field::StorageCleanup);
+        let policy = if ctx.in_project {
+            self.value(Field::WorktreeCleanup, ctx)
+        } else {
+            Value::Null
+        };
+        crate::settings_worktrees::resolve_rules(&storage, &policy)
+    }
+
+    /// Saves one cleanup rule: a project's custom policy, or the machine's `storageCleanup`
+    /// (written whole, so the artifact and log retention it also holds is carried along).
+    fn write_rules(&mut self, key: &'static str, value: Value, ctx: &Ctx, cx: &mut Context<Self>) {
+        if ctx.in_project {
+            let mut rules = self.rules(ctx);
+            rules.insert(key.to_owned(), value);
+            let policy = json!({"mode": "custom", "rules": rules});
+            return self.write(vec![(Field::WorktreeCleanup, Some(policy))], cx);
+        }
+        let mut storage = self.config.environment_value(Field::StorageCleanup);
+        let mut merged = crate::settings_worktrees::default_storage_cleanup();
+        for (name, value) in storage.as_object_mut().into_iter().flatten() {
+            merged[name.as_str()] = value.clone();
+        }
+        merged[key] = value;
+        self.write(vec![(Field::StorageCleanup, Some(merged))], cx);
     }
 
     /// Saves a text area's trimmed content when it lost focus and differs from the setting.
@@ -386,21 +524,25 @@ impl ScopedPanel {
     }
 
     /// The text a single line field shows for its setting.
-    fn line_text(&self, field: Field, ctx: &Ctx) -> String {
-        match field {
-            Field::SettleDays => self
-                .value(field, ctx)
+    fn line_text(&self, key: Key, ctx: &Ctx) -> String {
+        match key {
+            Key::Rule(rule) => self.rules(ctx)[rule.wire()]
                 .as_u64()
                 .map(|days| days.to_string())
                 .unwrap_or_default(),
-            _ => self.text(field, ctx),
+            Key::Field(Field::SettleDays) => self
+                .value(Field::SettleDays, ctx)
+                .as_u64()
+                .map(|days| days.to_string())
+                .unwrap_or_default(),
+            Key::Field(field) => self.text(field, ctx),
         }
     }
 
     /// Puts the setting's text into the unfocused fields, as the web's `key` remount does.
     fn sync_lines(&self, ctx: &Ctx, window: &mut Window, cx: &mut Context<Self>) {
         for line in &self.lines {
-            let want = self.line_text(line.field, ctx);
+            let want = self.line_text(line.key, ctx);
             let focused = line.input.read(cx).focus_handle(cx).is_focused(window);
             if !focused && line.input.read(cx).value().as_ref() != want.as_str() {
                 line.input
@@ -422,7 +564,15 @@ impl ScopedPanel {
     }
 
     fn pick(&mut self, pick: Pick, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.write(vec![(pick.field(), Some(pick.value(index)))], cx);
+        let ctx = self.ctx(cx);
+        match pick {
+            Pick::KeepWhen => {
+                if let Some(value) = pick.value(index) {
+                    self.write_rules("worktreeKeepWhen", value, &ctx, cx);
+                }
+            }
+            _ => self.write(vec![(pick.field(ctx.in_project), pick.value(index))], cx),
+        }
         self.close_menu(window, cx);
     }
 
@@ -711,13 +861,14 @@ impl ScopedPanel {
     /// `Input size="sm"` of a single line field, `w-full sm:w-56`.
     fn line(
         &self,
-        field: Field,
+        key: impl Into<Key>,
         width: f32,
         disabled: bool,
         window: &Window,
         cx: &App,
     ) -> AnyElement {
-        let Some(line) = self.lines.iter().find(|line| line.field == field) else {
+        let key = key.into();
+        let Some(line) = self.lines.iter().find(|line| line.key == key) else {
             return div().into_any_element();
         };
         let frame = sm_field(&line.input, false, false, disabled, window, cx);
@@ -777,9 +928,18 @@ impl ScopedPanel {
             .into_any_element()
     }
 
-    fn line_fields(page: Page) -> &'static [(Field, &'static str)] {
+    fn line_fields(page: Page) -> &'static [(Key, &'static str)] {
         match page {
-            Page::Threads => &[(Field::BaseDirectory, "~/"), (Field::SettleDays, "")],
+            Page::Threads => &[
+                (Key::Field(Field::BaseDirectory), "~/"),
+                (Key::Field(Field::SettleDays), ""),
+            ],
+            Page::Worktrees => &[
+                (Key::Field(Field::WorktreesDir), "Default"),
+                (Key::Field(Field::BranchPrefix), "No prefix"),
+                (Key::Rule(Rule::AfterDays), ""),
+                (Key::Rule(Rule::SettledDays), ""),
+            ],
         }
     }
 
@@ -788,6 +948,10 @@ impl ScopedPanel {
             Page::Threads => &[(
                 Field::TitleInstructions,
                 "Keep titles to a few words. Lead with the main subject.",
+            )],
+            Page::Worktrees => &[(
+                Field::BranchInstructions,
+                "Use julius/ followed by the issue ID and a short description.",
             )],
         }
     }
@@ -803,6 +967,7 @@ impl Render for ScopedPanel {
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)));
         match self.page {
             Page::Threads => page.children(self.threads(&ctx, window, cx)),
+            Page::Worktrees => page.children(self.worktrees(&ctx, window, cx)),
         }
     }
 }

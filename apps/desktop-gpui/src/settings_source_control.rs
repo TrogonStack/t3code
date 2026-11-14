@@ -154,6 +154,17 @@ pub enum Field {
     TextModel,
     TitleInstructions,
     Streaming,
+    /// The Worktrees tab's keys (WorktreesSettings.tsx).
+    WorktreesDir,
+    StartFromOrigin,
+    Submodules,
+    BranchMode,
+    BranchPrefix,
+    BranchInstructions,
+    /// The environment's cleanup rules, `storageCleanup`.
+    StorageCleanup,
+    /// A project's cleanup policy, `worktreeCleanup`.
+    WorktreeCleanup,
 }
 
 impl Field {
@@ -185,6 +196,14 @@ impl Field {
             Self::TextModel => TEXT_GENERATION,
             Self::TitleInstructions => "threadTitleInstructions",
             Self::Streaming => "responseStreamingMode",
+            Self::WorktreesDir => "worktreesDirectory",
+            Self::StartFromOrigin => "newWorktreesStartFromOrigin",
+            Self::Submodules => "worktreeSubmodules",
+            Self::BranchMode => "branchNamingMode",
+            Self::BranchPrefix => "branchNamePrefix",
+            Self::BranchInstructions => "branchNameInstructions",
+            Self::StorageCleanup => "storageCleanup",
+            Self::WorktreeCleanup => "worktreeCleanup",
         }
     }
 
@@ -209,6 +228,8 @@ impl Field {
                 | Self::ResumeLimited
                 | Self::SnoozeLimited
                 | Self::SnoozePresets
+                | Self::WorktreesDir
+                | Self::StorageCleanup
         )
     }
 
@@ -233,10 +254,16 @@ impl Field {
             Self::SettleDays => json!(crate::settings_threads::AUTO_SETTLE_DEFAULT_DAYS),
             Self::TextModel => crate::settings_threads::default_text_model(),
             Self::Streaming => json!("paragraph"),
+            Self::WorktreesDir | Self::BranchInstructions => json!(""),
+            Self::StartFromOrigin => json!(true),
+            Self::Submodules | Self::WorktreeCleanup => Value::Null,
+            Self::BranchMode => json!("static"),
+            Self::BranchPrefix => json!("t3"),
+            Self::StorageCleanup => crate::settings_worktrees::default_storage_cleanup(),
         }
     }
 
-    const ALL: [Self; 25] = [
+    const ALL: [Self; 33] = [
         Self::AutoPull,
         Self::AgentCredits,
         Self::MergeMethod,
@@ -262,6 +289,14 @@ impl Field {
         Self::TextModel,
         Self::TitleInstructions,
         Self::Streaming,
+        Self::WorktreesDir,
+        Self::StartFromOrigin,
+        Self::Submodules,
+        Self::BranchMode,
+        Self::BranchPrefix,
+        Self::BranchInstructions,
+        Self::StorageCleanup,
+        Self::WorktreeCleanup,
     ];
 }
 
@@ -691,6 +726,10 @@ fn describe(field: Field, value: &Value) -> String {
             crate::settings_threads::runtime_mode(value.as_str().unwrap_or_default())
                 .map_or_else(|| "Inherits".to_owned(), |mode| mode.label.to_owned())
         }
+        Field::Submodules => crate::settings_worktrees::submodules_label(value).to_owned(),
+        Field::BranchMode => crate::settings_worktrees::branch_mode_label(value).to_owned(),
+        Field::WorktreeCleanup => crate::settings_worktrees::cleanup_mode_label(value).to_owned(),
+        Field::StorageCleanup => "Custom".to_owned(),
         Field::Streaming => {
             crate::settings_threads::streaming_label(value.as_str().unwrap_or_default()).to_owned()
         }
