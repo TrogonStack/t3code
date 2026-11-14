@@ -440,6 +440,8 @@ fn socket_url(http_base: &str, ticket: &str) -> Result<reqwest::Url, String> {
             ("clientDeviceType", "desktop"),
             ("clientAppVersion", env!("CARGO_PKG_VERSION")),
             ("connectionMethod", "direct"),
+            // Without it the server shows every secret reference as a redacted literal.
+            ("clientCapabilities", "settingsSecretReferences"),
         ],
     )
     .map_err(|error| error.to_string())
@@ -1650,5 +1652,9 @@ mod tests {
         let pairs: Vec<_> = url.query_pairs().into_owned().collect();
         assert!(pairs.contains(&("orchestrationProtocol".into(), "2".into())));
         assert!(pairs.contains(&("wsTicket".into(), "a b&c".into())));
+        assert!(pairs.contains(&(
+            "clientCapabilities".into(),
+            "settingsSecretReferences".into()
+        )));
     }
 }
