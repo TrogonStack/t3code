@@ -4,7 +4,10 @@
 //! Writes go out as `project.update` and `project.delete` per member, and as settings patches
 //! for the New threads and Actions overrides; the streams bring the result back.
 
-use super::components::{group, note_row, reset_button_labeled, row, section, switch, tab_stop};
+use super::components::{
+    focus_ring, focus_visible, group, note_row, reset_button_labeled, row, section, switch,
+    tab_stop,
+};
 use super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem, xs_button};
 use super::model_chips::{ChipCtx, ChipHost, Chips};
@@ -20,7 +23,7 @@ use crate::settings::{DeviceSettings, GroupingMode};
 use crate::settings_projects::{self as model};
 use crate::settings_source_control::{Field, SourceControlConfig};
 use crate::status::CallEvent;
-use gpui::{PathPromptOptions, Subscription};
+use gpui::{ElementId, KeyDownEvent, PathPromptOptions, Subscription};
 use gpui_component::input::{InputEvent, InputState, TextareaState};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -257,16 +260,26 @@ impl ProjectsPanel {
     }
 
     /// Every listed project but the scratch one: the live groups, then the archived.
+    /// `useSettingsProjectGroups`: live and archived groups together, by display name.
     fn groups(&self) -> impl Iterator<Item = &ProjectEntry> {
-        self.live
+        let mut all: Vec<&ProjectEntry> = self
+            .live
             .iter()
             .chain(&self.archived)
             .filter(|entry| !entry.scratch)
+            .collect();
+        all.sort_by(|a, b| {
+            a.title
+                .to_lowercase()
+                .cmp(&b.title.to_lowercase())
+                .then_with(|| b.title.cmp(&a.title))
+        });
+        all.into_iter()
     }
 
     fn selected(&self, cx: &App) -> Option<&ProjectEntry> {
         let key = self.scope.read(cx).search().project.clone()?;
-        self.groups().find(|entry| entry.key == key)
+        self.groups().find(|entry| entry.scope_key() == key)
     }
 
     fn send(&mut self, project_id: &str, payload: Value, failure: &str) -> Option<u64> {
@@ -491,27 +504,85 @@ impl ProjectsPanel {
         self.seeded = Some(seed);
     }
 
-    fn list_row(&self, entry: &ProjectEntry, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// `SettingsScopeNotice`'s project choices: the second line is "Archived", the machines when
+    /// another group has the same name, then the workspace root.
+    fn list_secondary(&self, entry: &ProjectEntry, cx: &App) -> String {
+        let shared_name = self
+            .groups()
+            .any(|other| other.scope_key() != entry.scope_key() && other.title == entry.title);
+        let mut parts: Vec<String> = Vec::new();
+        if entry.archived {
+            parts.push("Archived".to_owned());
+        }
+        if shared_name {
+            let data = self.scope.read(cx).data();
+            let mut machines: Vec<String> = Vec::new();
+            let environments = data
+                .projects
+                .iter()
+                .find(|project| project.key == entry.scope_key())
+                .map(|project| project.environments.as_slice())
+                .unwrap_or_default();
+            for id in environments {
+                let name = data.environments.iter().find(|e| &e.id == id).map_or_else(
+                    || id.clone(),
+                    |e| crate::settings_labs::environment_label(e, &data.environments),
+                );
+                if !machines.contains(&name) {
+                    machines.push(name);
+                }
+            }
+            parts.push(machines.join(", "));
+        }
+        parts.push(entry.root.clone());
+        parts.retain(|part| !part.is_empty());
+        parts.join(" \u{b7} ")
+    }
+
+    fn list_row(
+        &self,
+        entry: &ProjectEntry,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Tokens::of(cx);
         let mono = cx.theme().mono_font_family.clone();
         let color: gpui::Hsla =
             gpui::rgb(crate::settings_labs::avatar_color(entry.color, theme.dark)).into();
-        let key = entry.key.clone();
+        let key = entry.scope_key().to_owned();
         let hover = theme.accent;
-        let root = if entry.archived {
-            format!("Archived \u{b7} {}", entry.root)
-        } else {
-            entry.root.clone()
+        let secondary = self.list_secondary(entry, cx);
+        let focus = tab_stop(
+            &ElementId::from(("settings-project-row-focus", index)),
+            window,
+            cx,
+        );
+        let ring = focus_visible(&focus, window);
+        let pick = {
+            let key = key.clone();
+            cx.listener(move |this, _: &KeyDownEvent, _, cx| {
+                this.scope
+                    .update(cx, |bar, cx| bar.select_project(&key, cx));
+            })
         };
         h_flex()
             .id(("settings-project-row", index))
+            .relative()
+            .track_focus(&focus)
             .items_center()
             .gap_3()
             .px_4()
             .py_3()
             .cursor_pointer()
             .hover(move |style| style.bg(hover.opacity(0.5)))
-            .child(monogram(&entry.initials, color, 24., &mono))
+            .on_key_down(move |event, window, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    cx.stop_propagation();
+                    pick(event, window, cx);
+                }
+            })
+            .child(monogram(&entry.initials, color, 16., &mono).text_size(px(16. * 8.25 / 16.)))
             .child(
                 v_flex()
                     .min_w_0()
@@ -520,22 +591,26 @@ impl ProjectsPanel {
                         div()
                             .truncate()
                             .text_size(px(14.))
+                            .line_height(px(20.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(entry.title.clone()),
                     )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(root),
-                    ),
+                    .when(!secondary.is_empty(), |column| {
+                        column.child(
+                            div()
+                                .truncate()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(secondary),
+                        )
+                    }),
             )
             .child(
                 Icon::new(Icons::ChevronRight)
                     .size(px(16.))
                     .text_color(theme.muted_foreground),
             )
+            .when(ring, |row| row.child(focus_ring(0., cx)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.scope
                     .update(cx, |bar, cx| bar.select_project(&key, cx));
@@ -856,13 +931,9 @@ impl Render for ProjectsPanel {
                 .collect::<Vec<_>>()
                 .iter()
                 .enumerate()
-                .map(|(index, entry)| self.list_row(entry, index, cx))
+                .map(|(index, entry)| self.list_row(entry, index, window, cx))
                 .collect();
-            let body = if rows.is_empty() {
-                note("Add a project from the sidebar to configure it here.", cx).into_any_element()
-            } else {
-                group(rows, cx).into_any_element()
-            };
+            let body = group(rows, cx).into_any_element();
             return v_flex()
                 .gap_4()
                 .child(
@@ -875,7 +946,11 @@ impl Render for ProjectsPanel {
                 .child(body)
                 .into_any_element();
         };
-        let Some(entry) = self.groups().find(|entry| entry.key == key).cloned() else {
+        let Some(entry) = self
+            .groups()
+            .find(|entry| entry.scope_key() == key)
+            .cloned()
+        else {
             return div()
                 .px_4()
                 .child(note("This project is no longer available.", cx))

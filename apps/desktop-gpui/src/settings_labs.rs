@@ -690,10 +690,7 @@ pub fn scope_data(
     });
     let mut add = |env: &str, entries: &[crate::projects::ProjectEntry]| {
         for entry in entries.iter().filter(|e| !e.scratch) {
-            let key = entry
-                .logical_key
-                .clone()
-                .unwrap_or_else(|| entry.key.clone());
+            let key = entry.scope_key().to_owned();
             match data.projects.iter_mut().find(|p| p.key == key) {
                 Some(project) => {
                     if !project.environments.iter().any(|e| e == env) {
@@ -716,6 +713,7 @@ pub fn scope_data(
     for other in others {
         add(&other.id, &other.projects);
     }
+    sort_projects(&mut data);
     for other in others {
         data.environments.push(Environment {
             id: other.id.clone(),
@@ -733,11 +731,11 @@ pub fn scope_data(
 /// Lists the attached environment's archived groups too, as the picker marks them.
 pub fn add_archived(data: &mut ScopeData, archived: &[crate::projects::ProjectEntry]) {
     for entry in archived.iter().filter(|e| !e.scratch) {
-        if data.projects.iter().any(|p| p.key == entry.key) {
+        if data.projects.iter().any(|p| p.key == entry.scope_key()) {
             continue;
         }
         data.projects.push(Project {
-            key: entry.key.clone(),
+            key: entry.scope_key().to_owned(),
             name: entry.title.clone(),
             root: entry.root.clone(),
             initials: entry.initials.clone(),
@@ -746,6 +744,17 @@ pub fn add_archived(data: &mut ScopeData, archived: &[crate::projects::ProjectEn
             environments: vec!["primary".to_owned()],
         });
     }
+    sort_projects(data);
+}
+
+/// `useSettingsProjectGroups`: groups sort by display name (`localeCompare`, lower case first).
+pub fn sort_projects(data: &mut ScopeData) {
+    data.projects.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| b.name.cmp(&a.name))
+    });
 }
 
 #[cfg(test)]
@@ -788,6 +797,21 @@ mod tests {
                 project("two", "Example Two", &["b"]),
             ],
         }
+    }
+
+    #[test]
+    fn projects_sort_by_name_ignoring_case() {
+        let mut data = ScopeData {
+            environments: Vec::new(),
+            projects: vec![
+                project("c", "charlie", &["a"]),
+                project("b", "Bravo", &["a"]),
+                project("a", "alpha", &["a"]),
+            ],
+        };
+        sort_projects(&mut data);
+        let names: Vec<_> = data.projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "Bravo", "charlie"]);
     }
 
     fn search(project: Option<&str>, machine: Option<&str>) -> ScopeSearch {

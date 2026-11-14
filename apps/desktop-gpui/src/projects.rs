@@ -113,6 +113,13 @@ pub struct ProjectEntry {
     pub archived: bool,
 }
 
+impl ProjectEntry {
+    /// What the settings scope calls this group: the repository key, else the group key.
+    pub fn scope_key(&self) -> &str {
+        self.logical_key.as_deref().unwrap_or(&self.key)
+    }
+}
+
 /// One project of a group, as the Projects settings tab edits it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Member {
