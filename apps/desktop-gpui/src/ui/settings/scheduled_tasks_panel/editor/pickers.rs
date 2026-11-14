@@ -289,8 +289,7 @@ impl ScheduledTasksPanel {
         let tab = self.model_tab(&active);
         let search = self.pickers.model_search.read(cx);
         let (query, cursor) = (search.value(), search.cursor());
-        let listing =
-            model_picker::listing(&instances, &tab, &query, self.pickers.pick.expanded);
+        let listing = model_picker::listing(&instances, &tab, &query, self.pickers.pick.expanded);
         let key = keystroke.key.as_str();
         let modifiers = keystroke.modifiers;
         if modifiers.platform && !modifiers.alt && !modifiers.control {
@@ -447,13 +446,7 @@ impl ScheduledTasksPanel {
                 Some(panel) => panel.render(window, cx),
                 None => div().into_any_element(),
             });
-        field_of(
-            "Model",
-            None,
-            h_flex().justify_start().child(picker),
-            cx,
-        )
-        .into_any_element()
+        field_of("Model", None, h_flex().justify_start().child(picker), cx).into_any_element()
     }
 
     /// Looks the draft's base ref up, so the button can tell a remote ref from a local one.
@@ -670,7 +663,7 @@ impl ScheduledTasksPanel {
         environment: &str,
         offers_modes: bool,
         menu: Option<Menu>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Tokens::of(cx);
@@ -684,6 +677,7 @@ impl ScheduledTasksPanel {
                 Sel {
                     id: "scheduled-task-destination".into(),
                     menu: Menu::Destination,
+                    highlight: self.highlight(),
                     open: menu == Some(Menu::Destination),
                     disabled: false,
                     lead: None,
@@ -701,6 +695,7 @@ impl ScheduledTasksPanel {
                         this.edit(cx, |editor| ed::set_thread_mode(&mut editor.draft, mode));
                     }
                 }),
+                window,
                 cx,
             ));
         }
@@ -821,64 +816,67 @@ impl ScheduledTasksPanel {
             .content(move |_, window, cx| {
                 let theme = Tokens::of(cx);
                 let accent = theme.accent;
-                let list = if rows.is_empty() {
-                    div()
-                        .px_2()
-                        .py_3()
-                        .text_sm()
-                        .text_center()
-                        .text_color(theme.muted_foreground)
-                        .child("No threads found.")
-                        .into_any_element()
-                } else {
-                    v_flex()
-                        .id("scheduled-task-thread-list")
-                        .max_h(px(240.))
-                        .overflow_y_scroll()
-                        .children(rows.iter().enumerate().map(|(index, (id, title, current))| {
-                            let (view, id, project_id, search) = (
-                                picked.clone(),
-                                id.clone(),
-                                project_id.clone(),
-                                search_for_pick.clone(),
-                            );
-                            h_flex()
-                                .id(("scheduled-task-thread-row", index))
-                                .min_h(px(28.))
-                                .items_center()
-                                .px_2()
-                                .py_1()
-                                .rounded(px(4.))
-                                .text_sm()
-                                .cursor_pointer()
-                                .hover(move |style| style.bg(accent))
-                                .when(*current, |row| row.bg(theme.foreground.opacity(0.08)))
-                                .child(div().min_w_0().truncate().child(title.clone()))
-                                .on_click(move |_, window, cx| {
-                                    search.update(cx, |state, cx| {
-                                        state.set_value("", window, cx)
-                                    });
-                                    let (id, project_id) = (id.clone(), project_id.clone());
-                                    view.update(cx, |this, cx| {
-                                        this.edit(cx, |editor| match id {
-                                            None => {
-                                                ed::unbind_from_thread(&mut editor.draft);
-                                                editor.draft.thread_mode =
-                                                    Some(json!(ed::NEW_THREAD));
-                                            }
-                                            Some(id) => {
-                                                ed::move_to_thread(
-                                                    &mut editor.draft,
-                                                    &id,
-                                                    &project_id,
-                                                )
-                                            }
+                let list =
+                    if rows.is_empty() {
+                        div()
+                            .px_2()
+                            .py_3()
+                            .text_sm()
+                            .text_center()
+                            .text_color(theme.muted_foreground)
+                            .child("No threads found.")
+                            .into_any_element()
+                    } else {
+                        v_flex()
+                            .id("scheduled-task-thread-list")
+                            .max_h(px(240.))
+                            .overflow_y_scroll()
+                            .children(rows.iter().enumerate().map(
+                                |(index, (id, title, current))| {
+                                    let (view, id, project_id, search) = (
+                                        picked.clone(),
+                                        id.clone(),
+                                        project_id.clone(),
+                                        search_for_pick.clone(),
+                                    );
+                                    h_flex()
+                                        .id(("scheduled-task-thread-row", index))
+                                        .min_h(px(28.))
+                                        .items_center()
+                                        .px_2()
+                                        .py_1()
+                                        .rounded(px(4.))
+                                        .text_sm()
+                                        .cursor_pointer()
+                                        .hover(move |style| style.bg(accent))
+                                        .when(*current, |row| {
+                                            row.bg(theme.foreground.opacity(0.08))
                                         })
-                                    })
-                                })
-                        }))
-                        .into_any_element()
-                };
+                                        .child(div().min_w_0().truncate().child(title.clone()))
+                                        .on_click(move |_, window, cx| {
+                                            search.update(cx, |state, cx| {
+                                                state.set_value("", window, cx)
+                                            });
+                                            let (id, project_id) = (id.clone(), project_id.clone());
+                                            view.update(cx, |this, cx| {
+                                                this.edit(cx, |editor| match id {
+                                                    None => {
+                                                        ed::unbind_from_thread(&mut editor.draft);
+                                                        editor.draft.thread_mode =
+                                                            Some(json!(ed::NEW_THREAD));
+                                                    }
+                                                    Some(id) => ed::move_to_thread(
+                                                        &mut editor.draft,
+                                                        &id,
+                                                        &project_id,
+                                                    ),
+                                                })
+                                            })
+                                        })
+                                },
+                            ))
+                            .into_any_element()
+                    };
                 popup_shell(cx)
                     .w(px(320.))
                     .p_1()
@@ -890,7 +888,12 @@ impl ScheduledTasksPanel {
     }
 
     /// Answers of the pickers' calls: ref pages, the base ref lookup and the star.
-    pub(in crate::ui::settings::scheduled_tasks_panel) fn on_picker_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
+    pub(in crate::ui::settings::scheduled_tasks_panel) fn on_picker_call(
+        &mut self,
+        token: u64,
+        event: CallEvent,
+        cx: &mut Context<Self>,
+    ) {
         if matches!(event, CallEvent::Progress(_)) {
             return;
         }

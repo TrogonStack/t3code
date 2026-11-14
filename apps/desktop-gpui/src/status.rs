@@ -214,6 +214,34 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
+impl Status {
+    /// Whether settings panels fed from the project list (the scheduled task editor, the Projects
+    /// tab) need it again: `Connected` arrives first without a shell, and the shell lands later.
+    pub fn projects_changed(&self, previous: &Status) -> bool {
+        type Lists<'a> = Option<(&'a str, Option<(&'a [ProjectEntry], &'a [ProjectEntry])>)>;
+        fn lists(status: &Status) -> Lists<'_> {
+            match status {
+                Status::Connected {
+                    environment_id,
+                    shell,
+                    ..
+                } => Some((
+                    environment_id,
+                    shell
+                        .as_ref()
+                        .map(|s| (&s.project_entries[..], &s.archived_entries[..])),
+                )),
+                _ => None,
+            }
+        }
+        match (lists(self), lists(previous)) {
+            (Some(next), Some(old)) => next != old,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+}
+
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -340,5 +368,48 @@ mod tests {
             single.to_string(),
             "Connected to Local \u{b7} 1 project \u{b7} 1 thread"
         );
+    }
+
+    #[test]
+    fn a_seeded_shell_changes_the_project_lists() {
+        let connected = |entries: Vec<ProjectEntry>| Status::Connected {
+            label: "Local".to_owned(),
+            machine: MachineKind::Server,
+            can_pin: false,
+            environment_id: "primary".to_owned(),
+            shell: Some(ShellView {
+                project_entries: entries,
+                ..Default::default()
+            }),
+        };
+        let waiting = Status::Connected {
+            label: "Local".to_owned(),
+            machine: MachineKind::Server,
+            can_pin: false,
+            environment_id: "primary".to_owned(),
+            shell: None,
+        };
+        let named = |id: &str| ProjectEntry {
+            key: id.to_owned(),
+            id: id.to_owned(),
+            member_ids: vec![id.to_owned()],
+            title: id.to_owned(),
+            initials: String::new(),
+            color: 0,
+            pinned: false,
+            scratch: false,
+            root: String::new(),
+            logical_key: None,
+            remote: Vec::new(),
+            repository: None,
+            members: Vec::new(),
+            archived: false,
+        };
+        let entry = named("a");
+        let seeded = connected(vec![entry.clone()]);
+        assert!(seeded.projects_changed(&waiting));
+        assert!(!seeded.projects_changed(&connected(vec![entry.clone()])));
+        assert!(connected(vec![entry, named("b")]).projects_changed(&seeded));
+        assert!(!Status::Connecting.projects_changed(&seeded));
     }
 }

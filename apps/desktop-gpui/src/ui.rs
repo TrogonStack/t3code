@@ -878,7 +878,11 @@ impl MainView {
             usage.set_environment(environment);
             usage.set_access(access, cx);
         });
+        let projects_changed = status.projects_changed(&self.status);
         self.status = status;
+        if projects_changed {
+            self.sync_labs(cx);
+        }
         // Thread activity reorders recency on every delta, so the default must not follow it.
         if self.selected_project.is_none() {
             self.selected_project = self

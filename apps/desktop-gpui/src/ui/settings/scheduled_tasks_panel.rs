@@ -70,9 +70,14 @@ enum Pending {
     Save,
     Rotate,
     /// A page of the base branch picker's refs.
-    Refs { query: String, append: bool },
+    Refs {
+        query: String,
+        append: bool,
+    },
     /// The draft's base ref looked up on its own, for the button's remote label.
-    BaseLookup { name: String },
+    BaseLookup {
+        name: String,
+    },
     /// A star, with the favorites to put back if the server refuses it.
     Favorite(Vec<(String, String)>),
     Mutation {

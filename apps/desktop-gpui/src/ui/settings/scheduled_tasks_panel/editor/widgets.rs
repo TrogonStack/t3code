@@ -1,8 +1,10 @@
-//! The editor's building blocks: `Field` with its hint, `Select` at size "sm", the segmented
+//! The editor's building blocks: `Field` with its hint, the shared `Select`, the segmented
 //! schedule toggle, the weekday toggle group and the switch row.
 
 use super::super::*;
-use crate::ui::settings::components::Toggle;
+use crate::ui::settings::components::{
+    HoverHandler, KeyHandler, Menu as MenuSpec, SelectTrigger, Toggle, select_menu, tab_stop,
+};
 use gpui::ElementId;
 
 /// One select item: a label with an optional second line and a leading icon.
@@ -34,20 +36,24 @@ pub(super) struct Sel {
     pub placeholder: bool,
     pub options: Vec<Opt>,
     pub selected: Option<usize>,
+    /// The item under the pointer while the popup is open.
+    pub highlight: Option<usize>,
     pub width: f32,
 }
 
 pub(super) type PickItem = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+pub(super) type OnOpen = Rc<dyn Fn(bool, &mut Window, &mut App)>;
 
-/// `Select` (select.tsx) with `size="sm"`: a `min-h-7` trigger and a popup whose selected item
-/// carries `foreground/8`.
+/// The shared `SelectTrigger` and `select_menu` of the other tabs, with the popup capped at
+/// `max-h-60` so a long project list scrolls.
 pub(super) fn select(
     spec: Sel,
-    on_open: impl Fn(bool, &mut Window, &mut App) + 'static,
+    on_open: OnOpen,
+    on_hover: HoverHandler,
     pick: PickItem,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    let theme = Tokens::of(cx);
     let Sel {
         id,
         open,
@@ -57,105 +63,78 @@ pub(super) fn select(
         placeholder,
         options,
         selected,
+        highlight,
         width,
         ..
     } = spec;
-    let trigger = h_flex()
-        .id(id.clone())
-        .min_h(px(28.))
-        .w_full()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .px(px(11.))
-        .rounded(px(8.))
-        .border_1()
-        .border_color(theme.input)
-        .bg(if theme.dark {
-            theme.input.opacity(0.32)
-        } else {
-            theme.background
+    let muted = Tokens::of(cx).muted_foreground;
+    let handle = tab_stop(&ElementId::from(id.clone()), window, cx);
+    let on_key: KeyHandler = {
+        let on_open = on_open.clone();
+        Rc::new(move |event, window, cx| {
+            if matches!(
+                event.keystroke.key.as_str(),
+                "enter" | "space" | "down" | "up"
+            ) {
+                cx.stop_propagation();
+                on_open(true, window, cx);
+            }
         })
-        .text_size(px(14.))
-        .when(disabled, |trigger| trigger.opacity(0.64))
-        .when(!disabled, |trigger| trigger.cursor_pointer())
-        .child(
-            h_flex()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .children(lead.map(|icon| {
-                    Icon::new(icon)
-                        .size(px(14.))
-                        .text_color(theme.muted_foreground)
-                }))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .when(placeholder, |label| label.text_color(theme.muted_foreground))
-                        .child(current),
-                ),
-        )
-        .child(
-            div()
-                .opacity(0.7)
-                .child(Icon::new(Icons::ChevronDown).size(px(14.))),
+    };
+    let mut trigger = SelectTrigger::new(id.clone(), current.clone(), width, handle, on_key);
+    if let Some(icon) = lead {
+        trigger = trigger.leading(
+            Icon::new(icon)
+                .size(px(14.))
+                .text_color(muted)
+                .into_any_element(),
         );
+    }
+    if placeholder {
+        trigger = trigger.content(div().text_color(muted).child(current).into_any_element());
+    }
+    if disabled {
+        return div().opacity(0.64).child(trigger).into_any_element();
+    }
+    let labels: Vec<SharedString> = options.iter().map(|o| o.label.clone().into()).collect();
+    let icons: Vec<Option<Icons>> = options.iter().map(|o| o.lead).collect();
+    let descriptions: Vec<Option<SharedString>> = options
+        .iter()
+        .map(|o| o.secondary.clone().map(Into::into))
+        .collect();
+    let highlighted = if open {
+        highlight.or(selected).unwrap_or(usize::MAX)
+    } else {
+        usize::MAX
+    };
+    let menu_id = id.clone();
     Popover::new(SharedString::from(format!("{id}-menu")))
         .anchor(Anchor::TopLeft)
         .offset(px(4.))
-        .open(open && !disabled)
+        .open(open)
         .p_0()
         .appearance(false)
         .on_open_change(move |next, window, cx| on_open(*next, window, cx))
-        .trigger(PopTrigger::new(trigger))
+        .trigger(trigger)
         .content(move |_, _, cx| {
-            let theme = Tokens::of(cx);
-            let accent = theme.accent;
-            popup_shell(cx)
-                .w(px(width))
-                .max_w_full()
-                .max_h(px(240.))
-                .id(SharedString::from(format!("{id}-list")))
-                .overflow_y_scroll()
-                .p_1()
-                .children(options.iter().enumerate().map(|(index, option)| {
-                    let pick = pick.clone();
-                    h_flex()
-                        .id(SharedString::from(format!("{id}-{index}")))
-                        .min_h(px(28.))
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(px(4.))
-                        .text_sm()
-                        .cursor_pointer()
-                        .text_color(theme.foreground)
-                        .hover(move |style| style.bg(accent))
-                        .when(Some(index) == selected, |item| {
-                            item.bg(theme.foreground.opacity(0.08))
-                        })
-                        .children(option.lead.map(|icon| {
-                            Icon::new(icon)
-                                .size(px(14.))
-                                .text_color(theme.muted_foreground)
-                        }))
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .child(div().truncate().child(option.label.clone()))
-                                .children(option.secondary.clone().map(|text| {
-                                    div()
-                                        .truncate()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child(text)
-                                })),
-                        )
-                        .on_click(move |_, window, cx| pick(index, window, cx))
-                }))
+            select_menu(
+                &MenuSpec {
+                    id: "scheduled-task-select-item",
+                    labels: labels.clone(),
+                    icons: icons.clone(),
+                    headings: Vec::new(),
+                    descriptions: descriptions.clone(),
+                    selected: selected.unwrap_or(usize::MAX),
+                    highlighted,
+                    width,
+                    on_pick: pick.clone(),
+                    on_hover: on_hover.clone(),
+                },
+                cx,
+            )
+            .max_h(px(240.))
+            .id(SharedString::from(format!("{menu_id}-list")))
+            .overflow_y_scroll()
         })
         .into_any_element()
 }
@@ -280,27 +259,31 @@ pub(super) fn weekday_group(days: Vec<Day>, cx: &App) -> gpui::Div {
         .border_1()
         .border_color(theme.input)
         .overflow_hidden()
-        .children(days.into_iter().enumerate().map(|(index, (id, label, on, toggle))| {
-            div()
-                .id(id)
-                .h_full()
-                .min_w(px(28.))
-                .px(px(8.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(13.))
-                .cursor_pointer()
-                .when(index + 1 < count, |item| {
-                    item.border_r_1().border_color(theme.input)
-                })
-                .text_color(if on {
-                    theme.foreground
-                } else {
-                    theme.muted_foreground
-                })
-                .when(on, |item| item.bg(theme.foreground.opacity(0.08)))
-                .child(label)
-                .on_click(move |_, window, cx| toggle(window, cx))
-        }))
+        .children(
+            days.into_iter()
+                .enumerate()
+                .map(|(index, (id, label, on, toggle))| {
+                    div()
+                        .id(id)
+                        .h_full()
+                        .min_w(px(28.))
+                        .px(px(8.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(13.))
+                        .cursor_pointer()
+                        .when(index + 1 < count, |item| {
+                            item.border_r_1().border_color(theme.input)
+                        })
+                        .text_color(if on {
+                            theme.foreground
+                        } else {
+                            theme.muted_foreground
+                        })
+                        .when(on, |item| item.bg(theme.foreground.opacity(0.08)))
+                        .child(label)
+                        .on_click(move |_, window, cx| toggle(window, cx))
+                }),
+        )
 }

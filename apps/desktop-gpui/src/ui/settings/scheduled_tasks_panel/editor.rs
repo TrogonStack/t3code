@@ -43,6 +43,7 @@ pub(super) struct Editor {
     pub legacy_interval: bool,
     pub webhook_url: Option<String>,
     pub menu: Option<Menu>,
+    pub highlight: Option<usize>,
     pub saving: bool,
     pub rotating: bool,
     pub rotate_confirm: bool,
@@ -164,7 +165,8 @@ impl ScheduledTasksPanel {
                 .pending
                 .values()
                 .any(|pending| matches!(pending, Pending::Favorite(_)));
-            self.pickers.settle_favorites(&self.data.favorites, in_flight);
+            self.pickers
+                .settle_favorites(&self.data.favorites, in_flight);
             cx.notify();
         }
     }
@@ -300,6 +302,7 @@ impl ScheduledTasksPanel {
             webhook_url: task.and_then(|task| task.webhook_url.clone()),
             draft,
             menu: None,
+            highlight: None,
             saving: false,
             rotating: false,
             rotate_confirm: false,
@@ -569,6 +572,7 @@ impl ScheduledTasksPanel {
                 return;
             }
             editor.menu = open.then_some(menu);
+            editor.highlight = None;
             if !open || menu != Menu::Model {
                 self.pickers.keys = None;
             }
@@ -580,24 +584,47 @@ impl ScheduledTasksPanel {
         if let Some(editor) = self.editor.as_mut() {
             change(editor);
             editor.menu = None;
+            editor.highlight = None;
             editor.error = None;
             self.pickers.keys = None;
             cx.notify();
         }
     }
 
-    fn select(view: &Entity<Self>, spec: Sel, pick: Pick, cx: &App) -> AnyElement {
+    fn select(
+        view: &Entity<Self>,
+        spec: Sel,
+        pick: Pick,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let menu = spec.menu;
-        let (opened, picked) = (view.clone(), view.clone());
+        let (opened, hovered, picked) = (view.clone(), view.clone(), view.clone());
         widgets::select(
             spec,
-            move |next, _, cx| opened.update(cx, |this, cx| this.set_menu(menu, next, cx)),
+            Rc::new(move |next, _, cx| opened.update(cx, |this, cx| this.set_menu(menu, next, cx))),
+            Rc::new(move |index, cx| {
+                hovered.update(cx, |this, cx| {
+                    if let Some(editor) = this.editor.as_mut()
+                        && editor.menu == Some(menu)
+                        && editor.highlight != Some(index)
+                    {
+                        editor.highlight = Some(index);
+                        cx.notify();
+                    }
+                })
+            }),
             Rc::new(move |index, window, cx| {
                 let pick = pick.clone();
                 picked.update(cx, |this, cx| pick(this, index, window, cx))
             }),
+            window,
             cx,
         )
+    }
+
+    fn highlight(&self) -> Option<usize> {
+        self.editor.as_ref().and_then(|editor| editor.highlight)
     }
 
     fn project_label(options: &[ed::ProjectOption], id: &str) -> (String, bool) {
@@ -702,6 +729,7 @@ impl ScheduledTasksPanel {
                     Sel {
                         id: "scheduled-task-env".into(),
                         menu: Menu::Environment,
+                        highlight: self.highlight(),
                         open: menu == Some(Menu::Environment),
                         disabled: editing || env_ids.len() < 2,
                         lead: current_env.map(|e| crate::ui::machine_icon(e.machine)),
@@ -716,6 +744,7 @@ impl ScheduledTasksPanel {
                             this.change_environment(next, cx);
                         }
                     }),
+                    window,
                     cx,
                 ),
                 cx,
@@ -782,6 +811,7 @@ impl ScheduledTasksPanel {
                 Sel {
                     id: "scheduled-task-project".into(),
                     menu: Menu::Project,
+                    highlight: self.highlight(),
                     open: menu == Some(Menu::Project),
                     disabled: false,
                     lead: None,
@@ -800,6 +830,7 @@ impl ScheduledTasksPanel {
                         this.lookup_base(cx);
                     }
                 }),
+                window,
                 cx,
             ),
             cx,
@@ -818,6 +849,7 @@ impl ScheduledTasksPanel {
                 Sel {
                     id: "scheduled-task-workspace".into(),
                     menu: Menu::Workspace,
+                    highlight: self.highlight(),
                     open: menu == Some(Menu::Workspace),
                     disabled: false,
                     lead: None,
@@ -837,6 +869,7 @@ impl ScheduledTasksPanel {
                         this.edit(cx, |editor| editor.draft.workspace = kind);
                     }
                 }),
+                window,
                 cx,
             ),
             cx,
@@ -992,11 +1025,12 @@ impl ScheduledTasksPanel {
                                 .gap_2()
                                 .items_center()
                                 .child(inline("Run at"))
-                                .child(
-                                    div()
-                                        .w(px(128.))
-                                        .child(field(&self.inputs.time, false, window, cx)),
-                                )
+                                .child(div().w(px(128.)).child(field(
+                                    &self.inputs.time,
+                                    false,
+                                    window,
+                                    cx,
+                                )))
                                 .child(small(self.zone.name().to_owned()))
                                 .child(small("on".to_owned())),
                         )
@@ -1044,9 +1078,7 @@ impl ScheduledTasksPanel {
             "Disabled tasks stay saved but do not run.",
             "scheduled-task-draft-enabled",
             draft.enabled,
-            Self::toggle_with(view, |editor| {
-                editor.draft.enabled = !editor.draft.enabled
-            }),
+            Self::toggle_with(view, |editor| editor.draft.enabled = !editor.draft.enabled),
             window,
             cx,
         ));
@@ -1164,12 +1196,12 @@ impl ScheduledTasksPanel {
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(field(&self.inputs.webhook_url, true, window, cx)),
-                    )
+                    .child(div().flex_1().min_w_0().child(field(
+                        &self.inputs.webhook_url,
+                        true,
+                        window,
+                        cx,
+                    )))
                     .child(actions)
                     .into_any_element()
             }
@@ -1192,7 +1224,10 @@ impl ScheduledTasksPanel {
                 continue;
             };
             let id = filter.id;
-            let ops: Vec<Opt> = FilterOp::ALL.iter().map(|op| Opt::plain(op.label())).collect();
+            let ops: Vec<Opt> = FilterOp::ALL
+                .iter()
+                .map(|op| Opt::plain(op.label()))
+                .collect();
             let remove = view.clone();
             value.update(cx, |state, cx| {
                 let placeholder = if filter.op == FilterOp::In {
@@ -1210,7 +1245,12 @@ impl ScheduledTasksPanel {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().flex_1().min_w_0().child(field(&path, false, window, cx)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(field(&path, false, window, cx)),
+                            )
                             .child(
                                 icon_button(
                                     ("scheduled-task-filter-remove", index),
@@ -1224,10 +1264,8 @@ impl ScheduledTasksPanel {
                                         this.collect(cx);
                                         this.inputs.filters.remove(&id);
                                         this.edit(cx, |editor| {
-                                            editor.draft.filters = ed::remove_filter_draft(
-                                                &editor.draft.filters,
-                                                id,
-                                            );
+                                            editor.draft.filters =
+                                                ed::remove_filter_draft(&editor.draft.filters, id);
                                         });
                                     })
                                 }),
@@ -1242,6 +1280,7 @@ impl ScheduledTasksPanel {
                                 Sel {
                                     id: format!("scheduled-task-filter-op-{index}").into(),
                                     menu: Menu::Op(id),
+                                    highlight: self.highlight(),
                                     open: menu == Some(Menu::Op(id)),
                                     disabled: false,
                                     lead: None,
@@ -1254,17 +1293,15 @@ impl ScheduledTasksPanel {
                                 Rc::new(move |this, pick, _, cx| {
                                     if let Some(op) = FilterOp::ALL.get(pick).copied() {
                                         this.edit(cx, |editor| {
-                                            if let Some(f) = editor
-                                                .draft
-                                                .filters
-                                                .iter_mut()
-                                                .find(|f| f.id == id)
+                                            if let Some(f) =
+                                                editor.draft.filters.iter_mut().find(|f| f.id == id)
                                             {
                                                 f.op = op;
                                             }
                                         });
                                     }
                                 }),
+                                window,
                                 cx,
                             )))
                             .when(filter.op != FilterOp::Exists, |row| {
@@ -1409,6 +1446,7 @@ impl ScheduledTasksPanel {
                                     Sel {
                                         id: "scheduled-task-encoding".into(),
                                         menu: Menu::Encoding,
+                                        highlight: self.highlight(),
                                         open: menu == Some(Menu::Encoding),
                                         disabled: false,
                                         lead: None,
@@ -1431,6 +1469,7 @@ impl ScheduledTasksPanel {
                                             });
                                         }
                                     }),
+                                    window,
                                     cx,
                                 ),
                                 cx,
@@ -1524,4 +1563,3 @@ impl ScheduledTasksPanel {
         ))
     }
 }
-
