@@ -6,7 +6,7 @@ use super::super::devices_panel::widgets::{Variant, button, icon_button};
 use super::threads::RESET;
 use super::*;
 use crate::settings_threads as threads;
-use gpui::Anchor;
+use gpui::{Anchor, TextAlign};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -413,7 +413,8 @@ impl ScopedPanel {
                         .bordered(false)
                         .disabled(disabled)
                         .h(px(26.))
-                        .px_0(),
+                        .px_0()
+                        .text_align(TextAlign::Center),
                 ),
             )
             .child(step(
