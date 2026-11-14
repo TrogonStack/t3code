@@ -6,6 +6,7 @@ mod appearance_themes;
 mod appearance_typography;
 mod components;
 pub(crate) mod confirm_dialog;
+mod connections_panel;
 mod devices_panel;
 mod diffs_panel;
 mod keybindings_panel;
@@ -37,6 +38,7 @@ use components::{
     ghost_button, group, reset_button, row, section, select_menu, select_menu_checked, switch,
 };
 use confirm_dialog::{ConfirmSpec, confirm_dialog};
+use connections_panel::ConnectionsPanel;
 use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
@@ -224,6 +226,7 @@ pub struct SettingsDialog {
     voice: Entity<ScopedPanel>,
     browser: Entity<ScopedPanel>,
     secrets: Entity<SecretsPanel>,
+    connections: Entity<ConnectionsPanel>,
     scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
     projects: Entity<ProjectsPanel>,
@@ -288,6 +291,7 @@ impl SettingsDialog {
             )
         });
         let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
+        let connections = cx.new(ConnectionsPanel::new);
         let providers =
             cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
         let projects = cx.new(|cx| ProjectsPanel::new(actions.clone(), scope.clone(), window, cx));
@@ -340,6 +344,7 @@ impl SettingsDialog {
             voice,
             browser,
             secrets,
+            connections,
             scheduled_tasks,
             providers,
             projects,
@@ -1502,6 +1507,10 @@ impl SettingsDialog {
             self.projects
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.projects.clone().into_any_element()]
+        } else if self.section == Section::Connections {
+            self.connections
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.connections.clone().into_any_element()]
         } else if self.section == Section::Keybindings {
             self.keybindings
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));

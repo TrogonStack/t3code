@@ -546,6 +546,30 @@ fn load_or_create_device_key() -> Result<crate::dpop::DpopKey, String> {
     Err("the device key needs the macOS Keychain".to_owned())
 }
 
+static RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+/// The async runtime the account's network calls run on; set once at startup.
+pub fn bind_runtime(handle: tokio::runtime::Handle) {
+    let _ = RUNTIME.set(handle);
+}
+
+/// Starts the browser sign-in from the UI thread.
+pub fn spawn_sign_in() {
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.spawn(async {
+            if let Err(message) = service().sign_in(open_in_browser).await {
+                eprintln!("[cloud] sign-in failed: {message}");
+            }
+        });
+    }
+}
+
+pub fn spawn_sign_out() {
+    if let Some(runtime) = RUNTIME.get() {
+        runtime.spawn(service().sign_out());
+    }
+}
+
 /// Opens `url` in the default browser, as Electron's `shell.openExternal` does.
 pub fn open_in_browser(url: &str) {
     let program = if cfg!(target_os = "macos") {

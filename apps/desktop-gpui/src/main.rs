@@ -4,7 +4,6 @@ mod auth;
 mod auth_dpop;
 mod branch_picker;
 mod clone_flow;
-#[allow(dead_code)] // the sign-in entry points land with the Connections panel next
 mod cloud;
 mod config;
 mod confirm;
@@ -141,6 +140,7 @@ fn main() {
             cloud::service().deliver_url(&url);
         }
     });
+    cloud::bind_runtime(runtime.handle().clone());
     runtime.spawn(cloud::service().restore());
     app.run(move |cx: &mut App| {
         gpui_component::init(cx);
