@@ -111,6 +111,11 @@ impl SnapShotPanel {
     }
 
     fn state(&self) -> State {
+        if self.wizard.is_some() && !self.settings.enabled {
+            let mut settings = self.settings.clone();
+            settings.enabled = true;
+            return State::compute(&settings, self.permissions);
+        }
         State::compute(&self.settings, self.permissions)
     }
 
@@ -326,7 +331,6 @@ impl SnapShotPanel {
             mac_permissions::request_screen_recording();
             self.refresh(cx);
         }
-        self.save(|settings| settings.enabled = true, cx);
         let ready = snap::access_ready(&self.state());
         if let Some(wizard) = &mut self.wizard {
             wizard.error = !ready;
@@ -342,6 +346,7 @@ impl SnapShotPanel {
             cx.notify();
             return;
         }
+        self.save(|settings| settings.enabled = true, cx);
         self.close_setup(true, cx);
     }
 
@@ -638,7 +643,7 @@ impl Render for SnapShotPanel {
                 }
             })
         };
-        let checked = enabled || self.wizard.is_some();
+        let checked = enabled;
         let main_switch = disabled_dim(
             available,
             switch("snap-shot-enabled", checked, toggle, window, cx),
