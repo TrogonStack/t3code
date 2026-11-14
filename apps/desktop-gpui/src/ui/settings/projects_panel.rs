@@ -530,22 +530,35 @@ impl ProjectsPanel {
     }
 
     fn callout(text: &'static str, cx: &App) -> AnyElement {
+        // `Alert variant="info"`: `--info` is blue-500 in both themes.
         let theme = Tokens::of(cx);
+        let info: Hsla = gpui::rgb(0x3b82f6).into();
         h_flex()
             .items_start()
-            .gap_3()
-            .rounded(px(8.))
+            .gap_2()
+            .rounded(px(12.))
             .border_1()
-            .border_color(theme.border)
-            .px_3()
-            .py_2()
+            .border_color(info.opacity(0.32))
+            .bg(info.opacity(0.04))
+            .px(px(14.))
+            .py_3()
+            .text_size(px(14.))
+            .line_height(px(20.))
             .child(
-                Icon::new(Icons::Info)
-                    .size(px(16.))
-                    .mt(px(2.))
-                    .text_color(theme.muted_foreground),
+                div()
+                    .h(px(20.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .child(Icon::new(Icons::Info).size(px(16.)).text_color(info)),
             )
-            .child(div().text_size(px(14.)).child(text))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_color(theme.muted_foreground)
+                    .child(text),
+            )
             .into_any_element()
     }
 
