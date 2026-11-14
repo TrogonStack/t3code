@@ -90,6 +90,7 @@ pub struct KeybindingsPanel {
     scope: Entity<ScopeBar>,
     wide: bool,
     keybindings: Keybindings,
+    merged: Vec<crate::keybindings::Rule>,
     search: Entity<InputState>,
     when_input: Entity<InputState>,
     when_trigger: Rc<Cell<Bounds<Pixels>>>,
@@ -135,6 +136,7 @@ impl KeybindingsPanel {
             scope,
             wide: true,
             keybindings: Keybindings::default(),
+            merged: rules::merge_with_defaults(&[]),
             search,
             when_input,
             when_trigger: Rc::new(Cell::new(Bounds::default())),
@@ -165,7 +167,8 @@ impl KeybindingsPanel {
             return;
         }
         self.keybindings = keybindings;
-        let ids: Vec<String> = rules::build_rows(&self.keybindings.rules, is_mac())
+        self.merged = rules::merge_with_defaults(&self.keybindings.rules);
+        let ids: Vec<String> = rules::build_rows(&self.merged, is_mac())
             .into_iter()
             .map(|row| row.id)
             .collect();
@@ -1549,7 +1552,7 @@ impl KeybindingsPanel {
             .content(value)
             .open(self.picking);
         let popup = self.picking.then(|| {
-            let options = command_options(&self.keybindings.rules);
+            let options = command_options(&self.merged);
             let mut list = popup_shell(COMMAND_WIDTH, cx)
                 .id("keybinding-commands")
                 .max_h(px(288.))
@@ -1695,96 +1698,87 @@ impl Render for KeybindingsPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Tokens::of(cx);
         let editable = self.editable(cx);
-        let all = rules::build_rows(&self.keybindings.rules, is_mac());
+        let all = rules::build_rows(&self.merged, is_mac());
         let query = self.search.read(cx).value().to_string();
         let shown = filter_rows(&all, &query);
         let sections = group_rows(&shown);
 
-        let mut rows: Vec<AnyElement> = Vec::new();
         let open_file = self.keybindings.path.clone().map(|path| {
             icon_button("keybindings-open-file", Variant::Ghost, true, cx)
                 .tooltip(tooltip("Open keybindings.json"))
                 .child(Icon::new(Icons::ExternalLink).size(px(16.)))
                 .on_click(move |_, _, cx| cx.open_url(&format!("file://{path}")))
         });
-        rows.push(
-            h_flex()
-                .px_4()
-                .py_3()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(field(&self.search, false, window, cx)),
-                )
-                .child(
-                    button("keybindings-add", Variant::Outline, editable, cx)
-                        .child(Icon::new(Icons::Plus).size(px(14.)))
-                        .child("Add keybinding")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            if this.editable(cx) && this.new.is_none() {
-                                this.new = Some(NewRow {
-                                    command: None,
-                                    key: String::new(),
-                                    when: String::new(),
-                                });
-                                cx.notify();
-                            }
-                        })),
-                )
-                .children(open_file)
-                .into_any_element(),
-        );
+        let toolbar = h_flex()
+            .px_4()
+            .py_3()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(field(&self.search, false, window, cx)),
+            )
+            .child(
+                button("keybindings-add", Variant::Outline, editable, cx)
+                    .child(Icon::new(Icons::Plus).size(px(14.)))
+                    .child("Add keybinding")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.editable(cx) && this.new.is_none() {
+                            this.new = Some(NewRow {
+                                command: None,
+                                key: String::new(),
+                                when: String::new(),
+                            });
+                            cx.notify();
+                        }
+                    })),
+            )
+            .children(open_file)
+            .into_any_element();
+        let mut page = v_flex()
+            .gap_8()
+            .child(section("Keybindings", group(vec![toolbar], cx)));
         if !editable {
             let text = if self.connected(cx) {
                 "This connection can view keybindings but cannot change them."
             } else {
                 "Connect an environment to change keybindings."
             };
-            rows.push(div().px_4().py_2().child(note(text, cx)).into_any_element());
+            page = page.child(note(text, cx));
         }
         if let Some(error) = &self.error {
-            rows.push(
-                div()
-                    .px_4()
-                    .py_2()
-                    .child(problem(error.clone(), cx))
-                    .into_any_element(),
-            );
+            page = page.child(problem(error.clone(), cx));
         }
         if let Some(new) = &self.new {
-            rows.push(self.new_row_view(new, &all, editable, window, cx));
+            page = page.child(group(
+                vec![self.new_row_view(new, &all, editable, window, cx)],
+                cx,
+            ));
         }
         if sections.is_empty() {
-            rows.push(
-                div()
-                    .px_4()
-                    .py_6()
-                    .flex()
-                    .justify_center()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("No keybindings match your search.")
-                    .into_any_element(),
-            );
+            page = page.child(group(
+                vec![
+                    div()
+                        .px_4()
+                        .py_12()
+                        .flex()
+                        .justify_center()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child("No keybindings match your search.")
+                        .into_any_element(),
+                ],
+                cx,
+            ));
         }
         for (title, members) in sections {
-            rows.push(
-                div()
-                    .px_4()
-                    .py_2()
-                    .bg(theme.muted.opacity(0.4))
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.muted_foreground)
-                    .child(title)
-                    .into_any_element(),
-            );
-            for row in members {
-                rows.push(self.row_view(row, &all, editable, window, cx));
-            }
+            let rows = members
+                .into_iter()
+                .map(|row| self.row_view(row, &all, editable, window, cx))
+                .collect();
+            page = page.child(section(title, group(rows, cx)));
         }
-        v_flex().child(section("Keybindings", group(rows, cx)))
+        page
     }
 }

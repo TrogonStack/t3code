@@ -9,7 +9,6 @@ use std::sync::OnceLock;
 /// Call tokens of the Keybindings tab, above every other range.
 pub const TOKEN_BASE: u64 = 1 << 53;
 pub const MAX_WHEN_DEPTH: usize = 64;
-#[cfg(test)]
 const MAX_KEYBINDINGS: usize = 256;
 
 /// `DEFAULT_KEYBINDINGS` as `(key, command, when)`.
@@ -31,7 +30,6 @@ const DEFAULTS: &[(&str, &str, &str)] = &[
     ),
     ("mod+d", "terminal.split", "terminalFocus"),
     ("mod+shift+d", "terminal.splitVertical", "terminalFocus"),
-    ("mod+shift+d", "composer.dictation", "!terminalFocus"),
     ("mod+n", "terminal.new", "terminalFocus"),
     ("mod+w", "terminal.close", "terminalFocus"),
     ("mod+w", "rightPanel.close", "!terminalFocus"),
@@ -157,7 +155,6 @@ const STATIC_COMMANDS: &[&str] = &[
     "composer.sendAlternate",
     "composer.sendBackground",
     "composer.sendAndNewThread",
-    "composer.dictation",
     "composer.host",
     "composer.cycleHost",
     "composer.effort",
@@ -752,10 +749,8 @@ pub fn default_rules() -> &'static [Rule] {
     })
 }
 
-/// `mergeWithDefaultKeybindings`; the config stream already carries the merged rules, so only
-/// the tests build them.
-#[cfg(test)]
-fn merge_with_defaults(custom: &[Rule]) -> Vec<Rule> {
+/// `mergeWithDefaultKeybindings`.
+pub fn merge_with_defaults(custom: &[Rule]) -> Vec<Rule> {
     if custom.is_empty() {
         return default_rules().to_vec();
     }
@@ -1033,7 +1028,6 @@ pub fn command_label(command: &str) -> String {
         "composer.sendAlternate" => "Composer: Opposite Queue or Steer Action",
         "composer.sendBackground" => "Composer: Start in Background",
         "composer.sendAndNewThread" => "Composer: Send and Start New Thread",
-        "composer.dictation" => "Composer: Start or Finish Dictation",
         "thread.steerQueuedMessage" => "Queue: Send First Queued Message",
         "thread.editQueuedMessage" => "Queue: Edit Last Queued Message",
         "thread.copyReference" => "Pull Request: Copy Link or Thread",
@@ -1041,9 +1035,9 @@ pub fn command_label(command: &str) -> String {
         "usage.tokens" => "Usage: Tokens",
         "usage.limits" => "Usage: Limits",
         "usage.period.day" => "Usage: Period: Past 24h",
-        "usage.period.week" => "Usage: Period: Past 7 days",
-        "usage.period.month" => "Usage: Period: Past 30 days",
-        "usage.period.quarter" => "Usage: Period: Past 90 days",
+        "usage.period.week" => "Usage: Period: 7 days",
+        "usage.period.month" => "Usage: Period: 30 days",
+        "usage.period.quarter" => "Usage: Period: 90 days",
         "view.reopenClosed" => "Reopen Closed Tab",
         "preview.focusUrl" => "Preview: Focus URL",
         _ => "",
@@ -1371,10 +1365,7 @@ mod tests {
             command_label("script.run-tests.run"),
             "Run Script: Run Tests"
         );
-        assert_eq!(
-            command_label("usage.period.week"),
-            "Usage: Period: Past 7 days"
-        );
+        assert_eq!(command_label("usage.period.week"), "Usage: Period: 7 days");
         assert_eq!(command_label("composer.cycleHost"), "Composer: Cycle Host");
     }
 
@@ -1385,6 +1376,57 @@ mod tests {
         let titles: Vec<_> = group_rows(&refs).into_iter().map(|g| g.0).collect();
         assert_eq!(titles.first(), Some(&"Navigation"));
         assert_eq!(titles.last(), Some(&"Other"));
+    }
+
+    #[test]
+    fn rows_match_the_web_output() {
+        let custom: Vec<Rule> = [
+            ("mod+shift+9", "chat.new", "!terminalFocus"),
+            ("mod+alt+9", "chat.new", ""),
+            ("mod+y", "script.build.run", ""),
+            (
+                "mod+shift+y",
+                "script.test-all.run",
+                "isDesktop || !terminalFocus",
+            ),
+            ("ctrl+k", "commandPalette.toggle", ""),
+            ("mod+k", "terminal.clear", ""),
+        ]
+        .iter()
+        .filter_map(|(key, command, when)| compile(key, command, when))
+        .collect();
+        let mut out = String::new();
+        for (name, rules) in [("defaults", Vec::new()), ("custom", custom)] {
+            let rows = build_rows(&merge_with_defaults(&rules), true);
+            for (suffix, query) in [
+                ("", ""),
+                (":search:ctrl", "  Ctrl "),
+                (":search:usage", "usage"),
+            ] {
+                if name == "custom" && suffix.is_empty() {
+                    continue;
+                }
+                out.push_str(&format!("# {name}{suffix}\n"));
+                let shown = filter_rows(&rows, query);
+                for (title, members) in group_rows(&shown) {
+                    out.push_str(&format!("## {title}\n"));
+                    for row in members {
+                        out.push_str(&format!(
+                            "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                            command_label(&row.command),
+                            row.key,
+                            row.when,
+                            row.source.label(),
+                            row.default_key.as_deref().unwrap_or("-"),
+                            row.default_when,
+                            row.conflicts.join("|"),
+                        ));
+                    }
+                }
+            }
+        }
+        let expected = include_str!("testdata/keybinding_rows.web.txt");
+        assert_eq!(out, expected);
     }
 
     #[test]
