@@ -538,6 +538,8 @@ impl RenderOnce for SelectTrigger {
 pub(super) struct Menu {
     pub id: &'static str,
     pub labels: Vec<SharedString>,
+    pub icons: Vec<Option<Icons>>,
+    pub headings: Vec<(usize, SharedString)>,
     pub selected: usize,
     pub highlighted: usize,
     pub width: f32,
@@ -584,6 +586,8 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
     let Menu {
         id,
         labels,
+        icons,
+        headings,
         selected,
         highlighted,
         width,
@@ -597,35 +601,62 @@ fn menu_items(menu: &Menu, check: bool, cx: &App) -> gpui::Div {
         theme.accent_foreground,
         theme.foreground.opacity(0.08),
     );
-    popup_shell(*width, cx).children(labels.iter().enumerate().map(|(index, label)| {
+    let muted = theme.muted_foreground;
+    let mut items: Vec<AnyElement> = Vec::new();
+    for (index, label) in labels.iter().enumerate() {
+        if let Some((_, heading)) = headings.iter().find(|(at, _)| *at == index) {
+            items.push(
+                div()
+                    .px_2()
+                    .py(px(6.))
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(muted)
+                    .child(heading.clone())
+                    .into_any_element(),
+            );
+        }
         let pick = on_pick.clone();
         let hover = on_hover.clone();
-        div()
-            .id((id, index))
-            .min_h(px(28.))
-            .flex()
-            .items_center()
-            .px_2()
-            .py_1()
-            .rounded(px(4.))
-            .text_sm()
-            .cursor_pointer()
-            .when(index == selected, |item| item.bg(chosen))
-            .when(index == highlighted, |item| {
-                item.bg(accent).text_color(accent_foreground)
-            })
-            .on_hover(move |entered, _, cx| {
-                if *entered {
-                    hover(index, cx);
-                }
-            })
-            .on_click(move |_, window, cx| pick(index, window, cx))
-            .when(check, |item| item.justify_between().gap_4())
-            .child(label.clone())
-            .when(check && index == selected, |item| {
-                item.child(Icon::new(IconName::Check).size(px(16.)))
-            })
-    }))
+        let content = match icons.get(index).cloned().flatten() {
+            Some(icon) => h_flex()
+                .items_center()
+                .gap_2()
+                .child(Icon::new(icon).size(px(16.)))
+                .child(label.clone())
+                .into_any_element(),
+            None => label.clone().into_any_element(),
+        };
+        items.push(
+            div()
+                .id((id, index))
+                .min_h(px(28.))
+                .flex()
+                .items_center()
+                .px_2()
+                .py_1()
+                .rounded(px(4.))
+                .text_sm()
+                .cursor_pointer()
+                .when(index == selected, |item| item.bg(chosen))
+                .when(index == highlighted, |item| {
+                    item.bg(accent).text_color(accent_foreground)
+                })
+                .on_hover(move |entered, _, cx| {
+                    if *entered {
+                        hover(index, cx);
+                    }
+                })
+                .on_click(move |_, window, cx| pick(index, window, cx))
+                .when(check, |item| item.justify_between().gap_4())
+                .child(content)
+                .when(check && index == selected, |item| {
+                    item.child(Icon::new(IconName::Check).size(px(16.)))
+                })
+                .into_any_element(),
+        );
+    }
+    popup_shell(*width, cx).children(items)
 }
 
 /// `Button variant="ghost"` (button.tsx:59-60): `rounded-[--control-radius]` (8px), a transparent

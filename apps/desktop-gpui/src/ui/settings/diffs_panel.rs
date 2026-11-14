@@ -282,6 +282,8 @@ impl DiffsPanel {
             .content(move |_, _, cx| {
                 select_menu(
                     &Menu {
+                        icons: Vec::new(),
+                        headings: Vec::new(),
                         id: choice.id(),
                         labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,

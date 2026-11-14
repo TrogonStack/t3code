@@ -1625,6 +1625,8 @@ impl SettingsDialog {
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let menu = Menu {
+                    icons: Vec::new(),
+                    headings: Vec::new(),
                     id: pick.id(),
                     labels: labels.iter().map(|l| l.to_string().into()).collect(),
                     selected,

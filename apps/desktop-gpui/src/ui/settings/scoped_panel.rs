@@ -937,13 +937,23 @@ impl ScopedPanel {
         } else {
             "Unavailable"
         };
-        let trigger = SelectTrigger::new(
+        let mut trigger = SelectTrigger::new(
             id,
             self.trigger_label(pick, selected, &labels, unset),
             width,
             self.triggers[pick.index()].clone(),
             on_key,
         );
+        if let Some(icon) = self.trigger_icon(pick) {
+            trigger = trigger.leading(
+                div()
+                    .mr(px(2.))
+                    .flex_shrink_0()
+                    .child(Icon::new(icon).size(px(16.)))
+                    .into_any_element(),
+            );
+        }
+        let (icons, headings) = (self.menu_icons(pick, cx), self.menu_headings(pick, cx));
         if why.is_some() {
             return Self::inert(id, why, trigger.into_any_element());
         }
@@ -991,6 +1001,8 @@ impl ScopedPanel {
             .content(move |_, _, cx| {
                 select_menu(
                     &Menu {
+                        icons: icons.clone(),
+                        headings: headings.clone(),
                         id,
                         labels: labels.iter().map(|l| l.to_string().into()).collect(),
                         selected,

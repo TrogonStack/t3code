@@ -2,12 +2,13 @@
 //! (`settings_voice::VoiceSettings`); the shared dictionary and the cleanup model are server
 //! settings written through `ScopedPanel::write`.
 
-use super::super::components::{outline_button, row, row_with_preview};
-use super::super::devices_panel::widgets::{Variant, icon_button};
+use super::super::components::{row, row_with_preview};
+use super::super::devices_panel::widgets::{Variant, button, icon_button};
 use super::*;
 use crate::settings_voice::{self as voice, Mic, Word};
 
 const SUCCESS: u32 = 0x10b981;
+const UNAVAILABLE: &str = "Chosen environment (unavailable)";
 
 impl ScopedPanel {
     pub(super) fn voice(
@@ -40,6 +41,40 @@ impl ScopedPanel {
         }
     }
 
+    pub(super) fn menu_icons(&self, pick: Pick, cx: &App) -> Vec<Option<Icons>> {
+        match pick {
+            Pick::Destination => self
+                .destinations(cx)
+                .into_iter()
+                .map(|(id, label)| match id {
+                    None => Some(Icons::MicOff),
+                    Some(_) if label == UNAVAILABLE => None,
+                    Some(_) => Some(Icons::Monitor),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn menu_headings(&self, pick: Pick, cx: &App) -> Vec<(usize, SharedString)> {
+        match pick {
+            Pick::Destination if self.destinations(cx).len() > 1 => {
+                vec![(1, "On an environment".into())]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn trigger_icon(&self, pick: Pick) -> Option<Icons> {
+        (pick == Pick::Destination).then(|| {
+            if self.grants.destination.is_some() {
+                Icons::Monitor
+            } else {
+                Icons::MicOff
+            }
+        })
+    }
+
     pub(super) fn trigger_label(
         &self,
         pick: Pick,
@@ -68,10 +103,7 @@ impl ScopedPanel {
         if let Some(chosen) = &self.grants.destination
             && !environments.iter().any(|e| &e.id == chosen)
         {
-            out.push((
-                Some(chosen.clone()),
-                "Chosen environment (unavailable)".to_owned(),
-            ));
+            out.push((Some(chosen.clone()), UNAVAILABLE.to_owned()));
         }
         out
     }
@@ -269,7 +301,7 @@ impl ScopedPanel {
                         cx.notify();
                     })
                 })
-                .child(Icon::new(Icons::RefreshCw).size(px(14.)))
+                .child(glyph(Icons::RefreshCw, 16., theme.muted_foreground))
                 .into_any_element()
         };
         let order = self.voice.order();
@@ -303,6 +335,7 @@ impl ScopedPanel {
                 |id: &'static str, steps: isize, icon: Icons, enabled: bool, label: String| {
                     let (view, key) = (view.clone(), key.clone());
                     icon_button((id, index), Variant::GhostMuted, enabled, cx)
+                        .size(px(24.))
                         .tooltip(tooltip(label))
                         .when(enabled, |button| {
                             button.on_click(move |_, _, cx| {
@@ -342,7 +375,7 @@ impl ScopedPanel {
                                 .bg(gpui::rgb(SUCCESS).opacity(0.12))
                                 .px_1()
                                 .text_size(px(11.))
-                                .text_color(gpui::rgb(SUCCESS))
+                                .text_color(gpui::rgb(if theme.dark { 0x34d399 } else { 0x047857 }))
                                 .child("In use"),
                         )
                     })
@@ -374,7 +407,7 @@ impl ScopedPanel {
                             ))
                             .child(match forget {
                                 Some(forget) => forget.into_any_element(),
-                                None => div().size(px(28.)).into_any_element(),
+                                None => div().size(px(24.)).into_any_element(),
                             }),
                     ),
             );
@@ -566,14 +599,16 @@ impl ScopedPanel {
         };
         let input = sm_field(&editor.draft, false, false, disabled, window, cx);
         let add_view = view.clone();
-        let add = outline_button(add_id, cx)
-            .when(!can_add, |button| button.opacity(0.64))
+        let add = button(add_id, Variant::Outline, can_add, cx)
+            .h(px(32.))
+            .px(px(11.))
+            .gap_2()
             .when(can_add, |button| {
                 button.on_click(move |_, window, cx| {
                     add_view.update(cx, |this, cx| this.add_words(which, window, cx))
                 })
             })
-            .child(Icon::new(Icons::Plus).size(px(14.)))
+            .child(glyph(Icons::Plus, 16., theme.muted_foreground).mx(px(-2.)))
             .child("Add");
         let alias_for = editor.alias_for;
         let mut chips = h_flex().flex_wrap().gap_1p5();
@@ -584,14 +619,14 @@ impl ScopedPanel {
             let mut chip = h_flex()
                 .items_center()
                 .gap_1()
-                .min_h(px(28.))
+                .py(px(2.))
                 .pl_2()
                 .pr(px(2.))
-                .rounded(px(8.))
+                .rounded(px(6.))
                 .border_1()
-                .border_color(theme.input)
-                .bg(theme.muted.opacity(0.5))
-                .text_sm()
+                .border_color(theme.border.opacity(0.6))
+                .bg(theme.muted.opacity(0.3))
+                .text_xs()
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
@@ -616,16 +651,25 @@ impl ScopedPanel {
                 )))
             } else {
                 chip.child(
-                    outline_button((open_id, index), cx)
-                        .when(full || disabled, |button| button.opacity(0.64))
-                        .when(!full && !disabled, |button| {
-                            button.on_click(move |_, window, cx| {
-                                open_view.update(cx, |this, cx| {
-                                    this.begin_alias(which, index, window, cx)
-                                })
-                            })
+                    button(
+                        (open_id, index),
+                        Variant::GhostMuted,
+                        !full && !disabled,
+                        cx,
+                    )
+                    .h(px(24.))
+                    .px(px(7.))
+                    .gap_1()
+                    .text_size(px(12.))
+                    .line_height(px(16.))
+                    .ml_auto()
+                    .when(!full && !disabled, |button| {
+                        button.on_click(move |_, window, cx| {
+                            open_view
+                                .update(cx, |this, cx| this.begin_alias(which, index, window, cx))
                         })
-                        .child("Alias"),
+                    })
+                    .child("Alias"),
                 )
             };
             let _ = alias_id;
@@ -826,9 +870,19 @@ impl ScopedPanel {
     }
 }
 
-/// A `Button size="sm" variant="outline"` that has no action to run here.
+/// `Button size="sm" variant="outline"` with a 16px `MicIcon` at `-mx-0.5`, with no action to run.
 fn button_disabled(id: &'static str, label: &'static str, cx: &App) -> AnyElement {
-    super::super::devices_panel::widgets::button(id, Variant::Outline, false, cx)
+    let muted = Tokens::of(cx).muted_foreground;
+    button(id, Variant::Outline, false, cx)
+        .child(glyph(Icons::Mic, 16., muted).mx(px(-2.)))
         .child(label)
         .into_any_element()
+}
+
+/// An icon in the colour a button gives it (`--control-icon-color`): muted for outline and ghost.
+fn glyph(icon: Icons, size: f32, color: Hsla) -> gpui::Div {
+    div()
+        .flex_shrink_0()
+        .text_color(color)
+        .child(Icon::new(icon).size(px(size)))
 }
