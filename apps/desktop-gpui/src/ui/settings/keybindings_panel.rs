@@ -32,7 +32,7 @@ use std::rc::Rc;
 const KEY_INPUT_WIDTH: f32 = 176.;
 const COMMAND_WIDTH: f32 = 224.;
 const WHEN_WIDTH: f32 = 544.;
-const OPERATOR_WIDTH: f32 = 96.;
+const OPERATOR_WIDTH: f32 = 144.;
 
 fn eid(prefix: &str, id: &str) -> ElementId {
     ElementId::from(SharedString::from(format!("{prefix}-{id}")))
@@ -845,7 +845,7 @@ impl KeybindingsPanel {
                     )
                 })
                 .collect();
-            self.pick_list(options, path.clone(), &select_id, 96., cx)
+            self.pick_list(options, path.clone(), &select_id, OPERATOR_WIDTH, cx)
         });
         let operator_select = div()
             .relative()
