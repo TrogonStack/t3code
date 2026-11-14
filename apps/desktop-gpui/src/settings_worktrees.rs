@@ -105,8 +105,9 @@ fn index_of(options: &[(&str, &str)], wire: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// Unset resolves to the built-in "recursive" (`PROJECT_FILE_BACKED_SETTINGS`), as the web shows it.
 pub fn submodules_index(value: &Value) -> usize {
-    index_of(&SUBMODULES, value.as_str().unwrap_or_default())
+    index_of(&SUBMODULES, value.as_str().unwrap_or("recursive"))
 }
 
 /// The layer label of a value; unset inherits.
@@ -275,6 +276,7 @@ mod tests {
     fn unset_options_read_as_the_first_or_default() {
         assert_eq!(submodules_label(&Value::Null), "Inherit");
         assert_eq!(submodules_label(&json!("none")), "Skip");
+        assert_eq!(SUBMODULES[submodules_index(&Value::Null)].0, "recursive");
         assert_eq!(branch_mode_label(&Value::Null), "Static prefix");
         assert_eq!(keep_when_index(""), 1);
         assert_eq!(keep_when_index("tracked-changes"), 2);

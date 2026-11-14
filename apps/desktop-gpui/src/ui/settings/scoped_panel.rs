@@ -239,7 +239,6 @@ impl Pick {
             Self::Workspace if value.is_null() => Self::UNSET,
             Self::Workspace => crate::settings_threads::workspace_index(text),
             Self::Streaming => crate::settings_threads::streaming_index(text),
-            Self::Submodules if value.is_null() => Self::UNSET,
             Self::Submodules => crate::settings_worktrees::submodules_index(value),
             Self::BranchMode => crate::settings_worktrees::branch_mode_index(value),
             Self::KeepWhen => crate::settings_worktrees::keep_when_index(text),
