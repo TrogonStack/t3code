@@ -235,15 +235,6 @@ fn xs_button(
         .line_height(px(16.))
 }
 
-fn destructive_button(id: impl Into<ElementId>, cx: &App) -> Stateful<gpui::Div> {
-    let destructive = Tokens::of(cx).destructive;
-    button(id, Variant::Ghost, true, cx)
-        .bg(destructive)
-        .border_color(destructive)
-        .text_color(gpui::white())
-        .hover(move |style| style.bg(destructive.opacity(0.9)))
-}
-
 fn driver_key(brand: Brand) -> Option<&'static str> {
     match brand {
         Brand::Anthropic => Some("anthropic"),
@@ -1411,13 +1402,14 @@ impl ProvidersPanel {
                 this.extras.gen_remove = None;
                 this.write_patch(ext::remove_text_generator_patch(&id), cx);
             };
-            return Some(self.confirm_dialog(
+            return Some(self.removal_dialog(
                 "generator-remove",
                 format!("Remove {name}?"),
                 description,
                 "Remove",
                 |this| this.extras.gen_remove = None,
                 go,
+                window,
                 cx,
             ));
         }
@@ -1434,7 +1426,7 @@ impl ProvidersPanel {
                 this.extras.hub_remove = None;
                 this.write_patch(ext::remove_usage_source_patch(&id), cx);
             };
-            return Some(self.confirm_dialog(
+            return Some(self.removal_dialog(
                 "usage-remove-dialog",
                 format!("Remove {title}?"),
                 "The hub's management key is deleted from this server. Its accounts leave the Limits view; the hub itself is untouched. Add it again with the URL and key to bring them back."
@@ -1442,54 +1434,39 @@ impl ProvidersPanel {
                 "Remove hub",
                 |this| this.extras.hub_remove = None,
                 go,
+                window,
                 cx,
             ));
         }
         None
     }
 
+    /// The removal `AlertDialog`s: a question, what it deletes and the action's own label.
     #[allow(clippy::too_many_arguments)]
-    fn confirm_dialog(
+    fn removal_dialog(
         &self,
         id: &'static str,
         title: String,
         description: String,
         action: &'static str,
-        cancel: impl Fn(&mut Self) + Clone + 'static,
+        cancel: impl Fn(&mut Self) + 'static,
         go: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let view = cx.entity();
-        let (cancel_view, go_view, dismiss_view) = (view.clone(), view, cx.entity());
-        let (cancel_click, cancel_dismiss) = (cancel.clone(), cancel);
-        let footer = vec![
-            button((id, 1usize), Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel_view.update(cx, |this, cx| {
-                        cancel_click(this);
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            destructive_button((id, 2usize), cx)
-                .child(action)
-                .on_click(move |_, _, cx| go_view.update(cx, |this, cx| go(this, cx)))
-                .into_any_element(),
-        ];
-        dialog_of(
-            id,
-            DIALOG_WIDTH,
-            title,
-            description,
-            Vec::new(),
-            footer,
+        let (go_view, dismiss_view) = (cx.entity(), cx.entity());
+        confirm_dialog(
+            ConfirmSpec::titled(id, title, description)
+                .destructive()
+                .confirm_label(action),
+            move |_, cx| go_view.update(cx, |this, cx| go(this, cx)),
             move |_, cx| {
                 dismiss_view.update(cx, |this, cx| {
-                    cancel_dismiss(this);
+                    cancel(this);
                     cx.notify();
                 })
             },
+            window,
             cx,
         )
     }

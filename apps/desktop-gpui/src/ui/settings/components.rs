@@ -24,13 +24,13 @@ pub(super) fn tab_stop(id: &ElementId, window: &mut Window, cx: &mut App) -> Foc
         .clone()
 }
 
-fn focus_visible(handle: &FocusHandle, window: &Window) -> bool {
+pub(super) fn focus_visible(handle: &FocusHandle, window: &Window) -> bool {
     handle.is_focused(window) && window.last_input_was_keyboard()
 }
 
 /// `focus-visible:ring-2 ring-inset ring-ring ring-offset-1 ring-offset-background`
 /// (switch.tsx, button.tsx): a 2px ring inside the control, over a 1px line in the background.
-fn focus_ring(radius: f32, cx: &App) -> gpui::Div {
+pub(super) fn focus_ring(radius: f32, cx: &App) -> gpui::Div {
     let theme = Tokens::of(cx);
     div()
         .absolute()

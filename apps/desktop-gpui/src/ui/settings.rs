@@ -5,6 +5,7 @@ mod appearance_panel;
 mod appearance_themes;
 mod appearance_typography;
 mod components;
+pub(crate) mod confirm_dialog;
 mod devices_panel;
 mod diffs_panel;
 mod keybindings_panel;
@@ -35,6 +36,7 @@ use components::{
     HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, close_button, disclosure,
     ghost_button, group, reset_button, row, section, select_menu, select_menu_checked, switch,
 };
+use confirm_dialog::{ConfirmSpec, confirm_dialog};
 use devices_panel::DevicesPanel;
 use diffs_panel::DiffsPanel;
 use gpui::{ClickEvent, FocusHandle, KeyBinding, KeyDownEvent, ScrollHandle, Subscription};
@@ -947,7 +949,7 @@ impl Render for SettingsDialog {
         let nav = self.nav(cx);
         let header = self.header(cx);
         let body = self.body(width - NAV_WIDTH, window, cx);
-        let confirm = self.restore_dialog(cx);
+        let confirm = self.restore_dialog(window, cx);
         let snapshot = self
             .snapshot
             .update(cx, |panel, cx| panel.overlay(window, cx));
@@ -1107,136 +1109,34 @@ impl SettingsDialog {
             .into_any_element()
     }
 
-    /// `AlertDialog` of `requestConfirmDialog` ("Restore default settings?", destructive).
-    fn restore_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `restoreDefaults`: "Restore default settings?", destructive.
+    fn restore_dialog(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.confirm_restore {
             return None;
         }
-        let theme = Tokens::of(cx);
-        let (background, muted, backdrop) =
-            (theme.background, theme.muted_foreground, theme.backdrop());
-        // `dialog-glass` border (index.css:425-437).
-        let border = if theme.dark {
-            gpui::white().opacity(0.08)
-        } else {
-            theme.foreground.opacity(0.1)
-        };
-        let (outline_bg, outline_hover) = if theme.dark {
-            (theme.input.opacity(0.32), theme.input.opacity(0.64))
-        } else {
-            (theme.popover, theme.accent.opacity(0.5))
-        };
         let labels = self
             .diffs
             .read(cx)
             .settings()
             .merge_labels(self.settings.changed_labels())
             .join(", ");
-        let cancel = div()
-            .id("settings-restore-cancel")
-            .h(px(32.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.input)
-            .bg(outline_bg)
-            .text_color(theme.foreground)
-            .text_size(px(14.))
-            .line_height(px(20.))
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .hover(move |style| style.bg(outline_hover))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.confirm_restore = false;
-                cx.notify();
-            }))
-            .child("Cancel");
-        let confirm = div()
-            .id("settings-restore-confirm")
-            .h(px(32.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.destructive)
-            .bg(theme.destructive)
-            .text_color(gpui::white())
-            .text_size(px(14.))
-            .line_height(px(20.))
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| this.restore_defaults(cx)))
-            .child("Confirm");
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .child(
-                    div()
-                        .id("settings-restore-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .occlude()
-                        .bg(backdrop)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.confirm_restore = false;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            v_flex()
-                                .occlude()
-                                .w(px(448.))
-                                .max_w_full()
-                                .gap_4()
-                                .p_6()
-                                .rounded(px(16.))
-                                .border_1()
-                                .border_color(border)
-                                .bg(background)
-                                .shadow(vec![gpui::BoxShadow {
-                                    color: gpui::black().opacity(if theme.dark {
-                                        0.9
-                                    } else {
-                                        0.65
-                                    }),
-                                    offset: gpui::point(px(0.), px(24.)),
-                                    blur_radius: px(if theme.dark { 72. } else { 64. }),
-                                    spread_radius: px(if theme.dark { -20. } else { -24. }),
-                                    inset: false,
-                                }])
-                                .child(
-                                    v_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_xl()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child("Restore default settings?"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(px(14.))
-                                                .line_height(px(20.))
-                                                .text_color(muted)
-                                                .child(format!("This will reset: {labels}.")),
-                                        ),
-                                )
-                                .child(h_flex().justify_end().gap_2().child(cancel).child(confirm)),
-                        ),
-                )
-                .into_any_element(),
-        )
+        let (go, dismiss) = (cx.entity(), cx.entity());
+        Some(confirm_dialog(
+            ConfirmSpec::from_message(
+                "settings-restore",
+                &format!("Restore default settings?\nThis will reset: {labels}."),
+            )
+            .destructive(),
+            move |_, cx| go.update(cx, |this, cx| this.restore_defaults(cx)),
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    this.confirm_restore = false;
+                    cx.notify();
+                })
+            },
+            window,
+            cx,
+        ))
     }
 
     /// `SettingsSidebarNav`: `w-60 border-e bg-sidebar`, content inset `p-2`, rows `gap-2`.

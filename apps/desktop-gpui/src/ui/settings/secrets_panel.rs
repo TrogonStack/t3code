@@ -3,6 +3,7 @@
 //! requests; settings writes are optimistic and put back when the call fails.
 
 use super::components::{group, section_with_action};
+use super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::devices_panel::widgets::{Variant, button, dialog_of, field, labeled, note, problem};
 use super::scope_inheritance::{PopTrigger, popup_shell};
 use super::scope_pickers::ScopeBar;
@@ -991,8 +992,13 @@ impl SecretsPanel {
         )
     }
 
-    fn confirm_view(&self, view: &Entity<Self>, provider: &Provider, cx: &App) -> AnyElement {
-        let theme = Tokens::of(cx);
+    fn confirm_view(
+        &self,
+        view: &Entity<Self>,
+        provider: &Provider,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let uses = secrets::uses(&self.config.settings, &provider.id);
         let label = provider.label.clone();
         let description = if uses.is_empty() {
@@ -1019,43 +1025,27 @@ impl SecretsPanel {
             );
         }
         let id = provider.id.clone();
-        let (cancel, confirm, dismiss) = (view.clone(), view.clone(), view.clone());
-        let destructive = theme.destructive;
-        let footer = vec![
-            button("secret-provider-remove-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            button("secret-provider-remove-confirm", Variant::Ghost, true, cx)
-                .bg(destructive)
-                .border_color(destructive)
-                .text_color(gpui::white())
-                .hover(move |style| style.bg(destructive.opacity(0.9)))
-                .child("Remove provider")
-                .on_click(move |_, _, cx| {
-                    let id = id.clone();
-                    confirm.update(cx, |this, cx| this.remove(&id, cx))
-                })
-                .into_any_element(),
-        ];
-        dialog_of(
-            "secret-provider-remove",
-            DIALOG_WIDTH,
-            format!("Remove {label}?"),
-            description,
-            body,
-            footer,
+        let (confirm, dismiss) = (view.clone(), view.clone());
+        confirm_dialog(
+            ConfirmSpec::titled(
+                "secret-provider-remove",
+                format!("Remove {label}?"),
+                description,
+            )
+            .destructive()
+            .confirm_label("Remove provider")
+            .extra(body),
+            move |_, cx| {
+                let id = id.clone();
+                confirm.update(cx, |this, cx| this.remove(&id, cx))
+            },
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     this.confirm = None;
                     cx.notify();
                 })
             },
+            window,
             cx,
         )
     }
@@ -1071,7 +1061,7 @@ impl SecretsPanel {
         let view = cx.entity();
         if let Some(id) = self.confirm.clone() {
             return match self.providers().into_iter().find(|p| p.id == id) {
-                Some(provider) => Some(self.confirm_view(&view, &provider, cx)),
+                Some(provider) => Some(self.confirm_view(&view, &provider, window, cx)),
                 None => {
                     self.confirm = None;
                     None

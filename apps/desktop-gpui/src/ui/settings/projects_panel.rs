@@ -5,6 +5,7 @@
 //! for the New threads and Actions overrides; the streams bring the result back.
 
 use super::components::{group, note_row, reset_button_labeled, row, section, switch, tab_stop};
+use super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem, xs_button};
 use super::model_chips::{ChipCtx, ChipHost, Chips};
 use super::scope_pickers::ScopeBar;
@@ -796,16 +797,15 @@ impl ProjectsPanel {
         view: Entity<Self>,
         entry: &ProjectEntry,
         targets: &[Member],
-        cx: &App,
+        window: &mut Window,
+        cx: &mut App,
     ) -> AnyElement {
-        let theme = Tokens::of(cx);
-        let whole = targets.len() == entry.members.len();
         let threads = self
             .thread_projects
             .iter()
             .filter(|id| targets.iter().any(|m| &m.id == *id))
             .count();
-        let lines = model::confirmation(
+        let message = model::confirmation(
             targets,
             entry.members.len(),
             false,
@@ -813,57 +813,23 @@ impl ProjectsPanel {
             Some(self.environment.as_str()),
             threads,
         );
-        let danger = model::danger(false, if whole { entry.members.len() } else { 1 });
-        let (cancel, go, dismiss) = (view.clone(), view.clone(), view);
-        let destructive = theme.destructive;
-        let footer = vec![
-            button("project-remove-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            button("project-remove-confirm", Variant::Ghost, true, cx)
-                .bg(destructive)
-                .border_color(destructive)
-                .text_color(gpui::white())
-                .hover(move |style| style.bg(destructive.opacity(0.9)))
-                .child(danger.button)
-                .on_click(move |_, _, cx| go.update(cx, |this, cx| this.remove(cx)))
-                .into_any_element(),
-        ];
-        let body = lines
-            .into_iter()
-            .map(|line| {
-                div()
-                    .text_size(px(14.))
-                    .text_color(theme.muted_foreground)
-                    .child(line)
-                    .into_any_element()
-            })
-            .collect();
-        dialog_of(
-            "project-remove",
-            DIALOG_WIDTH,
-            danger.title,
-            "",
-            body,
-            footer,
+        let (go, dismiss) = (view.clone(), view);
+        confirm_dialog(
+            ConfirmSpec::from_message("project-remove", &message).destructive(),
+            move |_, cx| go.update(cx, |this, cx| this.remove(cx)),
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     this.confirm = None;
                     cx.notify();
                 })
             },
+            window,
             cx,
         )
     }
 
     pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if let Some(view) = self.delete_script_view(cx) {
+        if let Some(view) = self.delete_script_view(window, cx) {
             return Some(view);
         }
         if let Some(view) = self.editor_view(window, cx) {
@@ -874,7 +840,7 @@ impl ProjectsPanel {
             self.confirm = None;
             return None;
         };
-        Some(self.confirm_view(cx.entity(), &entry, &targets, cx))
+        Some(self.confirm_view(cx.entity(), &entry, &targets, window, cx))
     }
 }
 

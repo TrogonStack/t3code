@@ -6,6 +6,7 @@ mod auth_dpop;
 mod branch_picker;
 mod clone_flow;
 mod config;
+mod confirm;
 mod connection;
 mod credentials;
 mod details;

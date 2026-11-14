@@ -6,8 +6,9 @@
 //! they appear in a notice at the top of the tab, as on the Devices tab.
 
 use super::super::components::{disclosure, row, row_with_preview, row_with_status};
+use super::super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::super::devices_panel::widgets::{
-    Variant, button, dialog_of, icon_button, menu_item, note, problem,
+    Variant, button, icon_button, menu_item, note, problem,
 };
 use super::super::scope_inheritance::{PopTrigger, popup_shell};
 use super::*;
@@ -1144,16 +1145,15 @@ impl ScopedPanel {
     }
 
     /// The clear and remove confirmations (`AlertDialog`s of `BrowserProfilesSetting`).
-    pub fn overlay(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.page != Page::Browser {
             return None;
         }
         let confirm = self.browser.confirm.clone()?;
-        let theme = Tokens::of(cx);
         let ctx = self.ctx(cx);
         let busy = self.browser.job.is_some();
         let removal = self.removal_available(&ctx);
-        let (cancel, run, dismiss) = (cx.entity(), cx.entity(), cx.entity());
+        let (run, dismiss) = (cx.entity(), cx.entity());
         let (title, description, action) = if confirm.remove {
             (
                 format!("Remove \u{201c}{}\u{201d}?", confirm.name),
@@ -1191,45 +1191,14 @@ impl ScopedPanel {
         if let Some(error) = confirm.error.clone() {
             body.push(problem(error, cx).into_any_element());
         }
-        let destructive = theme.destructive;
-        let footer = vec![
-            button(
-                "settings-browser-confirm-cancel",
-                Variant::Outline,
-                !busy,
-                cx,
-            )
-            .child("Cancel")
-            .on_click(move |_, _, cx| {
-                cancel.update(cx, |this, cx| {
-                    if this.browser.job.is_none() {
-                        this.browser.confirm = None;
-                        cx.notify();
-                    }
-                })
-            })
-            .into_any_element(),
-            button(
-                "settings-browser-confirm-run",
-                Variant::Ghost,
-                !busy && (removal || !confirm.remove),
-                cx,
-            )
-            .bg(destructive)
-            .border_color(destructive)
-            .text_color(gpui::white())
-            .hover(move |style| style.bg(destructive.opacity(0.9)))
-            .child(action)
-            .on_click(move |_, _, cx| run.update(cx, |this, cx| this.run_clear(cx)))
-            .into_any_element(),
-        ];
-        Some(dialog_of(
-            "settings-browser-confirm",
-            512.,
-            title,
-            description,
-            body,
-            footer,
+        Some(confirm_dialog(
+            ConfirmSpec::titled("settings-browser-confirm", title, description)
+                .destructive()
+                .confirm_label(action)
+                .busy(busy)
+                .confirm_enabled(removal || !confirm.remove)
+                .extra(body),
+            move |_, cx| run.update(cx, |this, cx| this.run_clear(cx)),
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     if this.browser.job.is_none() {
@@ -1238,6 +1207,7 @@ impl ScopedPanel {
                     }
                 })
             },
+            window,
             cx,
         ))
     }

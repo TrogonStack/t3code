@@ -6,6 +6,7 @@
 //! models, usage and the ACP registry flow are not here.
 
 use super::components::{card, flat_group, row, section, section_with_action, switch};
+use super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::devices_panel::widgets::{
     Variant, button, dialog_of, field, icon_button, labeled, note, problem,
 };
@@ -1242,63 +1243,44 @@ impl ProvidersPanel {
         )
     }
 
-    fn confirm_view(&self, view: &Entity<Self>, confirm: &Confirm, cx: &App) -> AnyElement {
-        let theme = Tokens::of(cx);
-        let view = view.clone();
+    fn confirm_view(
+        &self,
+        view: &Entity<Self>,
+        confirm: &Confirm,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
         let name = self
             .instances
             .iter()
             .find(|instance| instance.id == confirm.id)
             .map_or_else(|| confirm.id.clone(), |i| i.mark.display_name.clone());
-        let (title, action) = if confirm.reset {
-            (
-                format!("Reset the {name} provider to its defaults?"),
-                "Reset provider",
-            )
+        let question = if confirm.reset {
+            format!("Reset the {name} provider to its defaults?")
         } else {
-            (
-                format!("Remove the {name} provider instance?"),
-                "Remove instance",
-            )
+            format!("Remove the {name} provider instance?")
         };
         let id = confirm.id.clone();
-        let (cancel, go, dismiss) = (view.clone(), view.clone(), view);
-        let destructive = theme.destructive;
-        let footer = vec![
-            button("provider-remove-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            button("provider-remove-confirm", Variant::Ghost, true, cx)
-                .bg(destructive)
-                .border_color(destructive)
-                .text_color(gpui::white())
-                .hover(move |style| style.bg(destructive.opacity(0.9)))
-                .child(action)
-                .on_click(move |_, _, cx| {
-                    let id = id.clone();
-                    go.update(cx, |this, cx| this.remove(&id, cx))
-                })
-                .into_any_element(),
-        ];
-        dialog_of(
-            "provider-remove",
-            DIALOG_WIDTH,
-            title,
-            "Its saved settings, including any custom binary path, will be removed.",
-            Vec::new(),
-            footer,
+        let (go, dismiss) = (view.clone(), view.clone());
+        confirm_dialog(
+            ConfirmSpec::from_message(
+                "provider-remove",
+                &format!(
+                    "{question}\nIts saved settings, including any custom binary path, will be removed."
+                ),
+            )
+            .destructive(),
+            move |_, cx| {
+                let id = id.clone();
+                go.update(cx, |this, cx| this.remove(&id, cx))
+            },
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     this.confirm = None;
                     cx.notify();
                 })
             },
+            window,
             cx,
         )
     }
@@ -1312,7 +1294,7 @@ impl ProvidersPanel {
             return None;
         }
         if let Some(confirm) = self.confirm.take() {
-            let element = self.confirm_view(&cx.entity(), &confirm, cx);
+            let element = self.confirm_view(&cx.entity(), &confirm, window, cx);
             self.confirm = Some(confirm);
             return Some(element);
         }

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::providers::{accent_badge, driver_label, normalize_accent};
+use crate::ui::settings::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use crate::usage::{Pace, Window as LimitWindow};
 use crate::usage_limits::{
     self as limits, Account, CHATGPT_USAGE_URL, Link, Native, Pool, PoolWindow,
@@ -664,105 +665,31 @@ impl UsageDialog {
             .into_any_element()
     }
 
-    /// The confirm dialog, over the page.
-    pub(super) fn reset_credit_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `ResetCreditConfirmDialog`: an `AlertDialog` over the page.
+    pub(super) fn reset_credit_dialog(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         self.limits.confirm.as_ref()?;
-        let theme = cx.theme();
-        let (border, background, muted) = (theme.border, theme.background, theme.muted_foreground);
-        let backdrop = background.opacity(if theme.is_dark() { 0.64 } else { 0.6 });
-        let cancel = div()
-            .id("usage-credit-cancel")
-            .h(px(32.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(border)
-            .text_size(px(14.))
-            .line_height(px(20.))
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.foreground.opacity(0.06)))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.limits.confirm = None;
-                cx.notify();
-            }))
-            .child("Cancel");
-        let confirm = div()
-            .id("usage-credit-confirm")
-            .h(px(32.))
-            .px(px(12.))
-            .flex()
-            .items_center()
-            .rounded(px(6.))
-            .bg(theme.primary)
-            .text_color(theme.primary_foreground)
-            .text_size(px(14.))
-            .line_height(px(20.))
-            .font_weight(FontWeight::MEDIUM)
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| this.redeem(cx)))
-            .child("Use credit");
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .child(
-                    div()
-                        .id("usage-credit-backdrop")
-                        .absolute()
-                        .inset_0()
-                        .occlude()
-                        .bg(backdrop)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.limits.confirm = None;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            v_flex()
-                                .occlude()
-                                .w(px(448.))
-                                .max_w_full()
-                                .gap_4()
-                                .p_6()
-                                .rounded(px(16.))
-                                .border_1()
-                                .border_color(border)
-                                .bg(background)
-                                .shadow_lg()
-                                .child(
-                                    v_flex()
-                                        .gap_2()
-                                        .child(
-                                            div()
-                                                .text_lg()
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .child("Use a reset credit?"),
-                                        )
-                                        .child(div().text_size(px(14.)).line_height(px(20.)).text_color(muted).child(
-                                            "This redeems one credit on your account and clears the current rate-limit windows. It cannot be undone.",
-                                        )),
-                                )
-                                .child(
-                                    h_flex()
-                                        .justify_end()
-                                        .gap_2()
-                                        .child(cancel)
-                                        .child(confirm),
-                                ),
-                        ),
-                )
-                .into_any_element(),
-        )
+        let (go, dismiss) = (cx.entity(), cx.entity());
+        Some(confirm_dialog(
+            ConfirmSpec::titled(
+                "usage-credit",
+                "Use a reset credit?",
+                "This redeems one credit on your account and clears the current rate-limit windows. It cannot be undone.",
+            )
+            .confirm_label("Use credit"),
+            move |_, cx| go.update(cx, |this, cx| this.redeem(cx)),
+            move |_, cx| {
+                dismiss.update(cx, |this, cx| {
+                    this.limits.confirm = None;
+                    cx.notify();
+                })
+            },
+            window,
+            cx,
+        ))
     }
 }
 

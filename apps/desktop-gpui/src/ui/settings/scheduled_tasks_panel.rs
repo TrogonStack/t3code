@@ -4,6 +4,7 @@
 mod editor;
 
 use super::components::{group, section_with_action, switch};
+use super::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use super::devices_panel::widgets::{
     Variant, button, dialog_of, icon_button, menu_item, note, problem,
 };
@@ -26,7 +27,6 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DIALOG_WIDTH: f32 = 448.;
 const PRIMARY: &str = "primary";
 
 enum Load {
@@ -779,7 +779,13 @@ impl ScheduledTasksPanel {
         rows
     }
 
-    fn confirm_view(&self, view: &Entity<Self>, key: &Key, cx: &App) -> Option<AnyElement> {
+    fn confirm_view(
+        &self,
+        view: &Entity<Self>,
+        key: &Key,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
         let Some(Watch {
             load: Load::Loaded(list),
             ..
@@ -788,45 +794,25 @@ impl ScheduledTasksPanel {
             return None;
         };
         let task = list.iter().find(|task| task.id == key.1)?;
-        let theme = Tokens::of(cx);
         let (environment, id) = key.clone();
-        let (cancel, confirm, dismiss) = (view.clone(), view.clone(), view.clone());
-        let destructive = theme.destructive;
-        let footer = vec![
-            button("scheduled-task-delete-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
-                        this.confirm = None;
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            button("scheduled-task-delete-confirm", Variant::Ghost, true, cx)
-                .bg(destructive)
-                .border_color(destructive)
-                .text_color(gpui::white())
-                .hover(move |style| style.bg(destructive.opacity(0.9)))
-                .child("Delete task")
-                .on_click(move |_, _, cx| {
-                    let (environment, id) = (environment.clone(), id.clone());
-                    confirm.update(cx, |this, cx| this.delete(&environment, &id, cx))
-                })
-                .into_any_element(),
-        ];
-        Some(dialog_of(
-            "scheduled-task-delete",
-            DIALOG_WIDTH,
-            format!("Delete {}?", task.title),
-            "This removes the task and its schedule. Threads from earlier runs stay.".to_owned(),
-            Vec::new(),
-            footer,
+        let (confirm, dismiss) = (view.clone(), view.clone());
+        Some(confirm_dialog(
+            ConfirmSpec::from_message(
+                "scheduled-task-delete",
+                &format!("Delete \"{}\"?\nThis cannot be undone.", task.title),
+            )
+            .destructive(),
+            move |_, cx| {
+                let (environment, id) = (environment.clone(), id.clone());
+                confirm.update(cx, |this, cx| this.delete(&environment, &id, cx))
+            },
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     this.confirm = None;
                     cx.notify();
                 })
             },
+            window,
             cx,
         ))
     }
@@ -838,7 +824,7 @@ impl ScheduledTasksPanel {
         }
         let key = self.confirm.clone()?;
         let view = cx.entity();
-        let element = self.confirm_view(&view, &key, cx);
+        let element = self.confirm_view(&view, &key, window, cx);
         if element.is_none() {
             self.confirm = None;
         }

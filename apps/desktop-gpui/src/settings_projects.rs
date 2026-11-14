@@ -78,7 +78,7 @@ pub fn danger(has_other_members: bool, members: usize) -> Danger {
     }
 }
 
-/// `planProjectRemoval`'s confirmation message, one line per entry of the array.
+/// `planProjectRemoval`'s confirmation message.
 pub fn confirmation(
     members: &[Member],
     group_member_count: usize,
@@ -86,7 +86,7 @@ pub fn confirmation(
     display_name: &str,
     environment_label: Option<&str>,
     thread_count: usize,
-) -> Vec<String> {
+) -> String {
     let whole_group = members.len() == group_member_count;
     let kind = if has_other_members || !whole_group {
         "checkout"
@@ -132,7 +132,7 @@ pub fn confirmation(
         .to_owned(),
     );
     lines.push("This action cannot be undone.".to_owned());
-    lines
+    lines.join("\n")
 }
 
 /// The description of the Project icon row: the override, else the favicon path, else Automatic.
@@ -425,9 +425,11 @@ mod tests {
                 "This removes only the project entries, not the files on disk.",
                 "This action cannot be undone.",
             ]
+            .join("\n")
         );
         let two = [member("a"), member("b")];
-        let lines = confirmation(&two, 3, true, "group", None, 0);
+        let message = confirmation(&two, 3, true, "group", None, 0);
+        let lines: Vec<&str> = message.split('\n').collect();
         assert_eq!(lines[0], "Remove checkout \"group\"?");
         assert_eq!(lines[1], "This removes 2 grouped project entries.");
         assert_eq!(

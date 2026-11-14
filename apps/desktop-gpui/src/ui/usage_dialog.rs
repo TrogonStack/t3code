@@ -574,7 +574,7 @@ impl Render for UsageDialog {
         let prices = self.prices_dialog(window, cx);
         let header = self.header(width, cx);
         let body = self.body(vw, cx);
-        let confirm = self.reset_credit_dialog(cx);
+        let confirm = self.reset_credit_dialog(window, cx);
         div()
             .absolute()
             .inset_0()

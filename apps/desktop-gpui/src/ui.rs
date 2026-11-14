@@ -24,6 +24,7 @@ use crate::terminal_view::TerminalView;
 use crate::thread::{Entry, Kind};
 use crate::thread_card::{self, ChainKind, PrLine};
 use crate::toast::{Kind as ToastKind, Toast, ToastHost, ToastId};
+use crate::ui::settings::confirm_dialog::{ConfirmSpec, confirm_dialog};
 use crate::workspace::{self, Choice, Draft};
 use gpui::{
     Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DragMoveEvent, Entity,
@@ -295,6 +296,8 @@ pub struct MainView {
     /// The pull requests page, in place of the thread area while open.
     pull_requests_open: bool,
     pull_requests_page: Entity<pull_requests_page::PullRequestsPage>,
+    /// The terminal (thread key and id) a close confirmation asks about.
+    close_confirm: Option<(String, String)>,
     /// Threads (and drafts, by project) whose terminal drawer is open; it starts closed.
     terminal_open: HashSet<String>,
     /// The drawer's height per thread, as dragged.
@@ -509,6 +512,7 @@ impl MainView {
                 let actions = actions.clone();
                 move |_| pull_requests_page::PullRequestsPage::new(actions, pull_request_panel)
             }),
+            close_confirm: None,
             terminal_open: HashSet::new(),
             terminal_heights: HashMap::new(),
             terminals: HashMap::new(),
@@ -1976,28 +1980,46 @@ impl MainView {
     }
 
     /// The web asks before closing a terminal by hand (`confirmTerminalClose`).
-    fn request_close(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn request_close(&mut self, id: String, _: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.details_key() else {
             return;
         };
-        let label = terminal_state::label(&id);
-        let answer = window.prompt(
-            gpui::PromptLevel::Warning,
-            &format!("Close terminal \"{label}\"?"),
-            Some("This stops the running process and clears its history."),
-            &["Cancel", "Confirm"],
+        self.close_confirm = Some((key, id));
+        cx.notify();
+    }
+
+    fn close_confirm_dialog(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (_, id) = self.close_confirm.as_ref()?;
+        let label = terminal_state::label(id);
+        let (go, dismiss) = (cx.entity(), cx.entity());
+        Some(confirm_dialog(
+            ConfirmSpec::from_message(
+                "terminal-close",
+                &format!(
+                    "Close terminal \"{label}\"?\nThis stops the running process and clears its history."
+                ),
+            )
+            .destructive(),
+            move |window, cx| go.update(cx, |this, cx| this.answer_close(true, window, cx)),
+            move |window, cx| dismiss.update(cx, |this, cx| this.answer_close(false, window, cx)),
+            window,
             cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1) {
-                this.update_in(cx, |this, window, cx| {
-                    this.close_terminal(&key, &id, cx);
-                    this.focus_terminal(window, cx);
-                })
-                .ok();
-            }
-        })
-        .detach();
+        ))
+    }
+
+    fn answer_close(&mut self, confirmed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((key, id)) = self.close_confirm.take() else {
+            return;
+        };
+        if confirmed {
+            self.close_terminal(&key, &id, cx);
+        }
+        self.focus_terminal(window, cx);
+        cx.notify();
     }
 
     /// `closeThreadTerminal`: ends the shell, and closes the drawer with the last terminal.
@@ -6795,6 +6817,7 @@ impl Render for MainView {
         let overlay = narrow && self.sidebar_overlay_open;
         let container = width - if docked { sidebar_width } else { 0. };
         let panel = self.right_panel(width, container, cx);
+        let close_confirm = self.close_confirm_dialog(window, cx);
         self.main_width.set(container - panel.docked_width);
         v_flex()
             .relative()
@@ -6876,6 +6899,7 @@ impl Render for MainView {
             .child(self.usage.clone())
             .child(self.add_to_machine.clone())
             .child(self.settings.clone())
+            .children(close_confirm)
             .child(self.toasts.clone())
     }
 }

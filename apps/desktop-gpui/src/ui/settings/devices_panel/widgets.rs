@@ -15,6 +15,7 @@ pub(in crate::ui::settings) enum Variant {
     Ghost,
     GhostMuted,
     GhostDestructive,
+    Destructive,
 }
 
 /// `--warning-foreground` (index.css:1165, 1217): amber-700, amber-400 in dark.
@@ -49,6 +50,12 @@ pub(in crate::ui::settings) fn button(
             theme.input,
             theme.foreground,
             theme.accent.opacity(0.5),
+        ),
+        Variant::Destructive => (
+            theme.destructive,
+            theme.destructive,
+            gpui::white(),
+            theme.destructive.opacity(0.9),
         ),
         Variant::Ghost => (
             gpui::transparent_black(),

@@ -1026,44 +1026,29 @@ impl ProjectsPanel {
         ))
     }
 
-    pub(super) fn delete_script_view(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn delete_script_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let (_, name) = self.delete_script.clone()?;
-        let theme = Tokens::of(cx);
-        let view = cx.entity();
-        let destructive = theme.destructive;
-        let (cancel, dismiss) = (view.clone(), view);
-        let footer = vec![
-            button("project-action-delete-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click(move |_, _, cx| {
-                    cancel.update(cx, |this, cx| {
-                        this.delete_script = None;
-                        cx.notify();
-                    })
-                })
-                .into_any_element(),
-            button("project-action-delete-confirm", Variant::Ghost, true, cx)
-                .bg(destructive)
-                .border_color(destructive)
-                .text_color(gpui::white())
-                .hover(move |style| style.bg(destructive.opacity(0.9)))
-                .child("Delete action")
-                .on_click(cx.listener(|this, _, _, cx| this.delete_confirmed(cx)))
-                .into_any_element(),
-        ];
-        Some(dialog_of(
-            "project-action-delete",
-            DIALOG_WIDTH,
-            format!("Delete action \"{name}\"?"),
-            "This action cannot be undone.",
-            Vec::new(),
-            footer,
+        let (go, dismiss) = (cx.entity(), cx.entity());
+        Some(confirm_dialog(
+            ConfirmSpec::titled(
+                "project-action-delete",
+                format!("Delete action \"{name}\"?"),
+                "This action cannot be undone.",
+            )
+            .destructive()
+            .confirm_label("Delete action"),
+            move |_, cx| go.update(cx, |this, cx| this.delete_confirmed(cx)),
             move |_, cx| {
                 dismiss.update(cx, |this, cx| {
                     this.delete_script = None;
                     cx.notify();
                 })
             },
+            window,
             cx,
         ))
     }
