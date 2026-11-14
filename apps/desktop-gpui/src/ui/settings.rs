@@ -17,6 +17,7 @@ mod scope_pickers;
 mod scoped_panel;
 mod secret_field;
 mod secrets_panel;
+mod snapshot_panel;
 mod source_control_panel;
 pub(crate) mod tokens;
 
@@ -44,6 +45,7 @@ use scheduled_tasks_panel::ScheduledTasksPanel;
 use scope_pickers::ScopeBar;
 use scoped_panel::{Page, ScopedPanel};
 use secrets_panel::SecretsPanel;
+use snapshot_panel::SnapShotPanel;
 use source_control_panel::SourceControlPanel;
 use std::rc::Rc;
 use tokens::Tokens;
@@ -221,6 +223,7 @@ pub struct SettingsDialog {
     providers: Entity<ProvidersPanel>,
     projects: Entity<ProjectsPanel>,
     keybindings: Entity<KeybindingsPanel>,
+    snapshot: Entity<SnapShotPanel>,
     scope: Entity<ScopeBar>,
     confirm_restore: bool,
     scroll: ScrollHandle,
@@ -318,6 +321,7 @@ impl SettingsDialog {
             providers,
             projects,
             keybindings,
+            snapshot: cx.new(SnapShotPanel::new),
             scope,
             confirm_restore: false,
             scroll: ScrollHandle::new(),
@@ -348,6 +352,7 @@ impl SettingsDialog {
         self.providers.update(cx, |panel, cx| panel.reload(cx));
         self.projects.update(cx, |panel, cx| panel.reload(cx));
         self.keybindings.update(cx, |panel, cx| panel.reload(cx));
+        self.snapshot.update(cx, |panel, cx| panel.reload(cx));
         self.menu = None;
         self.advanced_open = false;
         self.confirm_restore = false;
@@ -546,6 +551,8 @@ impl SettingsDialog {
         keybindings: crate::keybindings::Keybindings,
         cx: &mut Context<Self>,
     ) {
+        self.snapshot
+            .update(cx, |panel, cx| panel.set_keybindings(&keybindings, cx));
         self.keybindings
             .update(cx, |panel, cx| panel.set_data(keybindings, cx));
     }
@@ -679,6 +686,12 @@ impl SettingsDialog {
         }
         if self
             .worktrees
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
+            .snapshot
             .update(cx, |panel, cx| panel.close_menu(window, cx))
         {
             return;
@@ -869,6 +882,9 @@ impl Render for SettingsDialog {
         let header = self.header(cx);
         let body = self.body(width - NAV_WIDTH, window, cx);
         let confirm = self.restore_dialog(cx);
+        let snapshot = self
+            .snapshot
+            .update(cx, |panel, cx| panel.overlay(window, cx));
         let devices = self
             .devices
             .update(cx, |panel, cx| panel.overlay(window, cx));
@@ -947,6 +963,7 @@ impl Render for SettingsDialog {
             .children(scheduled_tasks)
             .children(providers)
             .children(projects)
+            .children(snapshot)
             .into_any_element()
     }
 }
@@ -1477,6 +1494,10 @@ impl SettingsDialog {
             self.keybindings
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.keybindings.clone().into_any_element()]
+        } else if self.section == Section::SnapShot {
+            self.snapshot
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.snapshot.clone().into_any_element()]
         } else {
             Vec::new()
         };

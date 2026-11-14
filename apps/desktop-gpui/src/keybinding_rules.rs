@@ -835,7 +835,7 @@ fn default_for(rule: &Rule) -> Option<&'static Rule> {
 }
 
 /// `shortcutConflictKey`.
-fn conflict_key(shortcut: &Shortcut, mac: bool) -> String {
+pub fn conflict_key(shortcut: &Shortcut, mac: bool) -> String {
     let meta = shortcut.meta || (shortcut.modifier && mac);
     let ctrl = shortcut.ctrl || (shortcut.modifier && !mac);
     format!(

@@ -133,6 +133,26 @@ const SNAP_SHOT_SVG: &str = concat!(
     r#"<rect width="10" height="8" x="7" y="8" rx="2"/><circle cx="12" cy="12" r="1.5"/></svg>"#,
 );
 
+pub const MAC_SCREEN_RECORDING: &str = "icons/mac-screen-recording.svg";
+pub const MAC_ACCESSIBILITY: &str = "icons/mac-accessibility.svg";
+
+/// The white glyph of `MacScreenRecordingIcon` (Icons.tsx); the red tile is painted by the caller,
+/// because an svg here paints in a single color.
+const MAC_SCREEN_RECORDING_SVG: &str = concat!(
+    r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">"#,
+    r#"<circle cx="16" cy="16" r="10" stroke="white" stroke-width="2"/>"#,
+    r#"<circle cx="16" cy="16" r="4.5" fill="white"/></svg>"#,
+);
+
+/// The white glyph of `MacAccessibilityIcon`.
+const MAC_ACCESSIBILITY_SVG: &str = concat!(
+    r#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">"#,
+    r#"<circle cx="16" cy="16" r="10" stroke="white" stroke-width="1.75"/>"#,
+    r#"<circle cx="16" cy="10" r="1.6" fill="white"/>"#,
+    r#"<path d="m10 13 6 1 6-1M16 14v4m0 0-2.5 6m2.5-6 2.5 6" stroke="white" stroke-width="1.6" "#,
+    r#"stroke-linecap="round" stroke-linejoin="round"/></svg>"#,
+);
+
 /// The web's dev `SidebarStageBackdrop` art, dark palette, faded into the sidebar.
 pub const STAGE_DEV: &str = "images/stage-dev.svg";
 /// Pierre's `diffs-icon-symbol-modified`, the header icon of a changed file.
@@ -398,6 +418,12 @@ impl AssetSource for AppAssets {
         if path == SNAP_SHOT {
             return Ok(Some(Cow::Borrowed(SNAP_SHOT_SVG.as_bytes())));
         }
+        if path == MAC_SCREEN_RECORDING {
+            return Ok(Some(Cow::Borrowed(MAC_SCREEN_RECORDING_SVG.as_bytes())));
+        }
+        if path == MAC_ACCESSIBILITY {
+            return Ok(Some(Cow::Borrowed(MAC_ACCESSIBILITY_SVG.as_bytes())));
+        }
         if path == STAGE_DEV {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev.svg"))));
         }
@@ -440,6 +466,11 @@ impl AssetSource for AppAssets {
         }
         if SNAP_SHOT.starts_with(path) {
             paths.push(SNAP_SHOT.into());
+        }
+        for icon in [MAC_SCREEN_RECORDING, MAC_ACCESSIBILITY] {
+            if icon.starts_with(path) {
+                paths.push(icon.into());
+            }
         }
         paths.extend(ExtraIcons.list(path)?);
         Ok(paths)
@@ -550,6 +581,9 @@ mod tests {
                 .is_some()
         );
         assert!(AppAssets.load(SNAP_SHOT).ok().flatten().is_some());
+        for icon in [MAC_SCREEN_RECORDING, MAC_ACCESSIBILITY] {
+            assert!(AppAssets.load(icon).ok().flatten().is_some(), "{icon}");
+        }
     }
 
     #[test]

@@ -127,7 +127,7 @@ pub(super) fn row(
     wide: bool,
     cx: &App,
 ) -> gpui::Div {
-    row_with(title, description, reset, control, None, wide, cx)
+    row_with(title, description, reset, control, None, None, wide, cx)
 }
 
 /// A `SettingsRow` with `children`: `pt-3 pb-1` and the content under the row's columns.
@@ -140,15 +140,38 @@ pub(super) fn row_with_preview(
     wide: bool,
     cx: &App,
 ) -> gpui::Div {
-    row_with(title, description, reset, control, Some(preview), wide, cx)
+    row_with(
+        title,
+        description,
+        reset,
+        control,
+        Some(preview),
+        None,
+        wide,
+        cx,
+    )
 }
 
+/// A `SettingsRow` with `status`: `pt-0.5 text-xs text-muted-foreground` under the description.
+pub(super) fn row_with_status(
+    title: impl IntoElement,
+    description: impl IntoElement,
+    status: Option<SharedString>,
+    control: AnyElement,
+    wide: bool,
+    cx: &App,
+) -> gpui::Div {
+    row_with(title, description, None, control, None, status, wide, cx)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn row_with(
     title: impl IntoElement,
     description: impl IntoElement,
     reset: Option<AnyElement>,
     control: AnyElement,
     preview: Option<AnyElement>,
+    status: Option<SharedString>,
     wide: bool,
     cx: &App,
 ) -> gpui::Div {
@@ -173,6 +196,14 @@ fn row_with(
             .text_color(theme.muted_foreground)
             .child(description),
     );
+    let text = text.children(status.map(|status| {
+        div()
+            .pt(px(2.))
+            .text_xs()
+            .line_height(px(18.))
+            .text_color(theme.muted_foreground)
+            .child(status)
+    }));
     let control = h_flex()
         .min_w_0()
         .flex_shrink_0()
@@ -792,6 +823,98 @@ pub(super) fn outline_button(
         .text_color(theme.foreground)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
+}
+
+/// `Button variant="default"` (button.tsx): `bg-primary text-primary-foreground border-primary`,
+/// `h-8 px-[11px] text-sm`, 90% on hover. `compact` is the `xs` size, `h-6 px-[7px] text-xs`.
+pub(super) fn primary_button(
+    id: impl Into<gpui::ElementId>,
+    enabled: bool,
+    compact: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = Tokens::of(cx);
+    let primary = theme.primary;
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .gap_1()
+        .h(px(if compact { 24. } else { 32. }))
+        .px(px(if compact { 7. } else { 11. }))
+        .flex_shrink_0()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(primary)
+        .bg(primary)
+        .when(compact, |button| button.text_xs())
+        .when(!compact, |button| button.text_sm())
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(gpui::white())
+        .when(enabled, |button| {
+            button
+                .cursor_pointer()
+                .hover(move |style| style.bg(primary.opacity(0.9)))
+        })
+        .when(!enabled, |button| button.opacity(0.64))
+}
+
+/// `Button variant="secondary" size="xs"`: `bg-secondary text-secondary-foreground` with a
+/// transparent border.
+pub(super) fn secondary_button(
+    id: impl Into<gpui::ElementId>,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = Tokens::of(cx);
+    let (background, hover, text) = if theme.dark {
+        (
+            gpui::white().opacity(0.03),
+            gpui::white().opacity(0.06),
+            gpui::rgb(0xf5f5f5),
+        )
+    } else {
+        (
+            gpui::rgb(0xfafafa).into(),
+            gpui::rgb(0xf4f4f5).into(),
+            gpui::rgb(0x27272a),
+        )
+    };
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_1()
+        .h(px(24.))
+        .px(px(7.))
+        .flex_shrink_0()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .bg(background)
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(text)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
+}
+
+/// `Kbd` (kbd.tsx): `h-5 min-w-5 rounded px-1 text-xs font-medium` on `foreground/[0.07]`.
+pub(super) fn kbd(label: impl Into<SharedString>, cx: &App) -> gpui::Div {
+    let theme = Tokens::of(cx);
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(20.))
+        .min_w(px(20.))
+        .px_1()
+        .rounded(px(4.))
+        .bg(theme.foreground.opacity(0.07))
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.muted_foreground)
+        .child(label.into())
 }
 
 pub(super) type Change = Rc<dyn Fn(u32, &mut Window, &mut App)>;
