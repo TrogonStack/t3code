@@ -93,9 +93,27 @@ pub(super) fn section_with_action(
 /// `SettingsGroup` (SettingsGroup.tsx): `rounded-xl border border-border/60 bg-card/40 shadow-xs/5`
 /// with `border-border/50` between rows.
 pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
+    divided(card(cx), rows, cx)
+}
+
+/// A `SettingsGroup` inside `[data-provider-detail]` (index.css): no border, fill or shadow, the
+/// row dividers stay.
+pub(super) fn flat_group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
+    divided(
+        v_flex()
+            .relative()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(gpui::transparent_black()),
+        rows,
+        cx,
+    )
+}
+
+/// The frame of a `SettingsGroup` without its rows.
+pub(super) fn card(cx: &App) -> gpui::Div {
     let theme = Tokens::of(cx);
-    let divider = theme.border.opacity(0.5);
-    let mut card = v_flex()
+    v_flex()
         .relative()
         .rounded(px(12.))
         .border_1()
@@ -107,7 +125,11 @@ pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
             blur_radius: px(2.),
             spread_radius: px(0.),
             inset: false,
-        }]);
+        }])
+}
+
+fn divided(mut card: gpui::Div, rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
+    let divider = Tokens::of(cx).border.opacity(0.5);
     for (index, row) in rows.into_iter().enumerate() {
         if index > 0 {
             card = card.child(div().h(px(1.)).w_full().bg(divider));

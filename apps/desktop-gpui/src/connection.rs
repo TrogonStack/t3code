@@ -11,10 +11,11 @@ use crate::rpc::{
     DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
     OrchestrationLaunchThread, PING_FRAME, ProjectsMutate, ProviderConsumeResetCredit,
     ReviewGetDiffPreview, ServerCheckSecretSource, ServerDiscoverSourceControl, ServerGetConfig,
-    ServerGetUsageSummary, ServerListOnePasswordAccounts, ServerListTextGeneratorModels, ServerRefreshProviders,
-    ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
-    SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
-    TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
+    ServerGetUsageSummary, ServerListOnePasswordAccounts, ServerListTextGeneratorModels,
+    ServerRefreshProviders, ServerRefreshUsageRates, ServerUpdateSettings, Session,
+    ShellOpenInEditor, SubscribeShell, SubscribeThread, SubscribeVcsStatus, TerminalAttach,
+    TerminalClose, TerminalResize, TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull,
+    VcsRefreshStatus, VcsSwitchRef,
 };
 use crate::rpc::{
     ProjectCloneStart, ProjectsListIgnoredFiles, ProjectsMutateJson, ProjectsReadFile,

@@ -5,7 +5,7 @@
 //! this client knows (Codex and Claude, as text fields); the driver Setup form, accent colour,
 //! models, usage and the ACP registry flow are not here.
 
-use super::components::{group, row, section, section_with_action, switch};
+use super::components::{card, flat_group, row, section, section_with_action, switch};
 use super::devices_panel::widgets::{
     Variant, button, dialog_of, field, icon_button, labeled, note, problem,
 };
@@ -29,6 +29,7 @@ use std::rc::Rc;
 mod extras;
 
 const LIST_WIDTH: f32 = 272.;
+const SPLIT_WIDTH: f32 = 768.;
 const DIALOG_WIDTH: f32 = 512.;
 const SENSITIVE_NOTE: &str =
     "Sensitive values are stored separately and never returned to the app.";
@@ -70,6 +71,8 @@ pub struct ProvidersPanel {
     actions: ActionSender,
     scope: Entity<ScopeBar>,
     wide: bool,
+    split: bool,
+    refreshing: Option<u64>,
     settings: Value,
     instances: Vec<InstanceRow>,
     sources: Vec<SecretSource>,
@@ -143,6 +146,8 @@ impl ProvidersPanel {
             actions,
             scope,
             wide: true,
+            split: true,
+            refreshing: None,
             settings: Value::Null,
             instances: Vec::new(),
             sources: Vec::new(),
@@ -171,6 +176,15 @@ impl ProvidersPanel {
     pub fn set_wide(&mut self, wide: bool, cx: &mut Context<Self>) {
         if self.wide != wide {
             self.wide = wide;
+            cx.notify();
+        }
+    }
+
+    /// `@min-[48rem]/providers`: the card splits into two panes from this container width.
+    pub fn set_container(&mut self, width: f32, cx: &mut Context<Self>) {
+        let split = width >= SPLIT_WIDTH;
+        if self.split != split {
+            self.split = split;
             cx.notify();
         }
     }
@@ -287,6 +301,11 @@ impl ProvidersPanel {
     /// The outcome of a write or of a secret check.
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
         if matches!(event, CallEvent::Progress(_)) {
+            return;
+        }
+        if self.refreshing == Some(token) {
+            self.refreshing = None;
+            cx.notify();
             return;
         }
         if self.extras_call(token, &event, cx) {
@@ -1019,7 +1038,7 @@ impl ProvidersPanel {
             window,
             cx,
         ));
-        let identity = group(
+        let identity = flat_group(
             vec![
                 row(
                     "Status",
@@ -1042,7 +1061,7 @@ impl ProvidersPanel {
             ],
             cx,
         );
-        let environment = group(vec![self.variables(editable, window, cx)], cx);
+        let environment = flat_group(vec![self.variables(editable, window, cx)], cx);
         let default_slot = instance.id == instance.driver;
         let stored = self
             .settings
@@ -1109,10 +1128,10 @@ impl ProvidersPanel {
                     )
                 })
                 .collect::<Vec<_>>();
-            section("Runtime", group(fields, cx))
+            section("Runtime", flat_group(fields, cx))
         });
         v_flex()
-            .gap_8()
+            .gap_6()
             .child(section_with_action(
                 instance.mark.display_name.clone(),
                 action,
@@ -1339,42 +1358,107 @@ impl Render for ProvidersPanel {
                 cx,
             ))
         });
-        let wide = self.wide;
-        let add = button("provider-add", Variant::Outline, editable, cx)
+        let add_row = editable.then(|| {
+            h_flex()
+                .id("provider-add")
+                .w_full()
+                .items_center()
+                .gap_3()
+                .px_3()
+                .py_3()
+                .border_t_1()
+                .border_color(theme.border.opacity(0.5))
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .cursor_pointer()
+                .hover(move |row| {
+                    row.bg(theme.muted.opacity(0.25))
+                        .text_color(theme.foreground)
+                })
+                .child(Icon::new(Icons::Plus).size(px(16.)).flex_shrink_0())
+                .child("Add provider")
+                .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx)))
+        });
+        let split = self.split;
+        let height = split.then(|| {
+            let available = f32::from(window.viewport_size().height) - 176.;
+            available.clamp(512., 704.)
+        });
+        let list = v_flex().child(list).children(add_row);
+        let list_pane = div()
+            .id("provider-list-scroll")
+            .bg(theme.muted.opacity(0.1))
+            .border_color(theme.border.opacity(0.6))
+            .when(split, |pane| {
+                pane.w(px(LIST_WIDTH))
+                    .flex_shrink_0()
+                    .h_full()
+                    .min_h_0()
+                    .border_r_1()
+                    .overflow_y_scroll()
+            })
+            .when(!split, |pane| pane.border_b_1())
+            .child(list);
+        let detail = match editor {
+            Some(editor) => div()
+                .id("provider-detail-scroll")
+                .min_w_0()
+                .when(split, |pane| {
+                    pane.flex_1().h_full().min_h_0().overflow_y_scroll()
+                })
+                .child(div().py_4().child(editor))
+                .into_any_element(),
+            None => div()
+                .min_w_0()
+                .flex_1()
+                .p_6()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("No providers configured.")
+                .into_any_element(),
+        };
+        let panes = card(cx)
+            .overflow_hidden()
+            .when(split, |card| card.flex_row().h(px(height.unwrap_or(512.))))
+            .when(!split, |card| card.flex_col())
+            .child(list_pane)
+            .child(detail);
+        let plus = icon_button("provider-add-icon", Variant::GhostMuted, editable, cx)
+            .size(px(24.))
+            .tooltip(tooltip("Add provider".to_owned()))
+            .child(Icon::new(Icons::Plus).size(px(16.)))
+            .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx)));
+        let busy = self.refreshing.is_some();
+        let refresh = button("provider-refresh", Variant::GhostMuted, !busy, cx)
             .h(px(24.))
             .px(px(7.))
-            .gap(px(4.))
+            .gap(px(6.))
             .text_size(px(12.))
             .line_height(px(16.))
-            .child(Icon::new(Icons::Plus).size(px(12.)))
-            .child("Add provider")
-            .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx)));
+            .tooltip(tooltip("Refresh provider status".to_owned()))
+            .child(Icon::new(Icons::RefreshCw).size(px(14.)))
+            .child(if busy {
+                "Refreshing providers"
+            } else {
+                "Refresh providers"
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.refreshing = this.send(Call::RefreshProviders, json!({}));
+                cx.notify();
+            }));
+        let title = h_flex()
+            .items_center()
+            .gap_1()
+            .child("Providers")
+            .children(editable.then_some(plus));
         let sections = self.sections(editable, window, cx);
         v_flex()
             .gap_8()
-            .child(v_flex()
-            .gap_4()
-            .children(notice)
-            .child(h_flex().px_4().justify_end().child(add))
-            .child(
-                div()
-                    .flex()
-                    .when(!wide, |layout| layout.flex_col())
-                    .gap_6()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .when(wide, |pane| pane.w(px(LIST_WIDTH)))
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(theme.border.opacity(0.6))
-                            .bg(theme.card.opacity(0.4))
-                            .overflow_hidden()
-                            .self_start()
-                            .child(list),
-                    )
-                    .child(div().min_w_0().flex_1().children(editor)),
-            ))
+            .child(v_flex().gap_4().children(notice).child(section_with_action(
+                title,
+                Some(refresh.into_any_element()),
+                panes,
+            )))
             .child(sections)
             .into_any_element()
     }

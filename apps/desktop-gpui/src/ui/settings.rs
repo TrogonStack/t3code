@@ -19,8 +19,8 @@ mod secret_field;
 mod secrets_panel;
 mod snapshot_panel;
 mod source_control_panel;
-mod wizard;
 pub(crate) mod tokens;
+mod wizard;
 
 use super::*;
 use crate::assets::SNAP_SHOT;
@@ -1484,8 +1484,10 @@ impl SettingsDialog {
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.scheduled_tasks.clone().into_any_element()]
         } else if self.section == Section::Providers {
-            self.providers
-                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            self.providers.update(cx, |panel, cx| {
+                panel.set_wide(wide, cx);
+                panel.set_container(content_width.min(CONTENT_MAX + 48.) - 48., cx);
+            });
             vec![self.providers.clone().into_any_element()]
         } else if self.section == Section::Projects {
             self.projects

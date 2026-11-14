@@ -189,10 +189,7 @@ pub(super) fn wizard_panel(body: impl IntoElement, cx: &App) -> AnyElement {
 }
 
 /// `WizardFooter`: `leading` at the left, the actions at the right.
-pub(super) fn wizard_footer(
-    leading: Option<AnyElement>,
-    actions: Vec<AnyElement>,
-) -> AnyElement {
+pub(super) fn wizard_footer(leading: Option<AnyElement>, actions: Vec<AnyElement>) -> AnyElement {
     h_flex()
         .justify_between()
         .gap_2()

@@ -7,9 +7,11 @@ use super::super::components::{
     HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, Toggle, info_tip, popup_shell,
     reset_button_labeled, select_menu, tab_stop,
 };
-use super::super::scope_inheritance::PopTrigger;
-use super::super::wizard::{StepHandler, wizard_footer, wizard_header, wizard_panel, wizard_popup, wizard_steps};
 use super::super::devices_panel::widgets::{menu_item, spinner};
+use super::super::scope_inheritance::PopTrigger;
+use super::super::wizard::{
+    StepHandler, wizard_footer, wizard_header, wizard_panel, wizard_popup, wizard_steps,
+};
 use super::*;
 use crate::settings_provider_extras::{
     self as ext, Brand, IdleMode, Model, PRESETS, TASKS, TextGenerator,
@@ -93,9 +95,10 @@ pub(super) struct Extras {
 
 impl Extras {
     pub(super) fn new(window: &mut Window, cx: &mut Context<ProvidersPanel>) -> Self {
-        let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<ProvidersPanel>| {
-            cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
-        };
+        let input =
+            |placeholder: &'static str, window: &mut Window, cx: &mut Context<ProvidersPanel>| {
+                cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
+            };
         let hub_url = input("https://hub.example.ts.net:8318", window, cx);
         let hub_label = input("Defaults to the hub's host name", window, cx);
         let wiz_url = input("http://localhost:11434/v1", window, cx);
@@ -105,54 +108,66 @@ impl Extras {
         let hub_key = cx.new(|cx| SecretField::new("usage-hub-key", "", window, cx));
         let wiz_key = cx.new(|cx| SecretField::new("text-generator-key", "", window, cx));
         let subscriptions = vec![
-            cx.subscribe_in(&hub_url, window, |this, _, event: &InputEvent, _, cx| {
-                match event {
+            cx.subscribe_in(
+                &hub_url,
+                window,
+                |this, _, event: &InputEvent, _, cx| match event {
                     InputEvent::Change => cx.notify(),
                     InputEvent::PressEnter { .. } => this.submit_hub(cx),
                     _ => {}
-                }
-            }),
+                },
+            ),
             cx.subscribe_in(&hub_label, window, |this, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
                     this.submit_hub(cx);
                 }
             }),
-            cx.subscribe_in(&hub_key, window, |this, _, event: &SecretEvent, _, cx| {
-                match event {
+            cx.subscribe_in(
+                &hub_key,
+                window,
+                |this, _, event: &SecretEvent, _, cx| match event {
                     SecretEvent::Check(provider, reference) => {
                         this.check_secret(Which::Hub, provider, reference, cx)
                     }
                     SecretEvent::Submit => this.submit_hub(cx),
                     SecretEvent::Changed | SecretEvent::Commit => cx.notify(),
-                }
-            }),
-            cx.subscribe_in(&wiz_url, window, |this, _, event: &InputEvent, _, cx| {
-                match event {
+                },
+            ),
+            cx.subscribe_in(
+                &wiz_url,
+                window,
+                |this, _, event: &InputEvent, _, cx| match event {
                     InputEvent::Change => this.wizard_changed(cx),
                     InputEvent::PressEnter { .. } => this.connect(cx),
                     _ => {}
-                }
-            }),
-            cx.subscribe_in(&wiz_key, window, |this, _, event: &SecretEvent, _, cx| {
-                match event {
+                },
+            ),
+            cx.subscribe_in(
+                &wiz_key,
+                window,
+                |this, _, event: &SecretEvent, _, cx| match event {
                     SecretEvent::Check(provider, reference) => {
                         this.check_secret(Which::Wizard, provider, reference, cx)
                     }
                     SecretEvent::Submit => this.connect(cx),
                     SecretEvent::Changed => this.wizard_changed(cx),
                     SecretEvent::Commit => cx.notify(),
-                }
-            }),
+                },
+            ),
             cx.subscribe_in(&models_search, window, |_, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
                 }
             }),
-            cx.subscribe_in(&health, window, |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                    this.commit_health(window, cx);
-                }
-            }),
+            cx.subscribe_in(
+                &health,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                        this.commit_health(window, cx);
+                    }
+                },
+            ),
         ];
         Self {
             restricted: false,
@@ -244,9 +259,8 @@ fn preset_brand(index: usize) -> Brand {
 }
 
 fn valid_url(url: &str) -> bool {
-    url.split_once("://").is_some_and(|(scheme, rest)| {
-        matches!(scheme, "http" | "https") && !rest.trim().is_empty()
-    })
+    url.split_once("://")
+        .is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && !rest.trim().is_empty())
 }
 
 impl ProvidersPanel {
@@ -272,7 +286,13 @@ impl ProvidersPanel {
         }
     }
 
-    fn check_secret(&mut self, which: Which, provider: &str, reference: &str, cx: &mut Context<Self>) {
+    fn check_secret(
+        &mut self,
+        which: Which,
+        provider: &str,
+        reference: &str,
+        cx: &mut Context<Self>,
+    ) {
         let payload = crate::secret_source::check_payload(provider, reference);
         let field = match which {
             Which::Hub => self.extras.hub_key.clone(),
@@ -346,7 +366,12 @@ impl ProvidersPanel {
     }
 
     /// The outcome of a call this section started; false when the token is not one of them.
-    pub(super) fn extras_call(&mut self, token: u64, event: &CallEvent, cx: &mut Context<Self>) -> bool {
+    pub(super) fn extras_call(
+        &mut self,
+        token: u64,
+        event: &CallEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(pending) = self.extras.calls.remove(&token) else {
             return false;
         };
@@ -374,7 +399,9 @@ impl ProvidersPanel {
                     let models = ext::parse_models(value);
                     let count = models.len();
                     self.write_patch(ext::text_generator_patch(&id, config), cx);
-                    self.extras.models.insert(id.clone(), Models::Loaded(models));
+                    self.extras
+                        .models
+                        .insert(id.clone(), Models::Loaded(models));
                     if let Some(wizard) = &mut self.extras.wizard {
                         wizard.checking = false;
                         wizard.saved_id = Some(id);
@@ -404,7 +431,9 @@ impl ProvidersPanel {
                         self.extras.models_refreshing = false;
                         self.extras.models_error = Some(message.clone());
                     } else {
-                        self.extras.models.insert(id, Models::Failed(message.clone()));
+                        self.extras
+                            .models
+                            .insert(id, Models::Failed(message.clone()));
                     }
                 }
                 CallEvent::Progress(_) => {}
@@ -504,7 +533,10 @@ impl ProvidersPanel {
         let (url, label, key, placeholder) = match &existing {
             Some(generator) => (
                 generator.base_url().to_owned(),
-                generator.config["label"].as_str().unwrap_or_default().to_owned(),
+                generator.config["label"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
                 generator.config["apiKey"].clone(),
                 generator.name(),
             ),
@@ -549,15 +581,14 @@ impl ProvidersPanel {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let text = text.to_owned();
         input.update(cx, |state, cx| state.set_value(text, window, cx));
-        self.extras.name_subscription = Some(cx.subscribe_in(
-            &input,
-            window,
-            |this, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.connect(cx);
-                }
-            },
-        ));
+        self.extras.name_subscription =
+            Some(
+                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, _, cx| {
+                    if matches!(event, InputEvent::PressEnter { .. }) {
+                        this.connect(cx);
+                    }
+                }),
+            );
         self.extras.wiz_name = input;
     }
 
@@ -673,7 +704,10 @@ impl ProvidersPanel {
         let Some((instance, model)) = ext::task_selection(&self.settings, TASKS[index].0) else {
             return;
         };
-        if self.extras.tests[index].as_ref().is_some_and(|test| test.busy) {
+        if self.extras.tests[index]
+            .as_ref()
+            .is_some_and(|test| test.busy)
+        {
             return;
         }
         let key = format!("{instance}:{model}");
@@ -731,9 +765,9 @@ impl ProvidersPanel {
             self.write_patch(ext::health_interval_patch(&self.settings, seconds), cx);
         }
         self.extras.health_shown = seconds;
-        self.extras
-            .health
-            .update(cx, |state, cx| state.set_value(seconds.to_string(), window, cx));
+        self.extras.health.update(cx, |state, cx| {
+            state.set_value(seconds.to_string(), window, cx)
+        });
     }
 
     fn step_health(&mut self, direction: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -762,9 +796,9 @@ impl ProvidersPanel {
             .contains_focused(window, cx);
         if self.extras.health_shown != current && !focused {
             self.extras.health_shown = current;
-            self.extras
-                .health
-                .update(cx, |state, cx| state.set_value(current.to_string(), window, cx));
+            self.extras.health.update(cx, |state, cx| {
+                state.set_value(current.to_string(), window, cx)
+            });
         }
         let usage = self.usage_section(editable, cx);
         let generators =
@@ -796,7 +830,17 @@ impl ProvidersPanel {
         let hubs = ext::usage_sources(&self.settings);
         let mut rows: Vec<AnyElement> = Vec::new();
         if hubs.is_empty() {
-            rows.push(row("No hubs configured.", "", None, div().into_any_element(), wide, cx).into_any_element());
+            rows.push(
+                row(
+                    "No hubs configured.",
+                    "",
+                    None,
+                    div().into_any_element(),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+            );
         }
         for (index, hub) in hubs.iter().enumerate() {
             let control = if editable {
@@ -811,10 +855,18 @@ impl ProvidersPanel {
             } else {
                 div().into_any_element()
             };
-            rows.push(row(hub.title(), hub.description(), None, control, wide, cx).into_any_element());
+            rows.push(
+                row(hub.title(), hub.description(), None, control, wide, cx).into_any_element(),
+            );
         }
-        let action = editable
-            .then(|| Self::add_button("usage-add", "Add hub", |this, window, cx| this.open_hub(window, cx), cx));
+        let action = editable.then(|| {
+            Self::add_button(
+                "usage-add",
+                "Add hub",
+                |this, window, cx| this.open_hub(window, cx),
+                cx,
+            )
+        });
         section_with_action("Usage providers", action, group(rows, cx))
     }
 
@@ -847,10 +899,7 @@ impl ProvidersPanel {
                 .gap(px(10.))
                 .child(brand_icon(generator.brand(), &name, 16., cx))
                 .child(name.clone());
-            let description = div()
-                .truncate()
-                .pl(px(30.))
-                .child(generator.description());
+            let description = div().truncate().pl(px(30.)).child(generator.description());
             let control = if editable {
                 self.generator_controls(index, generator, window, cx)
             } else {
@@ -868,7 +917,6 @@ impl ProvidersPanel {
         });
         section_with_action("Text generators", action, group(rows, cx))
     }
-
 
     fn generator_controls(
         &mut self,
@@ -924,12 +972,16 @@ impl ProvidersPanel {
                         show.cursor_default().opacity(0.64).text_color(muted)
                     };
                     popup_shell(128., cx)
-                        .child(menu_item(("generator-edit", index), "Edit", false, cx).on_click(
-                            move |_, window, cx| {
-                                let id = edit_id.clone();
-                                edit.update(cx, |this, cx| this.open_wizard(Some(id), window, cx))
-                            },
-                        ))
+                        .child(
+                            menu_item(("generator-edit", index), "Edit", false, cx).on_click(
+                                move |_, window, cx| {
+                                    let id = edit_id.clone();
+                                    edit.update(cx, |this, cx| {
+                                        this.open_wizard(Some(id), window, cx)
+                                    })
+                                },
+                            ),
+                        )
                         .child(show)
                         .child(
                             menu_item(("generator-remove", index), "Remove", true, cx).on_click(
@@ -948,8 +1000,7 @@ impl ProvidersPanel {
         let toggle: Toggle = {
             let config = generator.config.clone();
             Rc::new(move |_, cx| {
-                let patch =
-                    ext::text_generator_patch(&id, ext::with_enabled(&config, !enabled));
+                let patch = ext::text_generator_patch(&id, ext::with_enabled(&config, !enabled));
                 view.update(cx, |this, cx| this.write_patch(patch, cx))
             })
         };
@@ -957,7 +1008,13 @@ impl ProvidersPanel {
             .items_center()
             .gap_2()
             .child(menu)
-            .child(switch(("generator-switch", index), enabled, toggle, window, cx))
+            .child(switch(
+                ("generator-switch", index),
+                enabled,
+                toggle,
+                window,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -1127,10 +1184,9 @@ impl ProvidersPanel {
                     cx,
                 ),
             }),
-            None if ext::task_follows(&self.settings, key) => Some(note(
-                "Follows the text generation model",
-                cx,
-            )),
+            None if ext::task_follows(&self.settings, key) => {
+                Some(note("Follows the text generation model", cx))
+            }
             None => None,
         };
         let test = testable.then(|| {
@@ -1220,9 +1276,9 @@ impl ProvidersPanel {
                 .text_color(theme.muted_foreground)
                 .hover(move |style| style.bg(theme.accent))
                 .child(Icon::new(icon).size(px(16.)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.step_health(direction, window, cx)
-                }))
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.step_health(direction, window, cx)),
+                )
         };
         let background = if theme.dark {
             theme.input.opacity(0.32)
@@ -1271,10 +1327,19 @@ impl ProvidersPanel {
             cx,
         );
         let idle = self.idle_row(editable, window, cx);
-        section_with_action("Advanced", None, group(vec![health.into_any_element(), idle], cx))
+        section_with_action(
+            "Advanced",
+            None,
+            group(vec![health.into_any_element(), idle], cx),
+        )
     }
 
-    fn idle_row(&mut self, editable: bool, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn idle_row(
+        &mut self,
+        editable: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let wide = self.wide;
         let view = cx.entity();
         let state = ext::idle_state(&[&self.settings]);
@@ -1343,9 +1408,19 @@ impl ProvidersPanel {
                 shell.into_any_element()
             })
         };
-        let control = div().when(!editable, |control| control.opacity(0.5)).child(
-            self.select_popover(Open::Idle, ("idle-select", 0), label, 224., false, popup, window, cx),
-        );
+        let control =
+            div()
+                .when(!editable, |control| control.opacity(0.5))
+                .child(self.select_popover(
+                    Open::Idle,
+                    ("idle-select", 0),
+                    label,
+                    224.,
+                    false,
+                    popup,
+                    window,
+                    cx,
+                ));
         let reset = (ext::global_idle(&self.settings) != IdleMode::OnReturn).then(|| {
             reset_button_labeled(
                 "idle-reset",
@@ -1489,7 +1564,10 @@ impl ProvidersPanel {
         let body = vec![
             v_flex()
                 .gap_4()
-                .child(labeled("Hub URL", field(&self.extras.hub_url, false, window, cx)))
+                .child(labeled(
+                    "Hub URL",
+                    field(&self.extras.hub_url, false, window, cx),
+                ))
                 .child(labeled("Management key", self.extras.hub_key.clone()))
                 .child(labeled(
                     "Label (optional)",
@@ -1553,7 +1631,9 @@ impl ProvidersPanel {
             }
             Some(Models::Failed(error)) => (
                 "The model list couldn't load.".to_owned(),
-                problem(error.clone(), cx).text_size(px(14.)).into_any_element(),
+                problem(error.clone(), cx)
+                    .text_size(px(14.))
+                    .into_any_element(),
             ),
             _ => (
                 "Loading the model list.".to_owned(),
@@ -1606,9 +1686,20 @@ impl ProvidersPanel {
         )
     }
 
-    fn model_list(&self, models: &[Model], window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn model_list(
+        &self,
+        models: &[Model],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Tokens::of(cx);
-        let query = self.extras.models_search.read(cx).value().trim().to_lowercase();
+        let query = self
+            .extras
+            .models_search
+            .read(cx)
+            .value()
+            .trim()
+            .to_lowercase();
         let shown: Vec<&Model> = models
             .iter()
             .filter(|model| {
@@ -1750,7 +1841,11 @@ impl ProvidersPanel {
                                 .hover(move |style| style.bg(accent.opacity(0.5)))
                         })
                         .child(icon)
-                        .child(if custom { "Custom" } else { PRESETS[index].label })
+                        .child(if custom {
+                            "Custom"
+                        } else {
+                            PRESETS[index].label
+                        })
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.pick_preset(index, window, cx)
                         }))
@@ -1758,7 +1853,12 @@ impl ProvidersPanel {
                 form = form.child(
                     v_flex()
                         .gap(px(6.))
-                        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Service"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Service"),
+                        )
                         .child(h_flex().gap_2().children(cards)),
                 );
             }
@@ -1770,7 +1870,11 @@ impl ProvidersPanel {
             }
             form = form
                 .child(labeled(
-                    if key_required { "API key" } else { "API key (optional)" },
+                    if key_required {
+                        "API key"
+                    } else {
+                        "API key (optional)"
+                    },
                     self.extras.wiz_key.clone(),
                 ))
                 .child(labeled(
@@ -1780,8 +1884,9 @@ impl ProvidersPanel {
                 .children(error.map(|error| problem(error, cx).text_size(px(14.))));
             form.into_any_element()
         } else {
-            let tasks: Vec<AnyElement> =
-                (0..TASKS.len()).map(|index| self.task_row(index, window, cx)).collect();
+            let tasks: Vec<AnyElement> = (0..TASKS.len())
+                .map(|index| self.task_row(index, window, cx))
+                .collect();
             v_flex()
                 .gap_4()
                 .child(

@@ -68,12 +68,19 @@ pub fn usage_sources(settings: &Value) -> Vec<UsageSource> {
 /// `new URL(url).host`: lowercased, without credentials or a default port.
 fn host_of(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty() || !scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    if scheme.is_empty()
+        || !scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
     {
         return None;
     }
     let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let authority = authority.rsplit('@').next().unwrap_or_default().to_lowercase();
+    let authority = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
     let default_port = match scheme.to_lowercase().as_str() {
         "http" | "ws" => ":80",
         "https" | "wss" => ":443",
@@ -91,7 +98,9 @@ pub fn source_id_from_url(url: &str, sources: &[UsageSource]) -> String {
     if let Some(existing) = sources.iter().find(|source| source.url == url) {
         return existing.id.clone();
     }
-    let host = host_of(url).unwrap_or_else(|| url.to_owned()).to_lowercase();
+    let host = host_of(url)
+        .unwrap_or_else(|| url.to_owned())
+        .to_lowercase();
     let slug = collapse_runs(&host);
     let slug = slug.trim_matches('-');
     let base = format!("cliproxy-{}", if slug.is_empty() { "hub" } else { slug });
@@ -121,12 +130,7 @@ fn collapse_runs(text: &str) -> String {
     out
 }
 
-pub fn add_usage_source_patch(
-    id: &str,
-    url: &str,
-    label: &str,
-    management_key: Value,
-) -> Value {
+pub fn add_usage_source_patch(id: &str, url: &str, label: &str, management_key: Value) -> Value {
     let mut source = Map::new();
     source.insert("kind".into(), json!("cliproxy"));
     let label = label.trim();
@@ -264,11 +268,7 @@ pub fn brand(config: &Value) -> Brand {
 }
 
 /// `nextTextGeneratorId`: `base`, then `base-2`, `base-3`, past every id a selection could mean.
-pub fn next_text_generator_id(
-    base: &str,
-    settings: &Value,
-    instance_ids: &[String],
-) -> String {
+pub fn next_text_generator_id(base: &str, settings: &Value, instance_ids: &[String]) -> String {
     let mut taken: HashSet<String> = crate::settings_providers::DRIVERS
         .iter()
         .map(|driver| (*driver).to_owned())
@@ -356,7 +356,11 @@ pub fn parse_models(result: &Value) -> Vec<Model> {
                     let id = text(model, "id").to_owned();
                     let name = text(model, "name");
                     Model {
-                        name: if name.is_empty() { id.clone() } else { name.to_owned() },
+                        name: if name.is_empty() {
+                            id.clone()
+                        } else {
+                            name.to_owned()
+                        },
                         id,
                     }
                 })
@@ -493,7 +497,11 @@ pub fn resolve_background(settings: &Value) -> (&'static str, Map<String, Value>
             .get("overrides")
             .and_then(Value::as_object)
             .is_none_or(Map::is_empty);
-    let legacy_profile = known_profile(settings.get("backgroundActivityProfile").and_then(Value::as_str));
+    let legacy_profile = known_profile(
+        settings
+            .get("backgroundActivityProfile")
+            .and_then(Value::as_str),
+    );
     let git = settings
         .get("automaticGitFetchInterval")
         .and_then(Value::as_i64)
@@ -538,7 +546,10 @@ pub fn resolve_background(settings: &Value) -> (&'static str, Map<String, Value>
     ];
     let mut resolved = Map::new();
     for (key, default) in OVERRIDE_KEYS.iter().zip(fallback) {
-        resolved.insert((*key).to_owned(), overrides.get(*key).cloned().unwrap_or(default));
+        resolved.insert(
+            (*key).to_owned(),
+            overrides.get(*key).cloned().unwrap_or(default),
+        );
     }
     (base, resolved)
 }
@@ -647,7 +658,9 @@ pub fn global_idle(settings: &Value) -> IdleMode {
 /// Whether the server accepts the three modes, so "Never" can be stored.
 pub fn reads_idle_modes(settings: &Value) -> bool {
     settings.get("idleCompaction").is_some_and(|v| !v.is_null())
-        || settings.get("compactIdleThreads").is_some_and(Value::is_string)
+        || settings
+            .get("compactIdleThreads")
+            .is_some_and(Value::is_string)
 }
 
 /// `idleCompactionPatch`: the key and shape this server stores the mode in.
@@ -705,7 +718,11 @@ fn merge(target: &mut Value, patch: &Value, key: Option<&str>) {
         if value.is_null() {
             map.remove(name);
         } else {
-            merge(map.entry(name.clone()).or_insert(Value::Null), value, Some(name));
+            merge(
+                map.entry(name.clone()).or_insert(Value::Null),
+                value,
+                Some(name),
+            );
         }
     }
 }
@@ -729,14 +746,20 @@ mod tests {
             source_id_from_url("https://Hub.Example.ts.net:8318/x", &[]),
             "cliproxy-hub.example.ts.net-8318"
         );
-        assert_eq!(source_id_from_url("https://hub.test/", &[]), "cliproxy-hub.test");
+        assert_eq!(
+            source_id_from_url("https://hub.test/", &[]),
+            "cliproxy-hub.test"
+        );
         assert_eq!(source_id_from_url("not a url", &[]), "cliproxy-not-a-url");
         assert_eq!(source_id_from_url("", &[]), "cliproxy-hub");
     }
 
     #[test]
     fn hub_ids_reuse_and_dedupe() {
-        let known = [source("mine", "https://a.test"), source("cliproxy-b.test", "https://x")];
+        let known = [
+            source("mine", "https://a.test"),
+            source("cliproxy-b.test", "https://x"),
+        ];
         assert_eq!(source_id_from_url("https://a.test", &known), "mine");
         assert_eq!(
             source_id_from_url("https://b.test", &known),
@@ -752,7 +775,10 @@ mod tests {
         hub.label = " Home ".into();
         hub.enabled = false;
         assert_eq!(hub.title(), "Home");
-        assert_eq!(hub.description(), "CLI Proxy \u{b7} Disabled \u{b7} https://a.test");
+        assert_eq!(
+            hub.description(),
+            "CLI Proxy \u{b7} Disabled \u{b7} https://a.test"
+        );
     }
 
     #[test]
@@ -795,7 +821,10 @@ mod tests {
             brand(&json!({"kind": "openaiCompatible", "baseUrl": "https://x.test"})),
             Brand::OpenAiCompatible
         );
-        assert_eq!(display_name(&json!({"kind": "anthropic", "baseUrl": "junk"})), "junk");
+        assert_eq!(
+            display_name(&json!({"kind": "anthropic", "baseUrl": "junk"})),
+            "junk"
+        );
     }
 
     #[test]
@@ -805,7 +834,8 @@ mod tests {
             config: json!({"kind": "openaiCompatible", "baseUrl": "https://api.openai.com/v1", "enabled": false}),
         };
         assert_eq!(generator.description(), "Off \u{b7} api.openai.com/v1");
-        let settings = json!({"providerInstances": {"openai": {}}, "textGenerators": {"openai-2": {}}});
+        let settings =
+            json!({"providerInstances": {"openai": {}}, "textGenerators": {"openai-2": {}}});
         assert_eq!(
             next_text_generator_id("openai", &settings, &["openai-3".into()]),
             "openai-4"
@@ -816,7 +846,13 @@ mod tests {
 
     #[test]
     fn generator_config_and_toggle() {
-        let config = wizard_config("anthropic", " https://a.test/v1 ", Some(json!("k")), " ", true);
+        let config = wizard_config(
+            "anthropic",
+            " https://a.test/v1 ",
+            Some(json!("k")),
+            " ",
+            true,
+        );
         assert_eq!(
             config,
             json!({"kind": "anthropic", "baseUrl": "https://a.test/v1", "apiKey": "k", "enabled": true})
@@ -871,7 +907,10 @@ mod tests {
         assert_eq!(health_preset_seconds(&legacy), 300);
         let profile = json!({"backgroundActivityProfile": "performance", "providerHealthRefreshInterval": 60000});
         assert_eq!(health_seconds(&profile), 60);
-        assert_eq!(resolve_background(&profile).1["automaticGitFetchInterval"], 30000);
+        assert_eq!(
+            resolve_background(&profile).1["automaticGitFetchInterval"],
+            30000
+        );
     }
 
     #[test]
@@ -880,7 +919,10 @@ mod tests {
         let activity = &patch["backgroundActivity"];
         assert_eq!(activity["profile"], "custom");
         assert_eq!(activity["baseProfile"], "balanced");
-        assert_eq!(activity["overrides"]["providerHealthRefreshInterval"], 90000);
+        assert_eq!(
+            activity["overrides"]["providerHealthRefreshInterval"],
+            90000
+        );
         assert_eq!(activity["overrides"]["automaticGitFetchInterval"], 30000);
         assert_eq!(activity["overrides"].as_object().unwrap().len(), 8);
     }
@@ -888,7 +930,9 @@ mod tests {
     #[test]
     fn health_reset_drops_only_that_override() {
         let reset = health_reset_patch(&json!({}));
-        let overrides = reset["backgroundActivity"]["overrides"].as_object().unwrap();
+        let overrides = reset["backgroundActivity"]["overrides"]
+            .as_object()
+            .unwrap();
         assert_eq!(overrides.len(), 7);
         assert!(!overrides.contains_key("providerHealthRefreshInterval"));
     }
@@ -902,8 +946,14 @@ mod tests {
     #[test]
     fn idle_mode_reads_the_old_and_new_fields() {
         assert_eq!(global_idle(&json!({})), IdleMode::OnReturn);
-        assert_eq!(global_idle(&json!({"compactIdleThreads": true})), IdleMode::BeforeCacheExpires);
-        assert_eq!(global_idle(&json!({"compactIdleThreads": "off"})), IdleMode::Off);
+        assert_eq!(
+            global_idle(&json!({"compactIdleThreads": true})),
+            IdleMode::BeforeCacheExpires
+        );
+        assert_eq!(
+            global_idle(&json!({"compactIdleThreads": "off"})),
+            IdleMode::Off
+        );
         assert_eq!(
             global_idle(&json!({"idleCompaction": "off", "compactIdleThreads": true})),
             IdleMode::Off
@@ -912,10 +962,25 @@ mod tests {
 
     #[test]
     fn idle_patch_follows_the_server_shape() {
-        assert_eq!(idle_patch(&json!({"idleCompaction": "onReturn"}), IdleMode::Off), json!({"idleCompaction": "off"}));
-        assert_eq!(idle_patch(&json!({"compactIdleThreads": "off"}), IdleMode::OnReturn), json!({"compactIdleThreads": "onReturn"}));
-        assert_eq!(idle_patch(&json!({"compactIdleThreads": false}), IdleMode::BeforeCacheExpires), json!({"compactIdleThreads": true}));
-        assert_eq!(idle_patch(&json!({}), IdleMode::OnReturn), json!({"compactIdleThreads": false}));
+        assert_eq!(
+            idle_patch(&json!({"idleCompaction": "onReturn"}), IdleMode::Off),
+            json!({"idleCompaction": "off"})
+        );
+        assert_eq!(
+            idle_patch(&json!({"compactIdleThreads": "off"}), IdleMode::OnReturn),
+            json!({"compactIdleThreads": "onReturn"})
+        );
+        assert_eq!(
+            idle_patch(
+                &json!({"compactIdleThreads": false}),
+                IdleMode::BeforeCacheExpires
+            ),
+            json!({"compactIdleThreads": true})
+        );
+        assert_eq!(
+            idle_patch(&json!({}), IdleMode::OnReturn),
+            json!({"compactIdleThreads": false})
+        );
     }
 
     #[test]
@@ -943,7 +1008,10 @@ mod tests {
             &json!({"textGenerators": {"b": {"kind": "openaiCompatible", "apiKey": "secret"}}}),
         );
         assert_eq!(settings["textGenerators"]["a"]["apiKey"], "x");
-        assert_eq!(settings["textGenerators"]["b"]["apiKey"], crate::secret_source::REDACTED);
+        assert_eq!(
+            settings["textGenerators"]["b"]["apiKey"],
+            crate::secret_source::REDACTED
+        );
         apply_patch(
             &mut settings,
             &json!({"backgroundActivity": {"overrides": {"automaticGitFetchInterval": 2}}}),
