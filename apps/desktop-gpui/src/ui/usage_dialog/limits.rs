@@ -1301,6 +1301,7 @@ impl Popover {
                 crate::ui::blurred_text::blurred_text(
                     &crate::settings_source_control::redacted(email),
                     muted,
+                    foreground,
                 )
                 .into_any_element()
             };

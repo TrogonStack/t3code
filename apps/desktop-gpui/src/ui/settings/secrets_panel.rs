@@ -472,6 +472,7 @@ impl SecretsPanel {
                     crate::ui::blurred_text::blurred_text(
                         &crate::settings_source_control::redacted(account),
                         theme.muted_foreground,
+                        theme.foreground,
                     )
                     .into_any_element()
                 };

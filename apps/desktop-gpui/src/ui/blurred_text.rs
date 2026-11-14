@@ -3,20 +3,34 @@
 //! smear together like the CSS blur and give away nothing but the shape of the value.
 
 use gpui::{
-    BoxShadow, Div, Hsla, IntoElement, ParentElement, Styled, div, point, px, relative,
-    transparent_black,
+    BoxShadow, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled, div, point, px,
+    relative, transparent_black,
 };
 
-/// `text` (already a placeholder) blurred in `color`. Font and size come from the parent.
-pub fn blurred_text(text: &str, color: Hsla) -> Div {
+const GROUP: &str = "blurred-text";
+
+/// `text` (already a placeholder) blurred in `color`, and in `hover` under the pointer like the
+/// web's `hover:text-foreground`. Font and size come from the parent.
+pub fn blurred_text(text: &str, color: Hsla, hover: Hsla) -> Div {
     div()
+        .group(GROUP)
         .flex()
         .min_w_0()
-        .overflow_hidden()
-        .children(text.chars().map(|ch| glyph(ch, color)))
+        .children(text.chars().map(|ch| glyph(ch, color, hover)))
 }
 
-fn glyph(ch: char, color: Hsla) -> impl IntoElement {
+/// The CSS blur spreads ink well past the glyph and thins it out.
+fn smudge(color: Hsla) -> Vec<BoxShadow> {
+    vec![BoxShadow {
+        color: color.opacity(0.45),
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(7.),
+        spread_radius: px(1.5),
+        inset: false,
+    }]
+}
+
+fn glyph(ch: char, color: Hsla, hover: Hsla) -> impl IntoElement {
     let (top, bottom, inset) = ink(ch);
     div()
         .relative()
@@ -30,14 +44,11 @@ fn glyph(ch: char, color: Hsla) -> impl IntoElement {
                 .left(relative(inset))
                 .right(relative(inset))
                 .rounded_full()
-                .bg(color.opacity(0.25))
-                .shadow(vec![BoxShadow {
-                    color: color.opacity(0.6),
-                    offset: point(px(0.), px(0.)),
-                    blur_radius: px(4.),
-                    spread_radius: px(0.),
-                    inset: false,
-                }]),
+                .bg(color.opacity(0.12))
+                .shadow(smudge(color))
+                .group_hover(GROUP, move |style| {
+                    style.bg(hover.opacity(0.12)).shadow(smudge(hover))
+                }),
         )
 }
 

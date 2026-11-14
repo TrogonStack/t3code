@@ -179,6 +179,7 @@ pub(super) fn redacted_login(account: &str, revealed: bool, cx: &App) -> gpui::D
         login.child(crate::ui::blurred_text::blurred_text(
             &sc::redacted(account),
             theme.muted_foreground,
+            theme.foreground,
         ))
     }
 }
