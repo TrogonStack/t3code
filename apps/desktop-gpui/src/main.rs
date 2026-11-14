@@ -34,6 +34,7 @@ mod settings_devices;
 mod settings_diffs;
 mod settings_labs;
 mod settings_projects;
+mod settings_provider_extras;
 mod settings_providers;
 mod settings_scheduled_task_editor;
 mod settings_scheduled_tasks;

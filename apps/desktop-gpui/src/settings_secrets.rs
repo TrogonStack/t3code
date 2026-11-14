@@ -15,6 +15,9 @@ const DEFAULT_MOUNT: &str = "secret";
 pub struct Config {
     pub settings: Value,
     pub manageable: bool,
+    /// `serverConfig.managedPolicy.limits.providers.allowedDrivers` is set: the server drops text
+    /// generators.
+    pub providers_restricted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

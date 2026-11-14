@@ -19,6 +19,7 @@ mod secret_field;
 mod secrets_panel;
 mod snapshot_panel;
 mod source_control_panel;
+mod wizard;
 pub(crate) mod tokens;
 
 use super::*;

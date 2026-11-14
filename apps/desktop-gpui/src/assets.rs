@@ -102,6 +102,7 @@ gpui_kit_assets::icon_assets!(
         Undo2,
         Apple,
         Ellipsis,
+        EllipsisVertical,
         Sun,
         Moon,
         Paintbrush
@@ -162,6 +163,30 @@ pub const STAGE_DEV_BUTTON: &str = "images/stage-dev-button.svg";
 
 /// The web's provider icons (`ProviderInstanceIcon`), one file per color scheme where the fills differ.
 const PROVIDER_ICONS: &[(&str, &[u8])] = &[
+    (
+        "providers/anthropic-dark.svg",
+        include_bytes!("provider-icons/anthropic-dark.svg") as &[u8],
+    ),
+    (
+        "providers/anthropic-light.svg",
+        include_bytes!("provider-icons/anthropic-light.svg") as &[u8],
+    ),
+    (
+        "providers/ollama-dark.svg",
+        include_bytes!("provider-icons/ollama-dark.svg") as &[u8],
+    ),
+    (
+        "providers/ollama-light.svg",
+        include_bytes!("provider-icons/ollama-light.svg") as &[u8],
+    ),
+    (
+        "providers/openrouter-dark.svg",
+        include_bytes!("provider-icons/openrouter-dark.svg") as &[u8],
+    ),
+    (
+        "providers/openrouter-light.svg",
+        include_bytes!("provider-icons/openrouter-light.svg") as &[u8],
+    ),
     (
         "providers/antigravity.png",
         include_bytes!("provider-icons/antigravity.png") as &[u8],
@@ -231,6 +256,7 @@ const PROVIDER_ICONS: &[(&str, &[u8])] = &[
 /// The icon asset for a driver, or `None` for the drivers the web draws as initials.
 pub fn provider_icon(driver: &str, dark: bool) -> Option<&'static str> {
     let scheme = if dark { "dark" } else { "light" };
+    let driver = if driver == "openai" { "codex" } else { driver };
     [
         format!("providers/{driver}-{scheme}.svg"),
         format!("providers/{driver}.svg"),

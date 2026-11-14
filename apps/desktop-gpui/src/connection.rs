@@ -11,7 +11,7 @@ use crate::rpc::{
     DeviceTestHost, Event, GitRunStackedAction, OrchestrationDispatchCommand,
     OrchestrationLaunchThread, PING_FRAME, ProjectsMutate, ProviderConsumeResetCredit,
     ReviewGetDiffPreview, ServerCheckSecretSource, ServerDiscoverSourceControl, ServerGetConfig,
-    ServerGetUsageSummary, ServerListOnePasswordAccounts, ServerRefreshProviders,
+    ServerGetUsageSummary, ServerListOnePasswordAccounts, ServerListTextGeneratorModels, ServerRefreshProviders,
     ServerRefreshUsageRates, ServerUpdateSettings, Session, ShellOpenInEditor, SubscribeShell,
     SubscribeThread, SubscribeVcsStatus, TerminalAttach, TerminalClose, TerminalResize,
     TerminalWrite, VcsCreateRef, VcsListRefs, VcsPull, VcsRefreshStatus, VcsSwitchRef,
@@ -164,6 +164,7 @@ pub enum Call {
     DeviceEasAccount,
     DiscoverSourceControl,
     CheckSecretSource,
+    ListTextGeneratorModels,
     ListOnePasswordAccounts,
     GetConfig,
     ListIgnoredFiles,
@@ -247,6 +248,7 @@ impl Call {
             Self::DeviceEasAccount => "check the Expo account",
             Self::DiscoverSourceControl => "scan the server environment",
             Self::CheckSecretSource => "check the secret",
+            Self::ListTextGeneratorModels => "list the text generator models",
             Self::ListOnePasswordAccounts => "list the 1Password accounts",
             Self::GetConfig => "load the server settings",
             Self::ListIgnoredFiles => "list the ignored files",
@@ -307,6 +309,9 @@ impl Call {
             Self::DeviceEasAccount => session.request::<DeviceEasAccount>(payload),
             Self::DiscoverSourceControl => session.request::<ServerDiscoverSourceControl>(payload),
             Self::CheckSecretSource => session.request::<ServerCheckSecretSource>(payload),
+            Self::ListTextGeneratorModels => {
+                session.request::<ServerListTextGeneratorModels>(payload)
+            }
             Self::ListOnePasswordAccounts => {
                 session.request::<ServerListOnePasswordAccounts>(payload)
             }

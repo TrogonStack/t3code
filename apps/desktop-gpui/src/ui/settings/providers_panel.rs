@@ -26,6 +26,8 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+mod extras;
+
 const LIST_WIDTH: f32 = 272.;
 const DIALOG_WIDTH: f32 = 512.;
 const SENSITIVE_NOTE: &str =
@@ -61,6 +63,7 @@ struct Ctx {
     connected: bool,
     editable: bool,
     in_project: bool,
+    label: String,
 }
 
 pub struct ProvidersPanel {
@@ -91,6 +94,7 @@ pub struct ProvidersPanel {
     creating: Option<(u64, String)>,
     /// The Runtime inputs of the selected instance, by field key.
     runtime: Vec<(&'static str, Entity<InputState>)>,
+    extras: extras::Extras,
     _runtime_subscriptions: Vec<Subscription>,
     _subscriptions: Vec<Subscription>,
 }
@@ -105,6 +109,7 @@ impl ProvidersPanel {
         let display_name = cx.new(|cx| InputState::new(window, cx).placeholder("Instance label"));
         let add_label = cx.new(|cx| InputState::new(window, cx).placeholder("Provider label"));
         let add_id = cx.new(|cx| InputState::new(window, cx).placeholder("Instance ID"));
+        let extras = extras::Extras::new(window, cx);
         let subscriptions = vec![
             cx.observe(&scope, |_, _, cx| cx.notify()),
             cx.subscribe_in(
@@ -157,6 +162,7 @@ impl ProvidersPanel {
             add_id,
             creating: None,
             runtime: Vec::new(),
+            extras,
             _runtime_subscriptions: Vec::new(),
             _subscriptions: subscriptions,
         }
@@ -177,6 +183,7 @@ impl ProvidersPanel {
         sources: Vec<SecretSource>,
         cx: &mut Context<Self>,
     ) {
+        self.extras.set_restricted(config.providers_restricted);
         if !self.pending.is_empty() {
             return;
         }
@@ -203,11 +210,15 @@ impl ProvidersPanel {
         self.confirm = None;
         self.creating = None;
         self.reseed = true;
+        self.extras_reload(cx);
         cx.notify();
     }
 
     /// Closes a source menu; returns whether there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.extras_close(cx) {
+            return true;
+        }
         if self.dialog.take().is_some() || self.confirm.take().is_some() {
             cx.notify();
             return true;
@@ -235,6 +246,7 @@ impl ProvidersPanel {
             connected: environment.is_some_and(|e| e.connected),
             editable: environment.is_some_and(|e| e.connected && e.writable),
             in_project: matches!(resolved, Scope::Project(_)),
+            label: environment.map(|e| e.label.clone()).unwrap_or_default(),
         }
     }
 
@@ -275,6 +287,9 @@ impl ProvidersPanel {
     /// The outcome of a write or of a secret check.
     pub fn on_call(&mut self, token: u64, event: CallEvent, cx: &mut Context<Self>) {
         if matches!(event, CallEvent::Progress(_)) {
+            return;
+        }
+        if self.extras_call(token, &event, cx) {
             return;
         }
         if let Some(row) = self.checks.remove(&token) {
@@ -1280,7 +1295,9 @@ impl ProvidersPanel {
             self.confirm = Some(confirm);
             return Some(element);
         }
-        self.dialog.as_ref()?;
+        if self.dialog.is_none() {
+            return self.extras_overlay(&ctx.label, window, cx);
+        }
         Some(self.dialog_view(window, cx))
     }
 }
@@ -1292,11 +1309,17 @@ impl Render for ProvidersPanel {
         if !ctx.connected {
             return note_line("Connect an environment to manage its providers.").into_any_element();
         }
+        let editable = ctx.editable && !ctx.in_project;
         if self.instances.is_empty() {
-            return note_line("No providers configured.").into_any_element();
+            let sections = self.sections(editable, window, cx);
+            let empty = div().px_4().child(note("No providers configured.", cx));
+            return v_flex()
+                .gap_8()
+                .child(empty)
+                .child(sections)
+                .into_any_element();
         }
         self.ensure_rows(window, cx);
-        let editable = ctx.editable && !ctx.in_project;
         let theme = Tokens::of(cx);
         let selected = self.selected_instance().cloned();
         let selected_id = selected.as_ref().map(|instance| instance.id.clone());
@@ -1326,7 +1349,10 @@ impl Render for ProvidersPanel {
             .child(Icon::new(Icons::Plus).size(px(12.)))
             .child("Add provider")
             .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx)));
+        let sections = self.sections(editable, window, cx);
         v_flex()
+            .gap_8()
+            .child(v_flex()
             .gap_4()
             .children(notice)
             .child(h_flex().px_4().justify_end().child(add))
@@ -1348,7 +1374,8 @@ impl Render for ProvidersPanel {
                             .child(list),
                     )
                     .child(div().min_w_0().flex_1().children(editor)),
-            )
+            ))
+            .child(sections)
             .into_any_element()
     }
 }

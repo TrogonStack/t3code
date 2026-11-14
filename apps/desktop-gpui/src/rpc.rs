@@ -114,6 +114,15 @@ impl Method for ServerCheckSecretSource {
     type Success = Value;
 }
 
+/// `server.listTextGeneratorModels`, the models a text generator lists, or a test of one.
+pub struct ServerListTextGeneratorModels;
+
+impl Method for ServerListTextGeneratorModels {
+    const TAG: &'static str = "server.listTextGeneratorModels";
+    type Payload = Value;
+    type Success = Value;
+}
+
 /// `server.listOnePasswordAccounts`, the accounts the server's `op` CLI is signed into.
 pub struct ServerListOnePasswordAccounts;
 

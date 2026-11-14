@@ -476,6 +476,8 @@ impl Catalog {
         let secrets = crate::settings_secrets::Config {
             settings: value["settings"].clone(),
             manageable: value["secretProviderSettings"].as_bool() == Some(true),
+            providers_restricted: !value["managedPolicy"]["limits"]["providers"]["allowedDrivers"]
+                .is_null(),
         };
         let Config {
             providers,

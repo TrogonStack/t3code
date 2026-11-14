@@ -275,6 +275,93 @@ fn tip_popup(text: &'static str, cx: &App) -> gpui::Div {
         )
 }
 
+/// `PolicyTooltip` (settingsLayout.tsx): a `size-5` ghost info button whose `max-w-80` tooltip
+/// opens above it after 200ms of hover or on keyboard focus.
+pub(super) fn info_tip(
+    id: &'static str,
+    text: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let key = ElementId::from(id);
+    let handle = tab_stop(&key, window, cx);
+    let visible = focus_visible(&handle, window);
+    let tip = window.use_keyed_state(ElementId::from((key.clone(), "tip")), cx, |_, _| {
+        TipState::default()
+    });
+    let shown = tip.read(cx).shown || visible;
+    let theme = Tokens::of(cx);
+    let (muted, hover, foreground) = (theme.muted_foreground, theme.accent, theme.foreground);
+    let ring = focus_ring(4., cx);
+    let popup = shown.then(|| {
+        gpui::deferred(
+            div()
+                .absolute()
+                .bottom_full()
+                .mb(px(4.))
+                .left(px(-150.))
+                .w(px(320.))
+                .px_2()
+                .py_1()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.popover)
+                .text_xs()
+                .line_height(px(15.))
+                .text_color(theme.foreground)
+                .shadow(vec![BoxShadow {
+                    color: gpui::black().opacity(0.05),
+                    offset: point(px(0.), px(4.)),
+                    blur_radius: px(6.),
+                    spread_radius: px(-1.),
+                    inset: false,
+                }])
+                .child(text),
+        )
+    });
+    let hovered_tip = tip.clone();
+    div()
+        .id(key)
+        .track_focus(&handle)
+        .relative()
+        .size(px(20.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.))
+        .text_color(muted)
+        .hover(move |style| style.bg(hover).text_color(foreground))
+        .on_hover(move |entered, window, cx| {
+            let epoch = hovered_tip.update(cx, |state, _| {
+                state.epoch += 1;
+                state.shown = false;
+                state.epoch
+            });
+            window.refresh();
+            if !*entered {
+                return;
+            }
+            let tip = hovered_tip.clone();
+            window
+                .spawn(cx, async move |cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(200))
+                        .await;
+                    cx.update(|window, cx| {
+                        tip.update(cx, |state, _| state.shown = state.epoch == epoch);
+                        window.refresh();
+                    })
+                    .ok();
+                })
+                .detach();
+        })
+        .child(Icon::new(Icons::Info).size(px(14.)))
+        .children(popup)
+        .when(visible, |button| button.child(ring))
+        .into_any_element()
+}
+
 /// `SettingResetButton` (settingsLayout.tsx:548-580): `Button size="icon-micro" variant="ghost-muted"`
 /// (`size-5 rounded-sm`, muted, `bg-accent` and foreground on hover) holding a `size-3` Undo2,
 /// with a "Reset to default" tooltip above it that opens after 600ms of hover or on keyboard focus.
