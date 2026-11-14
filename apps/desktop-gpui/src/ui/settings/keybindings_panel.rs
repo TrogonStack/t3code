@@ -31,8 +31,8 @@ use std::rc::Rc;
 /// `w-44` and `w-56` (KeybindingsSettings.tsx:1245-1250).
 const KEY_INPUT_WIDTH: f32 = 176.;
 const COMMAND_WIDTH: f32 = 224.;
-const WHEN_WIDTH: f32 = 830.;
-const OPERATOR_WIDTH: f32 = 200.;
+const WHEN_WIDTH: f32 = 544.;
+const OPERATOR_WIDTH: f32 = 96.;
 
 fn eid(prefix: &str, id: &str) -> ElementId {
     ElementId::from(SharedString::from(format!("{prefix}-{id}")))
