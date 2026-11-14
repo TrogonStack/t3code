@@ -518,6 +518,16 @@ impl ScopeBar {
         }
     }
 
+    /// Back to the first-open scope: every project, every environment, no picker open.
+    pub fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search = ScopeSearch::default();
+        self.open = None;
+        for input in [&self.project_search, &self.environment_search] {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+    }
+
     pub fn search(&self) -> &ScopeSearch {
         &self.search
     }

@@ -177,6 +177,11 @@ impl KeybindingsPanel {
         cx.notify();
     }
 
+    pub fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.key_drafts.clear();
         self.when_drafts.clear();

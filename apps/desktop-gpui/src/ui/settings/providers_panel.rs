@@ -225,6 +225,7 @@ impl ProvidersPanel {
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.dialog = None;
         self.confirm = None;
+        self.selected = None;
         self.creating = None;
         self.reseed = true;
         self.extras_reload(cx);

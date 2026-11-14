@@ -296,10 +296,11 @@ impl SettingsDialog {
         let scheduled_tasks =
             cx.new(|cx| ScheduledTasksPanel::new(actions.clone(), scope.clone(), window, cx));
         let labs = cx.new(|cx| LabsPanel::new(actions, scope.clone(), cx));
-        let labs_events = cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, _, cx| {
-            let LabsEvent::OpenSection(section) = event;
-            this.select_section(*section, cx);
-        });
+        let labs_events =
+            cx.subscribe_in(&labs, window, |this, _, event: &LabsEvent, window, cx| {
+                let LabsEvent::OpenSection(section) = event;
+                this.select_section(*section, window, cx);
+            });
         let text_targets = cx.observe(&providers, |this, providers, cx| {
             let targets = providers.read(cx).text_targets();
             this.threads
@@ -710,7 +711,7 @@ impl SettingsDialog {
         let results = self.results(cx);
         if let Some(item) = results.get(self.active_result) {
             if item.section != self.section {
-                self.advanced_open = false;
+                self.enter_section(item.section, window, cx);
             }
             self.advanced_open |= item.id == "skills-in-slash-menu";
             if crate::settings_appearance::is_advanced(item.id) {
@@ -724,20 +725,51 @@ impl SettingsDialog {
                 self.typography
                     .update(cx, |panel, cx| panel.open_advanced(item.id, cx));
             }
-            self.section = item.section;
             self.clear_search(window, cx);
             window.focus(&self.focus, cx);
             cx.notify();
         }
     }
 
-    fn select_section(&mut self, section: Section, cx: &mut Context<Self>) {
-        if section != self.section {
-            self.advanced_open = false;
-        }
+    fn select_section(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
+        self.enter_section(section, window, cx);
+        cx.notify();
+    }
+
+    /// Every tab opens at its entry point, as a fresh route does on the web: the scope
+    /// selection is dropped (route search params do not survive a tab change) and the
+    /// tab's transient state resets.
+    fn enter_section(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
+        self.advanced_open = false;
+        self.menu = None;
+        self.confirm_restore = false;
         self.section = section;
         self.scroll.set_offset(gpui::point(px(0.), px(0.)));
-        cx.notify();
+        self.scope.update(cx, |bar, cx| bar.reset(window, cx));
+        match section {
+            Section::Diffs => self.diffs.update(cx, |p, cx| p.reload(cx)),
+            Section::Appearance => {
+                self.appearance.update(cx, |p, cx| p.reload(cx));
+                self.typography.update(cx, |p, cx| p.reload(cx));
+            }
+            Section::Labs => self.labs.update(cx, |p, cx| p.reload(cx)),
+            Section::Devices => self.devices.update(cx, |p, cx| p.reload(cx)),
+            Section::SourceControl => self.source_control.update(cx, |p, cx| p.reload(cx)),
+            Section::Threads => self.threads.update(cx, |p, cx| p.reload(cx)),
+            Section::Worktrees => self.worktrees.update(cx, |p, cx| p.reload(cx)),
+            Section::Voice => self.voice.update(cx, |p, cx| p.reload(cx)),
+            Section::Browser => self.browser.update(cx, |p, cx| p.reload(cx)),
+            Section::Secrets => self.secrets.update(cx, |p, cx| p.reload(cx)),
+            Section::ScheduledTasks => self.scheduled_tasks.update(cx, |p, cx| p.reload(cx)),
+            Section::Providers => self.providers.update(cx, |p, cx| p.reload(cx)),
+            Section::Projects => self.projects.update(cx, |p, cx| p.reload(cx)),
+            Section::Keybindings => self.keybindings.update(cx, |p, cx| {
+                p.reload(cx);
+                p.clear_search(window, cx);
+            }),
+            Section::SnapShot => self.snapshot.update(cx, |p, cx| p.reload(cx)),
+            _ => {}
+        }
     }
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1312,9 +1344,9 @@ impl SettingsDialog {
                         .when(!active, |row| {
                             row.hover(move |style| style.bg(hover).text_color(foreground))
                         })
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.select_section(target, cx)),
-                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_section(target, window, cx)
+                        }))
                         .child(icon)
                         .child(div().min_w_0().truncate().child(target.label())),
                 );

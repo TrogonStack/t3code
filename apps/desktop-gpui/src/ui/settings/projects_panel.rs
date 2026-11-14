@@ -230,6 +230,7 @@ impl ProjectsPanel {
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.confirm = None;
+        self.removal = None;
         self.editor = None;
         self.delete_script = None;
         self.menu = None;
