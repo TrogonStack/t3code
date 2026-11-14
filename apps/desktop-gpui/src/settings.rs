@@ -200,6 +200,25 @@ choice! {
     }
 }
 
+choice! {
+    /// `ToolCallVisibility` (settings.ts:352); labels from `TOOL_CALL_VISIBILITY_LABELS`.
+    ToolCalls {
+        ShowAll => ("showAll", "Show all"),
+        HideSuccessful => ("hideSuccessful", "Hide successful"),
+        HideAll => ("hideAll", "Hide all"),
+        Zen => ("zen", "Zen"),
+    }
+}
+
+choice! {
+    /// `ScreenReaderAnnouncements` (settings.ts:356); labels from `SCREEN_READER_ANNOUNCEMENTS_LABELS`.
+    ScreenReaderAnnouncements {
+        Status => ("status", "Status only"),
+        Messages => ("messages", "Status and messages"),
+        Everything => ("everything", "Everything"),
+    }
+}
+
 /// The platform's primary modifier as the Chat tab prints it.
 pub fn mod_label(mac: bool) -> &'static str {
     if mac { "\u{2318}" } else { "Ctrl" }
@@ -267,6 +286,9 @@ pub struct DeviceSettings {
     pub send_shortcut: SendShortcut,
     pub follow_up: FollowUp,
     pub skills_in_slash_menu: bool,
+    pub tool_calls: ToolCalls,
+    pub screen_reader_announcements: ScreenReaderAnnouncements,
+    pub screen_reader_window_title: bool,
 }
 
 impl Default for DeviceSettings {
@@ -287,6 +309,9 @@ impl Default for DeviceSettings {
             send_shortcut: SendShortcut::Enter,
             follow_up: FollowUp::Steer,
             skills_in_slash_menu: true,
+            tool_calls: ToolCalls::ShowAll,
+            screen_reader_announcements: ScreenReaderAnnouncements::Status,
+            screen_reader_window_title: false,
         }
     }
 }
@@ -345,6 +370,16 @@ impl DeviceSettings {
                 .and_then(FollowUp::from_wire)
                 .unwrap_or(defaults.follow_up),
             skills_in_slash_menu: flag("showSkillsInSlashMenu", defaults.skills_in_slash_menu),
+            tool_calls: choice("toolCallVisibility")
+                .and_then(ToolCalls::from_wire)
+                .unwrap_or(defaults.tool_calls),
+            screen_reader_announcements: choice("screenReaderAnnouncements")
+                .and_then(ScreenReaderAnnouncements::from_wire)
+                .unwrap_or(defaults.screen_reader_announcements),
+            screen_reader_window_title: flag(
+                "screenReaderWindowTitle",
+                defaults.screen_reader_window_title,
+            ),
         })
     }
 
@@ -370,6 +405,15 @@ impl DeviceSettings {
             ("sendShortcut", json!(self.send_shortcut.wire())),
             ("followUpBehavior", json!(self.follow_up.wire())),
             ("showSkillsInSlashMenu", json!(self.skills_in_slash_menu)),
+            ("toolCallVisibility", json!(self.tool_calls.wire())),
+            (
+                "screenReaderAnnouncements",
+                json!(self.screen_reader_announcements.wire()),
+            ),
+            (
+                "screenReaderWindowTitle",
+                json!(self.screen_reader_window_title),
+            ),
         ];
         if let Some(language) = self.language.wire() {
             entries.push(("language", json!(language)));
@@ -515,6 +559,15 @@ impl DeviceSettings {
             ),
             (self.send_shortcut != d.send_shortcut, "Send shortcut"),
             (self.follow_up != d.follow_up, "Follow-up behavior"),
+            (self.tool_calls != d.tool_calls, "Tool calls in chat"),
+            (
+                self.screen_reader_announcements != d.screen_reader_announcements,
+                "Screen reader announcements",
+            ),
+            (
+                self.screen_reader_window_title != d.screen_reader_window_title,
+                "Screen reader window title",
+            ),
             (self.confirm_unpin != d.confirm_unpin, "Unpin confirmation"),
             (
                 self.confirm_archive != d.confirm_archive,
@@ -703,6 +756,21 @@ pub const CHAT_ITEMS: &[SearchItem] = &[
         "follow-up-behavior",
         "Follow-up behavior",
         "queue steer running turn send default behavior composer",
+    ),
+    chat_item(
+        "tool-call-visibility",
+        "Tool calls in chat",
+        "hide tool calls commands edits searches work log activity quiet chat zen final answers only",
+    ),
+    chat_item(
+        "screen-reader-announcements",
+        "Screen reader announcements",
+        "accessibility a11y screen reader nvda jaws voiceover orca narrator speech announce read aloud messages activity steps",
+    ),
+    chat_item(
+        "screen-reader-window-title",
+        "Screen reader window title",
+        "accessibility a11y screen reader nvda jaws voiceover orca narrator window title tab title alt tab taskbar thread status order working approval",
     ),
 ];
 
@@ -900,6 +968,12 @@ mod tests {
         assert_eq!(d.confirm_quit, QuitMode::Hold);
         assert_eq!(d.time_format, TimeFormat::Locale);
         assert_eq!(d.language, Language::Locale(0));
+        assert_eq!(d.tool_calls, ToolCalls::ShowAll);
+        assert_eq!(
+            d.screen_reader_announcements,
+            ScreenReaderAnnouncements::Status
+        );
+        assert!(!d.screen_reader_window_title);
         assert!(d.changed_labels().is_empty());
     }
 
@@ -921,6 +995,9 @@ mod tests {
             send_shortcut: SendShortcut::ModEnter,
             follow_up: FollowUp::Queue,
             skills_in_slash_menu: false,
+            tool_calls: ToolCalls::Zen,
+            screen_reader_announcements: ScreenReaderAnnouncements::Everything,
+            screen_reader_window_title: true,
         };
         assert_eq!(DeviceSettings::parse(&changed.to_json(None)), Some(changed));
     }
@@ -977,6 +1054,9 @@ mod tests {
         let value: Value = serde_json::from_str(&written).unwrap();
         assert_eq!(value["settings"]["theme"], "dark");
         assert_eq!(value["settings"]["confirmThreadDelete"], true);
+        assert_eq!(value["settings"]["toolCallVisibility"], "showAll");
+        assert_eq!(value["settings"]["screenReaderAnnouncements"], "status");
+        assert_eq!(value["settings"]["screenReaderWindowTitle"], false);
         let bare = DeviceSettings::default().to_json(Some(r#"{"theme":"dark"}"#));
         assert!(bare.contains("\"theme\":\"dark\""));
     }
@@ -1012,6 +1092,9 @@ mod tests {
             send_shortcut: SendShortcut::ModEnter,
             composer_rich_text: false,
             skills_in_slash_menu: false,
+            tool_calls: ToolCalls::HideAll,
+            screen_reader_announcements: ScreenReaderAnnouncements::Messages,
+            screen_reader_window_title: true,
             ..DeviceSettings::default()
         };
         assert_eq!(
@@ -1022,6 +1105,9 @@ mod tests {
                 "Rich text composer",
                 "Send shortcut",
                 "Follow-up behavior",
+                "Tool calls in chat",
+                "Screen reader announcements",
+                "Screen reader window title",
                 "Unpin confirmation"
             ]
         );
@@ -1037,6 +1123,23 @@ mod tests {
         assert_eq!(parsed.follow_up, FollowUp::Steer);
         assert!(!parsed.composer_rich_text);
         assert!(parsed.skills_in_slash_menu);
+        let parsed = DeviceSettings::parse(
+            r#"{"toolCallVisibility":"hideSuccessful","screenReaderAnnouncements":"loud","screenReaderWindowTitle":"yes"}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.tool_calls, ToolCalls::HideSuccessful);
+        assert_eq!(
+            parsed.screen_reader_announcements,
+            ScreenReaderAnnouncements::Status
+        );
+        assert!(!parsed.screen_reader_window_title);
+        let labels: Vec<_> = ToolCalls::ALL.iter().map(|v| v.label()).collect();
+        assert_eq!(labels, ["Show all", "Hide successful", "Hide all", "Zen"]);
+        let labels: Vec<_> = ScreenReaderAnnouncements::ALL
+            .iter()
+            .map(|v| v.label())
+            .collect();
+        assert_eq!(labels, ["Status only", "Status and messages", "Everything"]);
     }
 
     #[test]

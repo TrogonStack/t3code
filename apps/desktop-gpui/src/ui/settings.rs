@@ -79,6 +79,8 @@ enum Pick {
     Time,
     SendShortcut,
     FollowUp,
+    ToolCalls,
+    ScreenReaderAnnouncements,
 }
 
 impl Pick {
@@ -91,15 +93,18 @@ impl Pick {
             Self::Time => "settings-time-format",
             Self::SendShortcut => "settings-send-shortcut",
             Self::FollowUp => "settings-follow-up-behavior",
+            Self::ToolCalls => "settings-tool-call-visibility",
+            Self::ScreenReaderAnnouncements => "settings-screen-reader-announcements",
         }
     }
 
-    /// `w-full sm:w-56`, `sm:w-44`, `sm:w-40`, `sm:w-40`.
+    /// `w-full sm:w-56`, `sm:w-44`, `sm:w-40`, `sm:w-40`, `sm:w-40`, `sm:w-48`.
     fn width(self) -> f32 {
         match self {
             Self::Notifications => 224.,
             Self::ProjectOrder => 176.,
-            Self::Quit | Self::Language | Self::Time => 160.,
+            Self::Quit | Self::Language | Self::Time | Self::ToolCalls => 160.,
+            Self::ScreenReaderAnnouncements => 192.,
             Self::SendShortcut | Self::FollowUp => 0.,
         }
     }
@@ -121,6 +126,11 @@ impl Pick {
                 .map(|m| m.menu_label(MAC))
                 .collect(),
             Self::FollowUp => FollowUp::ALL.iter().map(|m| m.label()).collect(),
+            Self::ToolCalls => model::ToolCalls::ALL.iter().map(|m| m.label()).collect(),
+            Self::ScreenReaderAnnouncements => model::ScreenReaderAnnouncements::ALL
+                .iter()
+                .map(|m| m.label())
+                .collect(),
         }
     }
 
@@ -143,6 +153,12 @@ impl Pick {
                 .iter()
                 .position(|m| *m == settings.send_shortcut),
             Self::FollowUp => FollowUp::ALL.iter().position(|m| *m == settings.follow_up),
+            Self::ToolCalls => model::ToolCalls::ALL
+                .iter()
+                .position(|m| *m == settings.tool_calls),
+            Self::ScreenReaderAnnouncements => model::ScreenReaderAnnouncements::ALL
+                .iter()
+                .position(|m| *m == settings.screen_reader_announcements),
         };
         index.unwrap_or(0)
     }
@@ -156,10 +172,14 @@ impl Pick {
             Self::Time => settings.time_format = TimeFormat::ALL[index],
             Self::SendShortcut => settings.send_shortcut = SendShortcut::ALL[index],
             Self::FollowUp => settings.follow_up = FollowUp::ALL[index],
+            Self::ToolCalls => settings.tool_calls = model::ToolCalls::ALL[index],
+            Self::ScreenReaderAnnouncements => {
+                settings.screen_reader_announcements = model::ScreenReaderAnnouncements::ALL[index]
+            }
         }
     }
 
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 9] = [
         Self::Notifications,
         Self::ProjectOrder,
         Self::Quit,
@@ -167,6 +187,8 @@ impl Pick {
         Self::Time,
         Self::SendShortcut,
         Self::FollowUp,
+        Self::ToolCalls,
+        Self::ScreenReaderAnnouncements,
     ];
 }
 
@@ -182,7 +204,7 @@ pub struct SettingsDialog {
     /// "/" moved focus to the search; its character must not land in the field.
     swallow_slash: bool,
     menu: Option<(Pick, usize)>,
-    triggers: [FocusHandle; 7],
+    triggers: [FocusHandle; Pick::ALL.len()],
     /// `AdvancedSettings`' local `open` state: not persisted, closed again on leaving the tab.
     advanced_open: bool,
     diffs: Entity<DiffsPanel>,
@@ -650,12 +672,6 @@ impl SettingsDialog {
             return;
         }
         if self.projects.update(cx, |panel, cx| panel.close_menu(cx)) {
-            return;
-        }
-        if self
-            .labs
-            .update(cx, |panel, cx| panel.close_menu(window, cx))
-        {
             return;
         }
         if self
@@ -1586,7 +1602,8 @@ impl SettingsDialog {
             .into_any_element()
     }
 
-    /// `ChatSettingsPanel` (SettingsPanels.tsx:1075-1287): Composer and Follow-ups.
+    /// `ChatSettingsPanel` (SettingsPanels.tsx:1158-1330): Composer, Follow-ups, Activity and
+    /// Screen reader.
     fn chat(&self, wide: bool, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let s = self.settings;
         let d = DeviceSettings::default();
@@ -1686,9 +1703,72 @@ impl SettingsDialog {
             ],
             cx,
         );
+        let activity = group(
+            vec![
+                row(
+                    "Tool calls in chat",
+                    "Hide the commands, edits, and searches agents run. Hide successful keeps failures. Zen shows only final answers. Approvals, questions, and errors always show.",
+                    self.reset(
+                        "settings-reset-tool-calls",
+                        s.tool_calls != d.tool_calls,
+                        |s, d| s.tool_calls = d.tool_calls,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::ToolCalls, cx),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        );
+        let screen_reader = group(
+            vec![
+                row(
+                    "Screen reader announcements",
+                    "What a screen reader hears from the open thread: a turn starting, needing you, and ending. Status and messages adds what the agent writes before its last message. Everything adds each step.",
+                    self.reset(
+                        "settings-reset-screen-reader-announcements",
+                        s.screen_reader_announcements != d.screen_reader_announcements,
+                        |s, d| s.screen_reader_announcements = d.screen_reader_announcements,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::ScreenReaderAnnouncements, cx),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+                row(
+                    "Screen reader window title",
+                    "Start the window title with the thread's status, like Needs approval, and its name, so screen readers read them first when you switch apps. Taskbars, shared screens, and time trackers see it too.",
+                    self.reset(
+                        "settings-reset-screen-reader-window-title",
+                        s.screen_reader_window_title != d.screen_reader_window_title,
+                        |s, d| s.screen_reader_window_title = d.screen_reader_window_title,
+                        window,
+                        cx,
+                    ),
+                    self.flag(
+                        "settings-screen-reader-window-title",
+                        s.screen_reader_window_title,
+                        |s| s.screen_reader_window_title = !s.screen_reader_window_title,
+                        window,
+                        cx,
+                    ),
+                    wide,
+                    cx,
+                )
+                .into_any_element(),
+            ],
+            cx,
+        );
         vec![
             section("Composer", composer).into_any_element(),
             section("Follow-ups", follow_ups).into_any_element(),
+            section("Activity", activity).into_any_element(),
+            section("Screen reader", screen_reader).into_any_element(),
         ]
     }
 

@@ -4,7 +4,7 @@
 //!
 //! Where each Labs key lives (packages/contracts/src/settings.ts):
 //! - Device settings, `client-settings.json` (`ClientSettingsSchema`): `boringSidebarEnabled`,
-//!   `boringSidebarMultilineRows`, `toolCallVisibility`, `legacySidebarEnabled` (hidden, cleared
+//!   `boringSidebarMultilineRows`, `legacySidebarEnabled` (hidden, cleared
 //!   by the boring sidebar switch), `planModeEnabled`, `contextWindowMeterEnabled`. A device
 //!   setting ignores the scope bar.
 //! - Server settings, environment-wide: `guestSharingEnabled`, `linkedEnvironmentsEnabled`,
@@ -19,65 +19,14 @@ use std::path::PathBuf;
 /// Call tokens of the Labs tab's server writes start here.
 pub const TOKEN_BASE: u64 = 1 << 44;
 
-/// `ToolCallVisibility` (settings.ts:346); labels from `LabsSettingsPanel.tsx`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ToolCalls {
-    ShowAll,
-    HideSuccessful,
-    HideAll,
-    Zen,
-}
-
-impl ToolCalls {
-    pub const ALL: &'static [Self] = &[
-        Self::ShowAll,
-        Self::HideSuccessful,
-        Self::HideAll,
-        Self::Zen,
-    ];
-
-    pub fn wire(self) -> &'static str {
-        match self {
-            Self::ShowAll => "showAll",
-            Self::HideSuccessful => "hideSuccessful",
-            Self::HideAll => "hideAll",
-            Self::Zen => "zen",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::ShowAll => "Show all",
-            Self::HideSuccessful => "Hide successful",
-            Self::HideAll => "Hide all",
-            Self::Zen => "Zen",
-        }
-    }
-
-    pub fn from_wire(value: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|v| v.wire() == value)
-    }
-}
-
 /// The Labs keys of `ClientSettingsSchema`, with the schema's defaults.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LabsSettings {
     pub boring_sidebar: bool,
     pub boring_multiline: bool,
-    pub tool_calls: ToolCallsDefault,
     pub legacy_sidebar: bool,
     pub plan_mode: bool,
     pub context_meter: bool,
-}
-
-/// `ToolCalls` with `showAll` as its `Default`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ToolCallsDefault(pub ToolCalls);
-
-impl Default for ToolCallsDefault {
-    fn default() -> Self {
-        Self(ToolCalls::ShowAll)
-    }
 }
 
 /// The document is bare or wrapped as `{"settings": {...}}` (`decodeClientSettingsJson`).
@@ -108,23 +57,16 @@ impl LabsSettings {
         Some(Self {
             boring_sidebar: flag("boringSidebarEnabled"),
             boring_multiline: flag("boringSidebarMultilineRows"),
-            tool_calls: ToolCallsDefault(
-                map.get("toolCallVisibility")
-                    .and_then(Value::as_str)
-                    .and_then(ToolCalls::from_wire)
-                    .unwrap_or(ToolCalls::ShowAll),
-            ),
             legacy_sidebar: flag("legacySidebarEnabled"),
             plan_mode: flag("planModeEnabled"),
             context_meter: flag("contextWindowMeterEnabled"),
         })
     }
 
-    pub fn entries(self) -> [(&'static str, Value); 6] {
+    pub fn entries(self) -> [(&'static str, Value); 5] {
         [
             ("boringSidebarEnabled", json!(self.boring_sidebar)),
             ("boringSidebarMultilineRows", json!(self.boring_multiline)),
-            ("toolCallVisibility", json!(self.tool_calls.0.wire())),
             ("legacySidebarEnabled", json!(self.legacy_sidebar)),
             ("planModeEnabled", json!(self.plan_mode)),
             ("contextWindowMeterEnabled", json!(self.context_meter)),
@@ -296,11 +238,6 @@ pub const LABS_ITEMS: &[SearchItem] = &[
         "boring-sidebar-multiline",
         "Two-line folder rows",
         "beta boring sidebar folder rows multiline branch pull request details",
-    ),
-    item(
-        "tool-call-visibility",
-        "Tool calls in chat",
-        "beta hide tool calls commands edits searches work log activity quiet chat zen final answers only",
     ),
     item(
         "guest-links",
@@ -865,7 +802,6 @@ mod tests {
         let d = LabsSettings::default();
         assert!(!d.boring_sidebar && !d.boring_multiline && !d.legacy_sidebar);
         assert!(!d.plan_mode && !d.context_meter);
-        assert_eq!(d.tool_calls.0, ToolCalls::ShowAll);
     }
 
     #[test]
@@ -875,14 +811,12 @@ mod tests {
         )
         .unwrap();
         assert!(wrapped.boring_sidebar);
-        assert_eq!(wrapped.tool_calls.0, ToolCalls::Zen);
-        let bad = LabsSettings::parse(r#"{"toolCallVisibility":"loud"}"#).unwrap();
-        assert_eq!(bad.tool_calls.0, ToolCalls::ShowAll);
         assert!(LabsSettings::parse("[]").is_none());
-        let written = LabsSettings::default().to_json(Some(r#"{"settings":{"theme":"dark"}}"#));
+        let existing = r#"{"settings":{"theme":"dark","toolCallVisibility":"zen"}}"#;
+        let written = LabsSettings::default().to_json(Some(existing));
         let value: Value = serde_json::from_str(&written).unwrap();
         assert_eq!(value["settings"]["theme"], "dark");
-        assert_eq!(value["settings"]["toolCallVisibility"], "showAll");
+        assert_eq!(value["settings"]["toolCallVisibility"], "zen");
     }
 
     #[test]
@@ -896,12 +830,6 @@ mod tests {
         assert!(!s.boring_checked() && !s.legacy_sidebar);
         s.set_boring(true);
         assert!(s.boring_sidebar && !s.legacy_sidebar);
-    }
-
-    #[test]
-    fn tool_call_labels_follow_the_web_order() {
-        let labels: Vec<_> = ToolCalls::ALL.iter().map(|v| v.label()).collect();
-        assert_eq!(labels, ["Show all", "Hide successful", "Hide all", "Zen"]);
     }
 
     #[test]
@@ -1081,7 +1009,7 @@ mod tests {
 
     #[test]
     fn search_finds_every_labs_row_and_nothing_from_other_tabs() {
-        assert_eq!(search_hits("zen").first(), Some(&"tool-call-visibility"));
+        assert!(search_hits("zen").is_empty());
         assert_eq!(search_hits("simlock").first(), Some(&"simlock-hosts"));
         assert_eq!(search_hits("guest").first(), Some(&"guest-links"));
         assert_eq!(search_hits("plan").first(), Some(&"legacy-plan-mode"));
@@ -1090,7 +1018,7 @@ mod tests {
             Some(&"legacy-context-window-indicator")
         );
         assert!(LABS_ITEMS.iter().all(|i| i.section == Section::Labs));
-        assert_eq!(LABS_ITEMS.len(), 8);
+        assert_eq!(LABS_ITEMS.len(), 7);
     }
 
     #[test]
