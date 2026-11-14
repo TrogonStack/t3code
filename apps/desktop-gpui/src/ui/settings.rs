@@ -845,9 +845,6 @@ impl Render for SettingsDialog {
         let projects = self
             .projects
             .update(cx, |panel, cx| panel.overlay(window, cx));
-        let keybindings = self
-            .keybindings
-            .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
             .inset_0()
@@ -911,7 +908,6 @@ impl Render for SettingsDialog {
             .children(scheduled_tasks)
             .children(providers)
             .children(projects)
-            .children(keybindings)
             .into_any_element()
     }
 }

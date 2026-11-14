@@ -1,13 +1,13 @@
 //! The Keybindings tab: `KeybindingsSettings.tsx`. A search, the rules grouped by command with
 //! their source, `when` clause and key, and the writes as `server.upsertKeybinding` and
-//! `server.removeKeybinding`; the config stream brings the result back. The web's visual `when`
-//! tree is a text expression here, parsed with the same grammar.
+//! `server.removeKeybinding`; the config stream brings the result back. The `when` popover keeps
+//! the web's expression input and condition tree in step, through the same grammar.
 
 use super::components::{
     KeyHandler, SelectTrigger, group, popup_shell, row as settings_row, section, tab_stop,
 };
 use super::devices_panel::widgets::{
-    Variant, button, dialog_of, field, icon_button, menu_item, note, problem, warning,
+    Variant, button, field, icon_button, menu_item, note, problem, warning,
 };
 use super::scope_pickers::ScopeBar;
 use super::tokens::Tokens;
@@ -17,17 +17,22 @@ use crate::keybinding_rules::{
     self as rules, Row, Source, TOKEN_BASE, command_label, command_options, conflict_labels,
     filter_rows, group_rows, is_mac, pill_parts, record_input, target_payload, upsert_payload,
 };
-use crate::keybindings::Keybindings;
+use crate::keybindings::{Keybindings, When};
 use crate::status::CallEvent;
-use gpui::{ElementId, Keystroke, MouseDownEvent, Subscription, deferred};
-use gpui_component::input::{InputEvent, InputState};
+use gpui::{
+    Bounds, ElementId, Keystroke, MouseButton, MouseDownEvent, Subscription, canvas, deferred,
+};
+use gpui_component::input::{Input, InputEvent, InputState};
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
 /// `w-44` and `w-56` (KeybindingsSettings.tsx:1245-1250).
 const KEY_INPUT_WIDTH: f32 = 176.;
 const COMMAND_WIDTH: f32 = 224.;
+const WHEN_WIDTH: f32 = 830.;
+const OPERATOR_WIDTH: f32 = 200.;
 
 fn eid(prefix: &str, id: &str) -> ElementId {
     ElementId::from(SharedString::from(format!("{prefix}-{id}")))
@@ -60,9 +65,19 @@ struct NewRow {
     when: String,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+enum Pick {
+    Variable(Vec<usize>),
+    Operator(Vec<usize>),
+}
+
+/// `WhenExpressionBuilder`: the tree and the text it came from, which is not always a tree.
 struct WhenEdit {
     target: Target,
+    value: Option<When>,
+    text: String,
     problem: Option<&'static str>,
+    pick: Option<Pick>,
 }
 
 enum Pending {
@@ -77,6 +92,7 @@ pub struct KeybindingsPanel {
     keybindings: Keybindings,
     search: Entity<InputState>,
     when_input: Entity<InputState>,
+    when_trigger: Rc<Cell<Bounds<Pixels>>>,
     key_drafts: HashMap<String, String>,
     when_drafts: HashMap<String, String>,
     new: Option<NewRow>,
@@ -108,9 +124,9 @@ impl KeybindingsPanel {
                     cx.notify();
                 }
             }),
-            cx.subscribe_in(&when_input, window, |_, _, event: &InputEvent, _, cx| {
+            cx.subscribe_in(&when_input, window, |this, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
-                    cx.notify();
+                    this.typed_when(cx);
                 }
             }),
         ];
@@ -121,6 +137,7 @@ impl KeybindingsPanel {
             keybindings: Keybindings::default(),
             search,
             when_input,
+            when_trigger: Rc::new(Cell::new(Bounds::default())),
             key_drafts: HashMap::new(),
             when_drafts: HashMap::new(),
             new: None,
@@ -172,13 +189,27 @@ impl KeybindingsPanel {
 
     /// Closes the innermost open layer; returns whether there was one, so Escape stops there.
     pub fn close_menu(&mut self, cx: &mut Context<Self>) -> bool {
-        let closed = self.when_edit.take().is_some()
+        let closed = self.close_when_layer()
             || self.menu.take().is_some()
             || std::mem::take(&mut self.picking);
         if closed {
             cx.notify();
         }
         closed
+    }
+
+    fn close_when_layer(&mut self) -> bool {
+        match &mut self.when_edit {
+            Some(edit) if edit.pick.is_some() => {
+                edit.pick = None;
+                true
+            }
+            Some(_) => {
+                self.when_edit = None;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Whether a connected environment lets this app write its keybindings.
@@ -368,112 +399,672 @@ impl KeybindingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let value = rules::parse_when_draft(&current).ok().flatten();
         self.when_input
-            .update(cx, |input, cx| input.set_value(current, window, cx));
+            .update(cx, |input, cx| input.set_value(current.clone(), window, cx));
         let focus = self.when_input.read(cx).focus_handle(cx);
         window.focus(&focus, cx);
         self.when_edit = Some(WhenEdit {
             target,
+            value,
+            text: current,
             problem: None,
+            pick: None,
         });
         cx.notify();
     }
 
-    fn apply_when(&mut self, cx: &mut Context<Self>) {
-        let text = self.when_input.read(cx).value().to_string();
-        let expression = match rules::parse_when_draft(&text) {
-            Ok(node) => rules::when_expression(node.as_ref()),
-            Err(message) => {
-                if let Some(edit) = &mut self.when_edit {
-                    edit.problem = Some(message);
-                }
-                cx.notify();
-                return;
+    fn store_when(&mut self, target: Target, expression: String) {
+        match target {
+            Target::Row(id) => {
+                self.when_drafts.insert(id, expression);
             }
+            Target::New => {
+                if let Some(new) = &mut self.new {
+                    new.when = expression;
+                }
+            }
+        }
+    }
+
+    fn set_tree(&mut self, value: Option<When>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = &mut self.when_edit else {
+            return;
         };
-        if let Some(edit) = self.when_edit.take() {
-            match edit.target {
-                Target::Row(id) => {
-                    self.when_drafts.insert(id, expression);
-                }
-                Target::New => {
-                    if let Some(new) = &mut self.new {
-                        new.when = expression;
-                    }
-                }
+        let expression = rules::when_expression(value.as_ref());
+        edit.value = value;
+        edit.text = expression.clone();
+        edit.problem = None;
+        edit.pick = None;
+        let target = edit.target.clone();
+        self.when_input.update(cx, |input, cx| {
+            input.set_value(expression.clone(), window, cx)
+        });
+        self.store_when(target, expression);
+        cx.notify();
+    }
+
+    fn edit_tree(
+        &mut self,
+        path: &[usize],
+        change: rules::Edit,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(edit) = &self.when_edit else {
+            return;
+        };
+        let next = rules::apply_edit(edit.value.as_ref(), path, &change);
+        self.set_tree(next, window, cx);
+    }
+
+    fn add_root(&mut self, group: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(edit) = &self.when_edit else {
+            return;
+        };
+        let next = rules::add_root(edit.value.clone(), group);
+        self.set_tree(Some(next), window, cx);
+    }
+
+    fn typed_when(&mut self, cx: &mut Context<Self>) {
+        let text = self.when_input.read(cx).value().to_string();
+        let Some(edit) = &mut self.when_edit else {
+            return;
+        };
+        if text == edit.text {
+            return;
+        }
+        edit.text = text.clone();
+        match rules::parse_when_draft(&text) {
+            Ok(value) => {
+                let expression = rules::when_expression(value.as_ref());
+                edit.value = value;
+                edit.problem = None;
+                let target = edit.target.clone();
+                self.store_when(target, expression);
             }
+            Err(message) => edit.problem = Some(message),
         }
         cx.notify();
     }
 
-    pub fn overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let edit = self.when_edit.as_ref()?;
-        let theme = Tokens::of(cx);
-        let text = self.when_input.read(cx).value().to_string();
-        let unknown = rules::unknown_variables(rules::parse_when(&text).as_ref());
-        let mut body: Vec<AnyElement> =
-            vec![field(&self.when_input, false, window, cx).into_any_element()];
-        body.push(
-            note(
-                "Use variables with !, &&, ||, and parentheses. Leave it empty to always apply.",
-                cx,
-            )
-            .into_any_element(),
-        );
-        if !unknown.is_empty() {
-            let label = if unknown.len() == 1 {
-                format!("Unknown condition: {}", unknown[0])
+    fn when_invalid(&self, target: &Target) -> bool {
+        self.when_edit
+            .as_ref()
+            .is_some_and(|edit| &edit.target == target && edit.problem.is_some())
+    }
+
+    fn toggle_pick(&mut self, pick: Pick, cx: &mut Context<Self>) {
+        if let Some(edit) = &mut self.when_edit {
+            edit.pick = if edit.pick.as_ref() == Some(&pick) {
+                None
             } else {
-                format!("Unknown conditions: {}", unknown.join(", "))
+                Some(pick)
             };
-            body.push(
+            cx.notify();
+        }
+    }
+
+    fn unknown_icon(id: String, names: &[String], cx: &App) -> gpui::Stateful<gpui::Div> {
+        let label = if names.len() == 1 {
+            format!("Unknown condition: {}", names[0])
+        } else {
+            format!("Unknown conditions: {}", names.join(", "))
+        };
+        div()
+            .id(ElementId::from(SharedString::from(id)))
+            .size(px(18.))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .text_color(warning(&Tokens::of(cx)))
+            .tooltip(tooltip(format!(
+                "{label}. T3 Code does not recognize this condition yet. It can still be saved, but it may not match unless the runtime provides it."
+            )))
+            .child(Icon::new(Icons::TriangleAlert).size(px(14.)))
+    }
+
+    /// `Button size="compact"` (`h-7 gap-1 rounded-md px-[7px] text-xs`).
+    fn compact_button(
+        id: String,
+        primary: bool,
+        label: &str,
+        cx: &App,
+    ) -> gpui::Stateful<gpui::Div> {
+        let variant = if primary {
+            Variant::Primary
+        } else {
+            Variant::Outline
+        };
+        button(ElementId::from(SharedString::from(id)), variant, true, cx)
+            .px(px(7.))
+            .gap(px(4.))
+            .rounded(px(6.))
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .child(Icon::new(Icons::Plus).size(px(14.)))
+            .child(label.to_owned())
+    }
+
+    fn compact_toggle(id: String, pressed: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+        let theme = Tokens::of(cx);
+        let background = if theme.dark {
+            theme.input.opacity(0.32)
+        } else {
+            theme.background
+        };
+        let on = if theme.dark {
+            theme.input
+        } else {
+            theme.accent
+        };
+        let hover = if theme.dark {
+            theme.input.opacity(0.64)
+        } else {
+            theme.accent.opacity(0.5)
+        };
+        div()
+            .id(ElementId::from(SharedString::from(id)))
+            .h(px(28.))
+            .min_w(px(40.))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .px(px(3.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.input)
+            .bg(if pressed { on } else { background })
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.foreground)
+            .cursor_pointer()
+            .hover(move |style| style.bg(if pressed { on } else { hover }))
+            .child("Not")
+    }
+
+    fn compact_select(
+        id: String,
+        label: &str,
+        open: bool,
+        warning_icon: Option<gpui::Stateful<gpui::Div>>,
+        cx: &App,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = Tokens::of(cx);
+        let background = if theme.dark {
+            theme.input.opacity(0.32)
+        } else {
+            theme.background
+        };
+        div()
+            .id(ElementId::from(SharedString::from(id)))
+            .h(px(28.))
+            .min_w(px(144.))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .px(px(7.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if open { theme.ring } else { theme.input })
+            .bg(background)
+            .text_size(px(12.))
+            .text_color(theme.foreground)
+            .cursor_pointer()
+            .child(div().min_w_0().flex_1().truncate().child(label.to_owned()))
+            .children(warning_icon)
+            .child(
                 div()
-                    .text_xs()
-                    .text_color(warning(&theme))
-                    .child(label)
-                    .into_any_element(),
+                    .mr(px(-4.))
+                    .flex_shrink_0()
+                    .opacity(0.7)
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(Icons::ChevronDown).size(px(14.))),
+            )
+    }
+
+    fn pick_list(
+        &self,
+        options: Vec<(String, bool, rules::Edit)>,
+        path: Vec<usize>,
+        id: &str,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut list = popup_shell(width, cx)
+            .id(ElementId::from(SharedString::from(format!("{id}-list"))))
+            .max_h(px(288.))
+            .overflow_y_scroll();
+        let foreground = Tokens::of(cx).foreground.opacity(0.08);
+        for (index, (label, selected, change)) in options.into_iter().enumerate() {
+            let path = path.clone();
+            list = list.child(
+                menu_item(
+                    ElementId::from(SharedString::from(format!("{id}-option-{index}"))),
+                    label,
+                    false,
+                    cx,
+                )
+                .when(selected, |item| item.bg(foreground))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.edit_tree(&path, change.clone(), window, cx)
+                    }),
+                ),
             );
         }
-        if let Some(message) = edit.problem {
-            body.push(problem(message, cx).into_any_element());
-        }
-        let view = cx.entity();
-        let footer = vec![
-            button("keybinding-when-cancel", Variant::Outline, true, cx)
-                .child("Cancel")
-                .on_click({
-                    let view = view.clone();
-                    move |_, _, cx| {
-                        view.update(cx, |this, cx| {
-                            this.when_edit = None;
-                            cx.notify();
-                        })
-                    }
-                })
-                .into_any_element(),
-            button("keybinding-when-apply", Variant::Primary, true, cx)
-                .child("Apply")
-                .on_click({
-                    let view = view.clone();
-                    move |_, _, cx| view.update(cx, |this, cx| this.apply_when(cx))
-                })
-                .into_any_element(),
-        ];
-        Some(dialog_of(
-            "keybinding-when",
-            512.,
-            "When",
-            "Limit this shortcut to a condition.",
-            body,
-            footer,
-            move |_, cx| {
-                view.update(cx, |this, cx| {
-                    this.when_edit = None;
-                    cx.notify();
-                })
-            },
+        deferred(div().absolute().top(px(32.)).left_0().occlude().child(list))
+            .with_priority(2)
+            .into_any_element()
+    }
+
+    fn remove_button(
+        &self,
+        id: String,
+        label: &'static str,
+        path: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        icon_button(
+            ElementId::from(SharedString::from(id)),
+            Variant::Ghost,
+            true,
             cx,
-        ))
+        )
+        .tooltip(tooltip(label))
+        .child(Icon::new(Icons::Minus).size(px(14.)))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.edit_tree(&path, rules::Edit::Remove, window, cx)
+        }))
+    }
+
+    fn guide(depth: usize, node: AnyElement, cx: &App) -> gpui::Div {
+        let theme = Tokens::of(cx);
+        let color = if depth == 0 {
+            theme.border
+        } else {
+            theme.border.opacity(0.7)
+        };
+        div()
+            .relative()
+            .pl(px(16.))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(6.))
+                    .w(px(1.))
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(16.))
+                    .left(px(6.))
+                    .h(px(1.))
+                    .w(px(10.))
+                    .bg(color),
+            )
+            .child(node)
+    }
+
+    fn when_node(
+        &self,
+        node: &When,
+        path: Vec<usize>,
+        depth: usize,
+        removable: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Tokens::of(cx);
+        let key = path
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join("-");
+        let remove = removable.then(|| {
+            self.remove_button(
+                format!("when-remove-{key}-{depth}"),
+                rules::remove_label(node, depth),
+                path.clone(),
+                cx,
+            )
+        });
+
+        if let Some((name, negated)) = rules::condition_parts(node) {
+            let pick = Pick::Variable(path.clone());
+            let open = self
+                .when_edit
+                .as_ref()
+                .is_some_and(|edit| edit.pick.as_ref() == Some(&pick));
+            let warning_icon = (!rules::is_known_variable(name))
+                .then(|| Self::unknown_icon(format!("when-unknown-{key}"), &[name.to_owned()], cx));
+            let select_id = format!("when-variable-{key}");
+            let list = open.then(|| {
+                let mut variables = rules::variable_options();
+                if !variables.iter().any(|variable| variable == name) {
+                    variables.insert(0, name.to_owned());
+                }
+                let options = variables
+                    .into_iter()
+                    .map(|variable| {
+                        let selected = variable == name;
+                        (
+                            variable.clone(),
+                            selected,
+                            rules::Edit::Identifier(variable),
+                        )
+                    })
+                    .collect();
+                self.pick_list(options, path.clone(), &select_id, 160., cx)
+            });
+            let toggle_path = path.clone();
+            let select = div()
+                .relative()
+                .min_w_0()
+                .flex_1()
+                .child(
+                    Self::compact_select(select_id, name, open, warning_icon, cx).on_click(
+                        cx.listener(move |this, _, _, cx| this.toggle_pick(pick.clone(), cx)),
+                    ),
+                )
+                .children(list);
+            return h_flex()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py_2()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(theme.border.opacity(0.7))
+                .bg(theme.background.opacity(0.6))
+                .child(
+                    Self::compact_toggle(format!("when-not-{key}"), negated, cx).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.edit_tree(&toggle_path, rules::Edit::Negate(!negated), window, cx)
+                        }),
+                    ),
+                )
+                .child(select)
+                .children(remove)
+                .into_any_element();
+        }
+
+        if let When::Not(inner) = node {
+            let toggle_path = path.clone();
+            let header = h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    Self::compact_toggle(format!("when-not-{key}"), true, cx).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.edit_tree(&toggle_path, rules::Edit::Negate(false), window, cx)
+                        }),
+                    ),
+                )
+                .children(remove.map(|remove| div().ml_auto().child(remove)));
+            let child = self.when_node(inner, path, depth + 1, false, cx);
+            return v_flex()
+                .gap_2()
+                .p_2()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme.border.opacity(if depth > 0 { 0.5 } else { 0.7 }))
+                .bg(if depth > 0 {
+                    theme.background.opacity(0.5)
+                } else {
+                    theme.muted.opacity(0.2)
+                })
+                .child(header)
+                .child(Self::guide(1, child, cx))
+                .into_any_element();
+        }
+
+        let operator = rules::group_operator(node);
+        let pick = Pick::Operator(path.clone());
+        let open = self
+            .when_edit
+            .as_ref()
+            .is_some_and(|edit| edit.pick.as_ref() == Some(&pick));
+        let select_id = format!("when-operator-{key}");
+        let list = open.then(|| {
+            let options = [rules::Operator::And, rules::Operator::Or]
+                .into_iter()
+                .map(|choice| {
+                    (
+                        choice.label().to_owned(),
+                        choice == operator,
+                        rules::Edit::Operator(choice),
+                    )
+                })
+                .collect();
+            self.pick_list(options, path.clone(), &select_id, 96., cx)
+        });
+        let operator_select = div()
+            .relative()
+            .w(px(OPERATOR_WIDTH))
+            .flex_shrink_0()
+            .child(
+                Self::compact_select(select_id, operator.label(), open, None, cx).on_click(
+                    cx.listener(move |this, _, _, cx| this.toggle_pick(pick.clone(), cx)),
+                ),
+            )
+            .children(list);
+        let (condition_path, group_path) = (path.clone(), path.clone());
+        let header = h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .child(operator_select)
+            .child(
+                Self::compact_button(format!("when-add-condition-{key}"), false, "Condition", cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.edit_tree(&condition_path, rules::Edit::AddCondition, window, cx)
+                    })),
+            )
+            .child(
+                Self::compact_button(format!("when-add-group-{key}"), false, "Group", cx).on_click(
+                    cx.listener(move |this, _, window, cx| {
+                        this.edit_tree(&group_path, rules::Edit::AddGroup, window, cx)
+                    }),
+                ),
+            )
+            .children(remove.map(|remove| div().ml_auto().child(remove)));
+        let children = rules::flatten(node, operator)
+            .iter()
+            .enumerate()
+            .map(|(index, child)| {
+                let mut child_path = path.clone();
+                child_path.push(index);
+                let body = self.when_node(child, child_path, depth + 1, true, cx);
+                Self::guide(depth, body, cx).into_any_element()
+            })
+            .collect::<Vec<_>>();
+        v_flex()
+            .gap_2()
+            .p_2()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(theme.border.opacity(if depth > 0 { 0.7 } else { 0.6 }))
+            .bg(if depth > 0 {
+                theme.background.opacity(0.55)
+            } else {
+                theme.muted.opacity(0.1)
+            })
+            .child(header)
+            .child(v_flex().gap_2().children(children))
+            .into_any_element()
+    }
+
+    /// `WhenExpressionBuilder` (KeybindingsSettings.tsx:556-675), anchored under the trigger.
+    fn when_popover(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let edit = self.when_edit.as_ref()?;
+        let theme = Tokens::of(cx);
+        let invalid = edit.problem.is_some();
+        let unknown = rules::unknown_variables(edit.value.as_ref());
+        let focused = self
+            .when_input
+            .read(cx)
+            .focus_handle(cx)
+            .contains_focused(window, cx);
+        let background = if theme.dark {
+            theme.input.opacity(0.32)
+        } else {
+            theme.background
+        };
+        let border = match (invalid, focused) {
+            (true, true) => theme.destructive.opacity(0.64),
+            (true, false) => theme.destructive.opacity(0.36),
+            (false, true) => theme.ring,
+            (false, false) => theme.input,
+        };
+        let header = h_flex()
+            .items_start()
+            .justify_between()
+            .gap_3()
+            .child(
+                div()
+                    .text_size(px(14.))
+                    .line_height(px(20.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("When"),
+            )
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .gap_2()
+                    .child(
+                        Self::compact_button("when-root-condition".into(), false, "Condition", cx)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.add_root(false, window, cx)),
+                            ),
+                    )
+                    .child(
+                        Self::compact_button("when-root-group".into(), false, "Group", cx)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.add_root(true, window, cx)),
+                            ),
+                    ),
+            );
+        let input = h_flex()
+            .w_full()
+            .h(px(28.))
+            .items_center()
+            .px(px(9.))
+            .rounded(px(6.))
+            .border_1()
+            .border_color(border)
+            .bg(background)
+            .text_size(px(12.))
+            .font_family(cx.theme().mono_font_family.clone())
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.when_input)
+                        .appearance(false)
+                        .bordered(false)
+                        .h(px(26.))
+                        .px_0(),
+                ),
+            )
+            .children(
+                (!unknown.is_empty())
+                    .then(|| Self::unknown_icon("when-unknown-input".into(), &unknown, cx)),
+            );
+        let message = edit.problem.map(|message| {
+            h_flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(11.))
+                .line_height(px(16.))
+                .text_color(theme.destructive)
+                .child(Icon::new(Icons::CircleX).size(px(14.)))
+                .child(message)
+        });
+        let body = match &edit.value {
+            Some(value) => self.when_node(value, Vec::new(), 0, true, cx),
+            None => div()
+                .p_3()
+                .rounded(px(6.))
+                .border_1()
+                .border_dashed()
+                .border_color(theme.border.opacity(0.8))
+                .bg(theme.muted.opacity(0.15))
+                .child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            Self::compact_button(
+                                "when-empty-condition".into(),
+                                true,
+                                "Condition",
+                                cx,
+                            )
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.add_root(false, window, cx)),
+                            ),
+                        )
+                        .child(
+                            Self::compact_button("when-empty-group".into(), false, "Group", cx)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.add_root(true, window, cx)
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        };
+        let blocked = invalid.then(|| {
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_4()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(theme.destructive.opacity(0.3))
+                .bg(theme.background.opacity(0.75))
+                .text_size(px(12.))
+                .text_color(theme.destructive)
+                .child("Fix the expression above to continue editing visually.")
+        });
+        let card = popup_shell(WHEN_WIDTH, cx)
+            .w(px(WHEN_WIDTH))
+            .p(px(16.))
+            .gap(px(12.))
+            .child(header)
+            .child(v_flex().gap(px(6.)).child(input).children(message))
+            .child(div().relative().child(body).children(blocked));
+        Some(
+            deferred(
+                div()
+                    .absolute()
+                    .top(px(26.))
+                    .left_0()
+                    .occlude()
+                    .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        if let Some(edit) = &mut this.when_edit {
+                            if edit.pick.take().is_none()
+                                && !this.when_trigger.get().contains(&event.position)
+                            {
+                                this.when_edit = None;
+                            }
+                            cx.notify();
+                        }
+                    }))
+                    .child(card),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     fn pill(input: &str, cx: &App) -> gpui::Div {
@@ -610,9 +1201,20 @@ impl KeybindingsPanel {
         target: Target,
         when: &str,
         editable: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> gpui::Div {
         let theme = Tokens::of(cx);
+        let open = self
+            .when_edit
+            .as_ref()
+            .is_some_and(|edit| edit.target == target);
+        let popover = if open {
+            self.when_popover(window, cx)
+        } else {
+            None
+        };
+        let bounds = self.when_trigger.clone();
         let current = when.to_owned();
         let set = !when.is_empty();
         let label = if set {
@@ -622,7 +1224,7 @@ impl KeybindingsPanel {
         };
         let accent = theme.accent;
         let foreground = theme.foreground;
-        div()
+        let trigger = div()
             .id(id)
             .h(px(20.))
             .min_w_0()
@@ -665,15 +1267,28 @@ impl KeybindingsPanel {
                     .opacity(0.6)
                     .child(Icon::new(Icons::ChevronDown).size(px(12.))),
             )
+            .when(open, |link| {
+                link.child(
+                    canvas(move |area, _, _| bounds.set(area), |_, _, _, _| {})
+                        .absolute()
+                        .size_full(),
+                )
+            })
             .when(editable, |link| {
                 link.on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_when(target.clone(), current.clone(), window, cx)
+                    if open {
+                        this.when_edit = None;
+                        cx.notify();
+                    } else {
+                        this.open_when(target.clone(), current.clone(), window, cx)
+                    }
                 }))
-            })
+            });
+        div().relative().min_w_0().child(trigger).children(popover)
     }
 
     /// The "When" line shared by both row kinds: `flex h-6 gap-1.5`, a `text-xs` label at 70%.
-    fn when_line(&self, trigger: gpui::Stateful<gpui::Div>, cx: &App) -> gpui::Div {
+    fn when_line(&self, trigger: gpui::Div, cx: &App) -> gpui::Div {
         h_flex()
             .h(px(24.))
             .items_center()
@@ -790,6 +1405,7 @@ impl KeybindingsPanel {
         row: &Row,
         all: &[Row],
         editable: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Tokens::of(cx);
@@ -824,6 +1440,7 @@ impl KeybindingsPanel {
                 target.clone(),
                 &when,
                 editable,
+                window,
                 cx,
             ),
             cx,
@@ -833,7 +1450,7 @@ impl KeybindingsPanel {
             button(
                 eid("keybinding-save", &row.id),
                 Variant::Primary,
-                editable && self.pending.is_empty(),
+                editable && self.pending.is_empty() && !self.when_invalid(&target),
                 cx,
             )
             .child("Save")
@@ -991,7 +1608,8 @@ impl KeybindingsPanel {
         let ready = editable
             && self.pending.is_empty()
             && new.command.is_some()
-            && !new.key.trim().is_empty();
+            && !new.key.trim().is_empty()
+            && !self.when_invalid(&Target::New);
         let conflicts = conflict_labels(all, "new", &new.key, &new.when, is_mac());
         let when_line = self.when_line(
             self.when_trigger(
@@ -999,6 +1617,7 @@ impl KeybindingsPanel {
                 Target::New,
                 &new.when,
                 editable,
+                window,
                 cx,
             ),
             cx,
@@ -1151,7 +1770,7 @@ impl Render for KeybindingsPanel {
                     .into_any_element(),
             );
             for row in members {
-                rows.push(self.row_view(row, &all, editable, cx));
+                rows.push(self.row_view(row, &all, editable, window, cx));
             }
         }
         v_flex().child(section("Keybindings", group(rows, cx)))

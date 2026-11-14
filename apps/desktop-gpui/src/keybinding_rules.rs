@@ -488,6 +488,223 @@ pub fn unknown_variables(node: Option<&When>) -> Vec<String> {
         .collect()
 }
 
+pub fn is_known_variable(name: &str) -> bool {
+    known_variables().contains(name)
+}
+
+/// `buildWhenVariableOptions`: the core variables in their order, then the rest alphabetically.
+pub fn variable_options() -> Vec<String> {
+    let mut options: Vec<String> = CORE_WHEN_VARIABLES
+        .iter()
+        .map(|v| (*v).to_owned())
+        .collect();
+    options.extend(
+        known_variables()
+            .iter()
+            .filter(|name| !CORE_WHEN_VARIABLES.contains(&name.as_str()))
+            .cloned(),
+    );
+    options
+}
+
+/// `DEFAULT_WHEN_VARIABLE`.
+pub const DEFAULT_WHEN_VARIABLE: &str = CORE_WHEN_VARIABLES[0];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operator {
+    And,
+    Or,
+}
+
+impl Operator {
+    pub fn label(self) -> &'static str {
+        match self {
+            Operator::And => "and",
+            Operator::Or => "or",
+        }
+    }
+
+    fn other(self) -> Self {
+        match self {
+            Operator::And => Operator::Or,
+            Operator::Or => Operator::And,
+        }
+    }
+}
+
+/// An edit to the node at a path of child indexes through the tree the editor draws.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Edit {
+    Remove,
+    Negate(bool),
+    Identifier(String),
+    Operator(Operator),
+    AddCondition,
+    AddGroup,
+}
+
+pub fn default_condition() -> When {
+    When::Identifier(DEFAULT_WHEN_VARIABLE.to_owned())
+}
+
+pub fn default_group(operator: Operator) -> When {
+    join(
+        operator,
+        default_condition(),
+        When::Not(Box::new(default_condition())),
+    )
+}
+
+fn join(operator: Operator, left: When, right: When) -> When {
+    let (left, right) = (Box::new(left), Box::new(right));
+    match operator {
+        Operator::And => When::And(left, right),
+        Operator::Or => When::Or(left, right),
+    }
+}
+
+/// `flattenWhenChildren`.
+pub fn flatten(node: &When, operator: Operator) -> Vec<When> {
+    match (node, operator) {
+        (When::And(left, right), Operator::And) | (When::Or(left, right), Operator::Or) => {
+            let mut children = flatten(left, operator);
+            children.extend(flatten(right, operator));
+            children
+        }
+        _ => vec![node.clone()],
+    }
+}
+
+/// `buildWhenExpressionGroup`.
+pub fn build_group(children: Vec<When>, operator: Operator) -> Option<When> {
+    let mut children = children.into_iter();
+    let first = children.next()?;
+    Some(children.fold(first, |left, right| join(operator, left, right)))
+}
+
+/// `conditionParts`: the identifier and whether it is negated, for a leaf condition.
+pub fn condition_parts(node: &When) -> Option<(&str, bool)> {
+    match node {
+        When::Identifier(name) => Some((name, false)),
+        When::Not(inner) => match inner.as_ref() {
+            When::Identifier(name) => Some((name, true)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub fn group_operator(node: &When) -> Operator {
+    match node {
+        When::Or(..) => Operator::Or,
+        _ => Operator::And,
+    }
+}
+
+/// `whenNodeRemoveLabel`.
+pub fn remove_label(node: &When, depth: usize) -> &'static str {
+    if depth == 0 {
+        "Clear all conditions"
+    } else if condition_parts(node).is_some() {
+        "Remove condition"
+    } else {
+        "Remove group and its conditions"
+    }
+}
+
+fn negated(node: &When, on: bool) -> When {
+    if let Some((name, _)) = condition_parts(node) {
+        let identifier = When::Identifier(name.to_owned());
+        return if on {
+            When::Not(Box::new(identifier))
+        } else {
+            identifier
+        };
+    }
+    match (node, on) {
+        (When::Not(inner), false) => inner.as_ref().clone(),
+        (_, true) => When::Not(Box::new(node.clone())),
+        _ => node.clone(),
+    }
+}
+
+fn is_group(node: &When) -> bool {
+    matches!(node, When::And(..) | When::Or(..))
+}
+
+fn edit_node(node: &When, path: &[usize], edit: &Edit) -> Option<When> {
+    let Some((&index, rest)) = path.split_first() else {
+        return match edit {
+            Edit::Remove => None,
+            Edit::Negate(on) => Some(negated(node, *on)),
+            Edit::Identifier(name) => Some(match condition_parts(node) {
+                Some((_, true)) => When::Not(Box::new(When::Identifier(name.clone()))),
+                Some((_, false)) => When::Identifier(name.clone()),
+                None => node.clone(),
+            }),
+            Edit::Operator(next) => {
+                let current = group_operator(node);
+                if !is_group(node) || *next == current {
+                    return Some(node.clone());
+                }
+                build_group(flatten(node, current), *next)
+            }
+            Edit::AddCondition | Edit::AddGroup => {
+                if !is_group(node) {
+                    return Some(node.clone());
+                }
+                let operator = group_operator(node);
+                let mut children = flatten(node, operator);
+                children.push(if *edit == Edit::AddCondition {
+                    default_condition()
+                } else {
+                    default_group(operator.other())
+                });
+                build_group(children, operator)
+            }
+        };
+    };
+    match node {
+        When::Identifier(_) => Some(node.clone()),
+        When::Not(inner) => match edit_node(inner, path, edit) {
+            Some(next) if condition_parts(node).is_none() => Some(When::Not(Box::new(next))),
+            _ => Some(node.clone()),
+        },
+        When::And(..) | When::Or(..) => {
+            let operator = group_operator(node);
+            let mut children = flatten(node, operator);
+            if index >= children.len() {
+                return Some(node.clone());
+            }
+            match edit_node(&children[index], rest, edit) {
+                Some(next) => children[index] = next,
+                None => {
+                    children.remove(index);
+                }
+            }
+            Some(build_group(children, operator).unwrap_or_else(default_condition))
+        }
+    }
+}
+
+/// Applies `edit` to the node at `path` of the tree the editor draws; `None` is no condition.
+pub fn apply_edit(root: Option<&When>, path: &[usize], edit: &Edit) -> Option<When> {
+    edit_node(root?, path, edit)
+}
+
+/// `addRootCondition` and `addRootGroup`.
+pub fn add_root(root: Option<When>, group: bool) -> When {
+    let added = if group {
+        default_group(Operator::Or)
+    } else {
+        default_condition()
+    };
+    match root {
+        None => added,
+        Some(node) => join(Operator::And, node, added),
+    }
+}
+
 fn jump(prefix: &str, when: &str) -> Vec<(String, String, String)> {
     (1..=9)
         .map(|n| {
@@ -1011,6 +1228,95 @@ mod tests {
         }
         assert!(parse_shortcut("a+b").is_none());
         assert_eq!(parse_shortcut("cmd+space").unwrap().key, " ");
+    }
+
+    fn tree(text: &str) -> Option<When> {
+        parse_when_draft(text).unwrap()
+    }
+
+    fn edited(text: &str, path: &[usize], edit: Edit) -> String {
+        when_expression(apply_edit(tree(text).as_ref(), path, &edit).as_ref())
+    }
+
+    #[test]
+    fn tree_edits_follow_the_web_builder() {
+        assert_eq!(edited("a && b && c", &[1], Edit::Remove), "a && c");
+        assert_eq!(edited("a && b", &[], Edit::Remove), "");
+        assert_eq!(edited("a && (b || c)", &[1, 0], Edit::Remove), "a && c");
+        assert_eq!(edited("a && b", &[0], Edit::Negate(true)), "!a && b");
+        assert_eq!(edited("!a && b", &[0], Edit::Negate(false)), "a && b");
+        assert_eq!(
+            edited("!a && b", &[0], Edit::Identifier("c".into())),
+            "!c && b"
+        );
+        assert_eq!(
+            edited("a && b && c", &[], Edit::Operator(Operator::Or)),
+            "(a || b) || c"
+        );
+        assert_eq!(
+            edited("a && (b || c)", &[1], Edit::Operator(Operator::And)),
+            "a && (b && c)"
+        );
+        assert_eq!(
+            edited("a && b", &[], Edit::AddCondition),
+            "(a && b) && terminalFocus"
+        );
+        assert_eq!(
+            edited("a && b", &[], Edit::AddGroup),
+            "(a && b) && (terminalFocus || !terminalFocus)"
+        );
+        assert_eq!(
+            edited("a || b", &[], Edit::AddGroup),
+            "(a || b) || (terminalFocus && !terminalFocus)"
+        );
+        assert_eq!(edited("!(a || b)", &[], Edit::Negate(false)), "a || b");
+        assert_eq!(edited("!(a || b)", &[1], Edit::Remove), "!a");
+        assert_eq!(
+            edited("!(a || b)", &[0], Edit::Identifier("c".into())),
+            "!(c || b)"
+        );
+    }
+
+    #[test]
+    fn root_additions_join_with_and() {
+        assert_eq!(
+            when_expression(Some(&add_root(None, false))),
+            "terminalFocus"
+        );
+        assert_eq!(
+            when_expression(Some(&add_root(None, true))),
+            "terminalFocus || !terminalFocus"
+        );
+        assert_eq!(
+            when_expression(Some(&add_root(tree("a || b"), false))),
+            "(a || b) && terminalFocus"
+        );
+        assert_eq!(
+            when_expression(Some(&add_root(tree("a"), true))),
+            "a && (terminalFocus || !terminalFocus)"
+        );
+    }
+
+    #[test]
+    fn conditions_and_labels() {
+        let node = tree("!a").unwrap();
+        assert_eq!(condition_parts(&node), Some(("a", true)));
+        assert_eq!(condition_parts(&tree("!(a || b)").unwrap()), None);
+        assert_eq!(remove_label(&node, 0), "Clear all conditions");
+        assert_eq!(remove_label(&node, 1), "Remove condition");
+        assert_eq!(
+            remove_label(&tree("a || b").unwrap(), 1),
+            "Remove group and its conditions"
+        );
+    }
+
+    #[test]
+    fn variable_options_lead_with_the_core_variables() {
+        let options = variable_options();
+        assert_eq!(&options[..6], CORE_WHEN_VARIABLES);
+        assert!(options.len() > 6);
+        assert!(options.iter().all(|name| is_known_variable(name)));
+        assert!(!is_known_variable("mystery"));
     }
 
     #[test]
