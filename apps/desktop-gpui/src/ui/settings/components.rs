@@ -96,6 +96,20 @@ pub(super) fn group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {
     divided(card(cx), rows, cx)
 }
 
+/// A text row inside a `SettingsGroup`: `<p className="px-4 py-2.5 text-xs text-muted-foreground">`
+/// for an intro note (`small`), or `py-2 text-sm` for an empty state.
+pub(super) fn note_row(text: impl IntoElement, small: bool, cx: &App) -> gpui::Div {
+    let row = div()
+        .px_4()
+        .text_color(Tokens::of(cx).muted_foreground)
+        .child(text);
+    if small {
+        row.py(px(10.)).text_xs().line_height(px(16.))
+    } else {
+        row.py(px(8.)).text_sm().line_height(px(20.))
+    }
+}
+
 /// A `SettingsGroup` inside `[data-provider-detail]` (index.css): no border, fill or shadow, the
 /// row dividers stay.
 pub(super) fn flat_group(rows: Vec<AnyElement>, cx: &App) -> gpui::Div {

@@ -518,6 +518,7 @@ impl ProjectsPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let scripts = self.effective_scripts(entry);
+        let marker = self.marker("project-actions", Field::Scripts, &Self::member_ids(entry));
         let reset = editable
             .then(|| {
                 self.reset_for(
@@ -530,27 +531,27 @@ impl ProjectsPanel {
                 )
             })
             .flatten();
-        let add = button("project-action-add", Variant::Outline, editable, cx)
+        let add = xs_button("project-action-add", Variant::Outline, editable, cx)
+            .child(Icon::new(Icons::Plus).size(px(14.)))
             .child("Add action")
             .on_click(cx.listener(|this, _, window, cx| this.open_editor(None, window, cx)));
         let mut rows = vec![
-            row(
+            marker_row_with(
+                "project-actions",
                 "Actions",
                 "Commands that run in this project's checkout or its worktree, with optional shortcuts.",
+                Some(marker),
                 reset,
                 add.into_any_element(),
+                None,
                 self.wide,
+                window,
                 cx,
             )
             .into_any_element(),
         ];
         if scripts.is_empty() {
-            rows.push(
-                div()
-                    .px_4()
-                    .child(note("No actions configured.", cx))
-                    .into_any_element(),
-            );
+            rows.push(note_row("No actions configured.", false, cx).into_any_element());
         }
         for (index, script) in scripts.iter().enumerate() {
             rows.push(self.script_row(script, index, cx));
@@ -619,13 +620,12 @@ impl ProjectsPanel {
                 .into_any_element(),
             );
         }
-        let intro = div()
-            .px_4()
-            .child(note(
-                "Grouping rule decides how each checkout joins project groups in the sidebar. Changing it can move a checkout to a different project.",
-                cx,
-            ))
-            .into_any_element();
+        let intro = note_row(
+            "Grouping rule decides how each checkout joins project groups in the sidebar. Changing it can move a checkout to a different project.",
+            true,
+            cx,
+        )
+        .into_any_element();
         let mut all = vec![intro];
         all.extend(rows);
         section("Checkouts", group(all, cx)).into_any_element()

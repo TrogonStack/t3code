@@ -4,8 +4,8 @@
 //! Writes go out as `project.update` and `project.delete` per member, and as settings patches
 //! for the New threads and Actions overrides; the streams bring the result back.
 
-use super::components::{group, reset_button_labeled, row, section, switch, tab_stop};
-use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem};
+use super::components::{group, note_row, reset_button_labeled, row, section, switch, tab_stop};
+use super::devices_panel::widgets::{Variant, button, dialog_of, note, problem, xs_button};
 use super::model_chips::{ChipCtx, ChipHost, Chips};
 use super::scope_pickers::ScopeBar;
 use super::secret_field::sm_field;

@@ -98,6 +98,22 @@ pub(in crate::ui::settings) fn button(
         .when(!enabled, |button| button.opacity(0.64))
 }
 
+/// `Button size="xs"` (`h-6 gap-1 px-[7px] text-xs`, icons `size-3.5`): the caller adds the content
+/// and `on_click`.
+pub(in crate::ui::settings) fn xs_button(
+    id: impl Into<ElementId>,
+    variant: Variant,
+    enabled: bool,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    button(id, variant, enabled, cx)
+        .h(px(24.))
+        .px(px(7.))
+        .gap(px(4.))
+        .text_size(px(12.))
+        .line_height(px(16.))
+}
+
 /// `Button size="icon-sm"` (`size-8 sm:size-7`).
 pub(in crate::ui::settings) fn icon_button(
     id: impl Into<ElementId>,
