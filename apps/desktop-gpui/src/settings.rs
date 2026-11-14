@@ -116,6 +116,74 @@ choice! {
     }
 }
 
+/// `SUPPORTED_LOCALES` (apps/web gt.config.json) with `NATIVE_LANGUAGE_NAMES`
+/// (client-runtime locales.ts), in the web's order.
+pub const LANGUAGES: [(&str, &str); 9] = [
+    ("en", "English"),
+    ("de", "Deutsch"),
+    ("es", "Espa\u{f1}ol"),
+    ("fr", "Fran\u{e7}ais"),
+    ("ja", "\u{65e5}\u{672c}\u{8a9e}"),
+    ("ko", "\u{d55c}\u{ad6d}\u{c5b4}"),
+    ("pt-BR", "Portugu\u{ea}s (Brasil)"),
+    ("ru", "\u{420}\u{443}\u{441}\u{441}\u{43a}\u{438}\u{439}"),
+    ("zh", "\u{4e2d}\u{6587}\u{ff08}\u{7b80}\u{4f53}\u{ff09}"),
+];
+
+/// `ClientSettings.language`, an open string. The web shows anything outside the supported
+/// list as "System default"; `Other` does that here and is never written back, so the saved
+/// value survives untouched until the user picks something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    /// Index into `LANGUAGES`.
+    Locale(usize),
+    System,
+    Other,
+}
+
+impl Language {
+    pub const DEFAULT: Self = Self::Locale(0);
+
+    fn from_wire(value: &str) -> Self {
+        if value == "system" {
+            return Self::System;
+        }
+        LANGUAGES
+            .iter()
+            .position(|(code, _)| *code == value)
+            .map_or(Self::Other, Self::Locale)
+    }
+
+    fn wire(self) -> Option<&'static str> {
+        match self {
+            Self::Locale(index) => Some(LANGUAGES[index].0),
+            Self::System => Some("system"),
+            Self::Other => None,
+        }
+    }
+
+    /// Menu position: "System default" first, then each locale.
+    pub fn menu_index(self) -> usize {
+        match self {
+            Self::Locale(index) => index + 1,
+            Self::System | Self::Other => 0,
+        }
+    }
+
+    pub fn from_menu_index(index: usize) -> Self {
+        index
+            .checked_sub(1)
+            .filter(|i| *i < LANGUAGES.len())
+            .map_or(Self::System, Self::Locale)
+    }
+
+    pub fn menu_labels() -> Vec<&'static str> {
+        std::iter::once("System default")
+            .chain(LANGUAGES.iter().map(|(_, name)| *name))
+            .collect()
+    }
+}
+
 /// `SendShortcut`; written by hand because its labels depend on the platform modifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendShortcut {
@@ -193,6 +261,7 @@ pub struct DeviceSettings {
     pub confirm_archive: bool,
     pub confirm_delete: bool,
     pub confirm_quit: QuitMode,
+    pub language: Language,
     pub time_format: TimeFormat,
     pub composer_rich_text: bool,
     pub send_shortcut: SendShortcut,
@@ -212,6 +281,7 @@ impl Default for DeviceSettings {
             confirm_archive: false,
             confirm_delete: true,
             confirm_quit: QuitMode::Hold,
+            language: Language::DEFAULT,
             time_format: TimeFormat::Locale,
             composer_rich_text: true,
             send_shortcut: SendShortcut::Enter,
@@ -263,6 +333,7 @@ impl DeviceSettings {
                 }
                 _ => defaults.confirm_quit,
             },
+            language: choice("language").map_or(defaults.language, Language::from_wire),
             time_format: choice("timestampFormat")
                 .and_then(TimeFormat::from_wire)
                 .unwrap_or(defaults.time_format),
@@ -277,8 +348,8 @@ impl DeviceSettings {
         })
     }
 
-    pub fn entries(self) -> [(&'static str, Value); 14] {
-        [
+    pub fn entries(self) -> Vec<(&'static str, Value)> {
+        let mut entries = vec![
             ("notificationMode", json!(self.notification_mode.wire())),
             (
                 "inAppNotificationsEnabled",
@@ -299,7 +370,11 @@ impl DeviceSettings {
             ("sendShortcut", json!(self.send_shortcut.wire())),
             ("followUpBehavior", json!(self.follow_up.wire())),
             ("showSkillsInSlashMenu", json!(self.skills_in_slash_menu)),
-        ]
+        ];
+        if let Some(language) = self.language.wire() {
+            entries.push(("language", json!(language)));
+        }
+        entries
     }
 
     /// Writes these keys into `existing`, keeping every key this tab does not own.
@@ -414,6 +489,7 @@ impl DeviceSettings {
     pub fn changed_labels(self) -> Vec<&'static str> {
         let d = Self::default();
         [
+            (self.language != d.language, "Language"),
             (self.time_format != d.time_format, "Time format"),
             (
                 self.notification_mode != d.notification_mode,
@@ -663,6 +739,12 @@ pub const GENERAL_ITEMS: &[SearchItem] = &[
         false,
     ),
     item(
+        "language",
+        "Language",
+        "locale translation english deutsch german espa\u{f1}ol spanish fran\u{e7}ais french portugu\u{ea}s portuguese brasil brazilian chinese \u{4e2d}\u{6587} japanese \u{65e5}\u{672c}\u{8a9e} korean \u{d55c}\u{ad6d}\u{c5b4} russian \u{440}\u{443}\u{441}\u{441}\u{43a}\u{438}\u{439} sprache idioma langue \u{8bed}\u{8a00} \u{8a00}\u{8a9e} \u{c5b8}\u{c5b4} \u{44f}\u{437}\u{44b}\u{43a}",
+        false,
+    ),
+    item(
         "time-format",
         "Time format",
         "timestamp clock locale system browser os 12 hour 24 hour",
@@ -817,6 +899,7 @@ mod tests {
         assert!(!d.confirm_unpin && !d.confirm_archive && d.confirm_delete);
         assert_eq!(d.confirm_quit, QuitMode::Hold);
         assert_eq!(d.time_format, TimeFormat::Locale);
+        assert_eq!(d.language, Language::Locale(0));
         assert!(d.changed_labels().is_empty());
     }
 
@@ -832,6 +915,7 @@ mod tests {
             confirm_archive: true,
             confirm_delete: false,
             confirm_quit: QuitMode::DoubleClick,
+            language: Language::Locale(6),
             time_format: TimeFormat::Hour24,
             composer_rich_text: false,
             send_shortcut: SendShortcut::ModEnter,
@@ -839,6 +923,30 @@ mod tests {
             skills_in_slash_menu: false,
         };
         assert_eq!(DeviceSettings::parse(&changed.to_json(None)), Some(changed));
+    }
+
+    #[test]
+    fn language_is_an_open_string_that_survives_when_unknown() {
+        let read = |text: &str| DeviceSettings::parse(text).unwrap().language;
+        assert_eq!(read("{}"), Language::Locale(0));
+        assert_eq!(read(r#"{"language":"pt-BR"}"#), Language::Locale(6));
+        assert_eq!(read(r#"{"language":"system"}"#), Language::System);
+        assert_eq!(read(r#"{"language":"tlh"}"#), Language::Other);
+        let existing = r#"{"settings":{"language":"tlh"}}"#;
+        let unchanged = DeviceSettings::parse(existing)
+            .unwrap()
+            .to_json(Some(existing));
+        let value: Value = serde_json::from_str(&unchanged).unwrap();
+        assert_eq!(value["settings"]["language"], "tlh");
+        let system = DeviceSettings {
+            language: Language::System,
+            ..DeviceSettings::default()
+        };
+        let value: Value = serde_json::from_str(&system.to_json(Some(existing))).unwrap();
+        assert_eq!(value["settings"]["language"], "system");
+        assert_eq!(Language::from_menu_index(0), Language::System);
+        assert_eq!(Language::from_menu_index(2), Language::Locale(1));
+        assert_eq!(Language::menu_labels().len(), LANGUAGES.len() + 1);
     }
 
     #[test]
@@ -877,13 +985,19 @@ mod tests {
     fn changed_labels_follow_the_restore_order_and_restore_clears_them() {
         let mut settings = DeviceSettings {
             confirm_quit: QuitMode::Direct,
+            language: Language::System,
             time_format: TimeFormat::Hour12,
             working_shelf: false,
             ..DeviceSettings::default()
         };
         assert_eq!(
             settings.changed_labels(),
-            ["Time format", "Working section", "Quit shortcut"]
+            [
+                "Language",
+                "Time format",
+                "Working section",
+                "Quit shortcut"
+            ]
         );
         settings = DeviceSettings::default();
         assert!(settings.changed_labels().is_empty());

@@ -23,8 +23,8 @@ pub(crate) mod tokens;
 use super::*;
 use crate::assets::SNAP_SHOT;
 use crate::settings::{
-    self as model, DeviceSettings, FollowUp, GroupingMode, NAV_GROUPS, NotificationMode, QuitMode,
-    SearchItem, Section, SendShortcut, SortOrder, TimeFormat,
+    self as model, DeviceSettings, FollowUp, GroupingMode, Language, NAV_GROUPS, NotificationMode,
+    QuitMode, SearchItem, Section, SendShortcut, SortOrder, TimeFormat,
 };
 use appearance_panel::AppearancePanel;
 use appearance_typography::AppearanceTypography;
@@ -75,6 +75,7 @@ enum Pick {
     Notifications,
     ProjectOrder,
     Quit,
+    Language,
     Time,
     SendShortcut,
     FollowUp,
@@ -86,6 +87,7 @@ impl Pick {
             Self::Notifications => "settings-thread-notifications",
             Self::ProjectOrder => "settings-project-order",
             Self::Quit => "settings-quit-shortcut",
+            Self::Language => "settings-language",
             Self::Time => "settings-time-format",
             Self::SendShortcut => "settings-send-shortcut",
             Self::FollowUp => "settings-follow-up-behavior",
@@ -97,7 +99,7 @@ impl Pick {
         match self {
             Self::Notifications => 224.,
             Self::ProjectOrder => 176.,
-            Self::Quit | Self::Time => 160.,
+            Self::Quit | Self::Language | Self::Time => 160.,
             Self::SendShortcut | Self::FollowUp => 0.,
         }
     }
@@ -112,6 +114,7 @@ impl Pick {
             Self::Notifications => NotificationMode::ALL.iter().map(|m| m.label()).collect(),
             Self::ProjectOrder => SortOrder::ALL.iter().map(|m| m.label()).collect(),
             Self::Quit => QuitMode::ALL.iter().map(|m| m.label()).collect(),
+            Self::Language => Language::menu_labels(),
             Self::Time => TimeFormat::ALL.iter().map(|m| m.label()).collect(),
             Self::SendShortcut => SendShortcut::ALL
                 .iter()
@@ -123,6 +126,7 @@ impl Pick {
 
     fn selected(self, settings: &DeviceSettings) -> usize {
         let index = match self {
+            Self::Language => Some(settings.language.menu_index()),
             Self::Notifications => NotificationMode::ALL
                 .iter()
                 .position(|m| *m == settings.notification_mode),
@@ -148,16 +152,18 @@ impl Pick {
             Self::Notifications => settings.notification_mode = NotificationMode::ALL[index],
             Self::ProjectOrder => settings.project_order = SortOrder::ALL[index],
             Self::Quit => settings.confirm_quit = QuitMode::ALL[index],
+            Self::Language => settings.language = Language::from_menu_index(index),
             Self::Time => settings.time_format = TimeFormat::ALL[index],
             Self::SendShortcut => settings.send_shortcut = SendShortcut::ALL[index],
             Self::FollowUp => settings.follow_up = FollowUp::ALL[index],
         }
     }
 
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Notifications,
         Self::ProjectOrder,
         Self::Quit,
+        Self::Language,
         Self::Time,
         Self::SendShortcut,
         Self::FollowUp,
@@ -176,7 +182,7 @@ pub struct SettingsDialog {
     /// "/" moved focus to the search; its character must not land in the field.
     swallow_slash: bool,
     menu: Option<(Pick, usize)>,
-    triggers: [FocusHandle; 6],
+    triggers: [FocusHandle; 7],
     /// `AdvancedSettings`' local `open` state: not persisted, closed again on leaving the tab.
     advanced_open: bool,
     diffs: Entity<DiffsPanel>,
@@ -1881,20 +1887,37 @@ impl SettingsDialog {
             cx,
         );
         let display = group(
-            rows(vec![row(
-                "Time format",
-                "System default follows your browser or OS clock preference.",
-                self.reset(
-                    "settings-reset-time-format",
-                    s.time_format != d.time_format,
-                    |s, d| s.time_format = d.time_format,
-                    window,
+            rows(vec![
+                // GPUI has no i18n yet: the choice is saved for the other clients only.
+                row(
+                    "Language",
+                    "System default follows your browser or OS language.",
+                    self.reset(
+                        "settings-reset-language",
+                        s.language != d.language,
+                        |s, d| s.language = d.language,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::Language, cx),
+                    wide,
                     cx,
                 ),
-                self.select(Pick::Time, cx),
-                wide,
-                cx,
-            )]),
+                row(
+                    "Time format",
+                    "System default follows your browser or OS clock preference.",
+                    self.reset(
+                        "settings-reset-time-format",
+                        s.time_format != d.time_format,
+                        |s, d| s.time_format = d.time_format,
+                        window,
+                        cx,
+                    ),
+                    self.select(Pick::Time, cx),
+                    wide,
+                    cx,
+                ),
+            ]),
             cx,
         );
         vec![
