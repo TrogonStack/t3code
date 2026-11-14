@@ -207,6 +207,20 @@ impl SnapShotPanel {
         }
     }
 
+    /// Both sides of one modifier: both Shift keys, or a pair of another modifier.
+    fn record_pair(&mut self, cx: &mut Context<Self>) {
+        if !self.recording {
+            return;
+        }
+        if let Some(modifier) = crate::mac_keys::held_pair() {
+            self.candidate = Some(match modifier {
+                snap::Modifier::Shift => Shortcut::BothShift,
+                modifier => Shortcut::Pair(modifier),
+            });
+            self.stop_recording(cx);
+        }
+    }
+
     fn cancel_shortcut(&mut self, cx: &mut Context<Self>) {
         self.stop_recording(cx);
         self.candidate = None;
@@ -424,6 +438,7 @@ impl SnapShotPanel {
         button
             .track_focus(&handle)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_recording(cx)))
+            .on_modifiers_changed(cx.listener(|this, _, _, cx| this.record_pair(cx)))
             .on_key_down(move |event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                     cx.stop_propagation();

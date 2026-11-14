@@ -14,6 +14,7 @@ mod git_actions;
 mod history;
 mod keybinding_rules;
 mod keybindings;
+mod mac_keys;
 mod mac_permissions;
 mod minimap;
 mod model_picker;
