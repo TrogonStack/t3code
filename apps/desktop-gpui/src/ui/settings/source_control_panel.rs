@@ -877,7 +877,11 @@ impl SourceControlPanel {
     /// One flex child of an item's summary line.
     fn span(&self, index: usize, span: &Span, cx: &mut Context<Self>) -> AnyElement {
         match span {
-            Span::Text(text) => div().min_w_0().max_w_full().child(text.clone()).into_any_element(),
+            Span::Text(text) => div()
+                .min_w_0()
+                .max_w_full()
+                .child(text.clone())
+                .into_any_element(),
             Span::Code(text) => div()
                 .min_w_0()
                 .max_w_full()

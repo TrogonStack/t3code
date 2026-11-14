@@ -14,6 +14,7 @@ mod providers_panel;
 mod scheduled_tasks_panel;
 mod scope_inheritance;
 mod scope_pickers;
+mod scoped_panel;
 mod secret_field;
 mod secrets_panel;
 mod source_control_panel;
@@ -41,6 +42,7 @@ use projects_panel::ProjectsPanel;
 use providers_panel::ProvidersPanel;
 use scheduled_tasks_panel::ScheduledTasksPanel;
 use scope_pickers::ScopeBar;
+use scoped_panel::{Page, ScopedPanel};
 use secrets_panel::SecretsPanel;
 use source_control_panel::SourceControlPanel;
 use std::rc::Rc;
@@ -183,6 +185,7 @@ pub struct SettingsDialog {
     labs: Entity<LabsPanel>,
     devices: Entity<DevicesPanel>,
     source_control: Entity<SourceControlPanel>,
+    threads: Entity<ScopedPanel>,
     secrets: Entity<SecretsPanel>,
     scheduled_tasks: Entity<ScheduledTasksPanel>,
     providers: Entity<ProvidersPanel>,
@@ -205,6 +208,16 @@ impl SettingsDialog {
         let devices = cx.new(|cx| DevicesPanel::new(actions.clone(), scope.clone(), cx));
         let source_control =
             cx.new(|cx| SourceControlPanel::new(actions.clone(), scope.clone(), window, cx));
+        let threads = cx.new(|cx| {
+            ScopedPanel::new(
+                Page::Threads,
+                crate::settings_threads::TOKEN_BASE,
+                actions.clone(),
+                scope.clone(),
+                window,
+                cx,
+            )
+        });
         let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
         let providers =
             cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
@@ -247,6 +260,7 @@ impl SettingsDialog {
             labs,
             devices,
             source_control,
+            threads,
             secrets,
             scheduled_tasks,
             providers,
@@ -273,6 +287,7 @@ impl SettingsDialog {
         self.labs.update(cx, |panel, cx| panel.reload(cx));
         self.devices.update(cx, |panel, cx| panel.reload(cx));
         self.source_control.update(cx, |panel, cx| panel.reload(cx));
+        self.threads.update(cx, |panel, cx| panel.reload(cx));
         self.secrets.update(cx, |panel, cx| panel.reload(cx));
         self.scheduled_tasks
             .update(cx, |panel, cx| panel.reload(cx));
@@ -383,6 +398,26 @@ impl SettingsDialog {
         cx: &mut Context<Self>,
     ) {
         self.source_control
+            .update(cx, |panel, cx| panel.on_call(token, event, cx));
+    }
+
+    pub fn set_threads_data(
+        &mut self,
+        config: crate::settings_source_control::SourceControlConfig,
+        projects: crate::settings_devices::ProjectIds,
+        cx: &mut Context<Self>,
+    ) {
+        self.threads
+            .update(cx, |panel, cx| panel.set_data(config, projects, cx));
+    }
+
+    pub fn on_threads_call(
+        &mut self,
+        token: u64,
+        event: crate::status::CallEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.threads
             .update(cx, |panel, cx| panel.on_call(token, event, cx));
     }
 
@@ -540,6 +575,12 @@ impl SettingsDialog {
 
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.scope.update(cx, |bar, cx| bar.close_menu(cx)) {
+            return;
+        }
+        if self
+            .threads
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
             return;
         }
         if self
@@ -1308,6 +1349,10 @@ impl SettingsDialog {
             self.source_control
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
             vec![self.source_control.clone().into_any_element()]
+        } else if self.section == Section::Threads {
+            self.threads
+                .update(cx, |panel, cx| panel.set_wide(wide, cx));
+            vec![self.threads.clone().into_any_element()]
         } else if self.section == Section::Secrets {
             self.secrets
                 .update(cx, |panel, cx| panel.set_wide(wide, cx));
@@ -1337,6 +1382,7 @@ impl SettingsDialog {
             Section::Labs
                 | Section::Devices
                 | Section::SourceControl
+                | Section::Threads
                 | Section::Secrets
                 | Section::ScheduledTasks
                 | Section::Providers

@@ -37,6 +37,7 @@ mod settings_scheduled_task_editor;
 mod settings_scheduled_tasks;
 mod settings_secrets;
 mod settings_source_control;
+mod settings_threads;
 mod settings_typography;
 mod shell;
 mod slow_requests;

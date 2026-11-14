@@ -141,6 +141,19 @@ pub enum Field {
     ThreadEnvMode,
     /// The Projects tab's actions, `defaultProjectScripts`.
     Scripts,
+    /// The Threads tab's keys (SettingsPanels.tsx:1496-1830).
+    BaseDirectory,
+    FallbackModel,
+    RuntimeMode,
+    ResumeLimited,
+    SnoozeLimited,
+    SnoozePresets,
+    SettleOnMerge,
+    SettleDays,
+    SettleKeepPr,
+    TextModel,
+    TitleInstructions,
+    Streaming,
 }
 
 impl Field {
@@ -160,6 +173,18 @@ impl Field {
             Self::DefaultModel => "defaultModelSelection",
             Self::ThreadEnvMode => "defaultThreadEnvMode",
             Self::Scripts => "defaultProjectScripts",
+            Self::BaseDirectory => "addProjectBaseDirectory",
+            Self::FallbackModel => "fallbackModelSelection",
+            Self::RuntimeMode => "defaultRuntimeMode",
+            Self::ResumeLimited => "autoResumeLimitedThreads",
+            Self::SnoozeLimited => "snoozeLimitedThreads",
+            Self::SnoozePresets => "snoozePresets",
+            Self::SettleOnMerge => "sidebarAutoSettleOnMerge",
+            Self::SettleDays => "sidebarAutoSettleAfterDays",
+            Self::SettleKeepPr => "sidebarAutoSettleKeepPullRequests",
+            Self::TextModel => TEXT_GENERATION,
+            Self::TitleInstructions => "threadTitleInstructions",
+            Self::Streaming => "responseStreamingMode",
         }
     }
 
@@ -173,9 +198,18 @@ impl Field {
         }
     }
 
-    /// `isProjectScopedSettingKey`: every key but `reviewGuidesEnabled`.
+    /// `isProjectScopedSettingKey` (`PROJECT_SCOPED_SERVER_SETTING_KEYS`): the keys a project's
+    /// override entry can hold.
     pub fn project_scoped(self) -> bool {
-        !matches!(self, Self::ReviewGuides)
+        !matches!(
+            self,
+            Self::ReviewGuides
+                | Self::BaseDirectory
+                | Self::FallbackModel
+                | Self::ResumeLimited
+                | Self::SnoozeLimited
+                | Self::SnoozePresets
+        )
     }
 
     /// `DEFAULT_SERVER_SETTINGS`.
@@ -190,10 +224,19 @@ impl Field {
             }
             Self::ThreadEnvMode => json!("local"),
             Self::Scripts => json!([]),
+            Self::BaseDirectory | Self::TitleInstructions => json!(""),
+            Self::FallbackModel => Value::Null,
+            Self::RuntimeMode => json!(crate::settings_threads::DEFAULT_RUNTIME_MODE),
+            Self::ResumeLimited | Self::SnoozeLimited | Self::SettleKeepPr => json!(false),
+            Self::SettleOnMerge => json!(true),
+            Self::SnoozePresets => crate::settings_threads::default_presets(),
+            Self::SettleDays => json!(crate::settings_threads::AUTO_SETTLE_DEFAULT_DAYS),
+            Self::TextModel => crate::settings_threads::default_text_model(),
+            Self::Streaming => json!("paragraph"),
         }
     }
 
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 25] = [
         Self::AutoPull,
         Self::AgentCredits,
         Self::MergeMethod,
@@ -207,6 +250,18 @@ impl Field {
         Self::DefaultModel,
         Self::ThreadEnvMode,
         Self::Scripts,
+        Self::BaseDirectory,
+        Self::FallbackModel,
+        Self::RuntimeMode,
+        Self::ResumeLimited,
+        Self::SnoozeLimited,
+        Self::SnoozePresets,
+        Self::SettleOnMerge,
+        Self::SettleDays,
+        Self::SettleKeepPr,
+        Self::TextModel,
+        Self::TitleInstructions,
+        Self::Streaming,
     ];
 }
 
@@ -627,6 +682,18 @@ fn describe(field: Field, value: &Value) -> String {
             count => format!("{count} actions"),
         },
         Field::DefaultModel if value.is_null() => "Automatic".to_owned(),
+        Field::FallbackModel if value.is_null() => "None".to_owned(),
+        Field::SettleDays => value
+            .as_u64()
+            .map_or_else(|| "Off".to_owned(), |days| format!("{days} days")),
+        Field::SnoozePresets => format!("{} options", value.as_array().map_or(0, Vec::len)),
+        Field::RuntimeMode => {
+            crate::settings_threads::runtime_mode(value.as_str().unwrap_or_default())
+                .map_or_else(|| "Inherits".to_owned(), |mode| mode.label.to_owned())
+        }
+        Field::Streaming => {
+            crate::settings_threads::streaming_label(value.as_str().unwrap_or_default()).to_owned()
+        }
         _ => match value {
             Value::Bool(true) => "On".to_owned(),
             Value::Bool(false) => "Off".to_owned(),

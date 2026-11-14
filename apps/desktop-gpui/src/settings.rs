@@ -748,6 +748,7 @@ pub fn searchable() -> &'static [SearchItem] {
             .chain(crate::settings_typography::TYPOGRAPHY_ITEMS)
             .chain(crate::settings_devices::DEVICE_ITEMS)
             .chain(crate::settings_source_control::SOURCE_CONTROL_ITEMS)
+            .chain(crate::settings_threads::THREADS_ITEMS)
             .copied()
             .collect()
     })
