@@ -1,3 +1,4 @@
+mod add_environment;
 mod asset_fetch;
 mod assets;
 mod attachments;
