@@ -51,6 +51,7 @@ lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 [ -x "$lsregister" ] && "$lsregister" -f "$app" >/dev/null 2>&1 || true
 
 if [ "$action" = "run" ]; then
-  exec "$app/Contents/MacOS/$binary"
+  if [ $# -ge 2 ]; then shift 2; else shift $#; fi
+  exec "$app/Contents/MacOS/$binary" "$@"
 fi
 echo "$app"

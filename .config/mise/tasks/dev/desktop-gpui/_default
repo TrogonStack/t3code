@@ -23,4 +23,4 @@ token=$(cd "$main_checkout" && env -u T3CODE_HOME VITE_DEV_SERVER_URL="http://12
 # the same file the Electron dev app reads, so both show the same values.
 cd apps/desktop-gpui
 T3CODE_GPUI_SERVER_URL="$url" T3CODE_GPUI_PAIRING_TOKEN="$token" \
-  T3CODE_GPUI_HOME="${T3CODE_GPUI_HOME:-$HOME/.t3/dev}" exec cargo run --locked -- "$@"
+  T3CODE_GPUI_HOME="${T3CODE_GPUI_HOME:-$HOME/.t3/dev}" exec sh scripts/bundle.sh debug run "$@"
