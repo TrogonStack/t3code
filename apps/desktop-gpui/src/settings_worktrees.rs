@@ -105,12 +105,15 @@ fn index_of(options: &[(&str, &str)], wire: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// An unset `worktreeSubmodules` inherits t3.json, then recursive.
 pub fn submodules_index(value: &Value) -> usize {
-    index_of(&SUBMODULES, value.as_str().unwrap_or("recursive"))
+    index_of(&SUBMODULES, value.as_str().unwrap_or_default())
 }
 
+/// The layer label of a value; unset inherits.
 pub fn submodules_label(value: &Value) -> &'static str {
+    if value.is_null() {
+        return "Inherit";
+    }
     SUBMODULES[submodules_index(value)].1
 }
 
@@ -270,7 +273,7 @@ mod tests {
 
     #[test]
     fn unset_options_read_as_the_first_or_default() {
-        assert_eq!(submodules_label(&Value::Null), "Recursive");
+        assert_eq!(submodules_label(&Value::Null), "Inherit");
         assert_eq!(submodules_label(&json!("none")), "Skip");
         assert_eq!(branch_mode_label(&Value::Null), "Static prefix");
         assert_eq!(keep_when_index(""), 1);

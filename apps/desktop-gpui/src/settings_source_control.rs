@@ -243,7 +243,7 @@ impl Field {
             Self::MergeMethod | Self::ReviewModel | Self::WriterModel | Self::DefaultModel => {
                 Value::Null
             }
-            Self::ThreadEnvMode => json!("local"),
+            Self::ThreadEnvMode => Value::Null,
             Self::Scripts => json!([]),
             Self::BaseDirectory | Self::TitleInstructions => json!(""),
             Self::FallbackModel => Value::Null,
@@ -711,6 +711,7 @@ fn describe(field: Field, value: &Value) -> String {
     match field {
         Field::MergeMethod => MERGE_METHODS[merge_index(value)].1.to_owned(),
         Field::StyleMode => STYLE_MODES[style_index(value)].1.to_owned(),
+        Field::ThreadEnvMode | Field::Submodules if value.is_null() => "Inherit".to_owned(),
         Field::ThreadEnvMode => env_mode_label(value.as_str().unwrap_or("local")).to_owned(),
         Field::Scripts => match value.as_array().map_or(0, Vec::len) {
             1 => "1 action".to_owned(),

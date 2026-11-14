@@ -57,6 +57,9 @@ impl Pick {
         Self::CleanupMode,
     ];
 
+    /// The `selected` of a select whose setting is unset: no menu row, and the trigger says why.
+    const UNSET: usize = usize::MAX;
+
     fn index(self) -> usize {
         Self::ALL.iter().position(|pick| *pick == self).unwrap_or(0)
     }
@@ -155,8 +158,10 @@ impl Pick {
         let text = value.as_str().unwrap_or_default();
         match self {
             Self::Permissions => crate::settings_threads::runtime_mode_index(text),
+            Self::Workspace if value.is_null() => Self::UNSET,
             Self::Workspace => crate::settings_threads::workspace_index(text),
             Self::Streaming => crate::settings_threads::streaming_index(text),
+            Self::Submodules if value.is_null() => Self::UNSET,
             Self::Submodules => crate::settings_worktrees::submodules_index(value),
             Self::BranchMode => crate::settings_worktrees::branch_mode_index(value),
             Self::KeepWhen => crate::settings_worktrees::keep_when_index(text),
@@ -559,6 +564,11 @@ impl ScopedPanel {
     }
 
     fn open_menu(&mut self, pick: Pick, selected: usize, cx: &mut Context<Self>) {
+        let selected = if selected < pick.labels().len() {
+            selected
+        } else {
+            0
+        };
         self.menu = Some((pick, selected));
         cx.notify();
     }
@@ -570,6 +580,12 @@ impl ScopedPanel {
                 if let Some(value) = pick.value(index) {
                     self.write_rules("worktreeKeepWhen", value, &ctx, cx);
                 }
+            }
+            // A project's entry stores whole rules, so Custom starts from the ones in effect, as
+            // the web completes its `rules: {}` from `resolveWorktreeCleanup`.
+            Pick::CleanupMode if pick.value(index).is_some_and(|v| v["mode"] == "custom") => {
+                let policy = json!({"mode": "custom", "rules": self.rules(&ctx)});
+                self.write(vec![(Field::WorktreeCleanup, Some(policy))], cx)
             }
             _ => self.write(vec![(pick.field(ctx.in_project), pick.value(index))], cx),
         }
@@ -790,9 +806,15 @@ impl ScopedPanel {
                 }
             })
         };
+        // The web's trigger reads "Mixed" for a value it cannot name, "Unavailable" offline.
+        let unset = if self.ctx(cx).connected {
+            "Mixed"
+        } else {
+            "Unavailable"
+        };
         let trigger = SelectTrigger::new(
             id,
-            labels[selected],
+            labels.get(selected).copied().unwrap_or(unset),
             width,
             self.triggers[pick.index()].clone(),
             on_key,
