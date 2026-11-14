@@ -1,17 +1,25 @@
 //! The task editor dialog of `ScheduledTasksSettings.tsx`: text inputs are the source of truth for
 //! their fields and are read into the draft when saving; everything else lives in the draft.
 
+mod pickers;
+mod widgets;
+
 use super::*;
 use crate::settings_scheduled_task_editor::{
     self as ed, Draft, EditorData, Encoding, Failure, FilterOp, Mode, Model, ProjectChoice,
     Workspace,
 };
-use gpui::{ClipboardItem, ElementId};
+use gpui::ClipboardItem;
 use gpui_component::input::{InputState, Textarea, TextareaState};
 
-use super::super::devices_panel::widgets::{field, labeled};
+use super::super::devices_panel::widgets::field;
+pub(super) use pickers::Pickers;
+use widgets::{Opt, Sel, field_of, segment, switch_row_of, weekday_group};
 
 const EDITOR_WIDTH: f32 = 560.;
+/// A select's popup spans the dialog body; a grid cell's spans half of it.
+const FULL_WIDTH: f32 = EDITOR_WIDTH - 48.;
+const HALF_WIDTH: f32 = (FULL_WIDTH - 12.) / 2.;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Menu {
@@ -21,6 +29,7 @@ pub(super) enum Menu {
     Thread,
     Workspace,
     Model,
+    BaseRef,
     Op(u64),
     Encoding,
 }
@@ -28,14 +37,18 @@ pub(super) enum Menu {
 pub(super) struct Editor {
     pub environment: String,
     pub draft: Draft,
-    pub continue_thread: bool,
     pub has_secret: bool,
     pub editing_once: bool,
+    /// The saved task is an interval below the one-minute floor.
+    pub legacy_interval: bool,
     pub webhook_url: Option<String>,
     pub menu: Option<Menu>,
     pub saving: bool,
     pub rotating: bool,
     pub rotate_confirm: bool,
+    pub copied: bool,
+    /// Whether the base ref is a remote one, once the picker or a lookup knows.
+    pub base_remote: Option<bool>,
     pub error: Option<Failure>,
 }
 
@@ -43,7 +56,6 @@ type FilterInputs = (Entity<InputState>, Entity<InputState>);
 
 pub(super) struct Inputs {
     title: Entity<InputState>,
-    base_ref: Entity<InputState>,
     path: Entity<InputState>,
     interval: Entity<InputState>,
     time: Entity<InputState>,
@@ -58,6 +70,7 @@ pub(super) struct Inputs {
     model: Entity<InputState>,
     prompt: Entity<TextareaState>,
     filters: HashMap<u64, FilterInputs>,
+    webhook_url: Entity<InputState>,
 }
 
 fn input(placeholder: &'static str, window: &mut Window, cx: &mut App) -> Entity<InputState> {
@@ -78,13 +91,12 @@ impl Inputs {
     pub(super) fn new(window: &mut Window, cx: &mut App) -> Self {
         Self {
             title: input("e.g. Check for Sentry issues", window, cx),
-            base_ref: input("main", window, cx),
             path: input("/path/to/checkout", window, cx),
             interval: input("15", window, cx),
             time: input("09:00", window, cx),
             run_at: input("YYYY-MM-DDTHH:MM", window, cx),
             header: input(ed::SIGNATURE_HEADER, window, cx),
-            prefix: input(ed::SIGNATURE_PREFIX, window, cx),
+            prefix: input("None", window, cx),
             secret: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder("Shared secret")
@@ -97,10 +109,11 @@ impl Inputs {
             model: input("instanceId:model", window, cx),
             prompt: cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .placeholder("What should the agent do?")
+                    .placeholder("What should the agent do each time this runs?")
                     .auto_grow(4, 12)
             }),
             filters: HashMap::new(),
+            webhook_url: input("", window, cx),
         }
     }
 }
@@ -134,10 +147,24 @@ const DAYS: [(i64, &str); 7] = [
 type Pick =
     Rc<dyn Fn(&mut ScheduledTasksPanel, usize, &mut Window, &mut Context<ScheduledTasksPanel>)>;
 
+/// What the editor can save right now, as the web's `connected`, `tasksQuery` and
+/// `editingTaskMissing`.
+struct Readiness {
+    connected: bool,
+    loaded: bool,
+    missing: bool,
+    watch_error: Option<String>,
+}
+
 impl ScheduledTasksPanel {
     pub fn set_editor_data(&mut self, data: EditorData, cx: &mut Context<Self>) {
         if self.data != data {
             self.data = data;
+            let in_flight = self
+                .pending
+                .values()
+                .any(|pending| matches!(pending, Pending::Favorite(_)));
+            self.pickers.settle_favorites(&self.data.favorites, in_flight);
             cx.notify();
         }
     }
@@ -168,10 +195,42 @@ impl ScheduledTasksPanel {
             .unwrap_or_default()
     }
 
+    fn project_root(&self, environment: &str, project: &str) -> String {
+        self.project_options(environment)
+            .into_iter()
+            .find(|option| option.id == project)
+            .map(|option| option.root)
+            .unwrap_or_default()
+    }
+
+    fn readiness(&self, editor: &Editor, cx: &App) -> Readiness {
+        let connected = self
+            .resolved(cx)
+            .1
+            .iter()
+            .any(|environment| environment.id == editor.environment && environment.connected);
+        let watch = self.watches.get(&editor.environment);
+        let list = match watch.map(|watch| &watch.load) {
+            Some(Load::Loaded(list)) => Some(list),
+            _ => None,
+        };
+        Readiness {
+            connected,
+            loaded: list.is_some(),
+            missing: match (&editor.draft.editing_id, list) {
+                (Some(id), Some(list)) => !list.iter().any(|task| task.id == *id),
+                _ => false,
+            },
+            watch_error: match watch.map(|watch| &watch.load) {
+                Some(Load::Failed(message)) => Some(message.clone()),
+                _ => None,
+            },
+        }
+    }
+
     fn fill_inputs(&mut self, draft: &Draft, window: &mut Window, cx: &mut Context<Self>) {
         let inputs = &self.inputs;
         set_text(&inputs.title, &draft.title, window, cx);
-        set_text(&inputs.base_ref, &draft.base_ref, window, cx);
         set_text(&inputs.path, &draft.existing_worktree_path, window, cx);
         set_text(&inputs.interval, &draft.interval_minutes, window, cx);
         set_text(&inputs.time, &draft.time_of_day, window, cx);
@@ -208,7 +267,7 @@ impl ScheduledTasksPanel {
         cx: &mut Context<Self>,
     ) {
         let path_input = input("body.action", window, cx);
-        let value_input = input("Value", window, cx);
+        let value_input = input("opened", window, cx);
         set_text(&path_input, path, window, cx);
         set_text(&value_input, value, window, cx);
         self.inputs.filters.insert(id, (path_input, value_input));
@@ -224,20 +283,31 @@ impl ScheduledTasksPanel {
     ) {
         self.error = None;
         self.menu = None;
+        self.pickers.reset();
         self.fill_inputs(&draft, window, cx);
+        let legacy_interval = draft.editing_id.is_some()
+            && draft.mode == Mode::Interval
+            && draft
+                .interval_minutes
+                .trim()
+                .parse::<f64>()
+                .is_ok_and(|minutes| minutes < 1.);
         self.editor = Some(Editor {
             environment,
-            continue_thread: !draft.thread_id.is_empty(),
             has_secret: task.is_some_and(|task| task.has_secret),
             editing_once: draft.mode == Mode::Once && draft.editing_id.is_some(),
+            legacy_interval,
             webhook_url: task.and_then(|task| task.webhook_url.clone()),
             draft,
             menu: None,
             saving: false,
             rotating: false,
             rotate_confirm: false,
+            copied: false,
+            base_remote: None,
             error: None,
         });
+        self.lookup_base(cx);
         cx.notify();
     }
 
@@ -306,6 +376,11 @@ impl ScheduledTasksPanel {
             .flatten()
     }
 
+    /// Thread modes exist on this build's own server, and on a task that already has one.
+    fn offers_thread_modes(editor: &Editor) -> bool {
+        editor.environment == PRIMARY || editor.draft.thread_mode.is_some()
+    }
+
     fn collect(&mut self, cx: &App) {
         let Some(editor) = self.editor.as_mut() else {
             return;
@@ -313,7 +388,6 @@ impl ScheduledTasksPanel {
         let inputs = &self.inputs;
         let draft = &mut editor.draft;
         draft.title = text_of(&inputs.title, cx);
-        draft.base_ref = text_of(&inputs.base_ref, cx);
         draft.existing_worktree_path = text_of(&inputs.path, cx);
         draft.interval_minutes = text_of(&inputs.interval, cx);
         draft.time_of_day = text_of(&inputs.time, cx);
@@ -348,20 +422,16 @@ impl ScheduledTasksPanel {
         let Some(editor) = self.editor.as_ref() else {
             return;
         };
-        if editor.saving {
+        let readiness = self.readiness(editor, cx);
+        if editor.saving || !readiness.connected || !readiness.loaded || readiness.missing {
             return;
         }
         let environment = editor.environment.clone();
         let mut draft = editor.draft.clone();
-        if !editor.continue_thread {
-            draft.thread_id.clear();
-        } else if draft.thread_id.is_empty() {
-            self.set_editor_error(
-                "Pick a thread",
-                "Choose the thread each run should continue.",
-            );
-            cx.notify();
-            return;
+        if Self::offers_thread_modes(editor) {
+            draft.thread_mode = Some(json!(ed::thread_mode(&draft)));
+        } else {
+            draft.thread_mode = None;
         }
         let mut project_ids: Vec<String> = self
             .project_options(&environment)
@@ -450,6 +520,7 @@ impl ScheduledTasksPanel {
             }
         }
         self.editor = None;
+        self.pickers.reset();
     }
 
     pub(super) fn editor_rotated(&mut self, value: &Value) {
@@ -479,11 +550,13 @@ impl ScheduledTasksPanel {
             return false;
         };
         if editor.menu.take().is_some() || std::mem::take(&mut editor.rotate_confirm) {
+            self.pickers.keys = None;
             cx.notify();
             return true;
         }
         if !editor.saving {
             self.editor = None;
+            self.pickers.reset();
             cx.notify();
             return true;
         }
@@ -492,7 +565,13 @@ impl ScheduledTasksPanel {
 
     fn set_menu(&mut self, menu: Menu, open: bool, cx: &mut Context<Self>) {
         if let Some(editor) = self.editor.as_mut() {
+            if !open && editor.menu != Some(menu) {
+                return;
+            }
             editor.menu = open.then_some(menu);
+            if !open || menu != Menu::Model {
+                self.pickers.keys = None;
+            }
             cx.notify();
         }
     }
@@ -502,168 +581,58 @@ impl ScheduledTasksPanel {
             change(editor);
             editor.menu = None;
             editor.error = None;
+            self.pickers.keys = None;
             cx.notify();
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn select(
-        view: &Entity<Self>,
-        id: impl Into<SharedString>,
-        menu: Menu,
-        open: bool,
-        disabled: bool,
-        current: String,
-        options: Vec<String>,
-        selected: Option<usize>,
-        pick: Pick,
-        cx: &App,
-    ) -> AnyElement {
-        let id: SharedString = id.into();
-        let theme = Tokens::of(cx);
-        let trigger = h_flex()
-            .id(id.clone())
-            .h(px(32.))
-            .w_full()
-            .items_center()
-            .justify_between()
-            .px(px(11.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(theme.input)
-            .bg(if theme.dark {
-                theme.input.opacity(0.32)
-            } else {
-                theme.background
-            })
-            .text_size(px(14.))
-            .when(disabled, |trigger| trigger.opacity(0.64))
-            .when(!disabled, |trigger| trigger.cursor_pointer())
-            .child(div().min_w_0().truncate().child(current))
-            .child(
-                div()
-                    .opacity(0.7)
-                    .child(Icon::new(Icons::ChevronDown).size(px(14.))),
-            );
-        let opened = view.clone();
-        let picked = view.clone();
-        Popover::new(SharedString::from(format!("{id}-menu")))
-            .anchor(Anchor::TopLeft)
-            .offset(px(4.))
-            .open(open && !disabled)
-            .p_0()
-            .appearance(false)
-            .on_open_change(move |next, _, cx| {
-                opened.update(cx, |this, cx| this.set_menu(menu, *next, cx))
-            })
-            .trigger(PopTrigger::new(trigger))
-            .content(move |_, _, cx| {
-                let theme = Tokens::of(cx);
-                let accent = theme.accent;
-                popup_shell(cx)
-                    .w(px(EDITOR_WIDTH - 48.))
-                    .max_w_full()
-                    .max_h(px(240.))
-                    .id(SharedString::from(format!("{id}-list")))
-                    .overflow_y_scroll()
-                    .p_1()
-                    .children(options.iter().enumerate().map(|(index, label)| {
-                        let (view, pick) = (picked.clone(), pick.clone());
-                        h_flex()
-                            .id(SharedString::from(format!("{id}-{index}")))
-                            .min_h(px(28.))
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(4.))
-                            .text_sm()
-                            .cursor_pointer()
-                            .text_color(theme.foreground)
-                            .hover(move |style| style.bg(accent))
-                            .when(Some(index) == selected, |item| {
-                                item.font_weight(FontWeight::MEDIUM)
-                            })
-                            .child(label.clone())
-                            .on_click(move |_, window, cx| {
-                                view.update(cx, |this, cx| pick(this, index, window, cx))
-                            })
-                    }))
-            })
-            .into_any_element()
-    }
-
-    fn chip(
-        view: &Entity<Self>,
-        id: impl Into<ElementId>,
-        label: &'static str,
-        active: bool,
-        enabled: bool,
-        apply: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-        cx: &App,
-    ) -> AnyElement {
-        let view = view.clone();
-        button(
-            id,
-            if active {
-                Variant::Primary
-            } else {
-                Variant::Outline
-            },
-            enabled,
+    fn select(view: &Entity<Self>, spec: Sel, pick: Pick, cx: &App) -> AnyElement {
+        let menu = spec.menu;
+        let (opened, picked) = (view.clone(), view.clone());
+        widgets::select(
+            spec,
+            move |next, _, cx| opened.update(cx, |this, cx| this.set_menu(menu, next, cx)),
+            Rc::new(move |index, window, cx| {
+                let pick = pick.clone();
+                picked.update(cx, |this, cx| pick(this, index, window, cx))
+            }),
             cx,
         )
-        .child(label)
-        .on_click(move |_, window, cx| view.update(cx, |this, cx| apply(this, window, cx)))
-        .into_any_element()
     }
 
-    fn switch_row(
-        view: &Entity<Self>,
-        id: &'static str,
-        label: &'static str,
-        checked: bool,
-        apply: impl Fn(&mut Editor) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let view = view.clone();
-        let toggle: super::super::components::Toggle =
-            Rc::new(move |_, cx| view.update(cx, |this, cx| this.edit(cx, &apply)));
-        h_flex()
-            .gap_3()
-            .items_center()
-            .child(switch(id, checked, toggle, window, cx))
-            .child(div().text_size(px(14.)).child(label))
-            .into_any_element()
-    }
-
-    fn project_label(options: &[ed::ProjectOption], id: &str) -> String {
-        options
-            .iter()
-            .find(|option| option.id == id)
-            .map(|option| option.title.clone())
-            .unwrap_or_else(|| {
-                if id.is_empty() {
-                    "Select a project".to_owned()
-                } else {
-                    id.to_owned()
-                }
-            })
-    }
-
-    fn model_options(&self, draft: &Draft, environment: &str) -> Vec<(String, Model)> {
-        let current = self.selection(draft, environment);
-        let mut options = Vec::new();
-        for group in &self.data.models {
-            for (slug, label, legacy) in &group.models {
-                let model = (group.instance_id.clone(), slug.clone());
-                if !legacy || current.as_ref() == Some(&model) {
-                    options.push((format!("{} / {label}", group.name), model));
-                }
-            }
+    fn project_label(options: &[ed::ProjectOption], id: &str) -> (String, bool) {
+        match options.iter().find(|option| option.id == id) {
+            Some(option) => (option.title.clone(), false),
+            None if id.is_empty() => ("Select a project".to_owned(), true),
+            None => (id.to_owned(), false),
         }
-        options
+    }
+
+    fn change_environment(&mut self, next: String, cx: &mut Context<Self>) {
+        let choices: Vec<ProjectChoice> = self
+            .project_options(&next)
+            .into_iter()
+            .map(|p| ProjectChoice {
+                id: p.id,
+                pinned: p.pinned,
+                archived: p.archived,
+            })
+            .collect();
+        let project = ed::default_project_id(&choices, false);
+        self.edit(cx, |editor| {
+            editor.environment = next;
+            let draft = &mut editor.draft;
+            ed::unbind_from_thread(draft);
+            draft.project_id = project;
+            draft.model = None;
+            draft.base_model_selection = None;
+            draft.base_ref = "main".to_owned();
+            draft.start_from_origin = true;
+            draft.existing_worktree_path.clear();
+            editor.base_remote = None;
+        });
+        self.inputs.path.update(cx, |_, _| {});
+        self.lookup_base(cx);
     }
 
     fn fields(
@@ -680,17 +649,22 @@ impl ScheduledTasksPanel {
         let environment = editor.environment.clone();
         let menu = editor.menu;
         let editing = draft.editing_id.is_some();
-        let continue_thread = editor.continue_thread;
         let webhook_url = editor.webhook_url.clone();
         let rotate_confirm = editor.rotate_confirm;
         let rotating = editor.rotating;
+        let copied = editor.copied;
         let has_secret = editor.has_secret;
+        let legacy_interval = editor.legacy_interval;
+        let base_remote = editor.base_remote.unwrap_or(false);
+        let offers_modes = Self::offers_thread_modes(editor);
         let offers_once = environment == PRIMARY || editor.editing_once;
+        let readiness = self.readiness(editor, cx);
+        let error = editor.error.clone();
         let environments = self.connected_environments(cx);
         let projects = self.project_options(&environment);
         let mut out: Vec<AnyElement> = Vec::new();
 
-        if let Some(error) = editor.error.clone() {
+        if let Some(error) = error {
             out.push(
                 v_flex()
                     .gap_1()
@@ -705,168 +679,130 @@ impl ScheduledTasksPanel {
                     .into_any_element(),
             );
         }
+        if !readiness.connected {
+            out.push(problem("Reconnect this environment before saving.", cx).into_any_element());
+        }
 
-        let env_labels: Vec<String> = environments.iter().map(|e| e.label.clone()).collect();
-        let env_ids: Vec<String> = environments.iter().map(|e| e.id.clone()).collect();
-        let env_current = environments
+        let options: Vec<Opt> = environments
             .iter()
-            .find(|e| e.id == environment)
-            .map_or(environment.clone(), |e| e.label.clone());
-        let env_selected = env_ids.iter().position(|id| *id == environment);
-        let data_projects = self.data.projects.clone();
+            .map(|e| Opt {
+                label: e.label.clone(),
+                secondary: Some(e.address.clone()),
+                lead: Some(crate::ui::machine_icon(e.machine)),
+            })
+            .collect();
+        let env_ids: Vec<String> = environments.iter().map(|e| e.id.clone()).collect();
+        let current_env = environments.iter().find(|e| e.id == environment);
         out.push(
-            labeled(
+            field_of(
                 "Runs on",
+                None,
                 Self::select(
                     view,
-                    "scheduled-task-env",
-                    Menu::Environment,
-                    menu == Some(Menu::Environment),
-                    editing || env_ids.len() < 2,
-                    env_current,
-                    env_labels,
-                    env_selected,
+                    Sel {
+                        id: "scheduled-task-env".into(),
+                        menu: Menu::Environment,
+                        open: menu == Some(Menu::Environment),
+                        disabled: editing || env_ids.len() < 2,
+                        lead: current_env.map(|e| crate::ui::machine_icon(e.machine)),
+                        current: current_env.map_or(environment.clone(), |e| e.label.clone()),
+                        placeholder: false,
+                        selected: env_ids.iter().position(|id| *id == environment),
+                        options,
+                        width: FULL_WIDTH,
+                    },
                     Rc::new(move |this, index, _, cx| {
-                        let Some(next) = env_ids.get(index).cloned() else {
-                            return;
-                        };
-                        let choices: Vec<ProjectChoice> = data_projects
-                            .get(&next)
-                            .cloned()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|p| ProjectChoice {
-                                id: p.id,
-                                pinned: p.pinned,
-                                archived: p.archived,
-                            })
-                            .collect();
-                        let project = ed::default_project_id(&choices, false);
-                        this.edit(cx, |editor| {
-                            editor.environment = next;
-                            editor.draft.project_id = project;
-                            editor.draft.thread_id.clear();
-                            editor.draft.model = None;
-                            editor.continue_thread = false;
-                        });
+                        if let Some(next) = env_ids.get(index).cloned() {
+                            this.change_environment(next, cx);
+                        }
                     }),
                     cx,
                 ),
+                cx,
             )
             .into_any_element(),
         );
 
-        out.push(labeled("Name", field(&self.inputs.title, false, window, cx)).into_any_element());
-
-        let threads: Vec<ed::ThreadOption> = if environment == PRIMARY {
-            self.data
-                .threads
-                .iter()
-                .filter(|thread| thread.project_id == draft.project_id)
-                .cloned()
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let destination_disabled = environment != PRIMARY && !continue_thread;
-        let mut destination = v_flex().gap_2().child(Self::select(
-            view,
-            "scheduled-task-destination",
-            Menu::Destination,
-            menu == Some(Menu::Destination),
-            destination_disabled,
-            if continue_thread {
-                "One thread continuing the conversation".to_owned()
-            } else {
-                "New thread each run".to_owned()
-            },
-            vec![
-                "New thread each run".to_owned(),
-                "One thread continuing the conversation".to_owned(),
-            ],
-            Some(usize::from(continue_thread)),
-            Rc::new(|this, index, _, cx| {
-                this.edit(cx, |editor| {
-                    editor.continue_thread = index == 1;
-                    if index == 0 {
-                        editor.draft.thread_id.clear();
-                    }
-                })
-            }),
-            cx,
-        ));
-        if continue_thread {
-            let thread_label = threads
-                .iter()
-                .find(|thread| thread.id == draft.thread_id)
-                .map(|thread| thread.title.clone())
-                .unwrap_or_else(|| {
-                    if draft.thread_id.is_empty() {
-                        "Select a thread".to_owned()
-                    } else {
-                        draft.thread_id.clone()
-                    }
-                });
-            let titles: Vec<String> = threads.iter().map(|t| t.title.clone()).collect();
-            let ids: Vec<String> = threads.iter().map(|t| t.id.clone()).collect();
-            let selected = ids.iter().position(|id| *id == draft.thread_id);
-            destination = destination
-                .child(Self::select(
-                    view,
-                    "scheduled-task-thread",
-                    Menu::Thread,
-                    menu == Some(Menu::Thread),
-                    environment != PRIMARY,
-                    thread_label,
-                    titles,
-                    selected,
-                    Rc::new(move |this, index, _, cx| {
-                        if let Some(id) = ids.get(index).cloned() {
-                            this.edit(cx, |editor| editor.draft.thread_id = id);
-                        }
-                    }),
-                    cx,
-                ))
-                .child(note(
-                    "Each run continues this conversation, in its workspace and with its current model. Deleting the thread also deletes this task.",
-                    cx,
-                ));
+        if let Some(message) = readiness.watch_error.clone() {
+            out.push(
+                div()
+                    .text_sm()
+                    .text_color(theme.destructive)
+                    .child(message)
+                    .into_any_element(),
+            );
         }
-        if draft.thread_mode.is_some() {
-            destination = destination.child(note(
-                "This task uses a thread mode this build does not know. It is kept as is when you save.",
-                cx,
-            ));
+        if readiness.missing {
+            out.push(problem("This scheduled task no longer exists.", cx).into_any_element());
         }
-        out.push(labeled("Destination", destination).into_any_element());
 
-        let project_titles: Vec<String> = projects.iter().map(|p| p.title.clone()).collect();
-        let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
-        let project_selected = project_ids.iter().position(|id| *id == draft.project_id);
         out.push(
-            labeled(
-                "Project",
-                Self::select(
-                    view,
-                    "scheduled-task-project",
-                    Menu::Project,
-                    menu == Some(Menu::Project),
-                    false,
-                    Self::project_label(&projects, &draft.project_id),
-                    project_titles,
-                    project_selected,
-                    Rc::new(move |this, index, _, cx| {
-                        if let Some(id) = project_ids.get(index).cloned() {
-                            this.edit(cx, |editor| {
-                                editor.draft.project_id = id;
-                                editor.draft.thread_id.clear();
-                            });
-                        }
-                    }),
-                    cx,
-                ),
+            field_of(
+                "Name",
+                None,
+                field(&self.inputs.title, false, window, cx),
+                cx,
             )
             .into_any_element(),
+        );
+
+        out.push(self.destination_field(
+            view,
+            &draft,
+            &environment,
+            offers_modes,
+            menu,
+            window,
+            cx,
+        ));
+
+        let project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+        let project_options: Vec<Opt> = projects
+            .iter()
+            .map(|project| {
+                let duplicated = projects
+                    .iter()
+                    .filter(|other| other.title == project.title)
+                    .count()
+                    > 1;
+                Opt {
+                    label: project.title.clone(),
+                    secondary: duplicated.then(|| project.root.clone()),
+                    lead: None,
+                }
+            })
+            .collect();
+        let (project_label, project_placeholder) =
+            Self::project_label(&projects, &draft.project_id);
+        let project = field_of(
+            "Project",
+            None,
+            Self::select(
+                view,
+                Sel {
+                    id: "scheduled-task-project".into(),
+                    menu: Menu::Project,
+                    open: menu == Some(Menu::Project),
+                    disabled: false,
+                    lead: None,
+                    current: project_label,
+                    placeholder: project_placeholder,
+                    selected: project_ids.iter().position(|id| *id == draft.project_id),
+                    options: project_options,
+                    width: HALF_WIDTH,
+                },
+                Rc::new(move |this, index, _, cx| {
+                    if let Some(id) = project_ids.get(index).cloned() {
+                        this.edit(cx, |editor| {
+                            ed::change_project(&mut editor.draft, &id);
+                            editor.base_remote = None;
+                        });
+                        this.lookup_base(cx);
+                    }
+                }),
+                cx,
+            ),
+            cx,
         );
 
         let workspaces = [
@@ -874,53 +810,67 @@ impl ScheduledTasksPanel {
             (Workspace::Root, "Use the project checkout"),
             (Workspace::Existing, "Use a specific checkout"),
         ];
-        let mut workspace = v_flex().gap_2().child(Self::select(
-            view,
-            "scheduled-task-workspace",
-            Menu::Workspace,
-            menu == Some(Menu::Workspace),
-            false,
-            workspaces
-                .iter()
-                .find(|(kind, _)| *kind == draft.workspace)
-                .map_or("", |(_, label)| *label)
-                .to_owned(),
-            workspaces.iter().map(|(_, l)| (*l).to_owned()).collect(),
-            workspaces.iter().position(|(k, _)| *k == draft.workspace),
-            Rc::new(move |this, index, _, cx| {
-                if let Some((kind, _)) = workspaces.get(index) {
-                    let kind = *kind;
-                    this.edit(cx, |editor| editor.draft.workspace = kind);
-                }
-            }),
+        let workspace = field_of(
+            "Workspace",
+            None,
+            Self::select(
+                view,
+                Sel {
+                    id: "scheduled-task-workspace".into(),
+                    menu: Menu::Workspace,
+                    open: menu == Some(Menu::Workspace),
+                    disabled: false,
+                    lead: None,
+                    current: workspaces
+                        .iter()
+                        .find(|(kind, _)| *kind == draft.workspace)
+                        .map_or("", |(_, label)| *label)
+                        .to_owned(),
+                    placeholder: false,
+                    selected: workspaces.iter().position(|(k, _)| *k == draft.workspace),
+                    options: workspaces.iter().map(|(_, l)| Opt::plain(*l)).collect(),
+                    width: HALF_WIDTH,
+                },
+                Rc::new(move |this, index, _, cx| {
+                    if let Some((kind, _)) = workspaces.get(index) {
+                        let kind = *kind;
+                        this.edit(cx, |editor| editor.draft.workspace = kind);
+                    }
+                }),
+                cx,
+            ),
             cx,
-        ));
+        );
+        out.push(
+            h_flex()
+                .gap_3()
+                .items_start()
+                .child(div().flex_1().min_w_0().child(project))
+                .child(div().flex_1().min_w_0().child(workspace))
+                .into_any_element(),
+        );
+
         match draft.workspace {
-            Workspace::Worktree => {
-                workspace = workspace
-                    .child(labeled(
-                        "Base branch",
-                        field(&self.inputs.base_ref, false, window, cx),
-                    ))
-                    .child(Self::switch_row(
-                        view,
-                        "scheduled-task-origin",
-                        "Start from origin",
-                        draft.start_from_origin,
-                        |editor| editor.draft.start_from_origin = !editor.draft.start_from_origin,
-                        window,
-                        cx,
-                    ));
-            }
-            Workspace::Existing => {
-                workspace = workspace.child(labeled(
+            Workspace::Worktree => out.push(
+                field_of(
+                    "Base branch",
+                    None,
+                    self.base_branch(view, &draft, &environment, base_remote, menu, cx),
+                    cx,
+                )
+                .into_any_element(),
+            ),
+            Workspace::Existing => out.push(
+                field_of(
                     "Checkout path",
+                    None,
                     field(&self.inputs.path, false, window, cx),
-                ));
-            }
+                    cx,
+                )
+                .into_any_element(),
+            ),
             Workspace::Root => {}
         }
-        out.push(labeled("Workspace", workspace).into_any_element());
 
         let focused = self
             .inputs
@@ -929,8 +879,9 @@ impl ScheduledTasksPanel {
             .focus_handle(cx)
             .contains_focused(window, cx);
         out.push(
-            labeled(
+            field_of(
                 "Prompt",
+                None,
                 div()
                     .w_full()
                     .rounded(px(8.))
@@ -948,6 +899,7 @@ impl ScheduledTasksPanel {
                             .bordered(false)
                             .aria_label("Prompt"),
                     ),
+                cx,
             )
             .into_any_element(),
         );
@@ -955,157 +907,158 @@ impl ScheduledTasksPanel {
         out.push(self.model_field(view, &draft, &environment, menu, window, cx));
 
         let tab_modes = [Mode::Fixed, Mode::Once, Mode::Interval, Mode::Webhook];
-        let tabs = h_flex()
-            .gap_2()
-            .flex_wrap()
-            .children(tab_modes.into_iter().map(|mode| {
-                let enabled = mode != Mode::Once || offers_once;
-                Self::chip(
-                    view,
+        let tabs = widgets::segments(cx).children(tab_modes.into_iter().filter_map(|mode| {
+            let visible = mode != Mode::Once || offers_once || draft.mode == Mode::Once;
+            let view = view.clone();
+            visible.then(|| {
+                segment(
                     ("scheduled-task-mode", mode as usize),
                     mode_label(mode),
                     draft.mode == mode,
-                    enabled,
-                    move |this, window, cx| this.set_mode(mode, window, cx),
+                    move |_, window, cx| {
+                        view.update(cx, |this, cx| this.set_mode(mode, window, cx))
+                    },
                     cx,
                 )
-            }));
-        let mut schedule = v_flex().gap_3().child(tabs);
+            })
+        }));
+        let mut schedule = v_flex().gap_3();
+        if legacy_interval {
+            schedule = schedule.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("This task uses a legacy interval below one minute. Saving updates it to at least one minute."),
+            );
+        }
+        schedule = schedule.child(
+            h_flex()
+                .flex_wrap()
+                .items_center()
+                .justify_between()
+                .gap_2()
+                .child(div().text_size(px(14.)).child("Schedule"))
+                .child(tabs),
+        );
+        let inline = |label: &'static str| {
+            div()
+                .text_size(px(14.))
+                .flex_shrink_0()
+                .child(label)
+                .into_any_element()
+        };
+        let small = |text: String| {
+            div()
+                .text_xs()
+                .flex_shrink_0()
+                .text_color(theme.muted_foreground)
+                .child(text)
+                .into_any_element()
+        };
         schedule = match draft.mode {
-            Mode::Fixed => schedule
-                .child(h_flex().gap_1().flex_wrap().children(DAYS.into_iter().map(
-                    |(day, label)| {
-                        Self::chip(
-                            view,
+            Mode::Fixed => {
+                let toggles: Vec<_> = DAYS
+                    .into_iter()
+                    .map(|(day, label)| {
+                        let view = view.clone();
+                        (
                             ("scheduled-task-day", day as usize),
                             label,
                             draft.weekdays.contains(&day),
-                            true,
-                            move |this, _, cx| {
-                                this.edit(cx, |editor| {
-                                    let days = &mut editor.draft.weekdays;
-                                    if days.contains(&day) {
-                                        if days.len() > 1 {
-                                            days.remove(&day);
+                            Rc::new(move |_: &mut Window, cx: &mut App| {
+                                view.update(cx, |this, cx| {
+                                    this.edit(cx, |editor| {
+                                        let days = &mut editor.draft.weekdays;
+                                        if days.contains(&day) {
+                                            if days.len() > 1 {
+                                                days.remove(&day);
+                                            }
+                                        } else {
+                                            days.insert(day);
                                         }
-                                    } else {
-                                        days.insert(day);
-                                    }
+                                    })
                                 })
-                            },
-                            cx,
+                            }) as Rc<dyn Fn(&mut Window, &mut App)>,
                         )
-                    },
-                )))
-                .child(labeled(
-                    "Time (24-hour, local)",
-                    field(&self.inputs.time, false, window, cx),
-                )),
-            Mode::Once => schedule
-                .child(labeled(
-                    "Run at (local time)",
-                    field(&self.inputs.run_at, false, window, cx),
-                ))
-                .child(note(
-                    "Format YYYY-MM-DDTHH:MM, for example 2026-12-01T09:00. The task runs once.",
-                    cx,
-                )),
-            Mode::Interval => schedule
-                .child(labeled(
-                    "Every (minutes)",
-                    field(&self.inputs.interval, false, window, cx),
-                ))
-                .child(note(
-                    "Intervals shorter than a minute from older tasks keep running until you save a new one.",
-                    cx,
-                )),
+                    })
+                    .collect();
+                schedule.child(
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(inline("Run at"))
+                                .child(
+                                    div()
+                                        .w(px(128.))
+                                        .child(field(&self.inputs.time, false, window, cx)),
+                                )
+                                .child(small(self.zone.name().to_owned()))
+                                .child(small("on".to_owned())),
+                        )
+                        .child(weekday_group(toggles, cx)),
+                )
+            }
+            Mode::Once => schedule.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(inline("Run on"))
+                    .child(
+                        div()
+                            .w(px(224.))
+                            .child(field(&self.inputs.run_at, false, window, cx)),
+                    ),
+            ),
+            Mode::Interval => schedule.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(inline("Run every"))
+                    .child(
+                        div()
+                            .w(px(96.))
+                            .child(field(&self.inputs.interval, false, window, cx)),
+                    )
+                    .child(small("minutes".to_owned())),
+            ),
             Mode::Webhook => schedule.child(self.webhook_fields(
                 view,
                 &draft,
                 webhook_url,
-                rotate_confirm,
-                rotating,
+                (rotate_confirm, rotating, copied),
                 has_secret,
                 menu,
                 window,
                 cx,
             )),
         };
-        out.push(labeled("Schedule", schedule).into_any_element());
+        out.push(schedule.into_any_element());
 
-        out.push(
-            v_flex()
-                .gap_1()
-                .child(Self::switch_row(
-                    view,
-                    "scheduled-task-draft-enabled",
-                    "Enabled",
-                    draft.enabled,
-                    |editor| editor.draft.enabled = !editor.draft.enabled,
-                    window,
-                    cx,
-                ))
-                .child(note("Disabled tasks stay saved but do not run.", cx))
-                .into_any_element(),
-        );
+        out.push(switch_row_of(
+            "Enabled",
+            "Disabled tasks stay saved but do not run.",
+            "scheduled-task-draft-enabled",
+            draft.enabled,
+            Self::toggle_with(view, |editor| {
+                editor.draft.enabled = !editor.draft.enabled
+            }),
+            window,
+            cx,
+        ));
         out
     }
 
-    fn model_field(
-        &self,
+    fn toggle_with(
         view: &Entity<Self>,
-        draft: &Draft,
-        environment: &str,
-        menu: Option<Menu>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if environment != PRIMARY {
-            return v_flex()
-                .gap_2()
-                .child(labeled(
-                    "Model",
-                    field(&self.inputs.model, false, window, cx),
-                ))
-                .child(note(
-                    "Enter the provider instance and model as instanceId:model.",
-                    cx,
-                ))
-                .into_any_element();
-        }
-        let options = self.model_options(draft, environment);
-        let current = self.selection(draft, environment);
-        let label = options
-            .iter()
-            .find(|(_, model)| Some(model) == current.as_ref())
-            .map(|(label, _)| label.clone())
-            .or_else(|| current.as_ref().map(|(i, m)| format!("{i} / {m}")))
-            .unwrap_or_else(|| "No model available".to_owned());
-        let selected = options
-            .iter()
-            .position(|(_, model)| Some(model) == current.as_ref());
-        let labels: Vec<String> = options.iter().map(|(l, _)| l.clone()).collect();
-        let models: Vec<Model> = options.into_iter().map(|(_, m)| m).collect();
-        labeled(
-            "Model",
-            Self::select(
-                view,
-                "scheduled-task-model",
-                Menu::Model,
-                menu == Some(Menu::Model),
-                false,
-                label,
-                labels,
-                selected,
-                Rc::new(move |this, index, _, cx| {
-                    if let Some(model) = models.get(index).cloned() {
-                        this.edit(cx, |editor| editor.draft.model = Some(model));
-                    }
-                }),
-                cx,
-            ),
-        )
-        .into_any_element()
+        apply: impl Fn(&mut Editor) + 'static,
+    ) -> super::super::components::Toggle {
+        let view = view.clone();
+        Rc::new(move |_, cx| view.update(cx, |this, cx| this.edit(cx, &apply)))
     }
 
     fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
@@ -1130,20 +1083,28 @@ impl ScheduledTasksPanel {
         view: &Entity<Self>,
         draft: &Draft,
         url: Option<String>,
-        rotate_confirm: bool,
-        rotating: bool,
+        (rotate_confirm, rotating, copied): (bool, bool, bool),
         has_secret: bool,
         menu: Option<Menu>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let theme = Tokens::of(cx);
-        let mut column = v_flex().gap_3();
+        let mut column = v_flex().gap_4();
         column = column.child(match url {
-            None => note("The URL appears after you save.", cx).into_any_element(),
+            None => div()
+                .text_sm()
+                .text_color(Tokens::of(cx).muted_foreground)
+                .child("The URL appears after you save.")
+                .into_any_element(),
             Some(url) => {
-                let (copy_url, rotate_view, confirm_view, cancel_view) =
-                    (url.clone(), view.clone(), view.clone(), view.clone());
+                set_text(&self.inputs.webhook_url, &url, window, cx);
+                let (copy_url, copy_view, rotate_view, confirm_view, cancel_view) = (
+                    url.clone(),
+                    view.clone(),
+                    view.clone(),
+                    view.clone(),
+                    view.clone(),
+                );
                 let actions = if rotate_confirm {
                     h_flex()
                         .gap_2()
@@ -1171,21 +1132,24 @@ impl ScheduledTasksPanel {
                                     })
                                 }),
                         )
+                        .into_any_element()
                 } else {
                     h_flex()
                         .gap_2()
                         .child(
                             button("scheduled-task-copy-url", Variant::Outline, true, cx)
-                                .child("Copy")
+                                .child(Icon::new(Icons::Copy).size(px(14.)))
+                                .child(if copied { "Copied" } else { "Copy" })
                                 .on_click(move |_, _, cx| {
                                     cx.write_to_clipboard(ClipboardItem::new_string(
                                         copy_url.clone(),
-                                    ))
+                                    ));
+                                    copy_view.update(cx, |this, cx| this.mark_copied(cx));
                                 }),
                         )
                         .child(
                             button("scheduled-task-rotate", Variant::Outline, !rotating, cx)
-                                .child(if rotating { "Rotating" } else { "Rotate" })
+                                .child("Rotate")
                                 .on_click(move |_, _, cx| {
                                     rotate_view.update(cx, |this, cx| {
                                         if let Some(editor) = this.editor.as_mut() {
@@ -1195,206 +1159,312 @@ impl ScheduledTasksPanel {
                                     })
                                 }),
                         )
+                        .into_any_element()
                 };
-                v_flex()
+                h_flex()
                     .gap_2()
+                    .items_center()
                     .child(
                         div()
-                            .w_full()
-                            .px(px(11.))
-                            .py(px(6.))
-                            .rounded(px(8.))
-                            .border_1()
-                            .border_color(theme.input)
-                            .text_size(px(13.))
-                            .text_color(theme.muted_foreground)
-                            .child(url),
+                            .flex_1()
+                            .min_w_0()
+                            .child(field(&self.inputs.webhook_url, true, window, cx)),
                     )
                     .child(actions)
                     .into_any_element()
             }
         });
         column = column.child(note(
-            "Use {{body}}, {{body.path}}, {{headers.name}} and {{query.name}} in the prompt to include request data.",
+            "Each request runs the prompt. Use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}} or {{request}} in the prompt; only what it names reaches the agent.",
             cx,
         ));
-        column = column.child(labeled(
-            "Skip requests older than (minutes)",
+        column = column.child(field_of(
+            "Skip requests older than",
+            Some("minutes, optional"),
             field(&self.inputs.age, false, window, cx),
+            cx,
         ));
 
+        let theme = Tokens::of(cx);
         let mut filters = v_flex().gap_2();
         for (index, filter) in draft.filters.iter().enumerate() {
             let Some((path, value)) = self.inputs.filters.get(&filter.id).cloned() else {
                 continue;
             };
             let id = filter.id;
-            let ops: Vec<String> = FilterOp::ALL
-                .iter()
-                .map(|op| op.label().to_owned())
-                .collect();
+            let ops: Vec<Opt> = FilterOp::ALL.iter().map(|op| Opt::plain(op.label())).collect();
             let remove = view.clone();
+            value.update(cx, |state, cx| {
+                let placeholder = if filter.op == FilterOp::In {
+                    "opened, reopened"
+                } else {
+                    "opened"
+                };
+                state.set_placeholder(placeholder, window, cx);
+            });
             filters = filters.child(
-                h_flex()
+                v_flex()
                     .gap_2()
-                    .items_center()
-                    .child(div().w(px(150.)).child(field(&path, false, window, cx)))
-                    .child(div().w(px(120.)).child(Self::select(
-                        view,
-                        format!("scheduled-task-filter-op-{index}"),
-                        Menu::Op(id),
-                        menu == Some(Menu::Op(id)),
-                        false,
-                        filter.op.label().to_owned(),
-                        ops,
-                        FilterOp::ALL.iter().position(|op| *op == filter.op),
-                        Rc::new(move |this, pick, _, cx| {
-                            if let Some(op) = FilterOp::ALL.get(pick).copied() {
-                                this.edit(cx, |editor| {
-                                    if let Some(f) =
-                                        editor.draft.filters.iter_mut().find(|f| f.id == id)
-                                    {
-                                        f.op = op;
-                                    }
-                                });
-                            }
-                        }),
-                        cx,
-                    )))
-                    .child(div().flex_1().child(field(
-                        &value,
-                        filter.op == FilterOp::Exists,
-                        window,
-                        cx,
-                    )))
+                    .pt_1()
                     .child(
-                        icon_button(
-                            ("scheduled-task-filter-remove", index),
-                            Variant::GhostMuted,
-                            true,
-                            cx,
-                        )
-                        .child("x")
-                        .on_click(move |_, _, cx| {
-                            remove.update(cx, |this, cx| {
-                                this.collect(cx);
-                                this.inputs.filters.remove(&id);
-                                this.edit(cx, |editor| {
-                                    editor.draft.filters =
-                                        ed::remove_filter_draft(&editor.draft.filters, id);
-                                });
-                            })
-                        }),
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().flex_1().min_w_0().child(field(&path, false, window, cx)))
+                            .child(
+                                icon_button(
+                                    ("scheduled-task-filter-remove", index),
+                                    Variant::GhostMuted,
+                                    true,
+                                    cx,
+                                )
+                                .child(Icon::new(Icons::Trash).size(px(14.)))
+                                .on_click(move |_, _, cx| {
+                                    remove.update(cx, |this, cx| {
+                                        this.collect(cx);
+                                        this.inputs.filters.remove(&id);
+                                        this.edit(cx, |editor| {
+                                            editor.draft.filters = ed::remove_filter_draft(
+                                                &editor.draft.filters,
+                                                id,
+                                            );
+                                        });
+                                    })
+                                }),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(div().w(px(176.)).flex_shrink_0().child(Self::select(
+                                view,
+                                Sel {
+                                    id: format!("scheduled-task-filter-op-{index}").into(),
+                                    menu: Menu::Op(id),
+                                    open: menu == Some(Menu::Op(id)),
+                                    disabled: false,
+                                    lead: None,
+                                    current: filter.op.label().to_owned(),
+                                    placeholder: false,
+                                    selected: FilterOp::ALL.iter().position(|op| *op == filter.op),
+                                    options: ops,
+                                    width: 176.,
+                                },
+                                Rc::new(move |this, pick, _, cx| {
+                                    if let Some(op) = FilterOp::ALL.get(pick).copied() {
+                                        this.edit(cx, |editor| {
+                                            if let Some(f) = editor
+                                                .draft
+                                                .filters
+                                                .iter_mut()
+                                                .find(|f| f.id == id)
+                                            {
+                                                f.op = op;
+                                            }
+                                        });
+                                    }
+                                }),
+                                cx,
+                            )))
+                            .when(filter.op != FilterOp::Exists, |row| {
+                                row.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(field(&value, false, window, cx)),
+                                )
+                            }),
                     ),
             );
         }
         let add = view.clone();
         let can_add = draft.filters.len() < ed::MAX_WEBHOOK_FILTERS;
-        column = column.child(labeled(
-            "Filters",
+        column = column.child(
             v_flex()
                 .gap_2()
-                .child(filters)
                 .child(
-                    button("scheduled-task-filter-add", Variant::Outline, can_add, cx)
-                        .child("Add filter")
-                        .on_click(move |_, window, cx| {
-                            add.update(cx, |this, cx| {
-                                this.collect(cx);
-                                let filter = ed::empty_filter_draft();
-                                this.add_filter_inputs(filter.id, "", "", window, cx);
-                                this.edit(cx, |editor| editor.draft.filters.push(filter));
-                            })
-                        }),
+                    h_flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .gap_1()
+                                .child(div().text_size(px(14.)).child("Filters"))
+                                .child(
+                                    div()
+                                        .text_size(px(14.))
+                                        .text_color(theme.muted_foreground)
+                                        .child("Run only when every filter matches. Other requests are logged as filtered. Separate \u{201c}is one of\u{201d} values with commas; a value can't contain a comma."),
+                                ),
+                        )
+                        .child(
+                            button("scheduled-task-filter-add", Variant::Outline, can_add, cx)
+                                .child(Icon::new(Icons::Plus).size(px(14.)))
+                                .child("Add filter")
+                                .on_click(move |_, window, cx| {
+                                    add.update(cx, |this, cx| {
+                                        if !can_add {
+                                            return;
+                                        }
+                                        this.collect(cx);
+                                        let filter = ed::empty_filter_draft();
+                                        this.add_filter_inputs(filter.id, "", "", window, cx);
+                                        this.edit(cx, |editor| editor.draft.filters.push(filter));
+                                    })
+                                }),
+                        ),
                 )
-                .child(note(
-                    "Only requests matching every filter run the task. Paths start with body, headers or query. For In, separate values with commas.",
-                    cx,
-                )),
-        ));
+                .child(filters),
+        );
 
         column = column
-            .child(labeled(
+            .child(field_of(
                 "Duplicate request key",
+                Some("template, optional"),
                 field(&self.inputs.replay, false, window, cx),
+                cx,
             ))
             .child(note(
                 "Requests with the same key run only once within 7 days.",
                 cx,
             ))
-            .child(labeled(
+            .child(field_of(
                 "Coalesce key",
+                Some("template, optional"),
                 field(&self.inputs.coalesce_key, false, window, cx),
+                cx,
             ))
-            .child(labeled(
-                "Coalesce window (seconds)",
+            .child(field_of(
+                "Coalesce window",
+                Some("seconds, 10\u{2013}3600"),
                 field(&self.inputs.coalesce_window, false, window, cx),
+                cx,
             ))
             .child(note(
-                "Requests sharing a coalesce key within the window run as one task.",
+                "Coalescing runs the latest payload once when the window from the first delivery closes. Empty keys run normally.",
                 cx,
             ));
 
-        column = column.child(Self::switch_row(
-            view,
-            "scheduled-task-signature",
+        column = column.child(switch_row_of(
             "Require signature",
+            "Reject requests without a valid HMAC-SHA256 signature of the body.",
+            "scheduled-task-signature",
             draft.signature_enabled,
-            |editor| editor.draft.signature_enabled = !editor.draft.signature_enabled,
+            Self::toggle_with(view, |editor| {
+                editor.draft.signature_enabled = !editor.draft.signature_enabled
+            }),
             window,
             cx,
         ));
         if draft.signature_enabled {
             let encodings = [Encoding::Hex, Encoding::Base64];
-            let secret_note = if has_secret {
-                "Leave the secret empty to keep the saved one."
-            } else {
-                "Requests are verified with this shared secret."
+            self.inputs.secret.update(cx, |state, cx| {
+                state.set_placeholder(
+                    if has_secret {
+                        "Unchanged"
+                    } else {
+                        "Shared secret"
+                    },
+                    window,
+                    cx,
+                );
+            });
+            let encoding_label = |encoding: Encoding| match encoding {
+                Encoding::Hex => "hex",
+                Encoding::Base64 => "base64",
             };
-            column = column
-                .child(labeled(
-                    "Header",
-                    field(&self.inputs.header, false, window, cx),
-                ))
-                .child(labeled(
-                    "Prefix",
-                    field(&self.inputs.prefix, false, window, cx),
-                ))
-                .child(labeled(
-                    "Encoding",
-                    Self::select(
-                        view,
-                        "scheduled-task-encoding",
-                        Menu::Encoding,
-                        menu == Some(Menu::Encoding),
-                        false,
-                        match draft.signature_encoding {
-                            Encoding::Hex => "Hex",
-                            Encoding::Base64 => "Base64",
-                        }
-                        .to_owned(),
-                        vec!["Hex".to_owned(), "Base64".to_owned()],
-                        Some(
-                            encodings
-                                .iter()
-                                .position(|e| *e == draft.signature_encoding)
-                                .unwrap_or(0),
-                        ),
-                        Rc::new(move |this, index, _, cx| {
-                            if let Some(encoding) = encodings.get(index).copied() {
-                                this.edit(cx, |editor| editor.draft.signature_encoding = encoding);
-                            }
-                        }),
-                        cx,
+            let grid_cell = |child: gpui::Div| div().flex_1().min_w_0().child(child);
+            column = column.child(
+                v_flex()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .items_start()
+                            .child(grid_cell(field_of(
+                                "Header",
+                                None,
+                                field(&self.inputs.header, false, window, cx),
+                                cx,
+                            )))
+                            .child(grid_cell(field_of(
+                                "Prefix",
+                                None,
+                                field(&self.inputs.prefix, false, window, cx),
+                                cx,
+                            ))),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .items_start()
+                            .child(grid_cell(field_of(
+                                "Encoding",
+                                None,
+                                Self::select(
+                                    view,
+                                    Sel {
+                                        id: "scheduled-task-encoding".into(),
+                                        menu: Menu::Encoding,
+                                        open: menu == Some(Menu::Encoding),
+                                        disabled: false,
+                                        lead: None,
+                                        current: encoding_label(draft.signature_encoding)
+                                            .to_owned(),
+                                        placeholder: false,
+                                        selected: encodings
+                                            .iter()
+                                            .position(|e| *e == draft.signature_encoding),
+                                        options: encodings
+                                            .iter()
+                                            .map(|e| Opt::plain(encoding_label(*e)))
+                                            .collect(),
+                                        width: HALF_WIDTH,
+                                    },
+                                    Rc::new(move |this, index, _, cx| {
+                                        if let Some(encoding) = encodings.get(index).copied() {
+                                            this.edit(cx, |editor| {
+                                                editor.draft.signature_encoding = encoding
+                                            });
+                                        }
+                                    }),
+                                    cx,
+                                ),
+                                cx,
+                            )))
+                            .child(grid_cell(field_of(
+                                "Secret",
+                                None,
+                                field(&self.inputs.secret, false, window, cx),
+                                cx,
+                            ))),
                     ),
-                ))
-                .child(labeled(
-                    "Secret",
-                    field(&self.inputs.secret, false, window, cx),
-                ))
-                .child(note(secret_note, cx));
+            );
         }
         column
+    }
+
+    fn mark_copied(&mut self, cx: &mut Context<Self>) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.copied = true;
+        }
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            this.update(cx, |this, cx| {
+                if let Some(editor) = this.editor.as_mut() {
+                    editor.copied = false;
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The editor dialog over a backdrop.
@@ -1406,6 +1476,8 @@ impl ScheduledTasksPanel {
         let editor = self.editor.as_ref()?;
         let editing = editor.draft.editing_id.is_some();
         let saving = editor.saving;
+        let readiness = self.readiness(editor, cx);
+        let can_save = !saving && readiness.connected && readiness.loaded && !readiness.missing;
         let view = cx.entity();
         let body = self.fields(&view, window, cx);
         let (cancel, save, dismiss) = (view.clone(), view.clone(), view.clone());
@@ -1419,17 +1491,16 @@ impl ScheduledTasksPanel {
             .child("Cancel")
             .on_click(move |_, _, cx| {
                 cancel.update(cx, |this, cx| {
-                    this.editor = None;
-                    cx.notify();
+                    if this.editor.as_ref().is_some_and(|e| !e.saving) {
+                        this.editor = None;
+                        this.pickers.reset();
+                        cx.notify();
+                    }
                 })
             })
             .into_any_element(),
-            button("scheduled-task-editor-save", Variant::Primary, !saving, cx)
-                .child(match (saving, editing) {
-                    (true, _) => "Saving",
-                    (false, true) => "Save task",
-                    (false, false) => "Create task",
-                })
+            button("scheduled-task-editor-save", Variant::Primary, can_save, cx)
+                .child(if editing { "Save task" } else { "Create task" })
                 .on_click(move |_, _, cx| save.update(cx, |this, cx| this.save(cx)))
                 .into_any_element(),
         ];
@@ -1444,6 +1515,7 @@ impl ScheduledTasksPanel {
                 dismiss.update(cx, |this, cx| {
                     if this.editor.as_ref().is_some_and(|e| !e.saving) {
                         this.editor = None;
+                        this.pickers.reset();
                         cx.notify();
                     }
                 })
@@ -1452,3 +1524,4 @@ impl ScheduledTasksPanel {
         ))
     }
 }
+

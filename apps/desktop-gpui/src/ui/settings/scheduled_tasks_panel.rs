@@ -69,6 +69,12 @@ enum Pending {
     Watch(String),
     Save,
     Rotate,
+    /// A page of the base branch picker's refs.
+    Refs { query: String, append: bool },
+    /// The draft's base ref looked up on its own, for the button's remote label.
+    BaseLookup { name: String },
+    /// A star, with the favorites to put back if the server refuses it.
+    Favorite(Vec<(String, String)>),
     Mutation {
         environment: String,
         id: String,
@@ -91,6 +97,7 @@ pub struct ScheduledTasksPanel {
     menu: Option<Key>,
     editor: Option<editor::Editor>,
     inputs: editor::Inputs,
+    pickers: editor::Pickers,
     data: EditorData,
     confirm: Option<Key>,
     error: Option<String>,
@@ -124,6 +131,7 @@ impl ScheduledTasksPanel {
             menu: None,
             editor: None,
             inputs: editor::Inputs::new(window, cx),
+            pickers: editor::Pickers::new(window, cx),
             data: EditorData::default(),
             confirm: None,
             error: None,
@@ -154,6 +162,7 @@ impl ScheduledTasksPanel {
         self.busy.clear();
         self.menu = None;
         self.editor = None;
+        self.pickers.reset();
         self.confirm = None;
         self.error = None;
         cx.notify();
@@ -246,7 +255,15 @@ impl ScheduledTasksPanel {
         let Some(pending) = self.pending.get(&token) else {
             return;
         };
+        if matches!(
+            pending,
+            Pending::Refs { .. } | Pending::BaseLookup { .. } | Pending::Favorite(_)
+        ) {
+            self.on_picker_call(token, event, cx);
+            return;
+        }
         match pending {
+            Pending::Refs { .. } | Pending::BaseLookup { .. } | Pending::Favorite(_) => {}
             Pending::Save | Pending::Rotate => {
                 let save = matches!(pending, Pending::Save);
                 let environment = self.editor.as_ref().map(|e| e.environment.clone());

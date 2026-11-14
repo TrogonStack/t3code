@@ -810,6 +810,9 @@ pub struct EditorData {
     pub models: Vec<ModelGroup>,
     pub default_model: Option<Model>,
     pub threads: Vec<ThreadOption>,
+    /// The model popover's instances, as the composer lists them.
+    pub picker: Vec<crate::providers::PickerInstance>,
+    pub favorites: Vec<Model>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -818,6 +821,8 @@ pub struct ProjectOption {
     pub title: String,
     pub pinned: bool,
     pub archived: bool,
+    /// The project's checkout, which the base branch picker lists refs of.
+    pub root: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -851,6 +856,112 @@ impl EditorData {
                     .collect(),
             })
             .collect()
+    }
+}
+
+pub const NEW_THREAD: &str = "new_thread";
+pub const CONTINUE_THREAD: &str = "continue";
+pub const FRESH_SESSION: &str = "fresh_session";
+pub const THREAD_MODES: [&str; 3] = [NEW_THREAD, CONTINUE_THREAD, FRESH_SESSION];
+
+/// `THREAD_MODE_LABELS`; a mode this build does not know shows as it came.
+pub fn thread_mode_label(mode: &str) -> String {
+    match mode {
+        NEW_THREAD => "New thread each run".to_owned(),
+        CONTINUE_THREAD => "One thread, continuing the conversation".to_owned(),
+        FRESH_SESSION => "One thread, fresh session each run".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// The draft's thread mode; the web's `EMPTY_DRAFT` starts at `new_thread`.
+pub fn thread_mode(draft: &Draft) -> String {
+    draft
+        .thread_mode
+        .as_ref()
+        .and_then(Value::as_str)
+        .unwrap_or(NEW_THREAD)
+        .to_owned()
+}
+
+/// `unbindDraftFromThread`: a task that left its thread cannot run in the project root.
+pub fn unbind_from_thread(draft: &mut Draft) {
+    draft.thread_id.clear();
+    if draft.workspace == Workspace::Root {
+        draft.workspace = Workspace::Worktree;
+        draft.start_from_origin = true;
+    }
+}
+
+/// `moveDraftToThread`: a new-thread task that picks a thread continues it.
+pub fn move_to_thread(draft: &mut Draft, thread_id: &str, project_id: &str) {
+    draft.thread_id = thread_id.to_owned();
+    draft.project_id = project_id.to_owned();
+    if thread_mode(draft) == NEW_THREAD {
+        draft.thread_mode = Some(json!(CONTINUE_THREAD));
+    }
+}
+
+/// `changeDraftProject`.
+pub fn change_project(draft: &mut Draft, project_id: &str) {
+    unbind_from_thread(draft);
+    draft.project_id = project_id.to_owned();
+}
+
+/// The destination select's change: back to a new thread each run also drops the thread.
+pub fn set_thread_mode(draft: &mut Draft, mode: &str) {
+    if mode == NEW_THREAD {
+        unbind_from_thread(draft);
+    }
+    draft.thread_mode = Some(json!(mode));
+}
+
+/// The destination's help text, by mode and whether a thread is chosen.
+pub fn destination_detail(mode: &str, bound: bool) -> &'static str {
+    match (mode, bound) {
+        (NEW_THREAD, _) => "Each run starts a new thread with the workspace and model below.",
+        (CONTINUE_THREAD, false) => {
+            "The first run starts a thread with the workspace and model below. Later runs continue that conversation."
+        }
+        (_, false) => {
+            "The first run starts a thread with the workspace and model below. Later runs post there, each in a fresh session without earlier runs' context."
+        }
+        (CONTINUE_THREAD, true) => {
+            "Each run continues this conversation, in its workspace and with its current model."
+        }
+        (_, true) => {
+            "Each run starts a fresh session in this thread, without earlier runs' context."
+        }
+    }
+}
+
+/// `scheduledTaskDestinationThreads`: the project's other threads matching the query.
+pub fn destination_threads<'a>(
+    threads: &'a [ThreadOption],
+    project_id: &str,
+    current: &str,
+    query: &str,
+) -> Vec<&'a ThreadOption> {
+    let search = query.trim().to_lowercase();
+    threads
+        .iter()
+        .filter(|thread| {
+            thread.project_id == project_id
+                && thread.id != current
+                && thread.title.to_lowercase().contains(&search)
+        })
+        .collect()
+}
+
+/// `resolveBranchTriggerLabel`: what the base branch button reads.
+pub fn branch_trigger_label(base_ref: &str, start_from_origin: bool, is_remote: bool) -> String {
+    let name = base_ref.trim();
+    if name.is_empty() {
+        "Select ref".to_owned()
+    } else if start_from_origin && !is_remote {
+        format!("From {name} (remote)")
+    } else {
+        format!("From {name}")
     }
 }
 
@@ -1367,5 +1478,60 @@ mod tests {
         assert!(build_input(&draft, &stored).is_ok());
         draft.filters = vec![filter("nope", FilterOp::Equals, "x")];
         assert_eq!(title(&draft, &stored), "Invalid filter");
+    }
+    #[test]
+    fn destination_helpers_follow_the_web_draft_logic() {
+        let mut draft = Draft {
+            workspace: Workspace::Root,
+            thread_id: "t1".to_owned(),
+            ..Draft::default()
+        };
+        move_to_thread(&mut draft, "t2", "p2");
+        assert_eq!(
+            (draft.thread_id.as_str(), draft.project_id.as_str()),
+            ("t2", "p2")
+        );
+        assert_eq!(thread_mode(&draft), CONTINUE_THREAD);
+        set_thread_mode(&mut draft, FRESH_SESSION);
+        move_to_thread(&mut draft, "t3", "p2");
+        assert_eq!(thread_mode(&draft), FRESH_SESSION);
+        change_project(&mut draft, "p3");
+        assert_eq!(draft.thread_id, "");
+        assert_eq!(draft.workspace, Workspace::Worktree);
+        assert!(draft.start_from_origin);
+        set_thread_mode(&mut draft, NEW_THREAD);
+        assert_eq!(draft.thread_mode, Some(json!(NEW_THREAD)));
+        assert_eq!(thread_mode(&Draft::default()), NEW_THREAD);
+    }
+
+    #[test]
+    fn destination_threads_filter_by_project_current_and_title() {
+        let thread = |id: &str, project: &str, title: &str| ThreadOption {
+            id: id.to_owned(),
+            project_id: project.to_owned(),
+            title: title.to_owned(),
+        };
+        let all = [
+            thread("a", "p", "Fix login"),
+            thread("b", "p", "Deploy"),
+            thread("c", "q", "Fix login"),
+        ];
+        let ids = |found: Vec<&ThreadOption>| -> Vec<String> {
+            found.into_iter().map(|t| t.id.clone()).collect()
+        };
+        assert_eq!(ids(destination_threads(&all, "p", "", "")), ["a", "b"]);
+        assert_eq!(ids(destination_threads(&all, "p", "a", "")), ["b"]);
+        assert_eq!(ids(destination_threads(&all, "p", "", " LOGIN ")), ["a"]);
+    }
+
+    #[test]
+    fn the_branch_button_reads_like_the_web() {
+        assert_eq!(branch_trigger_label(" ", true, false), "Select ref");
+        assert_eq!(
+            branch_trigger_label("main", true, false),
+            "From main (remote)"
+        );
+        assert_eq!(branch_trigger_label("main", true, true), "From main");
+        assert_eq!(branch_trigger_label("main", false, false), "From main");
     }
 }

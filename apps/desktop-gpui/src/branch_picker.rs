@@ -168,6 +168,7 @@ impl BranchPicker {
                     }
                 });
             }),
+            footer: None,
         }
     }
 

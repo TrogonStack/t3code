@@ -37,7 +37,11 @@ pub struct RefMenu {
     pub on_create: CreateHandler,
     /// The list scrolled near its end with more refs to load.
     pub on_more: Rc<dyn Fn(&mut App)>,
+    /// A control under the list, as the worktree base picker's "Start from remote" switch.
+    pub footer: Option<Footer>,
 }
+
+pub type Footer = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 impl RefMenu {
     pub fn render(&self, window: &mut Window, cx: &mut App) -> AnyElement {
@@ -178,6 +182,7 @@ impl RefMenu {
                         )
                     }),
             )
+            .children(self.footer.as_ref().map(|footer| footer(window, cx)))
             .children(footer.map(|text| {
                 div()
                     .px_3()

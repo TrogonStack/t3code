@@ -923,6 +923,7 @@ impl DetailsCard {
                     })
                 }
             }),
+            footer: None,
         };
         Popover::new("ref-picker")
             .anchor(Anchor::TopRight)
