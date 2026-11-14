@@ -22,7 +22,7 @@ pub fn blurred_text(text: &str, color: Hsla, hover: Hsla) -> Div {
 /// The CSS blur spreads ink well past the glyph and thins it out.
 fn smudge(color: Hsla) -> Vec<BoxShadow> {
     vec![BoxShadow {
-        color: color.opacity(0.45),
+        color: color.opacity(0.25),
         offset: point(px(0.), px(0.)),
         blur_radius: px(7.),
         spread_radius: px(1.5),
@@ -44,10 +44,10 @@ fn glyph(ch: char, color: Hsla, hover: Hsla) -> impl IntoElement {
                 .left(relative(inset))
                 .right(relative(inset))
                 .rounded_full()
-                .bg(color.opacity(0.12))
+                .bg(color.opacity(0.05))
                 .shadow(smudge(color))
                 .group_hover(GROUP, move |style| {
-                    style.bg(hover.opacity(0.12)).shadow(smudge(hover))
+                    style.bg(hover.opacity(0.05)).shadow(smudge(hover))
                 }),
         )
 }
