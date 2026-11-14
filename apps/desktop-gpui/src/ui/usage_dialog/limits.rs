@@ -1296,9 +1296,13 @@ impl Popover {
             .filter(|email| !email.is_empty());
         let email_line = email.map(|email| {
             let shown = if self.reveal {
-                email.to_owned()
+                email.to_owned().into_any_element()
             } else {
-                redacted_placeholder(email)
+                crate::ui::blurred_text::blurred_text(
+                    &crate::settings_source_control::redacted(email),
+                    muted,
+                )
+                .into_any_element()
             };
             let weak = self.weak.clone();
             div()
@@ -1310,7 +1314,6 @@ impl Popover {
                 .text_size(px(11.))
                 .text_color(muted)
                 .hover(move |style| style.text_color(foreground))
-                .when(!self.reveal, |text| text.opacity(0.6))
                 .tooltip(tooltip(if self.reveal {
                     "Click to hide email"
                 } else {
@@ -1439,32 +1442,6 @@ impl Popover {
             .children(credit_section)
             .into_any_element()
     }
-}
-
-/// `redactedPlaceholder`: a stable stand-in of the same shape.
-fn redacted_placeholder(value: &str) -> String {
-    const ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-    let mut state: u32 = 0x811c_9dc5;
-    for unit in value.encode_utf16() {
-        state ^= u32::from(unit);
-        state = state.wrapping_mul(0x0100_0193);
-    }
-    let mut next = || {
-        state = (state ^ (state >> 13)).wrapping_mul(0x85eb_ca6b);
-        state = (state ^ (state >> 16)).wrapping_mul(0xc2b2_ae35);
-        let magnitude = (state as i32).unsigned_abs() as usize;
-        char::from(ALPHABET[magnitude % ALPHABET.len()])
-    };
-    value
-        .chars()
-        .map(|ch| {
-            if matches!(ch, '@' | '.' | '-' | '_') {
-                ch
-            } else {
-                next()
-            }
-        })
-        .collect()
 }
 
 fn inline_button(

@@ -466,13 +466,14 @@ impl SecretsPanel {
         let description = match (&provider.classified, provider.summary()) {
             (secrets::Classified::OnePassword { account }, _) => {
                 let shown = self.revealed.contains(&provider.id);
-                let (text, color) = if shown {
-                    (account.clone(), theme.muted_foreground)
+                let text = if shown {
+                    account.clone().into_any_element()
                 } else {
-                    (
-                        crate::settings_source_control::redacted(account),
-                        theme.muted_foreground.opacity(0.4),
+                    crate::ui::blurred_text::blurred_text(
+                        &crate::settings_source_control::redacted(account),
+                        theme.muted_foreground,
                     )
+                    .into_any_element()
                 };
                 let id = provider.id.clone();
                 h_flex()
@@ -488,7 +489,7 @@ impl SecretsPanel {
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(px(10.))
                             .line_height(px(15.))
-                            .text_color(color)
+                            .text_color(theme.muted_foreground)
                             .child(text)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.revealed.remove(&id) {

@@ -915,15 +915,7 @@ impl SourceControlPanel {
                             cx.notify();
                         })
                     })
-                    .child(hosts::redacted_login(
-                        &if shown {
-                            account.clone()
-                        } else {
-                            sc::redacted(account)
-                        },
-                        true,
-                        cx,
-                    ))
+                    .child(hosts::redacted_login(account, shown, cx))
                     .into_any_element()
             }
         }

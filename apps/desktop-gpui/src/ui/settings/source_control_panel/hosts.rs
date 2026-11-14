@@ -164,23 +164,23 @@ fn xs_button(
         .child(label)
 }
 
-/// `RedactedLogin`: the same letters for the same login, in mono at 10px. The web blurs them;
-/// without a blur the letters are dimmed, and nothing here can be selected.
+/// `RedactedLogin`: the login in mono at 10px, or its placeholder under the web's `blur-xs`.
 pub(super) fn redacted_login(account: &str, revealed: bool, cx: &App) -> gpui::Div {
     let theme = Tokens::of(cx);
-    let (text, color) = if revealed {
-        (account.to_owned(), theme.muted_foreground)
-    } else {
-        (sc::redacted(account), theme.muted_foreground.opacity(0.4))
-    };
-    div()
+    let login = div()
         .min_w_0()
-        .truncate()
         .font_family(cx.theme().mono_font_family.clone())
         .text_size(px(10.))
         .line_height(px(15.))
-        .text_color(color)
-        .child(text)
+        .text_color(theme.muted_foreground);
+    if revealed {
+        login.truncate().child(account.to_owned())
+    } else {
+        login.child(crate::ui::blurred_text::blurred_text(
+            &sc::redacted(account),
+            theme.muted_foreground,
+        ))
+    }
 }
 
 /// A secret's patch value as the server stores it: a typed literal reads back as the marker.

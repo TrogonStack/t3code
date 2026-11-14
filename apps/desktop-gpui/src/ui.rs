@@ -59,6 +59,7 @@ const TERMINAL_SIDEBAR_WIDTH: f32 = 144.;
 /// The drag handle on the terminal drawer's top edge.
 const TERMINAL_HANDLE_HEIGHT: f32 = 8.;
 mod add_to_machine;
+pub(crate) mod blurred_text;
 mod composer_menu;
 mod keymap;
 mod model_popover;
