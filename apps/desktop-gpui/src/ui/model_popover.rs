@@ -16,8 +16,26 @@ const RAIL_WIDTH: f32 = 44.;
 /// `COLUMN_ROW`'s `h-8`.
 const ROW_HEIGHT: f32 = 32.;
 
-pub(super) struct Panel {
-    pub view: Entity<MainView>,
+/// What the popover asks of whoever opened it: the composer, or a settings picker.
+pub(crate) enum Act {
+    Tab(Tab),
+    Older,
+    Favorite(String, String),
+    Pick(String, String),
+    Option(String, serde_json::Value),
+}
+
+pub(crate) type Host = std::rc::Rc<dyn Fn(Act, &mut Window, &mut App)>;
+
+/// The composer's footer: speed and permissions.
+pub(crate) struct Footer {
+    pub permissions: Entity<PermissionsPanel>,
+    pub open: bool,
+    pub mode: RuntimeMode,
+}
+
+pub(crate) struct Panel {
+    pub host: Host,
     pub search: Entity<InputState>,
     pub instances: Vec<PickerInstance>,
     pub trigger: Trigger,
@@ -26,9 +44,7 @@ pub(super) struct Panel {
     pub highlight: usize,
     pub focus: Focus,
     pub effort: usize,
-    pub permissions: Entity<PermissionsPanel>,
-    pub permissions_open: bool,
-    pub mode: RuntimeMode,
+    pub footer: Option<Footer>,
 }
 
 /// The tokens every part of the popover paints with.
@@ -106,7 +122,11 @@ impl Panel {
                     ))
                     .children(effort_column.then(|| self.effort_column(palette))),
             )
-            .child(self.footer(palette, cx))
+            .children(
+                self.footer
+                    .as_ref()
+                    .map(|footer| self.footer(footer, palette, cx)),
+            )
             .into_any_element()
     }
 
@@ -196,7 +216,7 @@ impl Panel {
         palette: Palette,
         icon: AnyElement,
     ) -> impl IntoElement {
-        let view = self.view.clone();
+        let host = self.host.clone();
         let current = active && !searching;
         let focused = current && self.focus == Focus::Sidebar;
         div()
@@ -230,11 +250,7 @@ impl Panel {
                 )
             })
             .when(usable, |item| {
-                item.on_click(move |_, window, cx| {
-                    view.update(cx, |this, cx| {
-                        this.picker_select_tab(tab.clone(), window, cx)
-                    });
-                })
+                item.on_click(move |_, window, cx| host(Act::Tab(tab.clone()), window, cx))
             })
     }
 
@@ -263,7 +279,7 @@ impl Panel {
             )
         });
         let toggle = listing.older.map(|expanded| {
-            let view = self.view.clone();
+            let host = self.host.clone();
             let highlighted = on_list && self.highlight == listing.rows.len();
             div()
                 .id("model-older")
@@ -282,9 +298,7 @@ impl Panel {
                     row.bg(palette.hover).text_color(palette.foreground)
                 })
                 .hover(move |style| style.bg(palette.hover).text_color(palette.foreground))
-                .on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.picker_toggle_older(cx));
-                })
+                .on_click(move |_, window, cx| host(Act::Older, window, cx))
                 .child(if expanded { "Show less" } else { "Show more" })
         });
         let empty = listing.rows.is_empty().then(|| {
@@ -367,13 +381,13 @@ impl Panel {
         let chosen =
             instance.instance_id == self.trigger.instance_id && model.slug == self.trigger.slug;
         let group: SharedString = format!("model-row-{index}").into();
-        let (view, id, slug) = (
-            self.view.clone(),
+        let (host, id, slug) = (
+            self.host.clone(),
             instance.instance_id.clone(),
             model.slug.clone(),
         );
         let star = {
-            let (view, id, slug) = (view.clone(), id.clone(), slug.clone());
+            let (host, id, slug) = (host.clone(), id.clone(), slug.clone());
             let favorite = model.favorite;
             // A starred model shows its star, except in the favorites tab where it is hover-only.
             let resting = favorite && self.tab != Tab::Favorites;
@@ -398,9 +412,9 @@ impl Panel {
                 })
                 .hover(move |style| style.bg(palette.accent).text_color(palette.foreground))
                 .tooltip(tooltip(tip))
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     cx.stop_propagation();
-                    view.update(cx, |this, cx| this.picker_toggle_favorite(&id, &slug, cx));
+                    host(Act::Favorite(id.clone(), slug.clone()), window, cx);
                 })
                 .child(
                     Icon::new(if favorite {
@@ -503,8 +517,8 @@ impl Panel {
                     })),
             )
             .when(usable, |row| {
-                row.on_click(move |_, _, cx| {
-                    view.update(cx, |this, cx| this.pick_model(&id, &slug, cx));
+                row.on_click(move |_, window, cx| {
+                    host(Act::Pick(id.clone(), slug.clone()), window, cx)
                 })
             })
     }
@@ -621,7 +635,7 @@ impl Panel {
         highlighted: bool,
         palette: Palette,
     ) -> impl IntoElement {
-        let (view, id, value) = (self.view.clone(), control.id.clone(), level.value.clone());
+        let (host, id, value) = (self.host.clone(), control.id.clone(), level.value.clone());
         h_flex()
             .id(("model-level", index))
             .h(px(ROW_HEIGHT))
@@ -638,11 +652,7 @@ impl Panel {
             .when_some(level.description.clone(), |row, tip| {
                 row.tooltip(tooltip(tip))
             })
-            .on_click(move |_, _, cx| {
-                view.update(cx, |this, cx| {
-                    this.picker_set_option(&id, value.clone(), cx)
-                });
-            })
+            .on_click(move |_, window, cx| host(Act::Option(id.clone(), value.clone()), window, cx))
             .child(
                 div()
                     .flex_1()
@@ -675,7 +685,7 @@ impl Panel {
         highlighted: bool,
         palette: Palette,
     ) -> impl IntoElement {
-        let (view, id) = (self.view.clone(), control.id.clone());
+        let (host, id) = (self.host.clone(), control.id.clone());
         let next = control.next().map(|level| level.value.clone());
         v_flex()
             .id(("model-option", index))
@@ -687,9 +697,9 @@ impl Panel {
             .cursor_pointer()
             .when(highlighted, |row| row.bg(palette.hover))
             .hover(move |style| style.bg(palette.hover))
-            .on_click(move |_, _, cx| {
+            .on_click(move |_, window, cx| {
                 if let Some(value) = next.clone() {
-                    view.update(cx, |this, cx| this.picker_set_option(&id, value, cx));
+                    host(Act::Option(id.clone(), value), window, cx);
                 }
             })
             .child(
@@ -709,11 +719,11 @@ impl Panel {
     }
 
     /// The footer: the speed segments, and the permissions control at the end.
-    fn footer(&self, palette: Palette, cx: &App) -> impl IntoElement {
+    fn footer(&self, footer: &Footer, palette: Palette, cx: &App) -> impl IntoElement {
         let speed = self.trigger.controls.speed.as_ref().map(|speed| {
             let last = speed.levels.len().saturating_sub(1);
             let segments = speed.levels.iter().enumerate().map(|(index, level)| {
-                let (view, id, value) = (self.view.clone(), speed.id.clone(), level.value.clone());
+                let (host, id, value) = (self.host.clone(), speed.id.clone(), level.value.clone());
                 let selected = level.selected;
                 let bolt = providers::is_fast_label(&level.label);
                 h_flex()
@@ -732,10 +742,8 @@ impl Panel {
                     })
                     .hover(move |style| style.text_color(palette.foreground))
                     .when_some(level.description.clone(), |s, tip| s.tooltip(tooltip(tip)))
-                    .on_click(move |_, _, cx| {
-                        view.update(cx, |this, cx| {
-                            this.picker_set_option(&id, value.clone(), cx)
-                        });
+                    .on_click(move |_, window, cx| {
+                        host(Act::Option(id.clone(), value.clone()), window, cx)
                     })
                     .children(bolt.then(|| Icon::new(Icons::Zap).size(px(12.))))
                     .child(level.label.clone())
@@ -759,11 +767,11 @@ impl Panel {
             .rounded_br(palette.radius)
             .children(speed)
             .child(div().ml_auto().child(permissions_popover(
-                &self.permissions,
-                self.permissions_open,
-                self.mode,
+                &footer.permissions,
+                footer.open,
+                footer.mode,
                 FooterPermissions {
-                    mode: self.mode,
+                    mode: footer.mode,
                     open: false,
                     hover: palette.hover,
                     foreground: palette.foreground,

@@ -195,9 +195,11 @@ impl ProvidersPanel {
         config: Config,
         instances: Vec<InstanceRow>,
         sources: Vec<SecretSource>,
+        pickers: (Vec<crate::providers::PickerInstance>, Vec<(String, String)>),
         cx: &mut Context<Self>,
     ) {
         self.extras.set_restricted(config.providers_restricted);
+        self.extras.set_agents(pickers, cx);
         if !self.pending.is_empty() {
             return;
         }

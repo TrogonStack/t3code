@@ -535,10 +535,11 @@ impl SettingsDialog {
         config: crate::settings_secrets::Config,
         instances: Vec<crate::providers::InstanceRow>,
         sources: Vec<crate::secret_source::SecretSource>,
+        pickers: (Vec<crate::providers::PickerInstance>, Vec<(String, String)>),
         cx: &mut Context<Self>,
     ) {
         self.providers.update(cx, |panel, cx| {
-            panel.set_data(config, instances, sources, cx)
+            panel.set_data(config, instances, sources, pickers, cx)
         });
     }
 

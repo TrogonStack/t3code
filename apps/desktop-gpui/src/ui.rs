@@ -613,6 +613,7 @@ impl MainView {
                 c.secrets().clone(),
                 c.instance_rows(),
                 c.source_control().secret_sources().to_vec(),
+                (c.text_picker(), c.favorites()),
             )
         });
         let project_ids = crate::settings_devices::project_ids(&entries);
@@ -641,8 +642,8 @@ impl MainView {
             if let Some(config) = secrets {
                 settings.set_secrets_data(config, cx);
             }
-            if let Some((config, instances, sources)) = provider_tab {
-                settings.set_providers_data(config, instances, sources, cx);
+            if let Some((config, instances, sources, pickers)) = provider_tab {
+                settings.set_providers_data(config, instances, sources, pickers, cx);
             }
             settings.set_keybindings_data(keybindings.clone(), cx);
             settings.set_projects_data(
@@ -4717,8 +4718,22 @@ impl MainView {
                 })
         });
         let (view, search) = (cx.entity(), self.model_search.clone());
+        let host: model_popover::Host = {
+            let view = view.clone();
+            std::rc::Rc::new(move |act, window, cx| {
+                view.update(cx, |this, cx| match act {
+                    model_popover::Act::Tab(tab) => this.picker_select_tab(tab, window, cx),
+                    model_popover::Act::Older => this.picker_toggle_older(cx),
+                    model_popover::Act::Favorite(id, slug) => {
+                        this.picker_toggle_favorite(&id, &slug, cx)
+                    }
+                    model_popover::Act::Pick(id, slug) => this.pick_model(&id, &slug, cx),
+                    model_popover::Act::Option(id, value) => this.picker_set_option(&id, value, cx),
+                });
+            })
+        };
         let panel = model_popover::Panel {
-            view: view.clone(),
+            host,
             search: search.clone(),
             tab: self
                 .model_ui
@@ -4729,9 +4744,11 @@ impl MainView {
             highlight: self.model_ui.highlight,
             focus: self.model_ui.focus,
             effort: self.model_ui.effort,
-            permissions: self.permissions.clone(),
-            permissions_open: self.permissions_open && self.model_open,
-            mode,
+            footer: Some(model_popover::Footer {
+                permissions: self.permissions.clone(),
+                open: self.permissions_open && self.model_open,
+                mode,
+            }),
             instances,
             trigger: trigger.clone(),
         };
@@ -5239,7 +5256,7 @@ fn model_trigger(trigger: &Trigger, open: bool, cx: &App) -> gpui::Stateful<gpui
 
 /// The web's `ProviderInstanceIcon` at `size-4`: the driver's art, or its initials, with the
 /// instance chip at the bottom-right. `icon_opacity` dims the art only, like `iconClassName`.
-fn provider_mark(mark: &Mark, icon_opacity: f32, cx: &App) -> gpui::Div {
+pub(crate) fn provider_mark(mark: &Mark, icon_opacity: f32, cx: &App) -> gpui::Div {
     provider_mark_at(mark, 16., 16., icon_opacity, cx)
 }
 
@@ -6846,7 +6863,7 @@ impl Render for MainView {
 
 /// `dropdown-glass`'s `1px solid` edge: `--contrast-foreground` at 10%. GPUI has no backdrop blur,
 /// so the fill takes the web's no-blur fallback, a solid `--popover` (index.css `@supports not`).
-fn dropdown_glass_edge(cx: &App) -> Hsla {
+pub(crate) fn dropdown_glass_edge(cx: &App) -> Hsla {
     if cx.theme().is_dark() {
         gpui::white().opacity(0.1)
     } else {

@@ -163,6 +163,9 @@ struct Model {
 struct Provider {
     instance_id: String,
     driver: String,
+    /// Absent means it can write text.
+    #[serde(default)]
+    supports_text_generation: Option<bool>,
     #[serde(default)]
     display_name: Option<String>,
     #[serde(default)]
@@ -684,6 +687,28 @@ impl Catalog {
                 }
             })
             .collect()
+    }
+
+    /// The starred models as `(instance, model)`.
+    pub fn favorites(&self) -> Vec<(String, String)> {
+        self.settings
+            .favorites
+            .iter()
+            .flatten()
+            .map(|fav| (fav.provider.clone(), fav.model.clone()))
+            .collect()
+    }
+
+    /// The picker's instances that can write text, for the settings' task pickers.
+    pub fn text_picker(&self) -> Vec<PickerInstance> {
+        let mute = |id: &str| {
+            self.providers.iter().any(|provider| {
+                provider.instance_id == id && provider.supports_text_generation == Some(false)
+            })
+        };
+        let mut instances = self.picker(None);
+        instances.retain(|instance| !mute(&instance.instance_id));
+        instances
     }
 
     /// The choice of `slug` on `instance_id`, when that instance can take a turn and has the model.
@@ -1604,6 +1629,22 @@ mod tests {
     }
 
     #[test]
+    fn text_picker_skips_instances_that_cannot_write_text() {
+        let mut quiet = provider("quiet", "cursor", "ready", vec![]);
+        quiet["supportsTextGeneration"] = json!(false);
+        let catalog = catalog(
+            vec![provider("codex", "codex", "ready", vec![]), quiet],
+            json!({}),
+        );
+        let ids: Vec<_> = catalog
+            .text_picker()
+            .into_iter()
+            .map(|instance| instance.instance_id)
+            .collect();
+        assert_eq!(ids, ["codex"]);
+    }
+
+    #[test]
     fn the_installed_editors_ride_along_and_default_to_none() {
         let with = Catalog::decode(json!({
             "providers": [], "settings": {}, "availableEditors": ["zed", "file-manager"],
@@ -1707,6 +1748,7 @@ mod tests {
         let named = |instance: &str, display: Option<&str>| Provider {
             instance_id: instance.into(),
             driver: "codex".into(),
+            supports_text_generation: None,
             display_name: display.map(str::to_owned),
             accent_color: None,
             status: "ready".into(),
@@ -1733,6 +1775,7 @@ mod tests {
             let provider = Provider {
                 instance_id: "claudeAgent".into(),
                 driver: "claudeAgent".into(),
+                supports_text_generation: None,
                 display_name: None,
                 accent_color: None,
                 status: status.into(),

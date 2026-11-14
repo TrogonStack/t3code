@@ -703,6 +703,21 @@ impl SecretField {
         }
     }
 
+    /// `onValidityChange`: Value is always usable; a source is usable once a reference for it
+    /// has been committed and the text now in the input is not a rejected one.
+    pub(in crate::ui::settings) fn is_valid(&self) -> bool {
+        match &self.provider {
+            None => true,
+            Some(provider) => {
+                self.rejected.is_none()
+                    && self
+                        .committed
+                        .as_ref()
+                        .is_some_and(|(committed, _)| committed == provider)
+            }
+        }
+    }
+
     /// Whether a secret provider, not Value, is chosen.
     pub(in crate::ui::settings) fn is_reference(&self) -> bool {
         self.provider.is_some()

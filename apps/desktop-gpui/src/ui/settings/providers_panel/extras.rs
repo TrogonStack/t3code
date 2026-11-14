@@ -4,8 +4,7 @@
 //! and `CompactIdleThreadsRow`). Writes are optimistic and put back by the panel when they fail.
 
 use super::super::components::{
-    HoverHandler, KeyHandler, Menu, PickHandler, SelectTrigger, Toggle, info_tip, popup_shell,
-    reset_button_labeled, select_menu, tab_stop,
+    KeyHandler, SelectTrigger, Toggle, info_tip, popup_shell, reset_button_labeled, tab_stop,
 };
 use super::super::devices_panel::widgets::{menu_item, spinner};
 use super::super::scope_inheritance::PopTrigger;
@@ -13,12 +12,15 @@ use super::super::wizard::{
     StepHandler, wizard_footer, wizard_header, wizard_panel, wizard_popup, wizard_steps,
 };
 use super::*;
+use crate::providers::PickerInstance;
 use crate::settings_provider_extras::{
     self as ext, Brand, IdleMode, Model, PRESETS, TASKS, TextGenerator,
 };
 use gpui::{Anchor, ElementId, Stateful, img};
 use gpui_component::input::Input;
 use gpui_component::popover::Popover;
+
+mod task_picker;
 
 const HUB_WIDTH: f32 = 448.;
 const DESCRIPTION: &str = "Writes thread titles, commit messages, and other short text without starting a coding agent. Your API key is stored on this environment.";
@@ -42,6 +44,7 @@ enum Pending {
     Connect { id: String, config: Value },
     Models { id: String, refresh: bool },
     Test(usize),
+    Favorite { before: Vec<(String, String)> },
 }
 
 enum Models {
@@ -88,6 +91,11 @@ pub(super) struct Extras {
     tests: [Option<Tested>; 3],
     health: Entity<InputState>,
     health_shown: i64,
+    agents: Vec<PickerInstance>,
+    favorites: Vec<(String, String)>,
+    pick: crate::model_picker::State,
+    pick_search: Entity<InputState>,
+    pick_keys: Option<Subscription>,
     calls: HashMap<u64, Pending>,
     name_subscription: Option<Subscription>,
     _subscriptions: Vec<Subscription>,
@@ -105,6 +113,7 @@ impl Extras {
         let wiz_name = input("OpenAI", window, cx);
         let models_search = input("Search models", window, cx);
         let health = input("300", window, cx);
+        let pick_search = input("Search models...", window, cx);
         let hub_key = cx.new(|cx| SecretField::new("usage-hub-key", "", window, cx));
         let wiz_key = cx.new(|cx| SecretField::new("text-generator-key", "", window, cx));
         let subscriptions = vec![
@@ -154,6 +163,11 @@ impl Extras {
                     SecretEvent::Commit => cx.notify(),
                 },
             ),
+            cx.subscribe_in(&pick_search, window, |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&models_search, window, |_, _, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -191,6 +205,11 @@ impl Extras {
             tests: [None, None, None],
             health,
             health_shown: i64::MIN,
+            agents: Vec::new(),
+            favorites: Vec::new(),
+            pick: crate::model_picker::State::default(),
+            pick_search,
+            pick_keys: None,
             calls: HashMap::new(),
             name_subscription: None,
             _subscriptions: subscriptions,
@@ -319,6 +338,9 @@ impl ProvidersPanel {
                     self.ensure_models(&id);
                 }
             }
+            if !matches!(open, Some(Open::Task(_))) {
+                self.extras.pick_keys = None;
+            }
             self.extras.open = open;
             cx.notify();
         }
@@ -408,12 +430,18 @@ impl ProvidersPanel {
                         wizard.model_count = count;
                         wizard.step = 1;
                     }
+                    self.extras
+                        .wiz_key
+                        .update(cx, |field, cx| field.set_disabled(false, cx));
                 }
                 CallEvent::Failed(message) => {
                     if let Some(wizard) = &mut self.extras.wizard {
                         wizard.checking = false;
                         wizard.error = Some(message.clone());
                     }
+                    self.extras
+                        .wiz_key
+                        .update(cx, |field, cx| field.set_disabled(false, cx));
                 }
                 CallEvent::Progress(_) => {}
             },
@@ -438,6 +466,11 @@ impl ProvidersPanel {
                 }
                 CallEvent::Progress(_) => {}
             },
+            Pending::Favorite { before } => {
+                if matches!(event, CallEvent::Failed(_)) {
+                    self.extras.favorites = before;
+                }
+            }
             Pending::Test(index) => {
                 if let Some(test) = &mut self.extras.tests[index] {
                     test.busy = false;
@@ -468,6 +501,7 @@ impl ProvidersPanel {
                 .wiz_key
                 .update(cx, |field, cx| field.close_menu(cx));
         if closed {
+            self.extras.pick_keys = None;
             cx.notify();
         }
         closed
@@ -475,6 +509,7 @@ impl ProvidersPanel {
 
     pub(super) fn extras_reload(&mut self, cx: &mut Context<Self>) {
         self.extras.open = None;
+        self.extras.pick_keys = None;
         self.extras.wizard = None;
         self.extras.models_for = None;
         self.extras.gen_remove = None;
@@ -554,6 +589,7 @@ impl ProvidersPanel {
         let sources = self.sources.clone();
         self.extras.wiz_key.update(cx, |field, cx| {
             field.set_sources(&sources, cx);
+            field.set_disabled(false, cx);
             field.load(&key, window, cx);
         });
         let saved_id = existing.as_ref().map(|generator| generator.id.clone());
@@ -656,6 +692,9 @@ impl ProvidersPanel {
             .and_then(|generator| generator.config["apiKey"].as_str())
             .filter(|key| !key.is_empty())
             .map(|key| Value::String(key.to_owned()));
+        if !self.extras.wiz_key.read(cx).is_valid() {
+            return None;
+        }
         let key = self.extras.wiz_key.read(cx).submission(cx).or(stored);
         if Self::key_required(wizard) && key.is_none() {
             return None;
@@ -697,6 +736,10 @@ impl ProvidersPanel {
                 wizard.error = Some("The request could not be sent.".to_owned());
             }
         }
+        let checking = self.extras.wizard.as_ref().is_some_and(|w| w.checking);
+        self.extras
+            .wiz_key
+            .update(cx, |field, cx| field.set_disabled(checking, cx));
         cx.notify();
     }
 
@@ -722,35 +765,6 @@ impl ProvidersPanel {
             error: (!sent).then(|| "The request could not be sent.".to_owned()),
         });
         cx.notify();
-    }
-
-    fn pick_task(&mut self, task: usize, option: usize, cx: &mut Context<Self>) {
-        if let Some((instance, model, _, _)) = self.task_options().get(option) {
-            let patch = ext::task_patch(TASKS[task].0, instance, model);
-            self.write_patch(patch, cx);
-        }
-        self.set_open(None, cx);
-    }
-
-    /// The models of the enabled generators that have loaded, as `(instance, model, name, generator)`.
-    fn task_options(&self) -> Vec<(String, String, String, String)> {
-        let mut options = Vec::new();
-        for generator in ext::text_generators(&self.settings) {
-            if !generator.enabled() {
-                continue;
-            }
-            if let Some(Models::Loaded(models)) = self.extras.models.get(&generator.id) {
-                for model in models {
-                    options.push((
-                        generator.id.clone(),
-                        model.id.clone(),
-                        model.name.clone(),
-                        generator.name(),
-                    ));
-                }
-            }
-        }
-        options
     }
 
     fn commit_health(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1070,96 +1084,19 @@ impl ProvidersPanel {
             .into_any_element()
     }
 
-    fn task_row(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn task_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let (key, title) = TASKS[index];
         let theme = Tokens::of(cx);
         let selection = ext::task_selection(&self.settings, key);
-        let options = self.task_options();
-        let selected_at = selection.as_ref().and_then(|(instance, model)| {
-            options
-                .iter()
-                .position(|(i, m, _, _)| i == instance && m == model)
-        });
-        let label: SharedString = match (&selected_at, &selection) {
-            (Some(at), _) => options[*at].2.clone().into(),
-            (None, Some((_, model))) => model.clone().into(),
-            (None, None) => "Select model".into(),
-        };
-        let mut labels: Vec<SharedString> = Vec::new();
-        let mut headings: Vec<(usize, SharedString)> = Vec::new();
-        let mut last: Option<&str> = None;
-        for (at, (instance, _, name, generator)) in options.iter().enumerate() {
-            if last != Some(instance.as_str()) {
-                headings.push((at, generator.clone().into()));
-                last = Some(instance.as_str());
-            }
-            labels.push(name.clone().into());
+        let ids: Vec<String> = ext::text_generators(&self.settings)
+            .into_iter()
+            .filter(TextGenerator::enabled)
+            .map(|generator| generator.id)
+            .collect();
+        for id in ids {
+            self.ensure_models(&id);
         }
-        let highlighted = if self.extras.open == Some(Open::Task(index)) {
-            self.extras.highlight
-        } else {
-            usize::MAX
-        };
-        let view = cx.entity();
-        let popup: Rc<dyn Fn(&App) -> AnyElement> = if labels.is_empty() {
-            Rc::new(move |cx| {
-                popup_shell(224., cx)
-                    .child(note("No models loaded yet.", cx).px_2().py_1())
-                    .into_any_element()
-            })
-        } else {
-            let on_pick: PickHandler = {
-                let view = view.clone();
-                Rc::new(move |option, _, cx| {
-                    view.update(cx, |this, cx| this.pick_task(index, option, cx))
-                })
-            };
-            let on_hover: HoverHandler = {
-                let view = view.clone();
-                Rc::new(move |option, cx| {
-                    view.update(cx, |this, cx| {
-                        if this.extras.highlight != option {
-                            this.extras.highlight = option;
-                            cx.notify();
-                        }
-                    })
-                })
-            };
-            let selected = selected_at.unwrap_or(usize::MAX);
-            Rc::new(move |cx| {
-                select_menu(
-                    &Menu {
-                        id: "task-model",
-                        labels: labels.clone(),
-                        icons: Vec::new(),
-                        headings: headings.clone(),
-                        selected,
-                        highlighted,
-                        width: 224.,
-                        on_pick: on_pick.clone(),
-                        on_hover: on_hover.clone(),
-                    },
-                    cx,
-                )
-                .max_h(px(320.))
-                .into_any_element()
-            })
-        };
-        let picker = self.select_popover(
-            Open::Task(index),
-            ("task-picker", index),
-            label,
-            224.,
-            false,
-            popup,
-            window,
-            cx,
-        );
+        let picker = self.task_picker(index, cx);
         let testable = selection.as_ref().is_some_and(|(instance, _)| {
             ext::text_generators(&self.settings)
                 .iter()
@@ -1827,7 +1764,8 @@ impl ProvidersPanel {
                         .rounded(px(8.))
                         .border_1()
                         .text_sm()
-                        .cursor_pointer()
+                        .when(checking, |card| card.opacity(0.64))
+                        .when(!checking, |card| card.cursor_pointer())
                         .when(selected, |card| {
                             card.border_color(theme.primary)
                                 .bg(theme.primary.opacity(0.05))
@@ -1835,10 +1773,15 @@ impl ProvidersPanel {
                                 .text_color(theme.foreground)
                         })
                         .when(!selected, |card| {
-                            card.border_color(theme.border)
+                            let card = card
+                                .border_color(theme.border)
                                 .bg(theme.background)
-                                .text_color(theme.muted_foreground)
-                                .hover(move |style| style.bg(accent.opacity(0.5)))
+                                .text_color(theme.muted_foreground);
+                            if checking {
+                                card
+                            } else {
+                                card.hover(move |style| style.bg(accent.opacity(0.5)))
+                            }
                         })
                         .child(icon)
                         .child(if custom {
@@ -1885,7 +1828,7 @@ impl ProvidersPanel {
             form.into_any_element()
         } else {
             let tasks: Vec<AnyElement> = (0..TASKS.len())
-                .map(|index| self.task_row(index, window, cx))
+                .map(|index| self.task_row(index, cx))
                 .collect();
             v_flex()
                 .gap_4()
