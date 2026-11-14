@@ -353,6 +353,10 @@ impl SettingsDialog {
         }
     }
 
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open {
             return;

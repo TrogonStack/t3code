@@ -558,6 +558,19 @@ impl MainView {
     }
 
     /// Hands the Labs tab the scope bar's choices and the attached environment's flags.
+    /// Every open is a fresh load: a new dialog on General, then the data the app pushes.
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.read(cx).is_open() {
+            return;
+        }
+        let actions = self.actions.clone();
+        self.settings = cx.new(|cx| settings::SettingsDialog::new(actions, window, cx));
+        self.sync_labs(cx);
+        self.settings
+            .update(cx, |settings, cx| settings.open(window, cx));
+        cx.notify();
+    }
+
     fn sync_labs(&mut self, cx: &mut Context<Self>) {
         let (label, machine, environment_id, entries) = match &self.status {
             Status::Connected {
@@ -2737,12 +2750,8 @@ impl MainView {
             .pt_1()
             .gap_px()
             .child(
-                footer_button("settings", Icon::new(IconName::Settings), "Settings", cx).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.settings
-                            .update(cx, |settings, cx| settings.open(window, cx));
-                    }),
-                ),
+                footer_button("settings", Icon::new(IconName::Settings), "Settings", cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
             )
             .child(
                 footer_button(
@@ -6842,10 +6851,9 @@ impl Render for MainView {
             .on_action(cx.listener(|this, _: &OpenUsage, window, cx| {
                 this.usage.update(cx, |usage, cx| usage.open(window, cx));
             }))
-            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
-                this.settings
-                    .update(cx, |settings, cx| settings.open(window, cx));
-            }))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleRightPanel, _, cx| this.toggle_right_panel(cx)))
             .on_action(
                 cx.listener(|this, _: &ToggleTerminal, window, cx| {
