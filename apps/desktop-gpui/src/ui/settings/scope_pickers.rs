@@ -188,6 +188,7 @@ fn row(
     let on_pick = on_pick.clone();
     h_flex()
         .id((id, index))
+        .flex_shrink_0()
         .min_h(px(style.height.unwrap_or(28.)))
         .items_center()
         .gap_2()
