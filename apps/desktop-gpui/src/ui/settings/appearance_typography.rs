@@ -1102,23 +1102,11 @@ fn diff_preview(family: SharedString, size: f32, cx: &App) -> AnyElement {
                 .gap(px(8.))
                 .px(px(16.))
                 .child(
-                    div()
+                    gpui::svg()
+                        .path(crate::assets::DIFF_SYMBOL_MODIFIED)
                         .flex_shrink_0()
                         .size(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .size(px(13.))
-                                .rounded_full()
-                                .border(px(1.5))
-                                .border_color(git.modified)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(div().size(px(6.)).rounded_full().bg(git.modified)),
-                        ),
+                        .text_color(git.modified),
                 )
                 .child("src/formatUser.ts")
                 .child(div().flex_1())

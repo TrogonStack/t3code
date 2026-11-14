@@ -130,6 +130,8 @@ const SNAP_SHOT_SVG: &str = concat!(
 
 /// The web's dev `SidebarStageBackdrop` art, dark palette, faded into the sidebar.
 pub const STAGE_DEV: &str = "images/stage-dev.svg";
+/// Pierre's `diffs-icon-symbol-modified`, the header icon of a changed file.
+pub const DIFF_SYMBOL_MODIFIED: &str = "images/diff-symbol-modified.svg";
 /// The same art cropped like the web's `StageBackdropButtonArt`, for the send button.
 pub const STAGE_DEV_BUTTON: &str = "images/stage-dev-button.svg";
 
@@ -393,6 +395,11 @@ impl AssetSource for AppAssets {
         }
         if path == STAGE_DEV {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev.svg"))));
+        }
+        if path == DIFF_SYMBOL_MODIFIED {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "diff-symbol-modified.svg"
+            ))));
         }
         if path == STAGE_DEV_BUTTON {
             return Ok(Some(Cow::Borrowed(include_bytes!("stage-dev-button.svg"))));
