@@ -25,6 +25,7 @@ mod source_control_panel;
 pub(crate) mod tokens;
 mod wizard;
 
+use super::add_to_machine::Notice;
 use super::*;
 use crate::assets::SNAP_SHOT;
 use crate::settings::{
@@ -292,6 +293,14 @@ impl SettingsDialog {
         });
         let secrets = cx.new(|cx| SecretsPanel::new(actions.clone(), scope.clone(), window, cx));
         let connections = cx.new(ConnectionsPanel::new);
+        cx.subscribe(&connections, |_, _, notice: &Notice, cx| {
+            cx.emit(Notice {
+                title: notice.title.clone(),
+                description: notice.description.clone(),
+                error: notice.error,
+            });
+        })
+        .detach();
         let providers =
             cx.new(|cx| ProvidersPanel::new(actions.clone(), scope.clone(), window, cx));
         let projects = cx.new(|cx| ProjectsPanel::new(actions.clone(), scope.clone(), window, cx));
@@ -818,6 +827,12 @@ impl SettingsDialog {
             return;
         }
         if self
+            .connections
+            .update(cx, |panel, cx| panel.close_menu(window, cx))
+        {
+            return;
+        }
+        if self
             .scheduled_tasks
             .update(cx, |panel, cx| panel.close_menu(cx))
         {
@@ -965,6 +980,8 @@ impl SettingsDialog {
     }
 }
 
+impl gpui::EventEmitter<Notice> for SettingsDialog {}
+
 impl Render for SettingsDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.open {
@@ -1011,6 +1028,9 @@ impl Render for SettingsDialog {
             .update(cx, |panel, cx| panel.overlay(window, cx));
         let browser = self
             .browser
+            .update(cx, |panel, cx| panel.overlay(window, cx));
+        let connections = self
+            .connections
             .update(cx, |panel, cx| panel.overlay(window, cx));
         div()
             .absolute()
@@ -1072,6 +1092,7 @@ impl Render for SettingsDialog {
             .children(confirm)
             .children(devices)
             .children(secrets)
+            .children(connections)
             .children(scheduled_tasks)
             .children(providers)
             .children(projects)

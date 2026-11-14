@@ -154,8 +154,10 @@ mod tests {
 
     #[test]
     fn saving_keeps_other_keys_and_the_settings_wrapper() {
-        let mut settings = LoadBalancing::default();
-        settings.enabled = true;
+        let mut settings = LoadBalancing {
+            enabled: true,
+            ..Default::default()
+        };
         settings.weights.insert("e1".into(), 100);
         let saved = settings.to_json(Some(r#"{"settings":{"theme":"dark"}}"#));
         let value: Value = serde_json::from_str(&saved).unwrap();

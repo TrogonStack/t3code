@@ -8,6 +8,7 @@ use crate::environment_state::{EnvState, Phase};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // `Relay` is named by `route_label` for T3 Connect hosts
 pub enum RouteKind {
     Loopback,
     Lan,
@@ -28,7 +29,9 @@ fn normalize(host: &str) -> String {
 fn is_loopback(host: &str) -> bool {
     host == "localhost"
         || host == "::1"
-        || host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.octets()[0] == 127)
+        || host
+            .parse::<Ipv4Addr>()
+            .is_ok_and(|ip| ip.octets()[0] == 127)
 }
 
 fn is_tailnet(host: &str) -> bool {
@@ -138,12 +141,12 @@ pub fn routes(state: &EnvState) -> Vec<RouteRow> {
     let mut rows = Vec::new();
     if state.saved && !state.url.is_empty() {
         // `state.url` follows the live route, so a relay session would name the relay base.
-        let direct = if state.via == Some(Via::Relay) && state.relay_url.as_deref() == Some(&state.url)
-        {
-            None
-        } else {
-            Some(state.url.clone())
-        };
+        let direct =
+            if state.via == Some(Via::Relay) && state.relay_url.as_deref() == Some(&state.url) {
+                None
+            } else {
+                Some(state.url.clone())
+            };
         if let Some(url) = direct {
             let kind = host_of(&url).map_or(RouteKind::Public, |host| classify_host(&host));
             rows.push(RouteRow {
@@ -205,12 +208,14 @@ pub fn status(state: &EnvState, enabled: bool) -> (String, Tone) {
         Phase::Connected => ("Connected".into(), Tone::Muted),
         Phase::Connecting => ("Connecting".into(), Tone::Muted),
         Phase::Reconnecting => {
-            let waiting = state
-                .failure
-                .as_ref()
-                .is_some_and(|failure| failure.reason == crate::connection_diagnosis::Reason::ApprovalPending);
+            let waiting = state.failure.as_ref().is_some_and(|failure| {
+                failure.reason == crate::connection_diagnosis::Reason::ApprovalPending
+            });
             if waiting {
-                (error.unwrap_or_else(|| "Waiting for approval".into()), Tone::Muted)
+                (
+                    error.unwrap_or_else(|| "Waiting for approval".into()),
+                    Tone::Muted,
+                )
             } else {
                 (
                     match error {
@@ -326,7 +331,10 @@ mod tests {
         let mut s = state("http://192.168.1.20:13774");
         s.phase = Phase::Connected;
         s.via = Some(Via::Direct);
-        assert_eq!(subtitle(&s, true, false), "192.168.1.20:13774 \u{b7} Connected");
+        assert_eq!(
+            subtitle(&s, true, false),
+            "192.168.1.20:13774 \u{b7} Connected"
+        );
         assert_eq!(subtitle(&s, true, true), "192.168.1.20:13774");
     }
 
@@ -357,7 +365,10 @@ mod tests {
     #[test]
     fn the_mcp_url_takes_the_direct_base_without_a_query() {
         let s = state("http://192.168.1.20:13774/?a=1");
-        assert_eq!(mcp_url(&s).as_deref(), Some("http://192.168.1.20:13774/mcp"));
+        assert_eq!(
+            mcp_url(&s).as_deref(),
+            Some("http://192.168.1.20:13774/mcp")
+        );
     }
 
     #[test]

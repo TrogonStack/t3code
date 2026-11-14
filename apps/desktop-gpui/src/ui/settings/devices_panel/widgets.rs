@@ -289,6 +289,7 @@ pub(in crate::ui::settings) fn dialog_of(
         .pt(px(4.))
         .pb(px(4.))
         .children(body);
+    let has_footer = !footer.is_empty();
     let footer = h_flex()
         .justify_end()
         .gap_2()
@@ -338,7 +339,7 @@ pub(in crate::ui::settings) fn dialog_of(
                         }])
                         .child(header)
                         .child(panel)
-                        .child(footer),
+                        .when(has_footer, |popup| popup.child(footer)),
                 ),
         )
         .into_any_element()

@@ -44,11 +44,25 @@ fn followed() -> &'static Mutex<HashSet<String>> {
     FOLLOWED.get_or_init(Mutex::default)
 }
 
+/// The credential store and runtime the environments were started with, for Add Environment.
+pub fn services() -> Option<(Arc<dyn CredentialStore>, tokio::runtime::Handle)> {
+    let context = context().lock().ok()?;
+    let context = context.as_ref()?;
+    Some((context.store.clone(), context.runtime.clone()))
+}
+
 /// Starts following an environment this app just paired with (Add Environment).
 pub fn attach(credential: StoredCredential) {
-    let Ok(context) = context().lock() else { return };
-    let Some(context) = context.as_ref() else { return };
-    if !followed().lock().is_ok_and(|mut ids| ids.insert(credential.environment_id.clone())) {
+    let Ok(context) = context().lock() else {
+        return;
+    };
+    let Some(context) = context.as_ref() else {
+        return;
+    };
+    if !followed()
+        .lock()
+        .is_ok_and(|mut ids| ids.insert(credential.environment_id.clone()))
+    {
         return;
     }
     let target = Target {
@@ -57,9 +71,11 @@ pub fn attach(credential: StoredCredential) {
         saved: Some(credential),
         relay: None,
     };
-    context
-        .runtime
-        .spawn(follow(context.store.clone(), target, context.status.clone()));
+    context.runtime.spawn(follow(
+        context.store.clone(),
+        target,
+        context.status.clone(),
+    ));
 }
 
 /// Stops following an environment and drops its device-local state; its pairing is forgotten by
@@ -209,10 +225,13 @@ async fn open(
     };
     let (http_base, credential) = match route {
         Route::Direct => {
-            let saved = target
-                .saved
-                .as_ref()
-                .ok_or_else(|| fail(Hop::Device, Reason::Configuration, "no saved pairing".into()))?;
+            let saved = target.saved.as_ref().ok_or_else(|| {
+                fail(
+                    Hop::Device,
+                    Reason::Configuration,
+                    "no saved pairing".into(),
+                )
+            })?;
             (
                 saved.http_base.clone(),
                 Credential::Bearer(saved.token.clone()),
@@ -267,16 +286,18 @@ async fn open(
     )
     .await
     .map_err(|_| fail(answering, Reason::Timeout, "no answer".into()))?
-    .map_err(|message| match message
-        .strip_prefix("HTTP ")
-        .and_then(|code| code.parse::<u16>().ok())
-    {
-        Some(code) => {
-            let mut failure = fail(answering, Reason::EndpointUnavailable, message);
-            failure.http_status = Some(code);
-            failure
+    .map_err(|message| {
+        match message
+            .strip_prefix("HTTP ")
+            .and_then(|code| code.parse::<u16>().ok())
+        {
+            Some(code) => {
+                let mut failure = fail(answering, Reason::EndpointUnavailable, message);
+                failure.http_status = Some(code);
+                failure
+            }
+            None => fail(answering, Reason::Network, message),
         }
-        None => fail(answering, Reason::Network, message),
     })?;
     if described.id != target.id {
         return Err(fail(

@@ -33,14 +33,15 @@ pub fn parse_pairing_url_fields(input: &str) -> Option<(String, String)> {
     if trimmed.is_empty() {
         return None;
     }
-    let has_scheme = trimmed
-        .split_once("://")
-        .is_some_and(|(scheme, _)| {
-            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                && scheme
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
-        });
+    let has_scheme = trimmed.split_once("://").is_some_and(|(scheme, _)| {
+        scheme
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+    });
     let like = if has_scheme {
         trimmed.to_owned()
     } else if trimmed.starts_with("//") {
@@ -84,7 +85,10 @@ pub fn http_base(host: &str) -> Result<String, String> {
         return Err("Enter a backend URL.".into());
     }
     let has_scheme = trimmed.split_once("://").is_some_and(|(scheme, _)| {
-        scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        scheme
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
             && scheme
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-')
@@ -202,8 +206,8 @@ pub fn parse_ssh_target(host: &str, username: &str, port: &str) -> Result<SshTar
             raw_port
                 .bytes()
                 .take_while(u8::is_ascii_digit)
-                .fold(Some(0i64), |acc: Option<i64>, b| {
-                    acc?.checked_mul(10)?.checked_add(i64::from(b - b'0'))
+                .try_fold(0i64, |acc: i64, b| {
+                    acc.checked_mul(10)?.checked_add(i64::from(b - b'0'))
                 })
                 .filter(|_| raw_port.as_bytes()[0].is_ascii_digit())
                 .unwrap_or(0),
@@ -318,7 +322,8 @@ pub fn discover_ssh_hosts() -> Vec<SshHost> {
     let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
         return Vec::new();
     };
-    let read = |name: &str| std::fs::read_to_string(home.join(".ssh").join(name)).unwrap_or_default();
+    let read =
+        |name: &str| std::fs::read_to_string(home.join(".ssh").join(name)).unwrap_or_default();
     parse_ssh_hosts(&read("config"), &read("known_hosts"))
 }
 
@@ -337,7 +342,9 @@ mod tests {
             Some(("https://box.example.com".into(), "ZZ".into()))
         );
         assert_eq!(
-            parse_pairing_url_fields("https://app.t3.codes/pair?host=https%3A%2F%2Fbox.example.com#token=T"),
+            parse_pairing_url_fields(
+                "https://app.t3.codes/pair?host=https%3A%2F%2Fbox.example.com#token=T"
+            ),
             Some(("https://box.example.com".into(), "T".into()))
         );
         assert_eq!(parse_pairing_url_fields("backend.example.com"), None);
@@ -362,11 +369,23 @@ mod tests {
 
     #[test]
     fn hosts_become_http_bases() {
-        assert_eq!(http_base("box.example.com").as_deref(), Ok("https://box.example.com"));
-        assert_eq!(http_base("//box:3773/x?y#z").as_deref(), Ok("https://box:3773"));
-        assert_eq!(http_base("ws://10.0.0.2:3773").as_deref(), Ok("http://10.0.0.2:3773"));
+        assert_eq!(
+            http_base("box.example.com").as_deref(),
+            Ok("https://box.example.com")
+        );
+        assert_eq!(
+            http_base("//box:3773/x?y#z").as_deref(),
+            Ok("https://box:3773")
+        );
+        assert_eq!(
+            http_base("ws://10.0.0.2:3773").as_deref(),
+            Ok("http://10.0.0.2:3773")
+        );
         assert_eq!(http_base("wss://box").as_deref(), Ok("https://box"));
-        assert_eq!(http_base("ftp://box"), Err("Backend URL is invalid.".into()));
+        assert_eq!(
+            http_base("ftp://box"),
+            Err("Backend URL is invalid.".into())
+        );
         assert_eq!(http_base(""), Err("Enter a backend URL.".into()));
     }
 
@@ -401,17 +420,32 @@ mod tests {
             "|1|hashed ssh-rsa AAA\nmini.local,192.168.0.9 ssh-ed25519 AAA\n[nas.lan]:2222 ssh-rsa AAA\n",
         );
         let names: Vec<_> = hosts.iter().map(|h| h.alias.as_str()).collect();
-        assert_eq!(names, ["devbox", "staging", "mini.local", "192.168.0.9", "nas.lan"]);
+        assert_eq!(
+            names,
+            ["devbox", "staging", "mini.local", "192.168.0.9", "nas.lan"]
+        );
         assert_eq!(hosts[0].hostname, "10.0.0.5");
     }
 
     #[test]
     fn the_filter_puts_alias_prefixes_first() {
         let hosts = [
-            SshHost { alias: "my-dev".into(), hostname: "a".into() },
-            SshHost { alias: "dev".into(), hostname: "b".into() },
-            SshHost { alias: "x".into(), hostname: "devhost".into() },
-            SshHost { alias: "y".into(), hostname: "zzz".into() },
+            SshHost {
+                alias: "my-dev".into(),
+                hostname: "a".into(),
+            },
+            SshHost {
+                alias: "dev".into(),
+                hostname: "b".into(),
+            },
+            SshHost {
+                alias: "x".into(),
+                hostname: "devhost".into(),
+            },
+            SshHost {
+                alias: "y".into(),
+                hostname: "zzz".into(),
+            },
         ];
         let aliases: Vec<_> = filter_ssh_hosts(&hosts, " DEV ")
             .into_iter()

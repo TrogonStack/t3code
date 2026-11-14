@@ -441,6 +441,11 @@ impl MainView {
             },
         )
         .detach();
+        let settings = cx.new(|cx| settings::SettingsDialog::new(actions.clone(), window, cx));
+        cx.subscribe(&settings, |this, _, notice: &add_to_machine::Notice, cx| {
+            this.toast_notice(notice, cx)
+        })
+        .detach();
         let card = cx.new(|cx| DetailsCard::new(actions.clone(), window, cx));
         cx.subscribe(&card, |this, _, _: &OpenDiff, cx| this.open_diff(cx))
             .detach();
@@ -526,7 +531,7 @@ impl MainView {
             toasts: cx.new(|cx| ToastHost::new(TOPBAR_HEIGHT, window, cx)),
             usage: cx.new(|cx| usage_dialog::UsageDialog::new(actions.clone(), cx)),
             add_to_machine,
-            settings: cx.new(|cx| settings::SettingsDialog::new(actions.clone(), window, cx)),
+            settings,
             slow_toast: None,
             main_width: Cell::new(0.),
             sending: None,
@@ -569,10 +574,31 @@ impl MainView {
         }
         let actions = self.actions.clone();
         self.settings = cx.new(|cx| settings::SettingsDialog::new(actions, window, cx));
+        cx.subscribe(
+            &self.settings,
+            |this, _, notice: &add_to_machine::Notice, cx| this.toast_notice(notice, cx),
+        )
+        .detach();
         self.sync_labs(cx);
         self.settings
             .update(cx, |settings, cx| settings.open(window, cx));
         cx.notify();
+    }
+
+    fn toast_notice(&mut self, notice: &add_to_machine::Notice, cx: &mut Context<Self>) {
+        let kind = if notice.error {
+            ToastKind::Error
+        } else {
+            ToastKind::Info
+        };
+        let toast = Toast::new(notice.title.clone()).kind(kind);
+        let toast = match &notice.description {
+            Some(description) => toast.description(description.clone()),
+            None => toast,
+        };
+        self.toasts.update(cx, |toasts, cx| {
+            toasts.add(toast, cx);
+        });
     }
 
     fn sync_labs(&mut self, cx: &mut Context<Self>) {

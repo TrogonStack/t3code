@@ -62,7 +62,12 @@ impl Prefs {
         let disabled = map
             .get("disabled")
             .and_then(Value::as_array)
-            .map(|ids| ids.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default();
         let sharing = map
             .get("pullRequestRouting")

@@ -12,6 +12,7 @@ pub enum Hop {
 
 /// `ConnectionFailureCause` plus the causes `locate` derives itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the web's full set; GPUI cannot yet tell every cause apart
 pub enum Cause {
     TunnelDown,
     OriginUnreachable,
@@ -61,6 +62,7 @@ impl Cause {
 
 /// `ConnectionTransientReason` and `ConnectionBlockedReason`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the web's full set; GPUI cannot yet tell every reason apart
 pub enum Reason {
     Network,
     Timeout,
@@ -256,11 +258,13 @@ fn headline(host: &str, at: &Located, failure: Option<&Failure>) -> String {
             "This device can't reach T3 Connect"
         }
         .into(),
-        Hop::Tunnel => if reason.is_some_and(Reason::unreachable) {
-            format!("This device can't reach {host}'s tunnel")
-        } else {
-            format!("T3 Connect could not reach {host}'s tunnel")
-        },
+        Hop::Tunnel => {
+            if reason.is_some_and(Reason::unreachable) {
+                format!("This device can't reach {host}'s tunnel")
+            } else {
+                format!("T3 Connect could not reach {host}'s tunnel")
+            }
+        }
         Hop::Server => {
             if matches!(reason, Some(Reason::Authentication | Reason::Permission)) {
                 format!("T3 Code on {host} did not accept this device")
@@ -278,7 +282,9 @@ fn steps(host: &str, at: &Located, failure: Option<&Failure>) -> Vec<String> {
     let awake = format!("Make sure {host} is awake and online.");
     match at.cause {
         Some(Cause::Offline) => {
-            return vec!["Connect this device to the internet. T3 Code reconnects on its own.".into()];
+            return vec![
+                "Connect this device to the internet. T3 Code reconnects on its own.".into(),
+            ];
         }
         Some(Cause::SessionPending) => {
             return vec![
@@ -316,7 +322,10 @@ fn steps(host: &str, at: &Located, failure: Option<&Failure>) -> Vec<String> {
             ];
         }
         Some(Cause::TunnelPending) => {
-            return vec!["Wait a minute. T3 Code retries on its own.".into(), check_host];
+            return vec![
+                "Wait a minute. T3 Code retries on its own.".into(),
+                check_host,
+            ];
         }
         Some(Cause::RelayError) => {
             return vec![
@@ -604,7 +613,14 @@ mod tests {
         let labels: Vec<_> = diagnosis.facts.iter().map(|f| f.0.as_str()).collect();
         assert_eq!(
             labels,
-            ["Cause", "Attempts", "Next retry", "Route", "App version", "Error"]
+            [
+                "Cause",
+                "Attempts",
+                "Next retry",
+                "Route",
+                "App version",
+                "Error"
+            ]
         );
         assert_eq!(diagnosis.facts[2].1, "2023-11-14T22:13:20.123Z");
     }
@@ -630,7 +646,10 @@ mod tests {
         let mut offline = input(Some(Failure::new(Reason::Timeout, "x")));
         offline.via = Via::Relay;
         let diagnosis = present(&offline).unwrap();
-        assert_eq!(diagnosis.headline, "This device can't reach devbox's tunnel");
+        assert_eq!(
+            diagnosis.headline,
+            "This device can't reach devbox's tunnel"
+        );
         assert_eq!(diagnosis.hops.len(), 4);
         assert!(
             diagnosis
@@ -664,9 +683,18 @@ mod tests {
 
     #[test]
     fn retry_counts_down_then_says_retrying() {
-        assert_eq!(retry_text(Some(10_500), 10_000).as_deref(), Some("retrying in 1s"));
-        assert_eq!(retry_text(Some(12_001), 10_000).as_deref(), Some("retrying in 3s"));
-        assert_eq!(retry_text(Some(10_000), 10_000).as_deref(), Some("retrying"));
+        assert_eq!(
+            retry_text(Some(10_500), 10_000).as_deref(),
+            Some("retrying in 1s")
+        );
+        assert_eq!(
+            retry_text(Some(12_001), 10_000).as_deref(),
+            Some("retrying in 3s")
+        );
+        assert_eq!(
+            retry_text(Some(10_000), 10_000).as_deref(),
+            Some("retrying")
+        );
         assert_eq!(retry_text(None, 10_000), None);
     }
 }
