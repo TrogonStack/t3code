@@ -240,9 +240,9 @@ export function injectMcpAppThemeBootstrap(html: string): string {
     : `<!doctype html>${script}${html}`;
 }
 
-/** Opaque documents throw on cookie reads; analytics startup often expects an empty string instead. */
+/** Opaque documents reject cookie access; analytics startup often expects an empty jar instead. */
 export function injectMcpAppCookieBootstrap(html: string): string {
-  const bootstrap = `<script>(function(){try{void document.cookie;}catch(error){if(error&&error.name==="SecurityError"){Object.defineProperty(document,"cookie",{configurable:true,get:function(){return "";},set:function(){}});}}})();</script>`;
+  const bootstrap = `<script>(function(){try{void document.cookie;}catch(error){if(error&&error.name==="SecurityError"){Object.defineProperty(document,"cookie",{configurable:true,get:function(){return "";},set:function(){}});}}if(self.origin==="null"&&"cookieStore" in self){var none=function(){return Promise.resolve();};Object.defineProperty(self,"cookieStore",{configurable:true,value:{get:function(){return Promise.resolve(null);},getAll:function(){return Promise.resolve([]);},set:none,delete:none,addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return true;},onchange:null}});}})();</script>`;
   // Preserve captured CSP ahead of executable code, including this bootstrap.
   const prefix =
     /^(?:\uFEFF?\s*<!doctype[^>]*>\s*)?(?:<meta http-equiv="Content-Security-Policy" content="[^"]*">)?/i.exec(
@@ -262,6 +262,8 @@ export function mcpAppAllowAttribute(permissions: McpAppPermissions | undefined)
 
 export function clampMcpAppHeight(height: number): number {
   if (!Number.isFinite(height)) return MCP_APP_DEFAULT_HEIGHT;
+  // Apps report 0 when a result has nothing to render; keep them mounted but invisible.
+  if (height <= 0) return 0;
   return Math.round(Math.min(MCP_APP_MAX_HEIGHT, Math.max(MCP_APP_MIN_HEIGHT, height)));
 }
 
