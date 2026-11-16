@@ -1096,6 +1096,19 @@ export const make = Effect.gen(function* () {
                     };
                   }
                 }
+                const owner =
+                  publicHost ?? sourceControlDefinitions.findByRepositoryKey(referenceKey);
+                const readable = owner === undefined ? null : registry.get(owner.kind);
+                if (
+                  readable !== null &&
+                  !readable.readsPublicHostWithoutCheckout &&
+                  readable.servesHost?.(host) !== false
+                ) {
+                  return yield* new PullRequestUnavailableError({
+                    reason: "repository-without-project",
+                    repository,
+                  });
+                }
                 return yield* new PullRequestUnavailableError({ reason: "provider-unsupported" });
               });
             }
@@ -1321,6 +1334,9 @@ export const make = Effect.gen(function* () {
       state: input.item.state,
       isDraft: input.item.isDraft,
       mergeability: input.item.mergeability,
+      ...(input.item.rebaseRequired === undefined
+        ? {}
+        : { rebaseRequired: input.item.rebaseRequired }),
       additions: input.item.additions,
       deletions: input.item.deletions,
       createdAt: input.item.createdAt,
@@ -1562,7 +1578,18 @@ export const make = Effect.gen(function* () {
         filters: input.filters,
         ...(cursor === undefined
           ? {}
-          : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+          : {
+              cursor: {
+                updatedBefore: cursor.updatedBefore,
+                delivered: cursor.delivered,
+                seenAt: chunk.flatMap((project) =>
+                  (cursorOf(project)?.seenAt ?? []).map((number) => ({
+                    repository: project.repository,
+                    number,
+                  })),
+                ),
+              },
+            }),
       }).pipe(
         observeRead,
         Effect.flatMap(({ value: page, observedAt }) => {
@@ -1793,6 +1820,9 @@ export const make = Effect.gen(function* () {
     ...(changeRequest.mergeability === undefined
       ? {}
       : { mergeability: changeRequest.mergeability }),
+    ...(changeRequest.rebaseRequired === undefined
+      ? {}
+      : { rebaseRequired: changeRequest.rebaseRequired }),
     ...(changeRequest.stack === undefined ? {} : { stack: changeRequest.stack }),
     ...(changeRequest.headSha?.trim() ? { headSha: changeRequest.headSha.trim() } : {}),
     ...(changeRequest.autoMergeEnabled === undefined
@@ -1892,6 +1922,9 @@ export const make = Effect.gen(function* () {
             state: changeRequest.state,
             isDraft: changeRequest.isDraft,
             mergeability: changeRequest.mergeability,
+            ...(changeRequest.rebaseRequired === undefined
+              ? {}
+              : { rebaseRequired: changeRequest.rebaseRequired }),
             additions: changeRequest.additions,
             deletions: changeRequest.deletions,
             changedFiles: changeRequest.changedFiles,
@@ -2071,32 +2104,40 @@ export const make = Effect.gen(function* () {
   const diffUncached: PullRequestService["Service"]["diff"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        project.api.capabilities.diff
-          ? project.api
-              .getDiff({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-                ...(input.commit === undefined ? {} : { commit: input.commit }),
-              })
-              .pipe(
-                Effect.mapError(toPullRequestError("diff")),
-                Effect.flatMap((slice) =>
-                  resolveGeneratedPaths(project, input, slice.patch).pipe(
-                    Effect.map((generatedPaths) =>
-                      generatedPaths.length === 0 ? slice : { ...slice, generatedPaths },
-                    ),
-                  ),
-                ),
-              )
-          : Effect.fail(
+        input.path !== undefined && project.api.capabilities.withheldFileDiff !== true
+          ? Effect.fail(
               new PullRequestOperationError({
                 operation: "diff",
-                detail: "This host cannot provide a diff for a change request.",
+                detail: "This host cannot read one file of a change request's diff.",
               }),
-            ),
+            )
+          : project.api.capabilities.diff
+            ? project.api
+                .getDiff({
+                  cwd: project.project.workspaceRoot,
+                  repository: project.repository,
+                  host: project.host,
+                  number: input.number,
+                  ...(input.path === undefined ? {} : { path: input.path }),
+                  ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                  ...(input.commit === undefined ? {} : { commit: input.commit }),
+                })
+                .pipe(
+                  Effect.mapError(toPullRequestError("diff")),
+                  Effect.flatMap((slice) =>
+                    resolveGeneratedPaths(project, input, slice.patch).pipe(
+                      Effect.map((generatedPaths) =>
+                        generatedPaths.length === 0 ? slice : { ...slice, generatedPaths },
+                      ),
+                    ),
+                  ),
+                )
+            : Effect.fail(
+                new PullRequestOperationError({
+                  operation: "diff",
+                  detail: "This host cannot provide a diff for a change request.",
+                }),
+              ),
       ),
     );
 
@@ -3412,6 +3453,7 @@ export const make = Effect.gen(function* () {
     deletions: detail.deletions,
     changedFiles: detail.changedFiles,
     mergeability: detail.mergeability,
+    ...(detail.rebaseRequired === undefined ? {} : { rebaseRequired: detail.rebaseRequired }),
     headBranch: detail.headBranch,
     baseBranch: detail.baseBranch,
     closedAt: detail.closedAt,
@@ -3575,16 +3617,26 @@ export const make = Effect.gen(function* () {
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
-      const [reference, cursor, commit] = JSON.parse(key) as [string, string | null, string | null];
+      const [reference, cursor, commit, , path] = JSON.parse(key) as [
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+      ];
       return diffUncached({
         ...refOfCacheKey(reference),
+        ...(path === null ? {} : { path }),
         ...(cursor === null ? {} : { cursor }),
         ...(commit === null ? {} : { commit }),
       } as PullRequestDiffInput).pipe(
         observeRead,
         Effect.tap(({ value, observedAt }) => {
           // Keep the loader's epoch and read time if a refresh occurs during the provider read.
-          diffFiles.record(JSON.stringify([reference, cursor, commit]), value, observedAt);
+          // One withheld file is not the page's file list.
+          if (path === null) {
+            diffFiles.record(JSON.stringify([reference, cursor, commit]), value, observedAt);
+          }
           return Effect.void;
         }),
       );
@@ -3631,6 +3683,7 @@ export const make = Effect.gen(function* () {
       input.commit === undefined
         ? (lastGoodSummary.peek(refCacheKey(input))?.updatedAt ?? null)
         : null,
+      input.path ?? null,
     ]);
     const evictDiffs = Cache.entries(diffCache).pipe(
       Effect.flatMap((entries) =>
