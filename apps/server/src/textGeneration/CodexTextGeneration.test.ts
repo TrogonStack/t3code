@@ -635,6 +635,7 @@ it.layer(layerCodexTextGenerationTest)("CodexTextGeneration", (it) => {
 
 const PREFLIGHT_PRIMARY_STATES = [
   "ready",
+  "profile blocks primary",
   "pending",
   "exhausted",
   "not installed",
@@ -750,6 +751,16 @@ it.effect.each(PREFLIGHT_PRIMARY_STATES)("text generation preflight: %s", (prima
               },
             },
             defaultModelSelection: threadDefault,
+            ...(primaryState === "profile blocks primary"
+              ? {
+                  trogonStack: {
+                    providerProfiles: {
+                      work: { name: "Work", providerInstanceIds: [fallback] },
+                    },
+                    projectProfiles: { [projectId]: "work" },
+                  },
+                }
+              : {}),
             ...(primaryState === "not installed, fallback disabled for project"
               ? {
                   projectSettingsOverrides: {
@@ -766,15 +777,20 @@ it.effect.each(PREFLIGHT_PRIMARY_STATES)("text generation preflight: %s", (prima
         ),
       ),
     );
-    expect(
-      yield* service.generateThreadTitle({
-        cwd: "/tmp",
-        message: "hello",
-        linkedContext: "",
-        modelSelection: selection,
-        projectId,
-      }),
-    ).toEqual({ title: "Generated title" });
+    const generation = service.generateThreadTitle({
+      cwd: "/tmp",
+      message: "hello",
+      linkedContext: "",
+      modelSelection: selection,
+      projectId,
+    });
+    if (primaryState === "profile blocks primary") {
+      const error = yield* generation.pipe(Effect.flip);
+      expect(error._tag).toBe("TextGenerationError");
+      expect(calls).toEqual([]);
+      return;
+    }
+    expect(yield* generation).toEqual({ title: "Generated title" });
     expect(calls).toEqual([
       primaryState === "ready" ||
       primaryState === "pending" ||
