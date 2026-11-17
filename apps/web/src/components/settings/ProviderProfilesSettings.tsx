@@ -15,9 +15,9 @@ import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hook
 import { randomUUID } from "../../lib/utils";
 import { useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { ensureLocalApi } from "../../localApi";
 import {
   profileAssignmentLabel,
@@ -147,34 +147,38 @@ export function ProviderInstanceProfiles({
   );
   if (profiles.length === 0) return null;
   return (
-    <SettingsRow
-      title="Profiles"
-      description="Projects using a checked profile can use this provider."
-      control={
-        <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2">
-          {profiles.map(([profileId, profile]) => (
-            <label key={profileId} className="flex cursor-pointer items-center gap-2 text-sm">
-              <Checkbox
+    <SettingsSection title="Profiles">
+      {profiles.map(([profileId, profile]) => {
+        const projects = Object.values(settings.trogonStack.projectProfiles).filter(
+          (assignedId) => assignedId === profileId,
+        ).length;
+        return (
+          <SettingsRow
+            key={profileId}
+            title={profile.name}
+            description={
+              projects === 0
+                ? "No project uses this profile yet."
+                : `Used by ${projects} project${projects === 1 ? "" : "s"}.`
+            }
+            control={
+              <Switch
                 aria-label={`${profile.name} profile`}
                 checked={profile.providerInstanceIds.includes(instanceId)}
                 disabled={disabled || saving}
                 onCheckedChange={(checked) => {
                   setSaving(true);
                   onPatch(
-                    setProfilePatch(
-                      profileId,
-                      toggleProfileInstance(profile, instanceId, checked === true),
-                    ),
+                    setProfilePatch(profileId, toggleProfileInstance(profile, instanceId, checked)),
                     { onSaved: () => setSaving(false), onFailed: () => setSaving(false) },
                   );
                 }}
               />
-              {profile.name}
-            </label>
-          ))}
-        </div>
-      }
-    />
+            }
+          />
+        );
+      })}
+    </SettingsSection>
   );
 }
 

@@ -1340,8 +1340,9 @@ export function ProviderInstanceCard({
             </div>
           }
         />
-        {mode === "editor" ? profiles : null}
       </SettingsSection>
+
+      {mode === "editor" ? profiles : null}
 
       {setup || environmentFields.length > 0 ? (
         <SettingsSection title="Setup">
