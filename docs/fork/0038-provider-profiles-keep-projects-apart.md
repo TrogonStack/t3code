@@ -14,7 +14,8 @@
 - Start new projects safely. Once a profile exists, a new project cannot run a provider until it
   is assigned one. Projects from before the first profile keep working as they did until you
   assign them.
-- Manage profiles and assignments from settings on web, desktop, and mobile.
+- Manage profiles, their providers, and each project's profile from one Provider profiles page in
+  settings on web and desktop, and from provider and project settings on mobile.
 
 ## Why
 
@@ -33,4 +34,6 @@ follow a thread delegated to another environment.
 The rebase burden is moderate. The profile data lives in the fork's own settings block, but the
 rule is checked wherever a provider is resolved and where a turn starts, and upstream changes
 those paths often. A sync that adds a new way to start a turn or pick a provider needs the profile
-check carried to it.
+check carried to it. On web, the list of providers the Providers page shows moved out of that page
+into its own module so the profiles page offers the same ones; upstream edits to that list need
+carrying over.
