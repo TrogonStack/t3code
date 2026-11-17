@@ -1,6 +1,6 @@
 # 0038: Provider profiles keep projects apart
 
-- PR: not opened yet
+- PR: [TrogonStack/t3code#237](https://github.com/TrogonStack/t3code/pull/237)
 - Status: active
 
 ## What you can do now
