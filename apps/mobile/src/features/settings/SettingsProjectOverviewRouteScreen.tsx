@@ -44,6 +44,7 @@ import { leaveSettingsPage } from "./settings-navigation";
 import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 import { DEFAULT_SETTINGS_PAGE } from "../layout/workspace/workspace-tab-navigation";
 import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
+import { ProjectProviderProfileSection } from "./ProviderProfilesSettings";
 
 export function SettingsProjectOverviewRouteScreen() {
   const environmentMenu = useSettingsEnvironmentMenu();
@@ -347,6 +348,21 @@ function ProjectOverviewContent(props: {
           </View>
         </View>
       </SettingsSection>
+
+      {props.members.map((member) => (
+        <ProjectProviderProfileSection
+          key={`${member.environmentId}:${member.id}`}
+          environment={props.connectedTargets.find(
+            (target) => target.environmentId === member.environmentId,
+          )}
+          projectId={member.id}
+          checkoutLabel={
+            props.environments.find((entry) => entry.environmentId === member.environmentId)
+              ?.label ?? "Environment"
+          }
+          showCheckoutLabel={props.members.length > 1}
+        />
+      ))}
 
       {canOrganize ? (
         <SettingsSection title="Organize">

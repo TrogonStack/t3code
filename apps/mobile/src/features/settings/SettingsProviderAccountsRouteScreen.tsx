@@ -11,7 +11,7 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -34,6 +34,7 @@ import { SettingsSection } from "./components/SettingsSection";
 import { AddClaudeAccount, ClaudeAccount } from "./ClaudeAccounts";
 import { CLAUDE_DRIVER } from "./claude-accounts";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
+import { ProviderProfilesSection } from "./ProviderProfilesSettings";
 
 export function SettingsProviderAccountsRouteScreen() {
   const environmentMenu = useSettingsEnvironmentMenu();
@@ -53,21 +54,27 @@ export function SettingsProviderAccountsRouteScreen() {
           <Text className="text-foreground-muted">Select a connected environment.</Text>
         ) : (
           selectedTargets.map((environment) => (
-            <SettingsSection key={environment.environmentId} title={environment.label}>
-              {!permittedEnvironments.has(environment.environmentId) ? (
-                <View className="gap-1 p-4">
-                  <Text className="text-base text-foreground">Limited permissions</Text>
-                  <Text className="text-sm text-foreground-muted">
-                    {`This session can view ${environment.label}'s providers but can't change their settings.`}
-                  </Text>
-                </View>
-              ) : (
-                <EnvironmentProviders
-                  environment={environment}
-                  providers={managedProviders(environment, providersByEnvironment)}
-                />
-              )}
-            </SettingsSection>
+            <Fragment key={environment.environmentId}>
+              <SettingsSection title={environment.label}>
+                {!permittedEnvironments.has(environment.environmentId) ? (
+                  <View className="gap-1 p-4">
+                    <Text className="text-base text-foreground">Limited permissions</Text>
+                    <Text className="text-sm text-foreground-muted">
+                      {`This session can view ${environment.label}'s providers but can't change their settings.`}
+                    </Text>
+                  </View>
+                ) : (
+                  <EnvironmentProviders
+                    environment={environment}
+                    providers={managedProviders(environment, providersByEnvironment)}
+                  />
+                )}
+              </SettingsSection>
+              <ProviderProfilesSection
+                environment={environment}
+                providers={managedProviders(environment, providersByEnvironment)}
+              />
+            </Fragment>
           ))
         )}
       </ScreenScrollView>

@@ -699,7 +699,7 @@ describe("mobile model options", () => {
           projectProfiles: {},
           projectsRequiringProfile: { [projectId]: true },
         },
-      } satisfies ServerSettings;
+      };
       const config = configWith(settings);
       const selection = { instanceId, model: "model-a" };
 
