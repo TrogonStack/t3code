@@ -3,12 +3,12 @@ import type { Element, ElementContent } from "hast";
 /** Widest a column's floor gets, in characters; longer cells wrap above it. */
 export const MARKDOWN_TABLE_COLUMN_FLOOR_CH = 16;
 
-function textLength(node: ElementContent): number {
-  if (node.type === "text") return node.value.trim().length;
-  if (node.type !== "element") return 0;
-  let length = 0;
-  for (const child of node.children) length += textLength(child);
-  return length;
+function textContent(node: ElementContent): string {
+  if (node.type === "text") return node.value;
+  if (node.type !== "element") return "";
+  let text = "";
+  for (const child of node.children) text += textContent(child);
+  return text;
 }
 
 function* tableRows(node: Element): Generator<Element> {
@@ -36,7 +36,7 @@ export function markdownTableMinWidth(
     let column = 0;
     for (const cell of row.children) {
       if (cell.type !== "element" || (cell.tagName !== "th" && cell.tagName !== "td")) continue;
-      longest[column] = Math.max(longest[column] ?? 0, textLength(cell));
+      longest[column] = Math.max(longest[column] ?? 0, textContent(cell).trim().length);
       column += 1;
     }
   }

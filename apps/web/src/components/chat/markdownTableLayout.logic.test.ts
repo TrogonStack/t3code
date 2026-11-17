@@ -32,6 +32,8 @@ describe("markdownTableMinWidth", () => {
       ch: 2 + "Breakout".length + MARKDOWN_TABLE_COLUMN_FLOOR_CH,
       columns: 3,
     });
+    const spaced = tableFrom(["| A |", "| - |", "| **a** **b** **c** **d** |"].join("\n"));
+    expect(markdownTableMinWidth(spaced)).toEqual({ ch: "a b c d".length, columns: 1 });
   });
 
   it("sums a floor per column, so many long columns outgrow a narrow lane", () => {
