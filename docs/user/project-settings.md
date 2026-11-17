@@ -203,10 +203,11 @@ A provider profile is a named list of the provider instances a project may use. 
 company or account boundary, such as Personal and Company A, when a project must never run on
 another boundary's models.
 
-Create profiles in **Settings → Providers** under **Provider profiles**. Open a provider in the
-same page and choose the profiles it belongs to under **Profiles**. Then pick a profile for each
-project in **Settings → Projects** under **Provider profile**. Each environment keeps its own
-profiles and assignments.
+Create and manage profiles in **Settings → Provider profiles**. There you choose each profile's
+providers, rename or delete it, and pick a profile for each project. You can also choose a
+provider's profiles from the provider's own settings under **Profiles**, and a project's profile
+in **Settings → Projects** under **Provider profile**. Each environment keeps its own profiles and
+assignments.
 
 - A project with a profile can only use that profile's instances, for agent turns and for text
   generation alike. Other instances are hidden from its model picker and refused by the server.
