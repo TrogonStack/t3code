@@ -614,6 +614,139 @@ describe("mobile model options", () => {
       } as unknown as ServerConfig;
     }
 
+    it("allows only named provider instances in the assigned profile, without restricting legacy projects", () => {
+      const otherProjectId = ProjectId.make("legacy-project");
+      const personalInstance = ProviderInstanceId.make("codex_personal");
+      const settings: ServerSettings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+          [personalInstance]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+        trogonStack: {
+          ...DEFAULT_SERVER_SETTINGS.trogonStack,
+          providerProfiles: {
+            work: { name: "Work", providerInstanceIds: [instanceId] },
+          },
+          projectProfiles: { [projectId]: "work" },
+        },
+      };
+      const config = {
+        ...configWith(settings),
+        providers: [
+          ...configWith(settings).providers,
+          {
+            ...configWith(settings).providers[0],
+            instanceId: personalInstance,
+            displayName: "Codex Personal",
+          },
+        ],
+      } as ServerConfig;
+      const personalSelection = { instanceId: personalInstance, model: "model-a" };
+
+      expect(
+        buildModelOptions(config, null, undefined, projectId).map((option) => option.providerKey),
+      ).toEqual([instanceId]);
+      expect(
+        buildModelOptions(config, null, undefined, otherProjectId).map(
+          (option) => option.providerKey,
+        ),
+      ).toEqual([instanceId, personalInstance]);
+      expect(isModelSelectionUnavailable(config, personalSelection, projectId)).toBe(true);
+      expect(resolveSelectableModelSelection(config, personalSelection, projectId)).toBeNull();
+      expect(resolveDefaultableModelSelection(config, personalSelection, projectId)).toBeNull();
+      expect(buildModelOptions(config, personalSelection, undefined, projectId)).toMatchObject([
+        { providerKey: instanceId },
+        { providerKey: personalInstance, isUnavailable: true },
+      ]);
+      expect(describeUnavailableModelSelection(config, personalSelection, projectId)).toMatchObject(
+        {
+          title: "Provider not in this project's profile",
+        },
+      );
+    });
+
+    it("fails closed when an assigned profile has been removed", () => {
+      const settings: ServerSettings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+        trogonStack: {
+          ...DEFAULT_SERVER_SETTINGS.trogonStack,
+          providerProfiles: {},
+          projectProfiles: { [projectId]: "missing" },
+        },
+      };
+      const selection = { instanceId, model: "model-a" };
+      const config = configWith(settings);
+
+      expect(buildModelOptions(config, null, undefined, projectId)).toEqual([]);
+      expect(isModelSelectionUnavailable(config, selection, projectId)).toBe(true);
+      expect(resolveSelectableModelSelection(config, selection, projectId)).toBeNull();
+    });
+
+    it("blocks a new project pending assignment without changing a legacy project's access", () => {
+      const legacyProjectId = ProjectId.make("legacy-project");
+      const settings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+        trogonStack: {
+          ...DEFAULT_SERVER_SETTINGS.trogonStack,
+          providerProfiles: { work: { name: "Work", providerInstanceIds: [instanceId] } },
+          projectProfiles: {},
+          projectsRequiringProfile: { [projectId]: true },
+        },
+      } satisfies ServerSettings;
+      const config = configWith(settings);
+      const selection = { instanceId, model: "model-a" };
+
+      expect(buildModelOptions(config, null, undefined, projectId)).toEqual([]);
+      expect(isModelSelectionUnavailable(config, selection, projectId)).toBe(true);
+      expect(resolveSelectableModelSelection(config, selection, projectId)).toBeNull();
+      expect(buildModelOptions(config, null, undefined, legacyProjectId)).toHaveLength(1);
+      expect(describeUnavailableModelSelection(config, selection, projectId).title).toBe(
+        "Provider profile required for this project",
+      );
+    });
+
+    it("rejects a saved Antigravity selection excluded by an assigned profile", () => {
+      const antigravityInstanceId = ProviderInstanceId.make("antigravity_work");
+      const config = {
+        providers: [
+          {
+            instanceId: antigravityInstanceId,
+            driver: "antigravity",
+            enabled: true,
+            installed: true,
+            auth: { status: "authenticated" },
+            availability: "available",
+            models: [{ slug: "model-a", name: "Model A", isCustom: false, capabilities: null }],
+          },
+        ],
+        settings: {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            [antigravityInstanceId]: {
+              driver: ProviderDriverKind.make("antigravity"),
+              enabled: true,
+            },
+          },
+          trogonStack: {
+            ...DEFAULT_SERVER_SETTINGS.trogonStack,
+            providerProfiles: { work: { name: "Work", providerInstanceIds: [] } },
+            projectProfiles: { [projectId]: "work" },
+          },
+        },
+      } as unknown as ServerConfig;
+      const selection = { instanceId: antigravityInstanceId, model: "model-a" };
+
+      expect(resolveSelectableModelSelection(config, selection, projectId)).toBeNull();
+      expect(isModelSelectionUnavailable(config, selection, projectId)).toBe(true);
+    });
+
     it("refuses to send a non-Antigravity model the project turned off", () => {
       const settings: ServerSettings = {
         ...DEFAULT_SERVER_SETTINGS,

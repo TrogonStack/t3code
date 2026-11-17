@@ -15,6 +15,7 @@ import {
   disallowedProviderMessage,
   isManagedDriverAllowed,
   isProviderDriverKind,
+  isProviderInstanceAllowedByProfile,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import {
@@ -110,6 +111,12 @@ function isDisabledForProject(
   instanceId: ModelSelection["instanceId"],
   projectId: ProjectId | null,
 ): boolean {
+  if (
+    config?.settings &&
+    !isProviderInstanceAllowedByProfile(config.settings, projectId, instanceId)
+  ) {
+    return true;
+  }
   if (isProjectDisabledOverride(config, instanceId, projectId)) {
     return true;
   }
@@ -222,6 +229,26 @@ export function describeUnavailableModelSelection(
       detail: `${disallowedProviderMessage(config?.managedPolicy?.organization, label)} Choose another model.`,
     };
   }
+  if (
+    projectId !== null &&
+    config?.settings?.trogonStack.projectsRequiringProfile?.[projectId] === true &&
+    config.settings.trogonStack.projectProfiles[projectId] === undefined
+  ) {
+    return {
+      title: "Provider profile required for this project",
+      detail: "Assign a provider profile in project Settings before choosing a model.",
+    };
+  }
+  if (
+    config?.settings &&
+    !isProviderInstanceAllowedByProfile(config.settings, projectId, selection.instanceId)
+  ) {
+    return {
+      title: "Provider not in this project's profile",
+      detail:
+        "Choose an instance in this project's provider profile or change the project's profile in Settings.",
+    };
+  }
   return isDisabledForProject(config, provider, selection.instanceId, projectId)
     ? {
         title: "Model turned off for this project",
@@ -240,6 +267,12 @@ export function resolveSelectableModelSelection(
 ): ModelSelection | null {
   if (!selection || !config) {
     return selection;
+  }
+  if (
+    config.settings &&
+    !isProviderInstanceAllowedByProfile(config.settings, projectId, selection.instanceId)
+  ) {
+    return null;
   }
   const provider = config.providers.find(
     (candidate) => candidate.instanceId === selection.instanceId,
