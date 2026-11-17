@@ -11,7 +11,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { render } from "../../../test/render";
-import { ProviderProfilesSettings } from "./ProviderProfilesSettings";
+import { ProviderInstanceProfiles, ProviderProfilesSettings } from "./ProviderProfilesSettings";
 
 const instanceId = ProviderInstanceId.make("company-codex");
 const projectId = ProjectId.make("client");
@@ -27,7 +27,7 @@ const settings: ServerSettings = {
   },
 };
 
-it("sends targeted patches when editing a profile's name and allowed instances", async () => {
+it("sends targeted patches when editing a profile's name and membership", async () => {
   const onPatch = vi.fn((_: ServerSettingsPatch, options?: { onSaved?: () => void }) =>
     options?.onSaved?.(),
   );
@@ -40,22 +40,37 @@ it("sends targeted patches when editing a profile's name and allowed instances",
     />,
   );
 
-  await screen.getByRole("checkbox", { name: "Company: Company Codex" }).click();
-  expect(onPatch).toHaveBeenLastCalledWith(
-    {
-      trogonStack: {
-        providerProfiles: { company: { name: "Company", providerInstanceIds: [instanceId] } },
-      },
-    },
-    expect.any(Object),
-  );
-
+  expect(screen.getByText(/Allows no providers yet/)).toBeVisible();
   const name = screen.getByRole("textbox", { name: "Rename provider profile Company" });
   await name.fill("New name");
   await userEvent.tab();
   expect(onPatch).toHaveBeenLastCalledWith(
     {
       trogonStack: { providerProfiles: { company: { name: "New name", providerInstanceIds: [] } } },
+    },
+    expect.any(Object),
+  );
+});
+
+it("adds an instance to a profile from the instance's own settings", async () => {
+  const onPatch = vi.fn((_: ServerSettingsPatch, options?: { onSaved?: () => void }) =>
+    options?.onSaved?.(),
+  );
+  await using screen = await render(
+    <ProviderInstanceProfiles
+      settings={settings}
+      instanceId={instanceId}
+      disabled={false}
+      onPatch={onPatch}
+    />,
+  );
+
+  await screen.getByRole("checkbox", { name: "Company profile" }).click();
+  expect(onPatch).toHaveBeenLastCalledWith(
+    {
+      trogonStack: {
+        providerProfiles: { company: { name: "Company", providerInstanceIds: [instanceId] } },
+      },
     },
     expect.any(Object),
   );

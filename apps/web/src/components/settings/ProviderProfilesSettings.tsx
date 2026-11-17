@@ -8,7 +8,7 @@ import {
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import { PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -60,12 +60,10 @@ function ProfileEditor({
     (assignedId) => assignedId === profileId,
   ).length;
   const knownIds = new Set(availableInstances.map(({ instanceId }) => instanceId));
-  const instances = [
-    ...availableInstances,
-    ...profile.providerInstanceIds
-      .filter((instanceId) => !knownIds.has(instanceId))
-      .map((instanceId) => ({ instanceId, label: `${instanceId} (not in Providers)` })),
-  ];
+  const allowedLabels = availableInstances
+    .filter(({ instanceId }) => profile.providerInstanceIds.includes(instanceId))
+    .map(({ label }) => label);
+  const unlistedIds = profile.providerInstanceIds.filter((instanceId) => !knownIds.has(instanceId));
   const remove = async () => {
     if (assignedProjects > 0) return;
     const confirmed = await ensureLocalApi().dialogs.confirm(
@@ -78,7 +76,7 @@ function ProfileEditor({
   return (
     <SettingsRow
       title={profile.name}
-      description={`${assignedProjects} assigned project${assignedProjects === 1 ? "" : "s"}. Only checked provider instances are allowed for assigned projects.`}
+      description={`${assignedProjects} assigned project${assignedProjects === 1 ? "" : "s"}. ${allowedLabels.length ? `Allows ${allowedLabels.join(", ")}` : "Allows no providers yet"}.`}
       control={
         <Button
           size="icon-sm"
@@ -109,32 +107,74 @@ function ProfileEditor({
             if (event.key === "Enter") event.currentTarget.blur();
           }}
         />
-        {instances.length ? (
-          <div className="flex flex-wrap gap-x-5 gap-y-3">
-            {instances.map(({ instanceId, label }) => (
-              <label key={instanceId} className="flex cursor-pointer items-center gap-2 text-sm">
-                <Checkbox
-                  aria-label={`${profile.name}: ${label}`}
-                  checked={profile.providerInstanceIds.includes(instanceId)}
-                  disabled={disabled || saving}
-                  onCheckedChange={(checked) =>
-                    save(
-                      setProfilePatch(
-                        profileId,
-                        toggleProfileInstance(profile, instanceId, checked === true),
-                      ),
-                    )
-                  }
-                />
-                {label}
-              </label>
-            ))}
+        {unlistedIds.map((instanceId) => (
+          <div key={instanceId} className="flex items-center gap-2 text-sm">
+            <span className="min-w-0 truncate text-muted-foreground">
+              {instanceId} (not in Providers)
+            </span>
+            <Button
+              size="icon-xs"
+              variant="ghost-muted"
+              aria-label={`Remove ${instanceId} from ${profile.name}`}
+              disabled={disabled || saving}
+              onClick={() =>
+                save(setProfilePatch(profileId, toggleProfileInstance(profile, instanceId, false)))
+              }
+            >
+              <XIcon />
+            </Button>
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">Add a provider instance to allow it here.</p>
-        )}
+        ))}
       </div>
     </SettingsRow>
+  );
+}
+
+export function ProviderInstanceProfiles({
+  settings,
+  instanceId,
+  disabled,
+  onPatch,
+}: {
+  settings: ServerSettings;
+  instanceId: ProviderInstanceId;
+  disabled: boolean;
+  onPatch: SettingsWriter;
+}) {
+  const [saving, setSaving] = useState(false);
+  const profiles = Object.entries(settings.trogonStack.providerProfiles).toSorted((left, right) =>
+    left[1].name.localeCompare(right[1].name),
+  );
+  if (profiles.length === 0) return null;
+  return (
+    <SettingsRow
+      title="Profiles"
+      description="Projects using a checked profile can use this provider."
+      control={
+        <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2">
+          {profiles.map(([profileId, profile]) => (
+            <label key={profileId} className="flex cursor-pointer items-center gap-2 text-sm">
+              <Checkbox
+                aria-label={`${profile.name} profile`}
+                checked={profile.providerInstanceIds.includes(instanceId)}
+                disabled={disabled || saving}
+                onCheckedChange={(checked) => {
+                  setSaving(true);
+                  onPatch(
+                    setProfilePatch(
+                      profileId,
+                      toggleProfileInstance(profile, instanceId, checked === true),
+                    ),
+                    { onSaved: () => setSaving(false), onFailed: () => setSaving(false) },
+                  );
+                }}
+              />
+              {profile.name}
+            </label>
+          ))}
+        </div>
+      }
+    />
   );
 }
 
@@ -172,7 +212,7 @@ export function ProviderProfilesSettings({
     <SettingsSection id="provider-profiles" title="Provider profiles">
       <SettingsRow
         title="New profile"
-        description="Choose allowed instances per profile. New providers are not added automatically. New projects need a profile; existing unassigned projects keep legacy access."
+        description="Add a provider to a profile from that provider's settings. New providers are not added automatically. New projects need a profile; existing unassigned projects keep legacy access."
         control={
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Input

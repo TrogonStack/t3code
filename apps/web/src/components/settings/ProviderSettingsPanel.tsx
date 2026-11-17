@@ -24,6 +24,7 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ServerProvider,
+  type ServerSettings,
   resolveEnvironmentMachineKind,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
@@ -101,6 +102,7 @@ import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import {
   ProjectProviderProfileAssignment,
+  ProviderInstanceProfiles,
   ProviderProfilesSettings,
 } from "./ProviderProfilesSettings";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
@@ -929,6 +931,7 @@ export function EnvironmentProviderSettings({
     updateModelPreferences: stableUpdateModelPreferences,
     toggleModelFavorite: stableToggleModelFavorite,
     selectInstance: setSelectedInstanceId,
+    patchSettings: updateSettings,
   };
   // resolveModelPreferences falls back to a fresh `[]`; keep it stable for the rows.
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
@@ -977,6 +980,8 @@ export function EnvironmentProviderSettings({
         modelPreferences={settings.providerModelPreferences?.[row.instanceId]}
         favorites={favorites}
         actions={actions}
+        profileSettings={mode === "editor" ? settings : undefined}
+        profilesDisabled={readOnly || !canWriteSettings || !canManageProfiles}
       />
     );
   };
@@ -1251,6 +1256,7 @@ interface ProviderInstanceRowActions {
   readonly updateModelPreferences: ReturnType<typeof useUpdateEnvironmentModelPreferences>;
   readonly toggleModelFavorite: ReturnType<typeof useToggleEnvironmentModelFavorite>;
   readonly selectInstance: (instanceId: ProviderInstanceId) => void;
+  readonly patchSettings: ReturnType<typeof useUpdateEnvironmentSettings>;
 }
 
 const NO_MODELS: ReadonlyArray<string> = [];
@@ -1276,6 +1282,8 @@ function ProviderInstanceRow({
   modelPreferences,
   favorites,
   actions,
+  profileSettings,
+  profilesDisabled,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -1298,6 +1306,8 @@ function ProviderInstanceRow({
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
+  readonly profileSettings: ServerSettings | undefined;
+  readonly profilesDisabled: boolean;
 }) {
   const allProjects = useProjects();
   const secretSources = useSecretSources(environmentId);
@@ -1363,6 +1373,16 @@ function ProviderInstanceRow({
         ) : undefined
       }
       canWriteSettings={canWriteSettings}
+      profiles={
+        profileSettings ? (
+          <ProviderInstanceProfiles
+            settings={profileSettings}
+            instanceId={instanceId}
+            disabled={profilesDisabled}
+            onPatch={actions.patchSettings}
+          />
+        ) : null
+      }
       setup={
         mode === "editor" && driver === "antigravity" ? (
           <ProviderSetupSection

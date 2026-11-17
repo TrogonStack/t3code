@@ -687,6 +687,7 @@ interface ProviderInstanceCardProps {
   readonly headerAction?: ReactNode | undefined;
   readonly setup?: ReactNode;
   readonly runtime?: ReactNode;
+  readonly profiles?: ReactNode;
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
@@ -761,6 +762,7 @@ export function ProviderInstanceCard({
   headerAction,
   setup,
   runtime,
+  profiles,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -1338,6 +1340,7 @@ export function ProviderInstanceCard({
             </div>
           }
         />
+        {mode === "editor" ? profiles : null}
       </SettingsSection>
 
       {setup || environmentFields.length > 0 ? (
