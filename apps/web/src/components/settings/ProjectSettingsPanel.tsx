@@ -50,6 +50,7 @@ import {
   ProjectFaviconPickerDialog,
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
+import { ProjectProviderProfileAssignment } from "./ProviderProfilesSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import {
   defaultProjectIcon,
@@ -711,6 +712,21 @@ function ProjectDetail({
               />
             </>
           ) : null}
+        </SettingsSection>
+        <SettingsSection id="project-provider-profile" title="Provider profile">
+          {group.memberProjects.map((member) => (
+            <ProjectProviderProfileAssignment
+              key={`${member.environmentId}:${member.id}`}
+              environmentId={member.environmentId}
+              projectId={member.id}
+              available={environmentById.get(member.environmentId)?.serverConfig != null}
+              {...(group.memberProjects.length > 1
+                ? {
+                    label: `${member.environmentLabel ?? member.environmentId} · ${member.workspaceRoot}`,
+                  }
+                : {})}
+            />
+          ))}
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
         <ProjectActionsSettings />

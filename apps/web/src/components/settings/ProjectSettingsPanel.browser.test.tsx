@@ -5,6 +5,7 @@ import type {
 } from "@t3tools/client-runtime/state/projects";
 import {
   AuthOrchestrationOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -12,6 +13,7 @@ import {
   ProviderInstanceId,
   type AuthEnvironmentScope,
   type AuthSessionState,
+  type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
@@ -50,6 +52,7 @@ const state = vi.hoisted(() => ({
         input: DeleteProjectInput;
       }) => Promise<AsyncResult.Success<void>>
     >(),
+  updateSettings: vi.fn<(patch: ServerSettingsPatch) => void>(),
   confirm: vi.fn<() => Promise<boolean>>(),
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
@@ -112,6 +115,10 @@ vi.mock(import("~/hooks/useSettings"), async (original) => ({
   ...(await original()),
   useClientSettings: ((selector?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
     selector ? selector(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS) as never,
+  useEnvironmentSettings: ((id: EnvironmentId) =>
+    environments.find((environment) => environment.environmentId === id)?.serverConfig.settings ??
+    DEFAULT_SERVER_SETTINGS) as never,
+  useUpdateEnvironmentSettings: (() => state.updateSettings) as never,
 }));
 vi.mock(import("~/localApi"), async (original) => ({
   ...(await original()),
@@ -189,6 +196,8 @@ function deferred<T>() {
 
 function setup() {
   vi.clearAllMocks();
+  for (const environment of environments)
+    environment.serverConfig.settings = DEFAULT_SERVER_SETTINGS;
   state.sessions.clear();
   for (const id of [primaryId, remoteId])
     state.sessions.set(id, Atom.make<SessionResult>(writable()).pipe(Atom.keepAlive));
@@ -360,6 +369,39 @@ describe("project organization", () => {
       [primaryId, true],
       [remoteId, true],
     ]);
+  });
+});
+
+describe("project provider profile", () => {
+  it("labels a pending project and assigns it with a targeted settings patch", async () => {
+    setup();
+    await grant(
+      primaryId,
+      AsyncResult.success(
+        session([AuthOrchestrationOperateScope, AuthSettingsWriteScope, AuthProvidersManageScope]),
+      ),
+    );
+    const projectId = state.projects.find((project) => project.environmentId === primaryId)!.id;
+    environments[0]!.serverConfig.settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      trogonStack: {
+        ...DEFAULT_SERVER_SETTINGS.trogonStack,
+        providerProfiles: { company: { name: "Company", providerInstanceIds: [instanceId] } },
+        projectsRequiringProfile: { [projectId]: true },
+      },
+    };
+
+    await using screen = await mountPanel({ machine: primaryId });
+    await expect
+      .element(screen.getByText("Choose a profile before using providers").first())
+      .toBeVisible();
+    await userEvent.click(screen.getByRole("combobox", { name: "Provider profile" }));
+    await userEvent.click(page.getByRole("option", { name: "Company" }));
+
+    expect(state.updateSettings).toHaveBeenCalledWith(
+      { trogonStack: { projectProfiles: { [projectId]: "company" } } },
+      expect.any(Object),
+    );
   });
 });
 

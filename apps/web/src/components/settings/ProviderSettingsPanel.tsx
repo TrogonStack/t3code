@@ -99,6 +99,10 @@ import { useSecretSources } from "./SecretSourceInput";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import {
+  ProjectProviderProfileAssignment,
+  ProviderProfilesSettings,
+} from "./ProviderProfilesSettings";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -553,6 +557,7 @@ export function EnvironmentProviderSettings({
   const canAddProvider =
     !readOnly && managedPolicy?.limits?.providers?.allowedDrivers?.length !== 0;
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canManageProfiles = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canRefreshProviders = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const updateModelPreferences = useUpdateEnvironmentModelPreferences(environmentId);
@@ -931,7 +936,11 @@ export function EnvironmentProviderSettings({
   const representativeProjectId = projectIds[0];
   const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
     const showProjectOverride =
-      representativeProjectId !== undefined && supportsProjectProviderOverrides;
+      representativeProjectId !== undefined &&
+      supportsProjectProviderOverrides &&
+      projectIds.every(
+        (projectId) => settings.trogonStack.projectProfiles[projectId] === undefined,
+      );
     return (
       <ProviderInstanceRow
         key={row.instanceId}
@@ -1085,6 +1094,26 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      {projectIds.length > 0 ? (
+        <SettingsSection title="Project provider profile">
+          {projectIds.map((projectId) => (
+            <ProjectProviderProfileAssignment
+              key={projectId}
+              environmentId={environmentId}
+              projectId={projectId}
+              {...(projectIds.length > 1 ? { label: String(projectId) } : {})}
+            />
+          ))}
+        </SettingsSection>
+      ) : null}
+
+      <ProviderProfilesSettings
+        settings={settings}
+        providers={serverProviders}
+        disabled={readOnly || !canWriteSettings || !canManageProfiles}
+        onPatch={updateSettings}
+      />
 
       <UsageProviderSettings
         key={environmentId}

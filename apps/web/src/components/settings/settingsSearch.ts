@@ -284,6 +284,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["name icon emoji image checkout remove delete"],
   },
   {
+    id: "project-provider-profile",
+    title: "Project provider profile",
+    to: "/settings/projects",
+    searchTerms: ["assign provider profile project company personal access separation"],
+  },
+  {
     id: "default-model",
     title: "Default model",
     to: "/settings/threads",
@@ -984,6 +990,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "agents cli codex claude cursor grok fx kiro opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
     ],
+  },
+  {
+    id: "provider-profiles",
+    title: "Provider profiles",
+    to: "/settings/providers",
+    searchTerms: ["company personal provider instances allowlist separation project policy"],
   },
   {
     id: "usage-providers",

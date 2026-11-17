@@ -46,14 +46,14 @@ describe("provider profile patches", () => {
         },
         projectProfiles: {
           [projectId]: "company",
-          other: "personal",
-          missing: "deleted",
+          [ProjectId.make("other")]: "personal",
+          [ProjectId.make("missing")]: "deleted",
         },
         projectsRequiringProfile: { [projectId]: true },
       },
     } satisfies Pick<ServerSettings, "trogonStack">;
 
-    expect(removeProfilePatch(settings, "company")).toEqual({
+    expect(removeProfilePatch("company")).toEqual({
       trogonStack: {
         providerProfiles: { company: null },
       },
