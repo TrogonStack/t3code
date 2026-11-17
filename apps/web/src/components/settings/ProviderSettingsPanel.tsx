@@ -100,11 +100,12 @@ import { useSecretSources } from "./SecretSourceInput";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import { ProviderInstanceProfiles } from "./ProviderProfilesSettings";
 import {
-  ProjectProviderProfileAssignment,
-  ProviderInstanceProfiles,
-  ProviderProfilesSettings,
-} from "./ProviderProfilesSettings";
+  buildProviderInstanceRows,
+  providerInstanceName,
+  type ProviderInstanceRowData,
+} from "./providerInstanceRows";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -136,14 +137,6 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 
-function providerInstanceName(instance: ProviderInstanceConfig): string {
-  return (
-    instance.displayName?.trim() ||
-    providerClients.get(instance.driver)?.label ||
-    String(instance.driver)
-  );
-}
-
 async function confirmProviderInstanceRemoval(
   question: string,
   consequence = "",
@@ -168,11 +161,6 @@ function providerConfigString(config: unknown, key: string): string | null {
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
-
-const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
-  provider: definition.driverKind,
-  hasDefaultInstance: definition.hasDefaultInstance !== false,
-}));
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -622,14 +610,6 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const providerHealthPreset = getBackgroundActivityPresetSettings(
     resolvedBackgroundActivity.profile,
@@ -707,80 +687,7 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  interface InstanceRow {
-    readonly instanceId: ProviderInstanceId;
-    /** Undefined for a default slot the user never configured. */
-    readonly explicitInstance: ProviderInstanceConfig | undefined;
-    readonly driver: ProviderDriverKind;
-    readonly isDefault: boolean;
-    readonly isDirty?: boolean;
-  }
-
-  const instancesByDriver = new Map<
-    ProviderDriverKind,
-    Array<[ProviderInstanceId, ProviderInstanceConfig]>
-  >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
-    const driver = instance.driver;
-    const list = instancesByDriver.get(driver) ?? [];
-    list.push([rawId as ProviderInstanceId, instance]);
-    instancesByDriver.set(driver, list);
-  }
-
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
-  const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
-  for (const providerSettings of visibleProviderSettings) {
-    const driver = providerSettings.provider;
-    const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
-    const isDirty = explicitInstance !== undefined;
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
-    if (
-      hasDefaultSlot &&
-      (driver === "codex" ||
-        driver === "claudeAgent" ||
-        isDirty ||
-        resolveProviderInstanceEnabled(explicitInstance ?? { driver }) ||
-        defaultInstanceId === targetInstanceId)
-    ) {
-      rows.push({
-        instanceId: defaultInstanceId,
-        explicitInstance,
-        driver,
-        isDefault: true,
-        isDirty,
-      });
-    }
-    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
-      if (id === defaultInstanceId) continue;
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: false,
-      });
-    }
-  }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
+  const rows = buildProviderInstanceRows(settings, serverProviders, targetInstanceId);
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
@@ -937,7 +844,7 @@ export function EnvironmentProviderSettings({
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+  const renderProviderInstance = (row: ProviderInstanceRowData, mode: "list" | "editor") => {
     const showProjectOverride =
       representativeProjectId !== undefined &&
       supportsProjectProviderOverrides &&
@@ -1099,33 +1006,6 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
-
-      {projectIds.length > 0 ? (
-        <SettingsSection title="Project provider profile">
-          {projectIds.map((projectId) => (
-            <ProjectProviderProfileAssignment
-              key={projectId}
-              environmentId={environmentId}
-              projectId={projectId}
-              {...(projectIds.length > 1 ? { label: String(projectId) } : {})}
-            />
-          ))}
-        </SettingsSection>
-      ) : null}
-
-      <ProviderProfilesSettings
-        settings={settings}
-        instances={rows.map((row) => ({
-          instanceId: row.instanceId,
-          label:
-            serverProviders
-              .find((candidate) => candidate.instanceId === row.instanceId)
-              ?.displayName?.trim() ||
-            providerInstanceName(row.explicitInstance ?? { driver: row.driver }),
-        }))}
-        disabled={readOnly || !canWriteSettings || !canManageProfiles}
-        onPatch={updateSettings}
-      />
 
       <UsageProviderSettings
         key={environmentId}

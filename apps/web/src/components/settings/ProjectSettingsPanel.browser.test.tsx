@@ -393,7 +393,7 @@ describe("project provider profile", () => {
 
     await using screen = await mountPanel({ machine: primaryId });
     await expect
-      .element(screen.getByText("Choose a profile before using providers").first())
+      .element(screen.getByText("Blocked until you pick a profile.").first())
       .toBeVisible();
     await userEvent.click(screen.getByRole("combobox", { name: "Provider profile" }));
     await userEvent.click(page.getByRole("option", { name: "Company" }));

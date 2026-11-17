@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/provider-profiles"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -102,6 +103,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
+  "/settings/provider-profiles": msg("Provider profiles"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
@@ -141,6 +143,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
+      "/settings/provider-profiles",
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
@@ -994,8 +997,17 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-profiles",
     title: "Provider profiles",
-    to: "/settings/providers",
-    searchTerms: ["company personal provider instances allowlist separation project policy"],
+    to: "/settings/provider-profiles",
+    searchTerms: ["company personal providers group allowlist separation project policy"],
+    providerSettingsOnly: true,
+  },
+  {
+    id: "provider-profiles-projects",
+    title: "Project provider profiles",
+    to: "/settings/provider-profiles",
+    targetId: "provider-profiles-projects",
+    searchTerms: ["assign profile project company personal access separation"],
+    providerSettingsOnly: true,
   },
   {
     id: "usage-providers",
@@ -1404,6 +1416,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/provider-profiles": null,
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,

@@ -7,14 +7,15 @@ import {
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
 import { render } from "../../../test/render";
-import { ProviderInstanceProfiles, ProviderProfilesSettings } from "./ProviderProfilesSettings";
+import { ProviderInstanceProfiles, ProviderProfilesView } from "./ProviderProfilesSettings";
 
 const instanceId = ProviderInstanceId.make("company-codex");
 const projectId = ProjectId.make("client");
+const options = [{ instanceId, label: "Company Codex" }];
+const projects = [{ id: projectId, title: "client", workspaceRoot: "/work/client" }];
 const settings: ServerSettings = {
   ...DEFAULT_SERVER_SETTINGS,
   providerInstances: {
@@ -27,23 +28,25 @@ const settings: ServerSettings = {
   },
 };
 
-it("sends targeted patches when editing a profile's name and membership", async () => {
+it("sends targeted patches when renaming a profile", async () => {
   const onPatch = vi.fn((_: ServerSettingsPatch, options?: { onSaved?: () => void }) =>
     options?.onSaved?.(),
   );
   await using screen = await render(
-    <ProviderProfilesSettings
+    <ProviderProfilesView
       settings={settings}
-      instances={[{ instanceId, label: "Company Codex" }]}
+      options={options}
+      projects={projects}
       disabled={false}
       onPatch={onPatch}
     />,
   );
 
-  expect(screen.getByText(/Allows no providers yet/)).toBeVisible();
-  const name = screen.getByRole("textbox", { name: "Rename provider profile Company" });
-  await name.fill("New name");
-  await userEvent.tab();
+  expect(screen.getByText(/Used by client\./)).toBeVisible();
+  await screen.getByRole("button", { name: "More actions for Company" }).click();
+  await screen.getByRole("menuitem", { name: "Rename" }).click();
+  await screen.getByRole("textbox", { name: "Profile name" }).fill("New name");
+  await screen.getByRole("button", { name: "Save" }).click();
   expect(onPatch).toHaveBeenLastCalledWith(
     {
       trogonStack: { providerProfiles: { company: { name: "New name", providerInstanceIds: [] } } },
@@ -82,9 +85,10 @@ it("starts new profiles with no allowed providers", async () => {
     options?.onSaved?.(),
   );
   await using screen = await render(
-    <ProviderProfilesSettings
+    <ProviderProfilesView
       settings={settings}
-      instances={[{ instanceId, label: "Company Codex" }]}
+      options={options}
+      projects={projects}
       disabled={false}
       onPatch={onPatch}
     />,
@@ -97,4 +101,27 @@ it("starts new profiles with no allowed providers", async () => {
     { name: "Personal", providerInstanceIds: [] },
   ]);
   expect(Object.keys(patch.trogonStack?.providerProfiles ?? {})).toHaveLength(1);
+});
+
+it("assigns a project to a profile or removes its profile", async () => {
+  const onPatch = vi.fn((_: ServerSettingsPatch, options?: { onSaved?: () => void }) =>
+    options?.onSaved?.(),
+  );
+  await using screen = await render(
+    <ProviderProfilesView
+      settings={settings}
+      options={options}
+      projects={projects}
+      disabled={false}
+      onPatch={onPatch}
+    />,
+  );
+
+  expect(screen.getByText("Can use no providers. Add some to Company.")).toBeVisible();
+  await screen.getByRole("combobox", { name: "Provider profile for client" }).click();
+  await screen.getByRole("option", { name: "No profile" }).click();
+  expect(onPatch).toHaveBeenLastCalledWith(
+    { trogonStack: { projectProfiles: { [projectId]: null } } },
+    expect.any(Object),
+  );
 });

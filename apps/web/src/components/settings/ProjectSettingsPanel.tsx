@@ -722,7 +722,7 @@ function ProjectDetail({
               available={environmentById.get(member.environmentId)?.serverConfig != null}
               {...(group.memberProjects.length > 1
                 ? {
-                    label: `${member.environmentLabel ?? member.environmentId} · ${member.workspaceRoot}`,
+                    title: `Provider profile · ${member.environmentLabel ?? member.environmentId} · ${member.workspaceRoot}`,
                   }
                 : {})}
             />

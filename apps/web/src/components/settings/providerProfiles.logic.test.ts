@@ -2,7 +2,10 @@ import { ProjectId, ProviderInstanceId, type ServerSettings } from "@t3tools/con
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  profileAssignmentLabel,
+  profileNameTaken,
+  profileUsageText,
+  projectDisplayTitles,
+  projectProfileDescription,
   removeProfilePatch,
   setProfilePatch,
   setProjectProfilePatch,
@@ -58,21 +61,49 @@ describe("provider profile patches", () => {
         providerProfiles: { company: null },
       },
     });
-    expect(profileAssignmentLabel(settings, projectId)).toBe("Company");
-    expect(profileAssignmentLabel(settings, ProjectId.make("missing"))).toBe(
-      "Missing profile (providers blocked)",
+    const options = [{ instanceId, label: "Company Codex" }];
+    const description = (value: Pick<ServerSettings, "trogonStack">, id: string) =>
+      projectProfileDescription(value, ProjectId.make(id), options);
+    expect(description(settings, projectId)).toBe("Can use Company Codex.");
+    expect(description(settings, "other")).toBe("Can use no providers. Add some to Personal.");
+    expect(description(settings, "missing")).toBe(
+      "Its profile was deleted. Blocked until you pick another.",
     );
-    expect(profileAssignmentLabel(settings, ProjectId.make("new"))).toBe(
-      "No profile (legacy access)",
+    expect(description(settings, "new")).toBe("Not restricted. Can use every provider.");
+    expect(
+      description(
+        {
+          trogonStack: {
+            ...settings.trogonStack,
+            projectsRequiringProfile: { [ProjectId.make("new")]: true },
+          },
+        },
+        "new",
+      ),
+    ).toBe("Blocked until you pick a profile.");
+    expect(projectProfileDescription(settings, projectId, [])).toBe(
+      "Can use company-codex (removed).",
     );
-    const pendingSettings = {
+  });
+
+  it("words who uses a profile, tells apart same-named projects, and rejects duplicate names", () => {
+    expect(profileUsageText([])).toBe("No project uses it yet.");
+    expect(profileUsageText(["website", "t3code"])).toBe("Used by t3code, website.");
+    const titles = projectDisplayTitles([
+      { id: ProjectId.make("a"), title: "app", workspaceRoot: "/one/app" },
+      { id: ProjectId.make("b"), title: "app", workspaceRoot: "/two/app" },
+      { id: ProjectId.make("c"), title: "site", workspaceRoot: "/site" },
+    ]);
+    expect([...titles.values()]).toEqual(["app (/one/app)", "app (/two/app)", "site"]);
+    const settings = {
       trogonStack: {
-        ...settings.trogonStack,
-        projectsRequiringProfile: { [ProjectId.make("new")]: true },
+        providerProfiles: { company: profile },
+        projectProfiles: {},
+        projectsRequiringProfile: {},
       },
     };
-    expect(profileAssignmentLabel(pendingSettings, ProjectId.make("new"))).toBe(
-      "Choose a profile before using providers",
-    );
+    expect(profileNameTaken(settings, " company ")).toBe(true);
+    expect(profileNameTaken(settings, "Company", "company")).toBe(false);
+    expect(profileNameTaken(settings, "Personal")).toBe(false);
   });
 });
