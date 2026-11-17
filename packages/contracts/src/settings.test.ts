@@ -488,6 +488,31 @@ describe("resolveProjectProviderInstanceEnabled", () => {
     };
     expect(resolveProjectProviderInstanceEnabled(settings, projectId, instanceId)).toBe(false);
   });
+
+  it("limits an assigned project to its profile even when a project override enables another instance", () => {
+    const settings = decodeServerSettings({
+      providerInstances: {
+        [instanceId]: { driver: "codex", enabled: true },
+        claude_work: { driver: "claudeAgent", enabled: true },
+      },
+      projectSettingsOverrides: {
+        [projectId]: { providerInstances: { claude_work: { enabled: true } } },
+      },
+      trogonStack: {
+        providerProfiles: { personal: { name: "Personal", providerInstanceIds: [instanceId] } },
+        projectProfiles: { [projectId]: "personal" },
+      },
+    });
+    expect(resolveProjectProviderInstanceEnabled(settings, projectId, instanceId)).toBe(true);
+    expect(
+      resolveProjectProviderInstanceEnabled(
+        settings,
+        projectId,
+        ProviderInstanceId.make("claude_work"),
+      ),
+    ).toBe(false);
+    expect(encodeServerSettings(settings)).toHaveProperty("trogonStack");
+  });
 });
 
 describe("requiredScopesForProjectMutation", () => {
