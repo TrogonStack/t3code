@@ -34,7 +34,7 @@ it("sends targeted patches when editing a profile's name and allowed instances",
   await using screen = await render(
     <ProviderProfilesSettings
       settings={settings}
-      providers={[]}
+      instances={[{ instanceId, label: "Company Codex" }]}
       disabled={false}
       onPatch={onPatch}
     />,
@@ -68,7 +68,7 @@ it("starts new profiles with no allowed providers", async () => {
   await using screen = await render(
     <ProviderProfilesSettings
       settings={settings}
-      providers={[]}
+      instances={[{ instanceId, label: "Company Codex" }]}
       disabled={false}
       onPatch={onPatch}
     />,

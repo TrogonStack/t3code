@@ -5,7 +5,6 @@ import {
   type ProjectId,
   type ProviderInstanceId,
   type ProviderProfile,
-  type ServerProvider,
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
@@ -14,14 +13,12 @@ import { useState } from "react";
 
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { randomUUID } from "../../lib/utils";
-import { providerInstanceEntriesFor } from "../../providerInstances";
 import { useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { ensureLocalApi } from "../../localApi";
-import { providerClients } from "./providerDriverMeta";
 import {
   profileAssignmentLabel,
   projectRequiresProfile,
@@ -67,7 +64,7 @@ function ProfileEditor({
     ...availableInstances,
     ...profile.providerInstanceIds
       .filter((instanceId) => !knownIds.has(instanceId))
-      .map((instanceId) => ({ instanceId, label: `${instanceId} (missing)` })),
+      .map((instanceId) => ({ instanceId, label: `${instanceId} (not in Providers)` })),
   ];
   const remove = async () => {
     if (assignedProjects > 0) return;
@@ -143,12 +140,13 @@ function ProfileEditor({
 
 export function ProviderProfilesSettings({
   settings,
-  providers,
+  instances,
   disabled,
   onPatch,
 }: {
   settings: ServerSettings;
-  providers: ReadonlyArray<ServerProvider>;
+  /** The instances the Providers list shows, so a profile offers the same ones. */
+  instances: ReadonlyArray<{ instanceId: ProviderInstanceId; label: string }>;
   disabled: boolean;
   onPatch: SettingsWriter;
 }) {
@@ -157,21 +155,6 @@ export function ProviderProfilesSettings({
   const profiles = Object.entries(settings.trogonStack.providerProfiles).toSorted((left, right) =>
     left[1].name.localeCompare(right[1].name),
   );
-  const fromProviders = providerInstanceEntriesFor(providers, settings, null).map((entry) => ({
-    instanceId: entry.instanceId,
-    label: entry.displayName,
-  }));
-  const knownIds = new Set(fromProviders.map((entry) => entry.instanceId));
-  const availableInstances = [
-    ...fromProviders,
-    ...Object.entries(settings.providerInstances)
-      .filter(([instanceId]) => !knownIds.has(instanceId as ProviderInstanceId))
-      .map(([instanceId, instance]) => ({
-        instanceId: instanceId as ProviderInstanceId,
-        label:
-          instance.displayName?.trim() || providerClients.get(instance.driver)?.label || instanceId,
-      })),
-  ];
   const create = () => {
     const name = newName.trim();
     if (!name || creating) return;
@@ -221,7 +204,7 @@ export function ProviderProfilesSettings({
           profileId={profileId}
           profile={profile}
           settings={settings}
-          availableInstances={availableInstances}
+          availableInstances={instances}
           disabled={disabled}
           onPatch={onPatch}
         />

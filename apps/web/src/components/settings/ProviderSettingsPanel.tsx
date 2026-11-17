@@ -1110,7 +1110,14 @@ export function EnvironmentProviderSettings({
 
       <ProviderProfilesSettings
         settings={settings}
-        providers={serverProviders}
+        instances={rows.map((row) => ({
+          instanceId: row.instanceId,
+          label:
+            serverProviders
+              .find((candidate) => candidate.instanceId === row.instanceId)
+              ?.displayName?.trim() ||
+            providerInstanceName(row.explicitInstance ?? { driver: row.driver }),
+        }))}
         disabled={readOnly || !canWriteSettings || !canManageProfiles}
         onPatch={updateSettings}
       />
