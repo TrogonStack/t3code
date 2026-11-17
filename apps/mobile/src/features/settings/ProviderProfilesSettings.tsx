@@ -2,6 +2,7 @@ import {
   AuthProvidersManageScope,
   AuthSettingsWriteScope,
   isManagedDriverAllowed,
+  resolveProjectProviderInstanceEnabled,
   type EnvironmentId,
   type ProjectId,
   type ProviderProfile,
@@ -254,6 +255,17 @@ function ProviderProfileEditor(props: {
   );
   const { write, pending } = useProfileSettingsWrite(environment.environmentId);
   const profiles = environment.serverConfig.settings.trogonStack;
+  // Every harness is in the snapshot; offer only the ones set up here or already in the profile.
+  const shownProviders = props.providers.filter(
+    (provider) =>
+      profile.providerInstanceIds.includes(provider.instanceId) ||
+      Object.hasOwn(environment.serverConfig.settings.providerInstances, provider.instanceId) ||
+      resolveProjectProviderInstanceEnabled(
+        environment.serverConfig.settings,
+        null,
+        provider.instanceId,
+      ),
+  );
   const assigned = Object.values(profiles.projectProfiles).filter(
     (assignedId) => assignedId === id,
   ).length;
@@ -322,7 +334,7 @@ function ProviderProfileEditor(props: {
           </Text>
         ) : null}
       </View>
-      {props.providers.map((provider) => (
+      {shownProviders.map((provider) => (
         <SettingsSwitchRow
           key={provider.instanceId}
           label={provider.displayName ?? provider.instanceId}
