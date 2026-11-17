@@ -203,6 +203,7 @@ import { createMarkdownRenderer } from "./chat/markdownRenderer";
 import { splitMarkdownBlocks } from "./chat/markdownStreamBlocks";
 import { MarkdownMermaidCodeBlock } from "./chat/MarkdownMermaidCodeBlock";
 import { MarkdownTable } from "./chat/MarkdownTable";
+import { markdownTableMinWidth } from "./chat/markdownTableLayout";
 import { MarkdownDetails } from "./chat/MarkdownDetails";
 import {
   authoredImageSizeStyle,
@@ -1660,8 +1661,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
     }
     return <ChatMarkdownImageFallback alt={altText} copyMarkdown={copyMarkdown} kind={kind} />;
   },
-  table: function MarkdownTableRenderer({ node: _node, ...props }) {
-    return <MarkdownTable {...props} />;
+  table: function MarkdownTableRenderer({ node, ...props }) {
+    return <MarkdownTable {...props} minWidth={markdownTableMinWidth(node)} />;
   },
   details: function MarkdownDetailsRenderer({ node: _node, children, open: detailsOpen, dir }) {
     return (
