@@ -65,7 +65,8 @@ it("adds an instance to a profile from the instance's own settings", async () =>
     />,
   );
 
-  await screen.getByRole("switch", { name: "Company profile" }).click();
+  await screen.getByRole("button", { name: "Profiles: No profiles" }).click();
+  await screen.getByRole("menuitemcheckbox", { name: "Company" }).click();
   expect(onPatch).toHaveBeenLastCalledWith(
     {
       trogonStack: {

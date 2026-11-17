@@ -8,7 +8,7 @@ import {
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
-import { PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
 import { useState } from "react";
 
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -16,8 +16,8 @@ import { randomUUID } from "../../lib/utils";
 import { useEnvironmentScope } from "../../state/session";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Menu, MenuCheckboxItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
-import { Switch } from "../ui/switch";
 import { ensureLocalApi } from "../../localApi";
 import {
   profileAssignmentLabel,
@@ -146,24 +146,28 @@ export function ProviderInstanceProfiles({
     left[1].name.localeCompare(right[1].name),
   );
   if (profiles.length === 0) return null;
+  const selected = profiles
+    .filter(([, profile]) => profile.providerInstanceIds.includes(instanceId))
+    .map(([, profile]) => profile.name);
+  const label = selected.length ? selected.join(", ") : "No profiles";
   return (
-    <SettingsSection title="Profiles">
-      {profiles.map(([profileId, profile]) => {
-        const projects = Object.values(settings.trogonStack.projectProfiles).filter(
-          (assignedId) => assignedId === profileId,
-        ).length;
-        return (
-          <SettingsRow
-            key={profileId}
-            title={profile.name}
-            description={
-              projects === 0
-                ? "No project uses this profile yet."
-                : `Used by ${projects} project${projects === 1 ? "" : "s"}.`
-            }
-            control={
-              <Switch
-                aria-label={`${profile.name} profile`}
+    <SettingsRow
+      title="Profiles"
+      description="Projects on a selected profile can use this provider."
+      control={
+        <Menu>
+          <MenuTrigger
+            render={<Button variant="outline" size="sm" className="max-w-56" />}
+            aria-label={`Profiles: ${label}`}
+            disabled={disabled}
+          >
+            <span className="truncate">{label}</span>
+            <ChevronDownIcon />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            {profiles.map(([profileId, profile]) => (
+              <MenuCheckboxItem
+                key={profileId}
                 checked={profile.providerInstanceIds.includes(instanceId)}
                 disabled={disabled || saving}
                 onCheckedChange={(checked) => {
@@ -173,12 +177,14 @@ export function ProviderInstanceProfiles({
                     { onSaved: () => setSaving(false), onFailed: () => setSaving(false) },
                   );
                 }}
-              />
-            }
-          />
-        );
-      })}
-    </SettingsSection>
+              >
+                {profile.name}
+              </MenuCheckboxItem>
+            ))}
+          </MenuPopup>
+        </Menu>
+      }
+    />
   );
 }
 
