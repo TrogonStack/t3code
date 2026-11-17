@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   profileNameTaken,
+  profileInUse,
   profileUsageText,
   projectDisplayTitles,
   projectProfileDescription,
@@ -87,8 +88,27 @@ describe("provider profile patches", () => {
   });
 
   it("words who uses a profile, tells apart same-named projects, and rejects duplicate names", () => {
-    expect(profileUsageText([])).toBe("No project uses it yet.");
-    expect(profileUsageText(["website", "t3code"])).toBe("Used by t3code, website.");
+    const usage = {
+      trogonStack: {
+        providerProfiles: { company: profile },
+        projectProfiles: {
+          [ProjectId.make("w")]: "company",
+          [ProjectId.make("t")]: "company",
+          [ProjectId.make("gone")]: "company",
+        },
+        projectsRequiringProfile: {},
+      },
+    };
+    const known = new Map([
+      [ProjectId.make("w"), "website"],
+      [ProjectId.make("t"), "t3code"],
+    ]);
+    expect(profileUsageText(usage, "personal", known)).toBe("No project uses it yet.");
+    expect(profileUsageText(usage, "company", known)).toBe(
+      "Used by t3code, website, 1 other project. Move them to another profile to delete this one.",
+    );
+    expect(profileInUse(usage, "company")).toBe(true);
+    expect(profileInUse(usage, "personal")).toBe(false);
     const titles = projectDisplayTitles([
       { id: ProjectId.make("a"), title: "app", workspaceRoot: "/one/app" },
       { id: ProjectId.make("b"), title: "app", workspaceRoot: "/two/app" },

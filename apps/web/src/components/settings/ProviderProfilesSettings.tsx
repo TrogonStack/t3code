@@ -32,10 +32,10 @@ import { useProviderInstanceOptions } from "./providerInstanceRows";
 import {
   profileNameTaken,
   profileProviderLabels,
+  profileInUse,
   profileUsageText,
   projectDisplayTitles,
   projectProfileDescription,
-  projectsUsingProfile,
   removeProfilePatch,
   setProfilePatch,
   setProjectProfilePatch,
@@ -171,7 +171,7 @@ function ProfileRow({
   settings,
   profileId,
   profile,
-  usedBy,
+  usage,
   options,
   disabled,
   onPatch,
@@ -179,7 +179,7 @@ function ProfileRow({
   settings: ServerSettings;
   profileId: string;
   profile: ProviderProfile;
-  usedBy: ReadonlyArray<string>;
+  usage: string;
   options: ReadonlyArray<ProviderInstanceOption>;
   disabled: boolean;
   onPatch: SettingsWriter;
@@ -198,7 +198,7 @@ function ProfileRow({
   };
   const labels = profileProviderLabels(profile, options);
   const buttonLabel = labels.length ? labels.join(", ") : "No providers";
-  const inUse = usedBy.length > 0;
+  const inUse = profileInUse(settings, profileId);
   const known = new Set(options.map(({ instanceId }) => instanceId));
   const removedIds = profile.providerInstanceIds.filter((instanceId) => !known.has(instanceId));
   const remove = async () => {
@@ -214,14 +214,14 @@ function ProfileRow({
   return (
     <SettingsRow
       title={profile.name}
-      description={`${profileUsageText(usedBy)}${inUse ? " Move them to another profile to delete this one." : ""}`}
+      description={usage}
       control={
         <div className="flex items-center gap-2">
           <Menu>
             <MenuTrigger
               render={<Button variant="outline" size="sm" className="max-w-56" />}
               aria-label={`Providers for ${profile.name}: ${buttonLabel}`}
-              disabled={disabled || saving}
+              disabled={disabled}
             >
               <span className="truncate">{buttonLabel}</span>
               <ChevronDownIcon />
@@ -231,6 +231,7 @@ function ProfileRow({
                 <MenuCheckboxItem
                   key={instanceId}
                   checked={profile.providerInstanceIds.includes(instanceId)}
+                  disabled={saving}
                   onCheckedChange={(checked) => setMember(instanceId, checked)}
                 >
                   {label}
@@ -240,6 +241,7 @@ function ProfileRow({
                 <MenuCheckboxItem
                   key={instanceId}
                   checked
+                  disabled={saving}
                   onCheckedChange={(checked) => setMember(instanceId, checked)}
                 >
                   {instanceId} (removed)
@@ -472,9 +474,7 @@ export function ProviderProfilesView({
             settings={settings}
             profileId={profileId}
             profile={profile}
-            usedBy={projectsUsingProfile(settings, profileId, projects).map(
-              (project) => titles.get(project.id) ?? project.title,
-            )}
+            usage={profileUsageText(settings, profileId, titles)}
             options={options}
             disabled={disabled}
             onPatch={onPatch}

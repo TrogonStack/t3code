@@ -76,20 +76,26 @@ export function profileProviderLabels(
   ];
 }
 
-export function profileUsageText(projectTitles: ReadonlyArray<string>): string {
-  return projectTitles.length === 0
-    ? "No project uses it yet."
-    : `Used by ${projectTitles.toSorted((left, right) => left.localeCompare(right)).join(", ")}.`;
-}
-
-export function projectsUsingProfile<Project extends { readonly id: ProjectId }>(
+export function profileUsageText(
   settings: ProfileSettings,
   profileId: string,
-  projects: ReadonlyArray<Project>,
-): Project[] {
-  return projects.filter(
-    (project) => settings.trogonStack.projectProfiles[project.id] === profileId,
-  );
+  titles: ReadonlyMap<ProjectId, string>,
+): string {
+  const assigned = Object.entries(settings.trogonStack.projectProfiles)
+    .filter(([, assignedId]) => assignedId === profileId)
+    .map(([projectId]) => titles.get(projectId as ProjectId));
+  if (assigned.length === 0) return "No project uses it yet.";
+  const known = assigned
+    .filter((title) => title !== undefined)
+    .toSorted((left, right) => left.localeCompare(right));
+  const hidden = assigned.length - known.length;
+  const names =
+    hidden > 0 ? [...known, `${hidden} other project${hidden === 1 ? "" : "s"}`] : known;
+  return `Used by ${names.join(", ")}. Move them to another profile to delete this one.`;
+}
+
+export function profileInUse(settings: ProfileSettings, profileId: string): boolean {
+  return Object.values(settings.trogonStack.projectProfiles).includes(profileId);
 }
 
 /** Titles as the user knows the projects; checkouts sharing a title also show their folder. */
