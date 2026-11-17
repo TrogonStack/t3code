@@ -1372,6 +1372,9 @@ export const TrogonStackSettings = Schema.Struct({
   projectProfiles: Schema.Record(ProjectId, TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  projectsRequiringProfile: Schema.Record(ProjectId, Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type TrogonStackSettings = typeof TrogonStackSettings.Type;
 
@@ -1681,7 +1684,8 @@ export const isProviderInstanceAllowedByProfile = (
 ): boolean => {
   if (projectId === null) return true;
   const profileId = settings.trogonStack?.projectProfiles[projectId];
-  if (profileId === undefined) return true;
+  if (profileId === undefined)
+    return settings.trogonStack?.projectsRequiringProfile[projectId] !== true;
   return (
     settings.trogonStack?.providerProfiles[profileId]?.providerInstanceIds.includes(instanceId) ??
     false
@@ -1838,6 +1842,9 @@ export const ServerSettingsPatch = Schema.Struct({
       ),
       projectProfiles: Schema.optionalKey(
         Schema.Record(ProjectId, Schema.NullOr(TrimmedNonEmptyString)),
+      ),
+      projectsRequiringProfile: Schema.optionalKey(
+        Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
       ),
     }),
   ),

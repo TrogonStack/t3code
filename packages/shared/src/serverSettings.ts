@@ -533,6 +533,10 @@ export function applyServerSettingsPatch(
               current.trogonStack.projectProfiles,
               trogonStackPatch.projectProfiles,
             ),
+            projectsRequiringProfile: applyNullableEntries(
+              current.trogonStack.projectsRequiringProfile,
+              trogonStackPatch.projectsRequiringProfile,
+            ),
           },
         }),
     ...(worktreeCleanupPatch === undefined
