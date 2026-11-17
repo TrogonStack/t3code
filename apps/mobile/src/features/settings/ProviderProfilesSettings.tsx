@@ -44,20 +44,17 @@ function useProfileSettingsWrite(environmentId: EnvironmentId) {
     }
     pendingRef.current = true;
     setPending(true);
-    try {
-      const result = await updateSettings({ environmentId, input: { patch } });
-      if (result._tag === "Failure") {
-        if (!isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          Dialog.alert("Could not save provider profile", String(error));
-        }
-        return false;
+    const result = await updateSettings({ environmentId, input: { patch } });
+    pendingRef.current = false;
+    setPending(false);
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        Dialog.alert("Could not save provider profile", String(error));
       }
-      return true;
-    } finally {
-      pendingRef.current = false;
-      setPending(false);
+      return false;
     }
+    return true;
   };
   return { write, pending };
 }
@@ -192,9 +189,10 @@ export function ProviderProfilesSection(props: {
       return;
     }
     // A reused id would silently rebind projects still pointing at a deleted profile.
+    const profileId = uuidv4();
     const saved = await write({
       trogonStack: {
-        providerProfiles: { [uuidv4()]: { name: nextName, providerInstanceIds: [] } },
+        providerProfiles: { [profileId]: { name: nextName, providerInstanceIds: [] } },
       },
     });
     if (saved) setName("");
