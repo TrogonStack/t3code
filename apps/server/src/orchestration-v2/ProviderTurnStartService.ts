@@ -11,6 +11,7 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
   isCompactionCommandMessage,
+  isProviderInstanceAllowedByProfile,
   parseGoalCommand,
   RunId,
   RunAttemptId,
@@ -193,6 +194,7 @@ export const layer: Layer.Layer<
     const path = yield* Path.Path;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
+    const serverSettings = yield* ServerSettings.ServerSettingsService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
@@ -552,6 +554,34 @@ export const layer: Layer.Layer<
           });
         },
       );
+      const settingsResult = yield* Effect.result(serverSettings.getSettings);
+      if (settingsResult._tag === "Failure") {
+        if (input.willRetry === true) return yield* settingsResult.failure;
+        yield* settleStartFailure({
+          signal: "settings-read-failure",
+          title: "Couldn't read settings",
+          error: settingsResult.failure,
+        });
+        return;
+      }
+      if (
+        !isProviderInstanceAllowedByProfile(
+          settingsResult.success,
+          projection.thread.projectId,
+          run.providerInstanceId,
+        )
+      ) {
+        yield* settleStartFailure({
+          signal: "provider-not-in-project-profile",
+          title: "Provider not allowed for this project",
+          error: new Error(
+            `Provider instance ${run.providerInstanceId} is not in the project's provider profile.`,
+          ),
+          message:
+            "This provider instance is not in the project's provider profile. Pick an instance from the profile, or change the profile in Settings.",
+        });
+        return;
+      }
       if (
         providerMessage.attachments.length === 0 &&
         providerMessage.text.trimStart().startsWith("/")
