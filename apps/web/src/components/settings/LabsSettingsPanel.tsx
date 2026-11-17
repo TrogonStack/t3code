@@ -25,6 +25,15 @@ export function LabsSettingsPanel() {
         <PromptSuggestionsRow />
         <SimlockHostsRow />
         <FastWorktreeCheckoutRow />
+        <SettingsRow
+          {...searchableSetting("provider-profiles")}
+          description="Group providers into profiles, such as Personal or one per company, and limit each project to one profile."
+          control={
+            <Button render={<Link to="/settings/provider-profiles" />} size="sm" variant="outline">
+              Manage profiles
+            </Button>
+          }
+        />
       </SettingsSection>
     </SettingsPageContainer>
   );

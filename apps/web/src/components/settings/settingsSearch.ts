@@ -143,7 +143,6 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
-      "/settings/provider-profiles",
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
@@ -997,7 +996,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "provider-profiles",
     title: "Provider profiles",
-    to: "/settings/provider-profiles",
+    to: "/settings/labs",
     searchTerms: ["company personal providers group allowlist separation project policy"],
     providerSettingsOnly: true,
   },
