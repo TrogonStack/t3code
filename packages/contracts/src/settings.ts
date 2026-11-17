@@ -1659,7 +1659,7 @@ export const resolveProviderInstanceEnabled = (
 
 export const resolveProjectProviderInstanceEnabled = (
   settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides"> &
-    Partial<Pick<ServerSettings, "trogonStack">>,
+    Pick<ServerSettings, "trogonStack">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
@@ -1678,16 +1678,16 @@ export const resolveProjectProviderInstanceEnabled = (
 };
 
 export const isProviderInstanceAllowedByProfile = (
-  settings: Partial<Pick<ServerSettings, "trogonStack">>,
+  settings: Pick<ServerSettings, "trogonStack">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
   if (projectId === null) return true;
-  const profileId = settings.trogonStack?.projectProfiles[projectId];
+  const profileId = settings.trogonStack.projectProfiles[projectId];
   if (profileId === undefined)
-    return settings.trogonStack?.projectsRequiringProfile[projectId] !== true;
+    return settings.trogonStack.projectsRequiringProfile[projectId] !== true;
   return (
-    settings.trogonStack?.providerProfiles[profileId]?.providerInstanceIds.includes(instanceId) ??
+    settings.trogonStack.providerProfiles[profileId]?.providerInstanceIds.includes(instanceId) ??
     false
   );
 };
@@ -1707,7 +1707,7 @@ export const resolveTextGenerationSelectionEnabled = (
     ServerSettings,
     "providerInstances" | "projectSettingsOverrides" | "textGenerators"
   > &
-    Partial<Pick<ServerSettings, "trogonStack">>,
+    Pick<ServerSettings, "trogonStack">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean =>

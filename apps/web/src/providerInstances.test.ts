@@ -1,5 +1,6 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -88,6 +89,7 @@ describe("applyProviderInstanceSettings", () => {
           },
         },
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );
@@ -109,6 +111,7 @@ describe("applyProviderInstanceSettings", () => {
         {
           providerInstances: {},
           projectSettingsOverrides: {},
+          trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
         },
         null,
       );
@@ -136,6 +139,7 @@ describe("applyProviderInstanceSettings", () => {
           },
         },
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );
@@ -153,6 +157,7 @@ describe("applyProviderInstanceSettings", () => {
       {
         providerInstances: {},
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );
@@ -553,6 +558,7 @@ describe("provider icon metadata", () => {
       {
         providerInstances: { [instanceId]: { driver, enabled: true, config: registryConfig } },
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );
@@ -570,6 +576,7 @@ describe("provider icon metadata", () => {
           },
         },
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );
@@ -583,6 +590,7 @@ describe("provider icon metadata", () => {
       {
         providerInstances: { [instanceId]: { driver, enabled: true, config: registryConfig } },
         projectSettingsOverrides: {},
+        trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       },
       null,
     );

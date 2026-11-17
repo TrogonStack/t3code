@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SERVER_SETTINGS,
   type ManagedPolicySummary,
   ProjectId,
   resolveProviderInstanceEnabled,
@@ -65,7 +66,11 @@ describe("groupWelcomeAgents", () => {
 
   it("uses this computer's settings and keeps agents that failed to load with the found ones", () => {
     const acpRegistry = ProviderDriverKind.make("acpRegistry");
-    const settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides"> = {
+    const settings: Pick<
+      ServerSettings,
+      "providerInstances" | "projectSettingsOverrides" | "trogonStack"
+    > = {
+      trogonStack: DEFAULT_SERVER_SETTINGS.trogonStack,
       providerInstances: {
         [ProviderInstanceId.make("pi")]: { driver: ProviderDriverKind.make("pi") },
         [ProviderInstanceId.make("registry")]: { driver: acpRegistry },
