@@ -14,8 +14,8 @@
 - Start new projects safely. Once a profile exists, a new project cannot run a provider until it
   is assigned one. Projects from before the first profile keep working as they did until you
   assign them.
-- Manage profiles, their providers, and each project's profile from one Provider profiles page in
-  settings on web and desktop, and from provider and project settings on mobile.
+- Manage profiles, their providers, and each project's profile from one Provider profiles page,
+  opened from Labs in settings on web and desktop, and from provider and project settings on mobile.
 
 ## Why
 
