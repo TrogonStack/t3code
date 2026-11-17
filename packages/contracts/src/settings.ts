@@ -1359,7 +1359,29 @@ export const CloudSpeechCredentials = Schema.Struct({
   openrouter: CloudSpeechCredential,
 });
 
+export const ProviderProfile = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  providerInstanceIds: Schema.Array(ProviderInstanceId),
+});
+export type ProviderProfile = typeof ProviderProfile.Type;
+
+export const TrogonStackSettings = Schema.Struct({
+  providerProfiles: Schema.Record(TrimmedNonEmptyString, ProviderProfile).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  projectProfiles: Schema.Record(ProjectId, TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  projectsRequiringProfile: Schema.Record(ProjectId, Schema.Boolean).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+});
+export type TrogonStackSettings = typeof TrogonStackSettings.Type;
+
 export const ServerSettings = Schema.Struct({
+  trogonStack: TrogonStackSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(TrogonStackSettings)({}))),
+  ),
   // Null means unmigrated; empty is authoritative and must not resurrect cleared preferences.
   favorites: Schema.NullOr(ModelFavorites).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   providerModelPreferences: Schema.NullOr(ProviderModelPreferences).pipe(
@@ -1636,10 +1658,12 @@ export const resolveProviderInstanceEnabled = (
 };
 
 export const resolveProjectProviderInstanceEnabled = (
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides"> &
+    Pick<ServerSettings, "trogonStack">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean => {
+  if (!isProviderInstanceAllowedByProfile(settings, projectId, instanceId)) return false;
   const override =
     projectId === null
       ? undefined
@@ -1651,6 +1675,21 @@ export const resolveProjectProviderInstanceEnabled = (
   return instanceConfig !== undefined
     ? resolveProviderInstanceEnabled(instanceConfig)
     : isUnconfiguredDefaultInstanceEnabled(instanceId);
+};
+
+export const isProviderInstanceAllowedByProfile = (
+  settings: Pick<ServerSettings, "trogonStack">,
+  projectId: ProjectId | null,
+  instanceId: ProviderInstanceId,
+): boolean => {
+  if (projectId === null) return true;
+  const profileId = settings.trogonStack.projectProfiles[projectId];
+  if (profileId === undefined)
+    return settings.trogonStack.projectsRequiringProfile[projectId] !== true;
+  return (
+    settings.trogonStack.providerProfiles[profileId]?.providerInstanceIds.includes(instanceId) ??
+    false
+  );
 };
 
 /** The text generator a selection names, if any; it takes precedence over a provider instance. */
@@ -1667,12 +1706,14 @@ export const resolveTextGenerationSelectionEnabled = (
   settings: Pick<
     ServerSettings,
     "providerInstances" | "projectSettingsOverrides" | "textGenerators"
-  >,
+  > &
+    Pick<ServerSettings, "trogonStack">,
   projectId: ProjectId | null,
   instanceId: ProviderInstanceId,
 ): boolean =>
-  textGeneratorForSelection(settings, instanceId)?.enabled ??
-  resolveProjectProviderInstanceEnabled(settings, projectId, instanceId);
+  isProviderInstanceAllowedByProfile(settings, projectId, instanceId) &&
+  (textGeneratorForSelection(settings, instanceId)?.enabled ??
+    resolveProjectProviderInstanceEnabled(settings, projectId, instanceId));
 
 const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
 
@@ -1794,6 +1835,19 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  trogonStack: Schema.optionalKey(
+    Schema.Struct({
+      providerProfiles: Schema.optionalKey(
+        Schema.Record(TrimmedNonEmptyString, Schema.NullOr(ProviderProfile)),
+      ),
+      projectProfiles: Schema.optionalKey(
+        Schema.Record(ProjectId, Schema.NullOr(TrimmedNonEmptyString)),
+      ),
+      projectsRequiringProfile: Schema.optionalKey(
+        Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
+      ),
+    }),
+  ),
   setModelFavorites: Schema.optionalKey(
     Schema.Array(Schema.Struct({ ...ModelFavorite.fields, favorite: Schema.Boolean })),
   ),
@@ -1998,6 +2052,9 @@ export function requiredScopesForServerSettingsPatch(
     if (value === undefined) continue;
     if (key === "requireConnectDeviceApproval") {
       changesAccess = true;
+    } else if (key === "trogonStack") {
+      changesProviders = true;
+      changesSettings = true;
     } else if (
       key === "providers" ||
       key === "providerInstances" ||

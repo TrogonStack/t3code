@@ -91,6 +91,31 @@ describe("fallbackTextGenerationModelSelection", () => {
 });
 
 describe("serverSettings helpers", () => {
+  it("updates profile entries without replacing other profiles or project assignments", () => {
+    const projectId = ProjectId.make("project-1");
+    const otherProjectId = ProjectId.make("project-2");
+    const codexId = ProviderInstanceId.make("codex");
+    const initial = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
+      trogonStack: {
+        providerProfiles: {
+          personal: { name: "Personal", providerInstanceIds: [codexId] },
+          work: { name: "Work", providerInstanceIds: [] },
+        },
+        projectProfiles: { [projectId]: "work", [otherProjectId]: "personal" },
+      },
+    });
+    const updated = applyServerSettingsPatch(initial, {
+      trogonStack: {
+        providerProfiles: { work: null },
+        projectProfiles: { [projectId]: null },
+      },
+    });
+    expect(updated.trogonStack.providerProfiles).toEqual({
+      personal: { name: "Personal", providerInstanceIds: [codexId] },
+    });
+    expect(updated.trogonStack.projectProfiles).toEqual({ [otherProjectId]: "personal" });
+  });
+
   it("translates a shipped client's idle compaction switch into a mode", () => {
     const off = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, { idleCompaction: "off" });
     expect([off.idleCompaction, off.compactIdleThreads]).toEqual(["off", false]);

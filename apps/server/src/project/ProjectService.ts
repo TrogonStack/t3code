@@ -401,6 +401,23 @@ export const make = Effect.gen(function* () {
         createIfMissing: input.createWorkspaceRootIfMissing ?? false,
       });
       yield* rejectWorktreeContainer(input.projectId, workspaceRoot);
+      yield* Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        if (Object.keys(settings.trogonStack.providerProfiles).length > 0) {
+          yield* serverSettings.updateSettings({
+            trogonStack: { projectsRequiringProfile: { [input.projectId]: true } },
+          });
+        }
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectOperationError({
+              operation: "dispatch-project-command",
+              projectId: input.projectId,
+              cause,
+            }),
+        ),
+      );
       yield* commit({
         type: "project.create",
         commandId: input.commandId,
@@ -556,6 +573,10 @@ export const make = Effect.gen(function* () {
         serverSettings.updateSettings({
           projectSettingsOverrides: {
             [projectId]: deletedProjectOverridePatch(projectSettingsOverrides[projectId]),
+          },
+          trogonStack: {
+            projectProfiles: { [projectId]: null },
+            projectsRequiringProfile: { [projectId]: null },
           },
         }),
       ),

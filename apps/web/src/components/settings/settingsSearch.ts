@@ -27,6 +27,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/provider-profiles"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -102,6 +103,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
+  "/settings/provider-profiles": msg("Provider profiles"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
@@ -282,6 +284,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Project overview",
     to: "/settings/projects",
     searchTerms: ["name icon emoji image checkout remove delete"],
+  },
+  {
+    id: "project-provider-profile",
+    title: "Project provider profile",
+    to: "/settings/projects",
+    searchTerms: ["assign provider profile project company personal access separation"],
   },
   {
     id: "default-model",
@@ -986,6 +994,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "provider-profiles",
+    title: "Provider profiles",
+    to: "/settings/labs",
+    searchTerms: ["company personal providers group allowlist separation project policy"],
+    providerSettingsOnly: true,
+  },
+  {
+    id: "provider-profiles-projects",
+    title: "Project provider profiles",
+    to: "/settings/provider-profiles",
+    targetId: "provider-profiles-projects",
+    searchTerms: ["assign profile project company personal access separation"],
+    providerSettingsOnly: true,
+  },
+  {
     id: "usage-providers",
     title: "Usage providers",
     to: "/settings/providers",
@@ -1392,6 +1415,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/provider-profiles": null,
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,

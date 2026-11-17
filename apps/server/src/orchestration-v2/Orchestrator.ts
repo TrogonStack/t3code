@@ -71,6 +71,7 @@ import {
   isRuntimeModeAbove,
   resolveProviderInstanceEnabled,
   resolveProjectProviderInstanceEnabled,
+  isProviderInstanceAllowedByProfile,
   type ProviderSessionId,
   RunId,
   RuntimeMode,
@@ -2544,9 +2545,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ? settings.providerInstances[queuedRun.providerInstanceId]
         : undefined;
       const instanceDisabledForProject =
-        projectOverride !== undefined
+        !isProviderInstanceAllowedByProfile(
+          settings,
+          projection.thread.projectId,
+          queuedRun.providerInstanceId,
+        ) ||
+        (projectOverride !== undefined
           ? !projectOverride
-          : machineInstance !== undefined && !resolveProviderInstanceEnabled(machineInstance);
+          : machineInstance !== undefined && !resolveProviderInstanceEnabled(machineInstance));
       if (
         worktreeMissing ||
         instanceDisabledForProject ||

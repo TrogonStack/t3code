@@ -92,11 +92,14 @@ const normalize = (target: string) => {
   }
   return `/${parts.join("/")}`;
 };
-const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
+const layerWorktreeLocation = (
+  worktreesDir = managedWorktreesDir,
+  settings: Parameters<typeof ServerSettings.layerTest>[0] = {},
+) =>
   Layer.mergeAll(
     Path.layer,
     Layer.mock(ServerConfig.ServerConfig)({ worktreesDir } as ServerConfig.ServerConfig["Service"]),
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest(settings),
   );
 
 function startWithMissingWorktree(
@@ -397,6 +400,7 @@ function makeLocalCommandHarness(input: {
   readonly goalDriver?: "opencode" | "antigravity";
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
+  readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
   readonly fileSystem?: FileSystem.FileSystem;
@@ -1256,7 +1260,7 @@ function makeLocalCommandHarness(input: {
         }),
         IdAllocator.layer,
         Layer.mock(TurnItemPositionStore.TurnItemPositionStoreV2)({}),
-        layerWorktreeLocation(input.worktreesDir),
+        layerWorktreeLocation(input.worktreesDir, input.settings),
         input.fileSystem === undefined
           ? FileSystem.layerNoop({ exists: () => Effect.succeed(true) })
           : Layer.succeed(FileSystem.FileSystem, input.fileSystem),
@@ -2973,3 +2977,31 @@ for (const previousMessages of [[], ["/compact", " /COMPACT "]]) {
       }),
   );
 }
+
+effectIt.effect("refuses to start a turn on a provider outside the project profile", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      settings: {
+        trogonStack: {
+          providerProfiles: {
+            acme: {
+              name: "Acme",
+              providerInstanceIds: [ProviderInstanceId.make("other-instance")],
+            },
+          },
+          projectProfiles: { [ProjectId.make("project-native-account-command")]: "acme" },
+        },
+      },
+    });
+
+    yield* harness.start;
+
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.startRootRun).not.toHaveBeenCalled();
+    expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+    expect(harness.projection().turnItems).toMatchObject([
+      { type: "error", title: "Provider not allowed for this project" },
+    ]);
+  }),
+);

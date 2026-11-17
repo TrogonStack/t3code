@@ -191,10 +191,26 @@ export function applyProviderInstanceMutation(
   const providerInstances = { ...settings.providerInstances };
   if (mutation.operation === "upsert" || mutation.operation === "create") {
     providerInstances[mutation.instanceId] = mutation.instance;
-  } else {
-    delete providerInstances[mutation.instanceId];
+    return { ...settings, providerInstances };
   }
-  return { ...settings, providerInstances };
+  delete providerInstances[mutation.instanceId];
+  // A dangling id would re-allow a later instance that reuses it.
+  const providerProfiles = Object.fromEntries(
+    Object.entries(settings.trogonStack.providerProfiles).map(([profileId, profile]) => [
+      profileId,
+      {
+        ...profile,
+        providerInstanceIds: profile.providerInstanceIds.filter(
+          (instanceId) => instanceId !== mutation.instanceId,
+        ),
+      },
+    ]),
+  );
+  return {
+    ...settings,
+    providerInstances,
+    trogonStack: { ...settings.trogonStack, providerProfiles },
+  };
 }
 
 const secretProviderConfigGuards = new Map(

@@ -83,6 +83,7 @@ const SETTINGS_SEARCH_TERMS = {
   SettingsArchive: ["archive", "archived", "restore", "unarchive"],
   SettingsProviderAccounts: [
     "provider accounts",
+    "provider profiles",
     "codex",
     "claude",
     "cursor",

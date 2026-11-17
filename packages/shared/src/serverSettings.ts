@@ -383,6 +383,20 @@ function patchedIdleCompaction(
   return globalIdleCompaction(current) === "off" ? "off" : "onReturn";
 }
 
+function applyNullableEntries<Key extends string, Value>(
+  current: Readonly<Record<Key, Value>>,
+  patch: Readonly<Record<Key, Value | null>> | undefined,
+): Record<Key, Value> {
+  const next = { ...current } as Record<Key, Value>;
+  if (patch === undefined) return next;
+  for (const key of Object.keys(patch) as Key[]) {
+    const value = patch[key];
+    if (value === null) delete next[key];
+    else if (value !== undefined) next[key] = value;
+  }
+  return next;
+}
+
 export function applyServerSettingsPatch(
   current: ServerSettings,
   rawPatch: ServerSettingsPatch,
@@ -409,6 +423,7 @@ export function applyServerSettingsPatch(
     usageModelAliases: usageModelAliasesPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
+    trogonStack: trogonStackPatch,
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
     projectAutoPullOverrides: _legacyAutoPull,
     projectScriptOverrides: _legacyScripts,
@@ -506,6 +521,24 @@ export function applyServerSettingsPatch(
     ...next,
     favorites,
     providerModelPreferences: nextModelPreferences,
+    ...(trogonStackPatch === undefined
+      ? {}
+      : {
+          trogonStack: {
+            providerProfiles: applyNullableEntries(
+              current.trogonStack.providerProfiles,
+              trogonStackPatch.providerProfiles,
+            ),
+            projectProfiles: applyNullableEntries(
+              current.trogonStack.projectProfiles,
+              trogonStackPatch.projectProfiles,
+            ),
+            projectsRequiringProfile: applyNullableEntries(
+              current.trogonStack.projectsRequiringProfile,
+              trogonStackPatch.projectsRequiringProfile,
+            ),
+          },
+        }),
     ...(worktreeCleanupPatch === undefined
       ? {}
       : {

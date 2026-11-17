@@ -5,7 +5,13 @@ import * as Tracer from "effect/Tracer";
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  CommandId,
+  type Project,
+  ProjectId,
+  ProviderInstanceId,
+  resolveProjectProviderInstanceEnabled,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -230,6 +236,57 @@ const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function* 
 });
 
 it.layer(layerTest)("ProjectService", (it) => {
+  it.effect("requires a profile for projects created after profiles are configured", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const service = yield* ProjectService.ProjectService;
+      const projectId = ProjectId.make("project:needs-profile");
+      const legacyProjectId = ProjectId.make("project:legacy-profile");
+      const instanceId = ProviderInstanceId.make("codex");
+      yield* service.create({
+        commandId: CommandId.make("command:project:legacy-profile"),
+        projectId: legacyProjectId,
+        title: "Existing project",
+        workspaceRoot: "/work/legacy-profile",
+      });
+      yield* settings.updateSettings({
+        trogonStack: {
+          providerProfiles: { work: { name: "Work", providerInstanceIds: [instanceId] } },
+        },
+      });
+      yield* service.create({
+        commandId: CommandId.make("command:project:needs-profile"),
+        projectId,
+        title: "New project",
+        workspaceRoot: "/work/needs-profile",
+      });
+      assert.isFalse(
+        resolveProjectProviderInstanceEnabled(yield* settings.getSettings, projectId, instanceId),
+      );
+      assert.isTrue(
+        resolveProjectProviderInstanceEnabled(
+          yield* settings.getSettings,
+          legacyProjectId,
+          instanceId,
+        ),
+      );
+      yield* settings.updateSettings({
+        trogonStack: { projectProfiles: { [projectId]: "work" } },
+      });
+      assert.isTrue(
+        resolveProjectProviderInstanceEnabled(yield* settings.getSettings, projectId, instanceId),
+      );
+      yield* service.delete({
+        commandId: CommandId.make("command:project:needs-profile:delete"),
+        projectId,
+      });
+      yield* service.delete({
+        commandId: CommandId.make("command:project:legacy-profile:delete"),
+        projectId: legacyProjectId,
+      });
+    }),
+  );
+
   it.effect("creates, updates, resolves, snapshots, and soft-deletes projects", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;

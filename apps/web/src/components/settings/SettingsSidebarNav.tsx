@@ -30,6 +30,7 @@ import {
   Settings2Icon,
   ShieldCheckIcon,
   SmartphoneIcon,
+  UsersRoundIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -98,6 +99,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
+  "/settings/provider-profiles": UsersRoundIcon,
   "/settings/threads": MessagesSquareIcon,
   "/settings/browser": GlobeIcon,
   "/settings/devices": SmartphoneIcon,
@@ -116,6 +118,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
 // Detail pages without a nav entry highlight the page that links to them.
 const SETTINGS_DETAIL_PAGE_PARENTS: Readonly<Record<string, SettingsPath>> = {
   "/settings/diagnostics": "/settings/maintenance",
+  "/settings/provider-profiles": "/settings/labs",
   "/settings/open-source-licenses": "/settings/about",
 };
 

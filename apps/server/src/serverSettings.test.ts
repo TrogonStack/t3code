@@ -46,6 +46,27 @@ const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
 const decodeServerSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 
+it("removes a deleted provider instance from every provider profile", () => {
+  const instanceId = ProviderInstanceId.make("codex_company");
+  const settings: ServerSettings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: { [instanceId]: { driver: ProviderDriverKind.make("codex") } },
+    trogonStack: {
+      ...DEFAULT_SERVER_SETTINGS.trogonStack,
+      providerProfiles: {
+        company: { name: "Company", providerInstanceIds: [instanceId] },
+      },
+    },
+  };
+  assert.deepEqual(
+    ServerSettingsModule.applyProviderInstanceMutation(settings, {
+      operation: "remove",
+      instanceId,
+    }).trogonStack.providerProfiles.company?.providerInstanceIds,
+    [],
+  );
+});
+
 const layerServerSettings = (policy?: ManagedPolicyDocument) =>
   ServerSettingsModule.layer.pipe(
     Layer.provide(ServerSecretStore.layer),

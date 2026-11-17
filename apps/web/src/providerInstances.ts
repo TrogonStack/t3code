@@ -118,7 +118,7 @@ export function brandProviderInstanceEntries(
 /** projectId applies project overrides; explicit null uses machine settings. */
 export function applyProviderInstanceSettings(
   entries: ReadonlyArray<ProviderInstanceEntry>,
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides" | "trogonStack">,
   projectId: ProjectId | null,
 ): ReadonlyArray<ProviderInstanceEntry> {
   return entries.map((entry) => {
@@ -161,7 +161,7 @@ function applyProviderInstanceBranding(
 /** Picker order: each driver's default instance first, then its custom instances. */
 export function providerInstanceEntriesFor(
   providers: ReadonlyArray<ServerProvider>,
-  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides">,
+  settings: Pick<ServerSettings, "providerInstances" | "projectSettingsOverrides" | "trogonStack">,
   projectId: ProjectId | null,
 ): ReadonlyArray<ProviderInstanceEntry> {
   return pipe(

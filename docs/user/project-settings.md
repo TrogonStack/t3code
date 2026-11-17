@@ -197,6 +197,29 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+## Provider profiles
+
+A provider profile is a named list of the provider instances a project may use. Use one per
+company or account boundary, such as Personal and Company A, when a project must never run on
+another boundary's models.
+
+Create and manage profiles in **Settings → Labs → Provider profiles → Manage profiles**. There you choose each profile's
+providers, rename or delete it, and pick a profile for each project. You can also choose a
+provider's profiles from the provider's own settings under **Profiles**, and a project's profile
+in **Settings → Projects** under **Provider profile**. Each environment keeps its own profiles and
+assignments.
+
+- A project with a profile can only use that profile's instances, for agent turns and for text
+  generation alike. Other instances are hidden from its model picker and refused by the server.
+- A provider instance you add later belongs to no profile until you choose one in its settings.
+- Once at least one profile exists, a new project cannot run providers until you assign it one.
+  Projects that existed before stay unrestricted until you assign them.
+- A profile can be deleted only when no project uses it. Removing a provider instance also
+  removes it from every profile.
+
+Changing a project's profile affects future turns. It does not erase context an existing thread
+already holds.
+
 ## Worktree location
 
 New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,

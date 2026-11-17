@@ -24,6 +24,7 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ServerProvider,
+  type ServerSettings,
   resolveEnvironmentMachineKind,
   resolveProjectProviderInstanceEnabled,
   resolveProviderInstanceEnabled,
@@ -99,6 +100,12 @@ import { useSecretSources } from "./SecretSourceInput";
 import { TextGeneratorsSettings } from "./TextGeneratorsSettings";
 import { UsageProviderSettings } from "./UsageProviderSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
+import { ProviderInstanceProfiles } from "./ProviderProfilesSettings";
+import {
+  buildProviderInstanceRows,
+  providerInstanceName,
+  type ProviderInstanceRowData,
+} from "./providerInstanceRows";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -130,14 +137,6 @@ import {
   resolveSelectedProviderEnvironmentId,
 } from "./ProviderSettingsPanel.logic";
 
-function providerInstanceName(instance: ProviderInstanceConfig): string {
-  return (
-    instance.displayName?.trim() ||
-    providerClients.get(instance.driver)?.label ||
-    String(instance.driver)
-  );
-}
-
 async function confirmProviderInstanceRemoval(
   question: string,
   consequence = "",
@@ -162,11 +161,6 @@ function providerConfigString(config: unknown, key: string): string | null {
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
-
-const PROVIDER_SETTINGS = providerClients.definitions.map((definition) => ({
-  provider: definition.driverKind,
-  hasDefaultInstance: definition.hasDefaultInstance !== false,
-}));
 
 function configuredBinaryPath(config: unknown): string {
   if (config === null || typeof config !== "object" || !("binaryPath" in config)) return "";
@@ -553,6 +547,7 @@ export function EnvironmentProviderSettings({
   const canAddProvider =
     !readOnly && managedPolicy?.limits?.providers?.allowedDrivers?.length !== 0;
   const canWriteSettings = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  const canManageProfiles = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const canRefreshProviders = useEnvironmentScope(environmentId, AuthOrchestrationReadScope);
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const updateModelPreferences = useUpdateEnvironmentModelPreferences(environmentId);
@@ -615,14 +610,6 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  const visibleProviderSettings = PROVIDER_SETTINGS.filter(
-    (providerSettings) =>
-      providerSettings.provider !== "cursor" ||
-      serverProviders.some(
-        (provider) =>
-          provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
-      ),
-  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const providerHealthPreset = getBackgroundActivityPresetSettings(
     resolvedBackgroundActivity.profile,
@@ -700,80 +687,7 @@ export function EnvironmentProviderSettings({
     },
   );
 
-  interface InstanceRow {
-    readonly instanceId: ProviderInstanceId;
-    /** Undefined for a default slot the user never configured. */
-    readonly explicitInstance: ProviderInstanceConfig | undefined;
-    readonly driver: ProviderDriverKind;
-    readonly isDefault: boolean;
-    readonly isDirty?: boolean;
-  }
-
-  const instancesByDriver = new Map<
-    ProviderDriverKind,
-    Array<[ProviderInstanceId, ProviderInstanceConfig]>
-  >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
-    const driver = instance.driver;
-    const list = instancesByDriver.get(driver) ?? [];
-    list.push([rawId as ProviderInstanceId, instance]);
-    instancesByDriver.set(driver, list);
-  }
-
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
-  const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
-  for (const providerSettings of visibleProviderSettings) {
-    const driver = providerSettings.provider;
-    const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
-    const isDirty = explicitInstance !== undefined;
-    const hasDefaultSlot = providerSettings.hasDefaultInstance || explicitInstance !== undefined;
-    if (
-      hasDefaultSlot &&
-      (driver === "codex" ||
-        driver === "claudeAgent" ||
-        isDirty ||
-        resolveProviderInstanceEnabled(explicitInstance ?? { driver }) ||
-        defaultInstanceId === targetInstanceId)
-    ) {
-      rows.push({
-        instanceId: defaultInstanceId,
-        explicitInstance,
-        driver,
-        isDefault: true,
-        isDirty,
-      });
-    }
-    for (const [id, instance] of instancesByDriver.get(providerSettings.provider) ?? []) {
-      if (id === defaultInstanceId) continue;
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: false,
-      });
-    }
-  }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        explicitInstance: instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
+  const rows = buildProviderInstanceRows(settings, serverProviders, targetInstanceId);
 
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
@@ -924,14 +838,19 @@ export function EnvironmentProviderSettings({
     updateModelPreferences: stableUpdateModelPreferences,
     toggleModelFavorite: stableToggleModelFavorite,
     selectInstance: setSelectedInstanceId,
+    patchSettings: updateSettings,
   };
   // resolveModelPreferences falls back to a fresh `[]`; keep it stable for the rows.
   const favorites = settings.favorites.length > 0 ? settings.favorites : NO_FAVORITES;
 
   const representativeProjectId = projectIds[0];
-  const renderProviderInstance = (row: InstanceRow, mode: "list" | "editor") => {
+  const renderProviderInstance = (row: ProviderInstanceRowData, mode: "list" | "editor") => {
     const showProjectOverride =
-      representativeProjectId !== undefined && supportsProjectProviderOverrides;
+      representativeProjectId !== undefined &&
+      supportsProjectProviderOverrides &&
+      projectIds.every(
+        (projectId) => settings.trogonStack.projectProfiles[projectId] === undefined,
+      );
     return (
       <ProviderInstanceRow
         key={row.instanceId}
@@ -968,6 +887,8 @@ export function EnvironmentProviderSettings({
         modelPreferences={settings.providerModelPreferences?.[row.instanceId]}
         favorites={favorites}
         actions={actions}
+        profileSettings={mode === "editor" ? settings : undefined}
+        profilesDisabled={readOnly || !canWriteSettings || !canManageProfiles}
       />
     );
   };
@@ -1215,6 +1136,7 @@ interface ProviderInstanceRowActions {
   readonly updateModelPreferences: ReturnType<typeof useUpdateEnvironmentModelPreferences>;
   readonly toggleModelFavorite: ReturnType<typeof useToggleEnvironmentModelFavorite>;
   readonly selectInstance: (instanceId: ProviderInstanceId) => void;
+  readonly patchSettings: ReturnType<typeof useUpdateEnvironmentSettings>;
 }
 
 const NO_MODELS: ReadonlyArray<string> = [];
@@ -1240,6 +1162,8 @@ function ProviderInstanceRow({
   modelPreferences,
   favorites,
   actions,
+  profileSettings,
+  profilesDisabled,
 }: {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
@@ -1262,6 +1186,8 @@ function ProviderInstanceRow({
     | undefined;
   readonly favorites: UnifiedSettings["favorites"];
   readonly actions: ProviderInstanceRowActions;
+  readonly profileSettings: ServerSettings | undefined;
+  readonly profilesDisabled: boolean;
 }) {
   const allProjects = useProjects();
   const secretSources = useSecretSources(environmentId);
@@ -1327,6 +1253,16 @@ function ProviderInstanceRow({
         ) : undefined
       }
       canWriteSettings={canWriteSettings}
+      profiles={
+        profileSettings ? (
+          <ProviderInstanceProfiles
+            settings={profileSettings}
+            instanceId={instanceId}
+            disabled={profilesDisabled}
+            onPatch={actions.patchSettings}
+          />
+        ) : null
+      }
       setup={
         mode === "editor" && driver === "antigravity" ? (
           <ProviderSetupSection

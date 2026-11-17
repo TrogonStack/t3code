@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import type { ModelSelection, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
 import {
   isProviderAvailable,
+  isProviderInstanceAllowedByProfile,
   isProviderTextGenerationCapable,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
@@ -86,6 +87,24 @@ export const make = Effect.gen(function* () {
       modelSelection: ModelSelection,
     ) => Effect.Effect<A, TextGenerationError>,
   ) {
+    const profileSettings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new TextGenerationError({
+            operation,
+            detail: "Could not read provider profile settings.",
+            cause,
+          }),
+      ),
+    );
+    if (
+      !isProviderInstanceAllowedByProfile(profileSettings, projectId ?? null, selection.instanceId)
+    ) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "This provider is not allowed by the project's provider profile.",
+      });
+    }
     const textGenerator = yield* textGenerators.runner(selection.instanceId);
     // A review guide reaches a text generator only through a fallback; it needs an agent instead.
     const textGeneratorId = selection.instanceId;
@@ -114,16 +133,7 @@ export const make = Effect.gen(function* () {
           (selected.status === "error" &&
             (!selected.installed || selected.auth.status === "unauthenticated"))));
     if (unusable || exhaustedUsageWindow(selected, now, selection.model)) {
-      const settings = yield* serverSettings.getSettings.pipe(
-        Effect.mapError(
-          (cause) =>
-            new TextGenerationError({
-              operation,
-              detail: "Could not read fallback model settings.",
-              cause,
-            }),
-        ),
-      );
+      const settings = profileSettings;
       selection =
         fallbackTextGenerationModelSelection(
           settings.providerInstances,
