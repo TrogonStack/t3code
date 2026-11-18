@@ -31,12 +31,15 @@ describe("web runtime relay telemetry policy", () => {
     {
       // The desktop host reads the login shell after the renderer has started.
       surface: "desktop enabled once the login shell is read",
-      desktopBridge: { getRelayTelemetryEnabled: answers(null, true) },
+      desktopBridge: { getAppBranding: () => null, getRelayTelemetryEnabled: answers(null, true) },
       exports: true,
     },
     {
       surface: "desktop opt-out found in the login shell",
-      desktopBridge: { getRelayTelemetryEnabled: answers(null, false, true) },
+      desktopBridge: {
+        getAppBranding: () => null,
+        getRelayTelemetryEnabled: answers(null, false, true),
+      },
       exports: false,
     },
     {
