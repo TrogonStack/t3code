@@ -1743,13 +1743,15 @@ export function DiffsSettingsPanel() {
           }
         />
         <SettingsRow
-          {...searchableSetting("collapse-generated-files")}
-          description="Collapse files that .gitattributes marks as linguist-generated when opening a pull request's Code tab. Expanding one stays expanded."
+          {...setting("collapse-generated-files")}
+          description={gt(
+            "Collapse files that .gitattributes marks as linguist-generated when opening a pull request's Code tab. Expanding one stays expanded.",
+          )}
           resetAction={
             settings.diffGeneratedFilesCollapsed !==
             DEFAULT_UNIFIED_SETTINGS.diffGeneratedFilesCollapsed ? (
               <SettingResetButton
-                label="collapse generated files"
+                ariaLabel={gt("Reset collapse generated files to default")}
                 onClick={() =>
                   updateSettings({
                     diffGeneratedFilesCollapsed:
@@ -1765,7 +1767,7 @@ export function DiffsSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ diffGeneratedFilesCollapsed: Boolean(checked) })
               }
-              aria-label="Collapse generated files by default"
+              aria-label={gt("Collapse generated files by default")}
             />
           }
         />

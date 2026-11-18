@@ -143,6 +143,7 @@ function EnvironmentSecretProviders({
                 description={
                   classified.kind === "one_password" ? (
                     <span className="flex min-w-0 items-center gap-1">
+                      {/* oxlint-disable-next-line t3code/no-untranslated-copy -- product name and a separator */}
                       <span className="shrink-0">1Password ·</span>
                       <RedactedSensitiveText
                         value={classified.account}

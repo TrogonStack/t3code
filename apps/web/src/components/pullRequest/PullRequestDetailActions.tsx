@@ -205,28 +205,40 @@ export function PullRequestResolveConflictsButton({
   );
 }
 
-function watchDogTooltip(status: WatchDogStatus): string {
+function watchDogTooltip(status: WatchDogStatus, gt: ReturnType<typeof useGT>): string {
   switch (status.kind) {
     case "clear":
-      return "All checks pass, no review threads are unresolved, and no review requests changes. Hand this to an agent to watch for later reviews.";
+      return gt(
+        "All checks pass, no review threads are unresolved, and no review requests changes. Hand this to an agent to watch for later reviews.",
+      );
     case "unknown":
-      return "Checks or review threads have not fully loaded yet. Hand this to an agent to watch.";
+      return gt(
+        "Checks or review threads have not fully loaded yet. Hand this to an agent to watch.",
+      );
     case "pending":
-      return "CI is still running. Hand this to an agent to watch.";
+      return gt("CI is still running. Hand this to an agent to watch.");
     case "attention": {
       const parts = [
         status.failedChecks > 0
-          ? `${status.failedChecks} failed ${status.failedChecks === 1 ? "job" : "jobs"}`
+          ? gt("{count, plural, one {{count} failed job} other {{count} failed jobs}}", {
+              count: status.failedChecks,
+            })
           : null,
         status.unresolvedThreads > 0
-          ? `${status.unresolvedThreads} unresolved ${status.unresolvedThreads === 1 ? "thread" : "threads"}`
+          ? gt(
+              "{count, plural, one {{count} unresolved thread} other {{count} unresolved threads}}",
+              { count: status.unresolvedThreads },
+            )
           : null,
         status.changeRequests > 0
-          ? `${status.changeRequests} ${status.changeRequests === 1 ? "review requests" : "reviews request"} changes`
+          ? gt(
+              "{count, plural, one {{count} review requests changes} other {{count} reviews request changes}}",
+              { count: status.changeRequests },
+            )
           : null,
-        status.conflicting ? "merge conflicts" : null,
+        status.conflicting ? gt("merge conflicts") : null,
       ].filter((part) => part !== null);
-      return `${parts.join(", ")}. Hand this to an agent to fix.`;
+      return gt("{parts}. Hand this to an agent to fix.", { parts: parts.join(", ") });
     }
   }
 }
@@ -242,9 +254,10 @@ export function PullRequestWatchDogButton({
   status: WatchDogStatus;
   onWatch: () => void;
 }) {
+  const gt = useGT();
   const clear = status.kind === "clear";
   const preparing = handoff === "watch-dog";
-  const label = preparing ? "Preparing..." : clear ? "All clear" : "Watch Dog";
+  const label = preparing ? gt("Preparing...") : clear ? gt("All clear") : gt("Watch Dog");
   return (
     <Tooltip>
       <TooltipTrigger
@@ -269,7 +282,9 @@ export function PullRequestWatchDogButton({
           </span>
         }
       />
-      <TooltipPopup side="top">{preparing ? "Preparing..." : watchDogTooltip(status)}</TooltipPopup>
+      <TooltipPopup side="top">
+        {preparing ? gt("Preparing...") : watchDogTooltip(status, gt)}
+      </TooltipPopup>
     </Tooltip>
   );
 }

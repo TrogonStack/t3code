@@ -1973,13 +1973,22 @@ export function PullRequestDetailPanel({
           <div className="col-span-2 px-4 pb-2">
             <Alert variant="warning" controlAlignment="first-line">
               <ShieldOffIcon />
-              <AlertTitle>Merge anyway?</AlertTitle>
+              <AlertTitle>
+                <T>Merge anyway?</T>
+              </AlertTitle>
               <AlertDescription>
-                {`${mergeRefusal} You can merge #${reference.number} using ${selectedMergeMethod} without the reviews and checks the base branch requires.`}
+                {gt(
+                  "{refusal} You can merge #{number} using {method} without the reviews and checks the base branch requires.",
+                  {
+                    refusal: mergeRefusal,
+                    number: reference.number,
+                    method: selectedMergeMethod,
+                  },
+                )}
               </AlertDescription>
               <AlertAction>
                 <Button size="xs" variant="ghost" onClick={() => setMergeRefusalScope(null)}>
-                  Dismiss
+                  <T>Dismiss</T>
                 </Button>
                 <Button
                   size="xs"
@@ -1989,7 +1998,7 @@ export function PullRequestDetailPanel({
                     void perform("merge", selectedMergeMethod, undefined, { bypassRules: true })
                   }
                 >
-                  {`${selectedMergeMethodLabel} anyway`}
+                  {gt("{method} anyway", { method: selectedMergeMethodLabel })}
                 </Button>
               </AlertAction>
             </Alert>

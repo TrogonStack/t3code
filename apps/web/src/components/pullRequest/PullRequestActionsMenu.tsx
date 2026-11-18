@@ -440,8 +440,8 @@ export function PullRequestActionsMenu({
                   closeOnClick={inlineConfirm.isArmed("merge-bypass")}
                   aria-label={
                     inlineConfirm.isArmed("merge-bypass")
-                      ? "Confirm merge past branch rules?"
-                      : `${selectedMergeMethodLabel} past branch rules`
+                      ? gt("Confirm merge past branch rules?")
+                      : gt("{method} past branch rules", { method: selectedMergeMethodLabel })
                   }
                   variant="destructive"
                   disabled={actionPending}
@@ -455,8 +455,8 @@ export function PullRequestActionsMenu({
                 >
                   <ShieldOffIcon className="size-3.5" />
                   {inlineConfirm.isArmed("merge-bypass")
-                    ? "Confirm merge past branch rules?"
-                    : `${selectedMergeMethodLabel} past branch rules`}
+                    ? gt("Confirm merge past branch rules?")
+                    : gt("{method} past branch rules", { method: selectedMergeMethodLabel })}
                 </MenuItem>
               </>
             ) : null}

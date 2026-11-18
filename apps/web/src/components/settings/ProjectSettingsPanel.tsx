@@ -364,7 +364,7 @@ function ProjectDetail({
     }).catch((error: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Failed to change project location",
+        title: gt("Failed to change project location"),
         description: error instanceof Error ? error.message : undefined,
       });
       return null;
@@ -624,7 +624,7 @@ function ProjectDetail({
           />
           {hasMultipleCheckouts ? null : (
             <SettingsRow
-              title="Location"
+              title={gt("Location")}
               description={
                 <span className="select-text break-all">{filePickerProject.workspaceRoot}</span>
               }
@@ -637,7 +637,7 @@ function ProjectDetail({
                     disabled={isChangingLocation || !canEditGroup}
                     onClick={() => void changeLocation()}
                   >
-                    Change…
+                    <T>Change…</T>
                   </Button>
                 ) : undefined
               }

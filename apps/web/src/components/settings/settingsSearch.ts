@@ -769,9 +769,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "collapse-generated-files",
-    title: "Collapse generated files",
+    title: msg("Collapse generated files"),
     to: "/settings/diffs",
-    searchTerms: ["generated linguist gitattributes lockfile collapse pull request pr code tab"],
+    searchTerms: [
+      msg("generated linguist gitattributes lockfile collapse pull request pr code tab"),
+    ],
   },
   {
     id: "diff-layout",

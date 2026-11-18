@@ -1,7 +1,7 @@
 import type { EnvironmentId, SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
-import { T, useGT, useMessages, Var } from "gt-react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
@@ -40,24 +40,29 @@ import {
 import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
-const NAME_PLACEHOLDERS: Readonly<Record<SupportedSecretProviderKind, string>> = {
-  one_password: "Personal",
-  openbao: "Homelab",
-  aws_secrets_manager: "Production",
-};
+const NAME_PLACEHOLDERS = {
+  one_password: msg("Personal"),
+  openbao: msg("Homelab"),
+  aws_secrets_manager: msg("Production"),
+} as const satisfies Readonly<Record<SupportedSecretProviderKind, unknown>>;
 
 const AUTH_OPTIONS = [
-  { auth: "token", label: "Token", description: "The token below, stored with the provider." },
+  {
+    auth: "token",
+    label: msg("Token"),
+    description: msg("The token below, stored with the provider."),
+  },
   {
     auth: "env",
-    label: "BAO_TOKEN on the server",
-    description: "The server process must have BAO_TOKEN set.",
+    label: msg("BAO_TOKEN on the server"),
+    description: msg("The server process must have BAO_TOKEN set."),
   },
   {
     auth: "cli",
-    label: "bao CLI login",
-    description:
+    label: msg("bao CLI login"),
+    description: msg(
       "Runs bao print token on the server, so bao must be installed and logged in there.",
+    ),
   },
 ] as const;
 
@@ -199,7 +204,7 @@ export function SecretProviderDialog({
               </Label>
               <Input
                 id="secret-provider-name"
-                placeholder={NAME_PLACEHOLDERS[draft.kind]}
+                placeholder={messages(NAME_PLACEHOLDERS[draft.kind])}
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
                 maxLength={64}
@@ -332,17 +337,19 @@ export function SecretProviderDialog({
                     }}
                   >
                     <SelectTrigger id="secret-provider-auth">
-                      <SelectValue>{authOption?.label}</SelectValue>
+                      <SelectValue>{authOption ? messages(authOption.label) : null}</SelectValue>
                     </SelectTrigger>
                     <SelectPopup>
                       {AUTH_OPTIONS.map((option) => (
                         <SelectItem key={option.auth} value={option.auth}>
-                          {option.label}
+                          {messages(option.label)}
                         </SelectItem>
                       ))}
                     </SelectPopup>
                   </Select>
-                  <p className="text-xs text-muted-foreground">{authOption?.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {authOption ? messages(authOption.description) : null}
+                  </p>
                 </div>
                 {draft.auth === "token" ? (
                   <div className="grid gap-1.5">
