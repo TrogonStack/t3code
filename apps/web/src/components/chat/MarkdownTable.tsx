@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react";
 import { CheckIcon, CopyIcon, Maximize2Icon } from "lucide-react";
 import { useRef, useState, type ComponentProps, type CSSProperties } from "react";
 
@@ -26,12 +27,13 @@ function TableCopyMenu({
   /** A text button instead of an icon. Inside the expanded dialog a tooltip would take one Escape press of its own. */
   labeled?: boolean;
 }) {
+  const gt = useGT();
   const { copyToClipboard, isCopied: copied } = useCopyToClipboard<"markdown" | "csv">({
     timeout: 1200,
     onError: (cause, format) =>
       reportMarkdownActionFailure({ operation: "copy-table", format }, cause),
   });
-  const copyLabel = copied ? "Copied" : "Copy table";
+  const copyLabel = copied ? gt("Copied") : gt("Copy table");
 
   const handleCopy = (format: "markdown" | "csv") => {
     const table = getTable();
@@ -50,7 +52,7 @@ function TableCopyMenu({
       {labeled ? (
         <MenuTrigger render={<Button type="button" variant="ghost-muted" size="xs" />}>
           {icon}
-          {copied ? "Copied" : "Copy"}
+          {copied ? <T>Copied</T> : <T>Copy</T>}
         </MenuTrigger>
       ) : (
         <Tooltip>
@@ -74,14 +76,19 @@ function TableCopyMenu({
         </Tooltip>
       )}
       <MenuPopup align="end">
-        <MenuItem onClick={() => handleCopy("markdown")}>Copy as Markdown</MenuItem>
-        <MenuItem onClick={() => handleCopy("csv")}>Copy as CSV</MenuItem>
+        <MenuItem onClick={() => handleCopy("markdown")}>
+          <T>Copy as Markdown</T>
+        </MenuItem>
+        <MenuItem onClick={() => handleCopy("csv")}>
+          <T>Copy as CSV</T>
+        </MenuItem>
       </MenuPopup>
     </Menu>
   );
 }
 
 export function MarkdownTable({ children, minWidth, style, ...props }: MarkdownTableProps) {
+  const gt = useGT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const expandedRef = useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -111,14 +118,16 @@ export function MarkdownTable({ children, minWidth, style, ...props }: MarkdownT
                   type="button"
                   variant="ghost-muted"
                   size="icon-xs"
-                  aria-label="Expand table"
+                  aria-label={gt("Expand table")}
                   onClick={() => setExpanded(true)}
                 />
               }
             >
               <Maximize2Icon className="size-3" />
             </TooltipTrigger>
-            <TooltipPopup side="top">Expand table</TooltipPopup>
+            <TooltipPopup side="top">
+              <T>Expand table</T>
+            </TooltipPopup>
           </Tooltip>
         </span>
         <TableCopyMenu getTable={() => containerRef.current?.querySelector("table")} />
@@ -126,7 +135,9 @@ export function MarkdownTable({ children, minWidth, style, ...props }: MarkdownT
       <Dialog open={expanded} onOpenChange={setExpanded}>
         <DialogPopup className="h-full max-w-none sm:max-w-[min(96vw,120rem)]">
           <div className="flex items-center gap-2 border-b py-2 ps-4 pe-12">
-            <DialogTitle>Table</DialogTitle>
+            <DialogTitle>
+              <T>Table</T>
+            </DialogTitle>
             <div className="ms-auto">
               <TableCopyMenu labeled getTable={() => expandedRef.current?.querySelector("table")} />
             </div>
