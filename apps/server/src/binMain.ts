@@ -4,6 +4,9 @@ import { enableCliCompileCache } from "./cliCompileCache.ts";
 // ACP agents spawn `acp-mcp-bridge` per session and `acp-mcp-call` per tool call, so those fast
 // paths dispatch before the full CLI module graph (seconds of evaluation) loads.
 export async function runCliCommand() {
+  // Hung getaddrinfo calls each hold a libuv thread; headroom keeps file and crypto work moving.
+  // Only effective before the pool's first use, so a launcher-provided value wins.
+  process.env.UV_THREADPOOL_SIZE ??= "16";
   const command = process.argv[2];
   // Install the socket guard before importing code that can open outbound connections.
   const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");

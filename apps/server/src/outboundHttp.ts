@@ -1,3 +1,5 @@
+// @effect-diagnostics globalTimers:off -- A libuv getaddrinfo cannot be cancelled, so the lookup deadline is a plain timer cleared on every completion path.
+import * as NodeDns from "node:dns";
 import * as NodeModule from "node:module";
 import * as NodeNet from "node:net";
 
@@ -10,25 +12,137 @@ const requireUndici = NodeModule.createRequire(import.meta.url);
 export const builtinFetchUsesHttp2 = (bundledUndiciVersion: string | undefined) =>
   Number.parseInt(bundledUndiciVersion ?? "", 10) >= 8;
 
+const LOOKUP_TIMEOUT_MS = 3_000;
+
+type LookupCallback = (
+  error: NodeJS.ErrnoException | null,
+  address?: string | Array<NodeDns.LookupAddress>,
+  family?: number,
+) => void;
+type Lookup = (hostname: string, options: NodeDns.LookupOptions, callback: LookupCallback) => void;
+type ResolveCallback = (error: Error | null, addresses?: Array<string>) => void;
+type ResolverLike = {
+  readonly resolve4: (hostname: string, callback: ResolveCallback) => void;
+  readonly resolve6: (hostname: string, callback: ResolveCallback) => void;
+};
+
+const notFound = (hostname: string): NodeJS.ErrnoException =>
+  Object.assign(new Error(`getaddrinfo ENOTFOUND ${hostname}`), {
+    code: "ENOTFOUND",
+    syscall: "getaddrinfo",
+    hostname,
+  });
+
+const wantedFamily = (family: NodeDns.LookupOptions["family"]): 0 | 4 | 6 =>
+  family === 4 || family === "IPv4" ? 4 : family === 6 || family === "IPv6" ? 6 : 0;
+
+/**
+ * getaddrinfo has no timeout and every hung call permanently holds one of the four libuv
+ * threadpool threads (macOS mDNSResponder can stop answering one process for good). Bound the
+ * wait, then answer from c-ares, which does its own socket I/O and uses no pool thread.
+ */
+export function makeBoundedLookup(
+  options: {
+    readonly timeoutMs?: number;
+    readonly lookup?: Lookup;
+    readonly resolver?: ResolverLike;
+  } = {},
+): NodeNet.LookupFunction {
+  const timeoutMs = options.timeoutMs ?? LOOKUP_TIMEOUT_MS;
+  const lookup = options.lookup ?? (NodeDns.lookup as unknown as Lookup);
+  let resolver = options.resolver;
+
+  return ((
+    hostname: string,
+    lookupOptions: NodeDns.LookupOptions | number,
+    callback: LookupCallback,
+  ) => {
+    const normalized: NodeDns.LookupOptions =
+      typeof lookupOptions === "number" ? { family: lookupOptions } : (lookupOptions ?? {});
+    let settled = false;
+    const deliver = (
+      error: NodeJS.ErrnoException | null,
+      addresses: Array<NodeDns.LookupAddress>,
+    ) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error !== null) return callback(error);
+      if (normalized.all) return callback(null, addresses);
+      const first = addresses[0];
+      return first === undefined
+        ? callback(notFound(hostname))
+        : callback(null, first.address, first.family);
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      resolver ??= new NodeDns.Resolver({ timeout: 2_000, tries: 2 });
+      const dns = resolver;
+      const family = wantedFamily(normalized.family);
+      const versions: Array<4 | 6> = family === 0 ? [4, 6] : [family];
+      const collected: Partial<Record<4 | 6, Array<NodeDns.LookupAddress>>> = {};
+      let pending = versions.length;
+      for (const version of versions) {
+        const onResult: ResolveCallback = (error, found) => {
+          collected[version] =
+            error || !found ? [] : found.map((address) => ({ address, family: version }));
+          if (--pending > 0) return;
+          const all = [...(collected[4] ?? []), ...(collected[6] ?? [])];
+          deliver(all.length === 0 ? notFound(hostname) : null, all);
+        };
+        if (version === 4) dns.resolve4(hostname, onResult);
+        else dns.resolve6(hostname, onResult);
+      }
+    }, timeoutMs);
+    timer.unref();
+
+    lookup(hostname, normalized, (error, address, resolvedFamily) => {
+      if (error) return deliver(error, []);
+      deliver(
+        null,
+        Array.isArray(address)
+          ? address
+          : [{ address: address ?? "", family: resolvedFamily ?? 4 }],
+      );
+    });
+  }) as NodeNet.LookupFunction;
+}
+
 /** Preserves the EnvHttpProxyAgent installed by --use-env-proxy / NODE_USE_ENV_PROXY. */
-export function installHttp1FetchDispatcher(): void {
+export function installHttp1FetchDispatcher(
+  options: { readonly lookup?: NodeNet.LookupFunction } = {},
+): void {
   const undici = requireUndici("undici") as typeof Undici;
+  const connectOptions =
+    options.lookup === undefined ? {} : { connect: { lookup: options.lookup } };
   // Node's agent comes from its internal undici copy, so `instanceof` against the npm class is false.
   const usesEnvProxy = undici.getGlobalDispatcher().constructor.name === "EnvHttpProxyAgent";
   undici.setGlobalDispatcher(
     usesEnvProxy
       ? new undici.EnvHttpProxyAgent({
           allowH2: false,
+          ...connectOptions,
+          ...(options.lookup === undefined ? {} : { proxyTls: { lookup: options.lookup } }),
           // ProxyAgent's connector forces h2 and ignores allowH2; replace it for HTTPS proxies.
           clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
         })
-      : new undici.Agent({ allowH2: false }),
+      : new undici.Agent({ allowH2: false, ...connectOptions }),
   );
 }
 
-/** Avoids uncaught idle-timeout errors on h2 streams (https://github.com/nodejs/undici/issues/5936). */
-export function keepOutboundFetchOnHttp1(): void {
-  if (builtinFetchUsesHttp2(process.versions.undici)) installHttp1FetchDispatcher();
+/**
+ * Avoids uncaught idle-timeout errors on h2 streams (https://github.com/nodejs/undici/issues/5936),
+ * and on macOS bounds name resolution so a hung getaddrinfo cannot starve the libuv threadpool.
+ */
+export function keepOutboundFetchOnHttp1(
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Runs before ACP dispatch without loading the Effect graph.
+  platform = process.platform,
+): void {
+  const bounded = platform === "darwin";
+  if (bounded || builtinFetchUsesHttp2(process.versions.undici)) {
+    installHttp1FetchDispatcher(bounded ? { lookup: makeBoundedLookup() } : {});
+  }
 }
 
 // @types/node does not declare setTypeOfService yet.
