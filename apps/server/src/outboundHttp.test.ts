@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - the test runs a real TLS h2 server to see which protocol fetch negotiates.
+import * as NodeDns from "node:dns";
+import * as NodeHttp from "node:http";
 import * as NodeHttp2 from "node:http2";
 import * as NodeNet from "node:net";
 import * as NodeTls from "node:tls";
@@ -16,6 +18,7 @@ import {
   builtinFetchUsesHttp2,
   ignoreMacosTypeOfServiceEinval,
   installHttp1FetchDispatcher,
+  makeBoundedLookup,
 } from "./outboundHttp.ts";
 
 // Non-secret, self-signed 127.0.0.1 certificate, valid until 2126; ALPN h2 requires TLS.
@@ -163,4 +166,115 @@ if (calls === 0) throw new Error("fetch did not call setTypeOfService");
       expect(child.stdout.trim()).toBe("1.1");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+});
+
+describe("makeBoundedLookup", () => {
+  type Callback = (
+    error: NodeJS.ErrnoException | null,
+    address?: string | Array<NodeDns.LookupAddress>,
+    family?: number,
+  ) => void;
+  const hangingLookup = () => {};
+  const resolverOf = (v4: Array<string>, v6: Array<string> = []) => ({
+    resolve4: (_host: string, cb: (error: Error | null, found?: Array<string>) => void) =>
+      cb(null, v4),
+    resolve6: (_host: string, cb: (error: Error | null, found?: Array<string>) => void) =>
+      cb(null, v6),
+  });
+  const run = (
+    lookup: ReturnType<typeof makeBoundedLookup>,
+    options: Parameters<typeof lookup>[1],
+  ) =>
+    new Promise<{
+      error: NodeJS.ErrnoException | null;
+      address?: string | Array<NodeDns.LookupAddress> | undefined;
+      family?: number | undefined;
+    }>((resolve) =>
+      lookup("example.test", options, (error, address, family) =>
+        resolve({ error, address, family }),
+      ),
+    );
+
+  it("passes a prompt dns.lookup answer through untouched", async () => {
+    const lookup = makeBoundedLookup({
+      timeoutMs: 50,
+      lookup: (_host, _options, cb) => cb(null, "10.0.0.1", 4),
+      resolver: resolverOf(["9.9.9.9"]),
+    });
+    expect(await run(lookup, {})).toEqual({ error: null, address: "10.0.0.1", family: 4 });
+  });
+
+  it("falls back to c-ares when getaddrinfo hangs, honoring family and all", async () => {
+    const lookup = makeBoundedLookup({
+      timeoutMs: 10,
+      lookup: hangingLookup,
+      resolver: resolverOf(["192.0.2.1"], ["2001:db8::1"]),
+    });
+    expect(await run(lookup, { family: 4 })).toEqual({
+      error: null,
+      address: "192.0.2.1",
+      family: 4,
+    });
+    expect(await run(lookup, { family: 6 })).toEqual({
+      error: null,
+      address: "2001:db8::1",
+      family: 6,
+    });
+    expect(await run(lookup, { all: true })).toEqual({
+      error: null,
+      address: [
+        { address: "192.0.2.1", family: 4 },
+        { address: "2001:db8::1", family: 6 },
+      ],
+      family: undefined,
+    });
+  });
+
+  it("ignores a late getaddrinfo answer after the fallback replied", async () => {
+    let late: Callback = () => {};
+    const lookup = makeBoundedLookup({
+      timeoutMs: 10,
+      lookup: (_host, _options, cb) => {
+        late = cb;
+      },
+      resolver: resolverOf(["192.0.2.1"]),
+    });
+    const calls: Array<unknown> = [];
+    await new Promise<void>((resolve) =>
+      lookup("example.test", { family: 4 }, (error, address) => {
+        calls.push(error ?? address);
+        resolve();
+      }),
+    );
+    late(null, "10.9.9.9", 4);
+    expect(calls).toEqual(["192.0.2.1"]);
+  });
+
+  it("reports ENOTFOUND when the fallback finds nothing", async () => {
+    const lookup = makeBoundedLookup({
+      timeoutMs: 10,
+      lookup: hangingLookup,
+      resolver: resolverOf([]),
+    });
+    expect((await run(lookup, { family: 4 })).error?.code).toBe("ENOTFOUND");
+  });
+
+  it("lets undici connect through the bounded lookup while getaddrinfo hangs", async () => {
+    installHttp1FetchDispatcher({
+      lookup: makeBoundedLookup({
+        timeoutMs: 10,
+        lookup: hangingLookup,
+        resolver: resolverOf(["127.0.0.1"]),
+      }),
+    });
+    const plain = NodeHttp.createServer((_request, response) => response.end("resolved"));
+    await new Promise<void>((resolve) => plain.listen(0, "127.0.0.1", resolve));
+    try {
+      const port = (plain.address() as NodeNet.AddressInfo).port;
+      const response = await Undici.request(`http://hung-dns.test:${port}/`);
+      expect(await response.body.text()).toBe("resolved");
+    } finally {
+      await new Promise<void>((resolve) => plain.close(() => resolve()));
+    }
+  });
 });

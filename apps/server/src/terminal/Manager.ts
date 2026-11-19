@@ -75,6 +75,7 @@ import {
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as ServerSettings from "../serverSettings.ts";
 import { increment, terminalSessionsTotal } from "../observability/Metrics.ts";
 import { expandHomeVariable } from "@t3tools/provider-core/server/pathExpansion";
@@ -1707,6 +1708,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
+  readonly secrets?: SecretResolver.SecretResolver["Service"] | undefined;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
   const settings = yield* input.serverSettings.getSettings.pipe(
@@ -1717,8 +1719,40 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
   }
 
+  // A shell missing a configured credential would fall back to whatever the server inherited,
+  // so an unreadable secret fails the launch instead of dropping the variable.
+  const secretVariables = (instance.environment ?? []).flatMap((variable) =>
+    typeof variable.value === "string" ? [] : [{ name: variable.name, reference: variable.value }],
+  );
+  const secretValues =
+    secretVariables.length === 0
+      ? []
+      : input.secrets === undefined
+        ? secretVariables.map(() => undefined)
+        : yield* input.secrets.read(secretVariables.map(({ reference }) => reference));
+  const unreadable = secretVariables.filter(
+    (_, index) => (secretValues[index] ?? "").trim() === "",
+  );
+  if (unreadable.length > 0) {
+    return yield* new TerminalProviderEnvironmentError({
+      providerInstanceId,
+      cause: new Error(
+        `Could not read ${unreadable
+          .map(({ name, reference }) => `${name} (${reference.provider}:${reference.reference})`)
+          .join(", ")} from its secret provider. Unlock it, then try again.`,
+      ),
+    });
+  }
+
   let resolved = yield* overlayProviderInstanceEnvironment(
-    literalProviderInstanceEnvironment(instance.environment),
+    [
+      ...literalProviderInstanceEnvironment(instance.environment),
+      ...secretVariables.map(({ name }, index) => ({
+        name,
+        value: secretValues[index] ?? "",
+        sensitive: true,
+      })),
+    ],
     input.env ?? {},
   );
   if (instance.driver === "codex") {
@@ -1753,6 +1787,7 @@ export const make = Effect.fn("TerminalManager.make")(function* (
   const portDiscovery = yield* PortScanner.PortDiscovery;
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const secrets = yield* SecretResolver.SecretResolver;
   const path = yield* Path.Path;
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
@@ -1763,6 +1798,7 @@ export const make = Effect.fn("TerminalManager.make")(function* (
       path,
       rawProviderInstanceId,
       env,
+      secrets,
     }),
   );
   return yield* makeWithOptions({
