@@ -18,6 +18,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
   UsageDay,
   type UsageSource,
   type UsageSummary,
@@ -51,6 +52,7 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityUsage from "../provider/Drivers/AntigravityUsage.ts";
 import * as ProviderHostLive from "../provider/ProviderHostLive.ts";
 import { totalTokens, type UsageRecord } from "@t3tools/provider-core/server/usage";
+import * as SecretResolverTestkit from "../secrets/SecretResolver.testkit.ts";
 import * as UsageService from "./UsageService.ts";
 import { DESKTOP_HOST_SCOPE_ENV, physicalSourceIdOf } from "./usageTranscriptReader.ts";
 import * as MuseSdk from "../../../../packages/provider-muse/src/server/sdk.ts";
@@ -196,6 +198,7 @@ const layerService = (input: {
   readonly platform?: NodeJS.Platform;
   readonly hostname?: string;
   readonly secretStore?: Partial<ServerSecretStore.ServerSecretStore["Service"]>;
+  readonly readSecrets?: Parameters<typeof SecretResolverTestkit.layerTest>[0];
 }) =>
   layerCursorUsageAccounts(CursorAccountReader.layer).pipe(
     Layer.provideMerge(AntigravityUsage.layer),
@@ -217,6 +220,7 @@ const layerService = (input: {
     Layer.provideMerge(Layer.succeed(HostProcess.Hostname, input.hostname ?? "usage-test-host")),
     Layer.provideMerge(Layer.succeed(HostProcess.HomeDirectory, input.home)),
     Layer.provideMerge(ServerSettings.layerTest(input.settings)),
+    Layer.provideMerge(SecretResolverTestkit.layerTest(input.readSecrets)),
     Layer.provideMerge(
       Layer.succeed(
         HttpClient.HttpClient,
@@ -1786,6 +1790,71 @@ describe("UsageService", () => {
       }
     }),
   );
+
+  describe("secret-backed history directory", () => {
+    const secretHome = { provider: SecretProviderId.make("vault"), reference: "kv/codex#home" };
+    const summaryWith = (
+      readSecrets: (home: string) => Parameters<typeof SecretResolverTestkit.layerTest>[0],
+    ) =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        const sessions = NodePath.join(home, "secret-codex", "sessions");
+        yield* Effect.promise(async () => {
+          await NodeFSP.mkdir(sessions, { recursive: true });
+          await NodeFSP.writeFile(
+            NodePath.join(sessions, "rollout.jsonl"),
+            [
+              { type: "session_meta", payload: { id: "secret" } },
+              { type: "turn_context", payload: { model: "gpt-5.6-sol" } },
+              {
+                type: "event_msg",
+                timestamp: "2026-08-01T10:00:00Z",
+                payload: {
+                  type: "token_count",
+                  info: { last_token_usage: { input_tokens: 10, output_tokens: 31 } },
+                },
+              },
+            ]
+              .map((line) => encodeUnknownJsonString(line))
+              .join("\n") + "\n",
+          );
+        });
+        const service = yield* UsageService.make.pipe(
+          Effect.provide(
+            layerService({
+              prefix: "usage-secret-home",
+              home,
+              readSecrets: readSecrets(home),
+              settings: {
+                ...settings,
+                providerInstances: {
+                  [ProviderInstanceId.make("codex-secret")]: {
+                    driver: ProviderDriverKind.make("codex"),
+                    config: {},
+                    environment: [{ name: "CODEX_HOME", value: secretHome, sensitive: true }],
+                  },
+                },
+              },
+            }),
+          ),
+        );
+        return yield* service.readSummary(WINDOW);
+      }).pipe(Effect.scoped);
+
+    it.effect("counts the history of a directory read from a secret", () =>
+      Effect.gen(function* () {
+        const summary = yield* summaryWith((home) => () => [NodePath.join(home, "secret-codex")]);
+        assert.strictEqual(totalOutputTokens(summary), 31);
+      }),
+    );
+
+    it.effect("skips the instance and logs the variable when its secret cannot be read", () =>
+      Effect.gen(function* () {
+        const summary = yield* summaryWith(() => () => [undefined]);
+        assert.strictEqual(totalOutputTokens(summary), 0);
+      }),
+    );
+  });
 
   it.effect("reads shared managed default and disabled extra account history once", () =>
     Effect.gen(function* () {

@@ -45,6 +45,7 @@ import {
 } from "../orchestration-v2/testkit/fixtures/shared.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as SecretResolverTestkit from "../secrets/SecretResolver.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionImporter from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
@@ -1027,6 +1028,7 @@ it.effect("repeated imports reach linked-worktree sessions behind the scan budge
                 },
               },
             }),
+            SecretResolverTestkit.layerTest(),
             Layer.mock(ProjectStore.ProjectStoreV2)({ listShells: () => Effect.succeed([]) }),
             Layer.succeed(
               ProviderSessionRuntime.ProviderSessionRuntimeRepository,

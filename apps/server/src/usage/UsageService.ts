@@ -30,13 +30,15 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import {
+  PROVIDER_HOME_ENVIRONMENT_NAMES,
+  resolveProviderEnvironmentSecrets,
+} from "../secrets/providerEnvironmentSecrets.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
-import {
-  literalProviderInstanceEnvironment,
-  mergeProviderInstanceEnvironment,
-} from "@t3tools/provider-core/server/instanceEnvironment";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type {
   ProviderUsageInstance,
   TranscriptUsageFormat,
@@ -173,6 +175,7 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const secrets = yield* SecretResolver.SecretResolver;
   const hostEnvironment = yield* HostProcess.Environment;
   const hostPlatform = yield* HostProcess.Platform;
   const hostScope = hostEnvironment[DESKTOP_HOST_SCOPE_ENV]?.trim();
@@ -371,21 +374,36 @@ export const make = Effect.gen(function* () {
     // History in the driver's default home stays counted after every instance moves elsewhere; readers dedupe shared directories.
     entries.push([ProviderInstanceId.make(driver.driverKind), {}, false]);
     const decodeConfig = Schema.decodeUnknownOption(driver.configSchema);
-    return yield* Effect.forEach(
+    const resolved = yield* Effect.forEach(
       entries,
       Effect.fnUntraced(function* ([instanceId, instance, configured]) {
+        const providerSecrets = yield* resolveProviderEnvironmentSecrets(
+          secrets,
+          instance.environment,
+          PROVIDER_HOME_ENVIRONMENT_NAMES,
+        );
+        // Counting the default home for an instance whose own home cannot be read would
+        // report the wrong history as if it were complete, so the instance is skipped.
+        if (providerSecrets.unreadable.length > 0) {
+          yield* Effect.logWarning(
+            "skipping usage for a provider instance whose environment secret could not be read",
+            { instanceId, unreadable: providerSecrets.unreadable },
+          );
+          return [];
+        }
         const instanceConfig: ProviderUsageInstance<Config> = {
           instanceId,
           config: Option.getOrUndefined(decodeConfig(instance.config ?? {})),
           environment: yield* mergeProviderInstanceEnvironment(
-            literalProviderInstanceEnvironment(instance.environment),
+            providerSecrets.environment,
             hostEnvironment,
           ),
           configured,
         };
-        return instanceConfig;
+        return [instanceConfig];
       }),
     );
+    return resolved.flat();
   });
 
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* (

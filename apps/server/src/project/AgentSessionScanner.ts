@@ -39,6 +39,11 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import {
+  PROVIDER_HOME_ENVIRONMENT_NAMES,
+  resolveProviderEnvironmentSecrets,
+} from "../secrets/providerEnvironmentSecrets.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
@@ -852,6 +857,7 @@ export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const isWindows = platform === "win32";
   const foldWorktreeCase = isWindows;
+  const secrets = yield* SecretResolver.SecretResolver;
   const hostEnvironment = yield* HostProcess.Environment;
   const homeDir = yield* HostProcess.HomeDirectory;
   // `/private/tmp` is what macOS reports for sessions started in `/tmp`.
@@ -1757,8 +1763,22 @@ export const make = Effect.gen(function* () {
       const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
       const seenHomes = new Set<string>();
       for (const { instanceId, config: instance } of instances) {
+        const providerSecrets = yield* resolveProviderEnvironmentSecrets(
+          secrets,
+          instance.environment,
+          PROVIDER_HOME_ENVIRONMENT_NAMES,
+        );
+        // A history directory held in an unreadable secret would fall back to the host default,
+        // so the scan would show or import another account's sessions as this instance's.
+        if (providerSecrets.unreadable.length > 0) {
+          yield* Effect.logWarning(
+            "skipping a provider instance whose history directory secret could not be read",
+            { instanceId, unreadable: providerSecrets.unreadable },
+          );
+          continue;
+        }
         const environmentHome = (name: "CLAUDE_CONFIG_DIR" | "CODEX_HOME") => {
-          const configured = instance.environment?.findLast(
+          const configured = providerSecrets.environment.findLast(
             (variable) => variable.name === name,
           )?.value;
           return typeof configured === "string" ? configured : hostEnvironment[name];
@@ -1767,7 +1787,7 @@ export const make = Effect.gen(function* () {
         let homePath: string;
         if (source === "pi") {
           const environment = yield* mergeProviderInstanceEnvironment(
-            instance.environment,
+            providerSecrets.environment,
             hostEnvironment,
           ).pipe(Effect.provideService(HostProcess.HomeDirectory, homeDir));
           homePath = resolvePiSessionsDir(
