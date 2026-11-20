@@ -20,14 +20,13 @@ import * as Stream from "effect/Stream";
 
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as SecretResolverCore from "@t3tools/secret-provider-core/server/SecretResolver";
+import { resolveProviderEnvironmentSecrets } from "../secrets/providerEnvironmentSecrets.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
-import {
-  literalProviderInstanceEnvironment,
-  mergeProviderInstanceEnvironment,
-} from "@t3tools/provider-core/server/instanceEnvironment";
+import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 
 const ANTIGRAVITY = ProviderDriverKind.make("antigravity");
 const hasBinaryPath = Schema.is(Schema.Struct({ binaryPath: Schema.String }));
@@ -58,6 +57,7 @@ const make = Effect.fn("makeProviderInstallation")(function* () {
   const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const providers = yield* ProviderRegistry.ProviderRegistry;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const secrets = yield* SecretResolverCore.SecretResolver;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const scope = yield* Effect.scope;
@@ -222,10 +222,20 @@ const make = Effect.fn("makeProviderInstallation")(function* () {
           return [];
         }
         const binaryPath = entry.config.binaryPath.trim();
+        // A PATH that cannot be read would resolve the binary against the server's own PATH,
+        // and removal would then leave a path another instance still runs unprotected.
+        const pathSecrets = yield* resolveProviderEnvironmentSecrets(secrets, entry.environment, [
+          "PATH",
+        ]);
+        if (pathSecrets.unreadable.length > 0) {
+          return yield* new ProviderSetupError({
+            instanceId: input.instanceId,
+            operation: "remove-install",
+            detail: `Could not read ${pathSecrets.unreadable.join(", ")} from its secret provider. Unlock it, then try again.`,
+          });
+        }
         const resolved = yield* resolveCommandPath(binaryPath, {
-          env: yield* mergeProviderInstanceEnvironment(
-            literalProviderInstanceEnvironment(entry.environment),
-          ),
+          env: yield* mergeProviderInstanceEnvironment(pathSecrets.environment),
         }).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
