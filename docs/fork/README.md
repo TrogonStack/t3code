@@ -27,8 +27,6 @@ Each entry uses these sections:
 
 ## Ledger
 
-active, [#17](https://github.com/TrogonStack/t3code/pull/17)
-
 - **0010** [Pull request conventions of our own](./0010-fork-pull-request-conventions.md)
   active, [#19](https://github.com/TrogonStack/t3code/pull/19)
 - **0017** [A revoked Claude token reads as revoked](./0017-a-revoked-claude-token-reads-as-revoked.md)
@@ -51,3 +49,7 @@ active, [#17](https://github.com/TrogonStack/t3code/pull/17)
   active, [#219](https://github.com/TrogonStack/t3code/pull/219)
 - **0038** [Wide tables in a reply stay readable](./0038-wide-chat-tables-stay-readable.md)
   active, [#236](https://github.com/TrogonStack/t3code/pull/236)
+- **0039** [Turn, session, and command metrics are recorded again](./0039-orchestrator-metrics-come-back.md)
+  active, [#76](https://github.com/TrogonStack/t3code/pull/76)
+- **0040** [A lost provider session only stops its own work](./0040-a-released-session-leaves-other-work-alone.md)
+  active, [#77](https://github.com/TrogonStack/t3code/pull/77)

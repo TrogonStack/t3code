@@ -172,6 +172,7 @@ function WorkflowScript(props: { readonly script: string }) {
   let offset = 0;
   const highlighted = lines?.slice(0, shownLines).flatMap((line, lineIndex) => {
     const separator = lineIndex > 0 ? "\n" : "";
+    // oxlint-disable-next-line react/immutability -- flatMap runs synchronously during render
     offset += separator.length;
     return [
       separator,

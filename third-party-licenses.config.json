@@ -1,6 +1,33 @@
 {
   "customNotices": [
     {
+      "bundles": ["desktop", "mobile"],
+      "license": "MIT",
+      "name": "Apple Speech engine (adapted from @react-native-ai/apple)",
+      "sourceUrl": "https://github.com/callstackincubator/ai",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": [
+            "Copyright (c) 2024-2025 Szymon Rybczak",
+            "Copyright (c) 2025-present Callstack"
+          ]
+        }
+      ]
+    },
+    {
+      "bundles": ["desktop", "mobile", "web"],
+      "license": "MIT",
+      "name": "GitHub gemoji alias data",
+      "sourceUrl": "https://github.com/github/gemoji/blob/fadaeaf1f1a9be82b321316a6c5502e43138b2f6/db/emoji.json",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2019 GitHub, Inc."]
+        }
+      ]
+    },
+    {
       "name": "opencode Office viewers",
       "bundles": ["web"],
       "license": "MIT",
@@ -237,7 +264,7 @@
     },
     {
       "name": "@nodable/entities",
-      "version": "2.1.1",
+      "version": "3.1.0",
       "sourceUrl": "https://github.com/nodable/val-parsers",
       "generatedNotice": {
         "licenseId": "MIT",
@@ -245,17 +272,8 @@
       }
     },
     {
-      "name": "xml-naming",
-      "version": "0.1.0",
-      "sourceUrl": "https://github.com/NaturalIntelligence/xml-naming",
-      "generatedNotice": {
-        "licenseId": "MIT",
-        "copyrights": ["Copyright (c) 2026 Natural Intelligence"]
-      }
-    },
-    {
       "name": "fast-xml-parser",
-      "version": "5.7.3",
+      "version": "5.12.0",
       "license": "MIT",
       "sourceUrl": "https://github.com/NaturalIntelligence/fast-xml-parser"
     },
@@ -594,17 +612,6 @@
       "generatedNotice": {
         "licenseId": "MIT",
         "copyrights": ["Copyright (c) Meta Platforms, Inc. and affiliates."]
-      }
-    },
-    {
-      "name": "@react-native-ai/apple",
-      "sourceUrl": "https://github.com/callstackincubator/ai",
-      "generatedNotice": {
-        "licenseId": "MIT",
-        "copyrights": [
-          "Copyright (c) 2024-2025 Szymon Rybczak",
-          "Copyright (c) 2025-present Callstack"
-        ]
       }
     },
     {

@@ -85,11 +85,10 @@ export function retryFailedUpdateRunServers(
     options: { readonly quiet: boolean },
   ) => Promise<ServerUpdateOutcome>,
 ): void {
-  const failed = (appAtomRegistry.get(updateEverythingRunAtom)?.machines ?? []).flatMap(
-    (machine) =>
-      machine.result === "failed" && machine.server !== null
-        ? [{ target: machine.server, providerFailure: machine.providerFailure }]
-        : [],
+  const failed = (appAtomRegistry.get(updateEverythingRunAtom)?.machines ?? []).flatMap((machine) =>
+    machine.result === "failed" && machine.server !== null
+      ? [{ target: machine.server, providerFailure: machine.providerFailure }]
+      : [],
   );
   const pending: typeof failed = [];
   for (const entry of failed) {
@@ -350,9 +349,9 @@ function followHandedOffServers(servers: ReadonlyArray<HandedOffServer>): void {
         ).pipe(
           Stream.map((state) => AsyncResult.getOrElse(state, () => AVAILABLE_CONNECTION_STATE)),
         ),
-        retryNow: Effect.promise(() =>
-          environmentCatalog.retryNow.run(appAtomRegistry, server.environmentId),
-        ).pipe(Effect.asVoid),
+        retryNow: environmentCatalog.retryNow
+          .run(appAtomRegistry, server.environmentId)
+          .pipe(Effect.ignoreCause),
       }),
     );
     const unsubscribe = appAtomRegistry.subscribe(

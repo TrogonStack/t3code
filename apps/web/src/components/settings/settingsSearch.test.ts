@@ -77,6 +77,12 @@ describe("searchSettings", () => {
     expect(searchSettings("openbao").map((item) => item.to)).toContain("/settings/secrets");
   });
 
+  it("finds where subagents and side chats open by any of its names", () => {
+    for (const query of ["side panel", "subagent", "side chat", "linked thread", "middle click"]) {
+      expect(searchSettings(query).map((item) => item.id)).toContain("side-thread-open-target");
+    }
+  });
+
   it("finds the Scheduled tasks page", () => {
     expect(searchSettings("scheduled tasks")[0]).toMatchObject({
       id: "scheduled-tasks",
