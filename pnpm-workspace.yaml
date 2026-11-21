@@ -80,8 +80,8 @@ catalog:
   tailwindcss: 4.3.3
   tldts: 7.4.2
   undici: 8.12.4
-  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
-  vite-plus: 1.4.0
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8000
+  vite-plus: 1.7.0
   ws: 8.22.0
   yaml: ^2.9.0
   # Markdown pipeline: the server counts find matches with the same parser the
@@ -98,8 +98,8 @@ catalog:
   remark-parse: 11.0.0
   remark-rehype: 11.1.2
   unified: 11.0.5
-  vitest: 5.0.5
-  "@vitest/browser-playwright": 5.0.5
+  vitest: 5.1.0
+  "@vitest/browser-playwright": 5.1.0
 
 overrides:
   # Pin every patched package, including transitive dependencies, so lockfile-free
@@ -295,10 +295,8 @@ strictPeerDependencies: true
 peerDependencyRules:
   allowAny:
     - typescript
-    - vite
     - vitest
   allowedVersions:
-    vite: "*"
     vitest: "*"
     # Our react-native-screens fork is a 5.x prerelease, which ">= 4.0.0" excludes.
     "@react-navigation/native-stack>react-native-screens": "*"
