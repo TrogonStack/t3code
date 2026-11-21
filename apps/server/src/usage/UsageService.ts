@@ -32,7 +32,7 @@ import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import {
-  PROVIDER_HOME_ENVIRONMENT_NAMES,
+  providerHomeEnvironmentNames,
   resolveProviderEnvironmentSecrets,
 } from "../secrets/providerEnvironmentSecrets.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -380,7 +380,7 @@ export const make = Effect.gen(function* () {
         const providerSecrets = yield* resolveProviderEnvironmentSecrets(
           secrets,
           instance.environment,
-          PROVIDER_HOME_ENVIRONMENT_NAMES,
+          providerHomeEnvironmentNames(driver.driverKind),
         );
         // Counting the default home for an instance whose own home cannot be read would
         // report the wrong history as if it were complete, so the instance is skipped.

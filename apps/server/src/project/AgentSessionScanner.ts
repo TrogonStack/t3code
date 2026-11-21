@@ -41,7 +41,7 @@ import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.t
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import {
-  PROVIDER_HOME_ENVIRONMENT_NAMES,
+  providerHomeEnvironmentNames,
   resolveProviderEnvironmentSecrets,
 } from "../secrets/providerEnvironmentSecrets.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -1763,10 +1763,24 @@ export const make = Effect.gen(function* () {
       const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
       const seenHomes = new Set<string>();
       for (const { instanceId, config: instance } of instances) {
+        const claudeConfig =
+          source === "claudeAgent" ? decodeClaudeSettings(instance.config ?? {}) : Option.none();
+        const codexConfig =
+          source === "codex" ? decodeCodexSettings(instance.config ?? {}) : Option.none();
+        if (source === "claudeAgent" && Option.isNone(claudeConfig)) continue;
+        if (source === "codex" && Option.isNone(codexConfig)) continue;
+        // A configured home path wins over the environment, so its secret is not needed then.
+        const configuredHome =
+          Option.exists(claudeConfig, (config) => config.homePath.trim().length > 0) ||
+          Option.exists(
+            codexConfig,
+            (config) =>
+              config.homePath.trim().length > 0 || config.shadowHomePath.trim().length > 0,
+          );
         const providerSecrets = yield* resolveProviderEnvironmentSecrets(
           secrets,
           instance.environment,
-          PROVIDER_HOME_ENVIRONMENT_NAMES,
+          configuredHome ? [] : providerHomeEnvironmentNames(source),
         );
         // A history directory held in an unreadable secret would fall back to the host default,
         // so the scan would show or import another account's sessions as this instance's.
@@ -1785,7 +1799,22 @@ export const make = Effect.gen(function* () {
         };
 
         let homePath: string;
-        if (source === "pi") {
+        if (Option.isSome(claudeConfig)) {
+          homePath = resolveClaudeConfigDir(
+            claudeConfig.value.homePath,
+            environmentHome("CLAUDE_CONFIG_DIR"),
+          );
+        } else if (Option.isSome(codexConfig)) {
+          const codexHome = environmentHome("CODEX_HOME");
+          const codexSettings =
+            !configuredHome && codexHome?.trim()
+              ? { ...codexConfig.value, homePath: codexHome }
+              : codexConfig.value;
+          const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
+            Effect.provideService(Path.Path, path),
+          );
+          homePath = layout.sharedHomePath;
+        } else {
           const environment = yield* mergeProviderInstanceEnvironment(
             providerSecrets.environment,
             hostEnvironment,
@@ -1795,27 +1824,6 @@ export const make = Effect.gen(function* () {
             piHome(environment, homeDir, platform),
             path,
           );
-        } else if (source === "claudeAgent") {
-          const config = decodeClaudeSettings(instance.config ?? {});
-          if (Option.isNone(config)) continue;
-          homePath = resolveClaudeConfigDir(
-            config.value.homePath,
-            environmentHome("CLAUDE_CONFIG_DIR"),
-          );
-        } else {
-          const config = decodeCodexSettings(instance.config ?? {});
-          if (Option.isNone(config)) continue;
-          const codexHome = environmentHome("CODEX_HOME");
-          const codexSettings =
-            config.value.homePath.trim().length === 0 &&
-            config.value.shadowHomePath.trim().length === 0 &&
-            codexHome?.trim()
-              ? { ...config.value, homePath: codexHome }
-              : config.value;
-          const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
-            Effect.provideService(Path.Path, path),
-          );
-          homePath = layout.sharedHomePath;
         }
 
         const homeKey = `${source}\0${yield* directoryIdentity(homePath)}`;

@@ -12,6 +12,7 @@ import {
   type OrchestrationProjectShell,
   ProjectId,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
   ProviderInstanceId,
   SecretProviderId,
   type ServerSettings as ContractServerSettings,
@@ -826,7 +827,8 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
       const unrelated = { provider: SecretProviderId.make("vault"), reference: "kv/codex#key" };
       const scanCodexSecretHome = (
         readSecrets: (home: string) => Parameters<typeof SecretResolverTestkit.layerTest>[0],
-        extraEnvironment: ReadonlyArray<{ name: string; value: typeof unrelated; sensitive: true }>,
+        extraEnvironment: (home: string) => NonNullable<ProviderInstanceConfig["environment"]>,
+        config: (home: string) => Record<string, unknown> = () => ({}),
       ) =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
@@ -855,9 +857,9 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
                 driver: ProviderDriverKind.make("codex"),
                 environment: [
                   { name: "CODEX_HOME", value: secretHome, sensitive: true },
-                  ...extraEnvironment,
+                  ...extraEnvironment(secretCodexHome),
                 ],
-                config: {},
+                config: config(secretCodexHome),
               },
             },
           });
@@ -868,7 +870,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         Effect.gen(function* () {
           const { result, codexWorkspace } = yield* scanCodexSecretHome(
             (home) => (references) => references.map(() => home),
-            [],
+            () => [],
           );
           expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
         }),
@@ -880,10 +882,31 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
           Effect.gen(function* () {
             const { result } = yield* scanCodexSecretHome(
               () => (references) => references.map(() => undefined),
-              [],
+              () => [],
             );
             expect(result.candidates).toEqual([]);
           }),
+      );
+
+      it.effect("scans a configured home path when the environment home secret is unreadable", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            () => (references) => references.map(() => undefined),
+            () => [],
+            (home) => ({ homePath: home }),
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
+      );
+
+      it.effect("lets a later configured home row win over an earlier secret one", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            () => (references) => references.map(() => "/nonexistent-codex-home"),
+            (home) => [{ name: "CODEX_HOME", value: home, sensitive: false }],
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
       );
 
       it.effect("does not skip an instance over a secret unrelated to its history directory", () =>
@@ -893,7 +916,10 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
               references.map((reference) =>
                 reference.reference === secretHome.reference ? home : undefined,
               ),
-            [{ name: "OPENAI_API_KEY", value: unrelated, sensitive: true }],
+            () => [
+              { name: "OPENAI_API_KEY", value: unrelated, sensitive: true },
+              { name: "CLAUDE_CONFIG_DIR", value: unrelated, sensitive: true },
+            ],
           );
           expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
         }),

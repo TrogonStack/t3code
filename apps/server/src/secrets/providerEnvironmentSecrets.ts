@@ -1,19 +1,20 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
-import { literalProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 
+const PROVIDER_HOME_ENVIRONMENT_NAMES = new Map<string, ReadonlyArray<string>>([
+  ["claudeAgent", ["CLAUDE_CONFIG_DIR"]],
+  ["codex", ["CODEX_HOME"]],
+  ["antigravity", ["ANTIGRAVITY_DATA_DIR"]],
+  ["pi", ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]],
+]);
+
 /**
- * Variables that place a provider's session history on disk. Readers that only look for a
+ * Variables that place a driver's session history on disk. Readers that only look for a
  * transcript directory need these resolved, and nothing else.
  */
-export const PROVIDER_HOME_ENVIRONMENT_NAMES: ReadonlyArray<string> = [
-  "CLAUDE_CONFIG_DIR",
-  "CODEX_HOME",
-  "ANTIGRAVITY_DATA_DIR",
-  "PI_CODING_AGENT_DIR",
-  "PI_CODING_AGENT_SESSION_DIR",
-];
+export const providerHomeEnvironmentNames = (driver: string): ReadonlyArray<string> =>
+  PROVIDER_HOME_ENVIRONMENT_NAMES.get(driver) ?? [];
 
 export interface ProviderEnvironmentSecrets {
   /** Literal variables plus every secret that was read, ready to overlay on a process environment. */
@@ -50,16 +51,16 @@ export const resolveProviderEnvironmentSecrets = Effect.fn("ProviderEnvironmentS
           ? secretVariables.map(() => undefined)
           : yield* secrets.read(secretVariables.map(({ reference }) => reference));
     const unreadable = secretVariables.filter((_, index) => (values[index] ?? "").trim() === "");
+    let secretIndex = 0;
     return {
-      environment: [
-        ...literalProviderInstanceEnvironment(environment),
-        ...secretVariables.flatMap(({ name }, index) => {
-          const value = values[index];
-          return value === undefined || value.trim() === ""
-            ? []
-            : [{ name, value, sensitive: true }];
-        }),
-      ],
+      environment: (environment ?? []).flatMap(({ name, value, sensitive }) => {
+        if (typeof value === "string") return [{ name, value, sensitive }];
+        if (only !== undefined && !only.includes(name)) return [];
+        const read = values[secretIndex++];
+        return read === undefined || read.trim() === ""
+          ? []
+          : [{ name, value: read, sensitive: true }];
+      }),
       unreadable: unreadable.map(
         ({ name, reference }) => `${name} (${reference.provider}:${reference.reference})`,
       ),
