@@ -847,6 +847,7 @@ function HighlightedCodeText({
   let offset = 0;
   const highlighted = lines?.flatMap((line, lineIndex) => {
     const separator = lineIndex > 0 ? "\n" : "";
+    // oxlint-disable-next-line react/immutability -- flatMap runs synchronously during render
     offset += separator.length;
     return [
       separator,
