@@ -1,9 +1,11 @@
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 
+import { T3codeOutcome } from "./otel/metrics.ts";
+
 export type MetricAttributeValue = string;
 export type MetricAttributes = Readonly<Record<string, MetricAttributeValue>>;
-export type ObservabilityOutcome = "success" | "failure" | "interrupt";
+export type ObservabilityOutcome = T3codeOutcome;
 
 export function compactMetricAttributes(
   attributes: Readonly<Record<string, unknown>>,
@@ -26,9 +28,9 @@ export function compactMetricAttributes(
 
 export function outcomeFromExit(exit: Exit.Exit<unknown, unknown>): ObservabilityOutcome {
   if (Exit.isSuccess(exit)) {
-    return "success";
+    return T3codeOutcome.Success;
   }
-  return Cause.hasInterruptsOnly(exit.cause) ? "interrupt" : "failure";
+  return Cause.hasInterruptsOnly(exit.cause) ? T3codeOutcome.Interrupt : T3codeOutcome.Failure;
 }
 
 export function normalizeModelMetricLabel(model: string | null | undefined): string | undefined {
