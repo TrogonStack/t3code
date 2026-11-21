@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import * as Undici from "undici";
-import { afterAll, afterEach, beforeAll, describe, expect } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, vi } from "vite-plus/test";
 
 import {
   builtinFetchUsesHttp2,
@@ -58,6 +58,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   Undici.setGlobalDispatcher(defaultDispatcher);
   NodeNet.setDefaultAutoSelectFamilyAttemptTimeout(defaultAttemptTimeout);
 });
@@ -195,6 +196,11 @@ describe("makeBoundedLookup", () => {
       ),
     );
 
+  const afterDeadline = <A>(pending: Promise<A>) => {
+    vi.advanceTimersByTime(10);
+    return pending;
+  };
+
   it("passes a prompt dns.lookup answer through untouched", async () => {
     const lookup = makeBoundedLookup({
       timeoutMs: 50,
@@ -205,22 +211,23 @@ describe("makeBoundedLookup", () => {
   });
 
   it("falls back to c-ares when getaddrinfo hangs, honoring family and all", async () => {
+    vi.useFakeTimers();
     const lookup = makeBoundedLookup({
       timeoutMs: 10,
       lookup: hangingLookup,
       resolver: resolverOf(["192.0.2.1"], ["2001:db8::1"]),
     });
-    expect(await run(lookup, { family: 4 })).toEqual({
+    expect(await afterDeadline(run(lookup, { family: 4 }))).toEqual({
       error: null,
       address: "192.0.2.1",
       family: 4,
     });
-    expect(await run(lookup, { family: 6 })).toEqual({
+    expect(await afterDeadline(run(lookup, { family: 6 }))).toEqual({
       error: null,
       address: "2001:db8::1",
       family: 6,
     });
-    expect(await run(lookup, { all: true })).toEqual({
+    expect(await afterDeadline(run(lookup, { all: true }))).toEqual({
       error: null,
       address: [
         { address: "192.0.2.1", family: 4 },
@@ -231,6 +238,7 @@ describe("makeBoundedLookup", () => {
   });
 
   it("ignores a late getaddrinfo answer after the fallback replied", async () => {
+    vi.useFakeTimers();
     let late: Callback = () => {};
     const lookup = makeBoundedLookup({
       timeoutMs: 10,
@@ -240,23 +248,26 @@ describe("makeBoundedLookup", () => {
       resolver: resolverOf(["192.0.2.1"]),
     });
     const calls: Array<unknown> = [];
-    await new Promise<void>((resolve) =>
-      lookup("example.test", { family: 4 }, (error, address) => {
-        calls.push(error ?? address);
-        resolve();
-      }),
+    await afterDeadline(
+      new Promise<void>((resolve) =>
+        lookup("example.test", { family: 4 }, (error, address) => {
+          calls.push(error ?? address);
+          resolve();
+        }),
+      ),
     );
     late(null, "10.9.9.9", 4);
     expect(calls).toEqual(["192.0.2.1"]);
   });
 
   it("reports ENOTFOUND when the fallback finds nothing", async () => {
+    vi.useFakeTimers();
     const lookup = makeBoundedLookup({
       timeoutMs: 10,
       lookup: hangingLookup,
       resolver: resolverOf([]),
     });
-    expect((await run(lookup, { family: 4 })).error?.code).toBe("ENOTFOUND");
+    expect((await afterDeadline(run(lookup, { family: 4 }))).error?.code).toBe("ENOTFOUND");
   });
 
   it("lets undici connect through the bounded lookup while getaddrinfo hangs", async () => {
@@ -275,6 +286,41 @@ describe("makeBoundedLookup", () => {
       expect(await response.body.text()).toBe("resolved");
     } finally {
       await new Promise<void>((resolve) => plain.close(() => resolve()));
+    }
+  });
+
+  it("resolves an env proxy hostname through the bounded lookup for HTTPS requests", async () => {
+    const proxy = NodeHttp.createServer();
+    // CONNECT sockets leave the server's connection tracking, so closeAllConnections misses them.
+    const tunnels: Array<NodeNet.Socket> = [];
+    proxy.on("connect", (request: NodeHttp.IncomingMessage, client: NodeNet.Socket) => {
+      const [host, port] = (request.url ?? "").split(":");
+      const upstream = NodeNet.connect(Number(port), host, () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      tunnels.push(client, upstream);
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    try {
+      const proxyUrl = `http://hung-proxy.test:${(proxy.address() as NodeNet.AddressInfo).port}`;
+      for (const name of ["https_proxy", "HTTPS_PROXY"]) vi.stubEnv(name, proxyUrl);
+      for (const name of ["no_proxy", "NO_PROXY"]) vi.stubEnv(name, "");
+      Undici.setGlobalDispatcher(new Undici.EnvHttpProxyAgent());
+      installHttp1FetchDispatcher({
+        lookup: makeBoundedLookup({
+          timeoutMs: 10,
+          lookup: hangingLookup,
+          resolver: resolverOf(["127.0.0.1"]),
+        }),
+      });
+      expect(await versionViaGlobalDispatcher()).toBe("1.1");
+    } finally {
+      vi.unstubAllEnvs();
+      for (const socket of tunnels) socket.destroy();
+      proxy.closeAllConnections();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
     }
   });
 });

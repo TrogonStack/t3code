@@ -1,4 +1,4 @@
-import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
+import type { ProviderInstanceEnvironment, SecretReference } from "@t3tools/contracts";
 import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 
@@ -9,15 +9,17 @@ export interface ProviderEnvironmentSecrets {
     readonly value: string;
     readonly sensitive?: boolean | undefined;
   }>;
-  /** `NAME (provider:reference)` for each secret that could not be read or read empty. */
-  readonly unreadable: ReadonlyArray<string>;
+  /** Each secret that could not be read or read empty. Values are never part of it. */
+  readonly unreadable: ReadonlyArray<{
+    readonly name: string;
+    readonly reference: SecretReference;
+  }>;
 }
 
 /**
  * Reads the secret-backed variables of a provider instance, so a caller never launches or probes
  * with a credential silently missing. `only` limits the read to the named variables, for callers
- * that need a few of them and should not fail on an unrelated secret. Values are never part of
- * `unreadable`.
+ * that need a few of them and should not fail on an unrelated secret.
  */
 export const resolveProviderEnvironmentSecrets = Effect.fn("ProviderEnvironmentSecrets.resolve")(
   function* (
@@ -47,9 +49,7 @@ export const resolveProviderEnvironmentSecrets = Effect.fn("ProviderEnvironmentS
           ? []
           : [{ name, value: read, sensitive: true }];
       }),
-      unreadable: unreadable.map(
-        ({ name, reference }) => `${name} (${reference.provider}:${reference.reference})`,
-      ),
+      unreadable,
     } satisfies ProviderEnvironmentSecrets;
   },
 );

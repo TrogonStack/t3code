@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { SecretReference } from "./secretReference.ts";
 
 export const DEFAULT_TERMINAL_ID = "term-1";
 export const DEFAULT_MAX_TERMINAL_BUFFER_BYTES = 512 * 1024;
@@ -281,6 +282,7 @@ export type TerminalSummary = typeof TerminalSummary.Type;
 const TerminalMetadataSnapshotEvent = Schema.Struct({
   type: Schema.Literal("snapshot"),
   terminals: Schema.Array(TerminalSummary),
+  managerId: Schema.optional(Schema.String),
 });
 
 const TerminalMetadataUpsertEvent = Schema.Struct({
@@ -469,11 +471,19 @@ export class TerminalProviderEnvironmentError extends Schema.TaggedError<Termina
   "TerminalProviderEnvironmentError",
   {
     providerInstanceId: ProviderInstanceId,
+    unreadableSecrets: Schema.optional(
+      Schema.Array(Schema.Struct({ name: Schema.String, reference: SecretReference })),
+    ),
     cause: Schema.Defect(),
   },
 ) {
   override get message() {
-    return `Could not prepare the terminal environment for provider instance: ${this.providerInstanceId}`;
+    const unreadable = (this.unreadableSecrets ?? []).map(
+      ({ name, reference }) => `${name} (${reference.provider}:${reference.reference})`,
+    );
+    return unreadable.length === 0
+      ? `Could not prepare the terminal environment for provider instance: ${this.providerInstanceId}`
+      : `Could not read ${unreadable.join(", ")} for provider instance: ${this.providerInstanceId}. Unlock its secret provider, then try again.`;
   }
 }
 
