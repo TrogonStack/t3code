@@ -39,10 +39,14 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
+import { claudeUsageReader } from "../provider/Drivers/claudeUsage.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { codexUsageReader } from "../provider/Drivers/codexUsage.ts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
+import { resolveProviderEnvironmentSecrets } from "../secrets/providerEnvironmentSecrets.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
+import { piHome, piUsageReader, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
@@ -921,6 +925,7 @@ export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const isWindows = platform === "win32";
   const foldWorktreeCase = isWindows;
+  const secrets = yield* SecretResolver.SecretResolver;
   const hostEnvironment = yield* HostProcess.Environment;
   const homeDir = yield* HostProcess.HomeDirectory;
   // `/private/tmp` is what macOS reports for sessions started in `/tmp`.
@@ -1826,17 +1831,59 @@ export const make = Effect.gen(function* () {
       const homes: Array<{ homePath: string; providerInstanceId: ProviderInstanceId }> = [];
       const seenHomes = new Set<string>();
       for (const { instanceId, config: instance } of instances) {
+        const claudeConfig =
+          source === "claudeAgent" ? decodeClaudeSettings(instance.config ?? {}) : Option.none();
+        const codexConfig =
+          source === "codex" ? decodeCodexSettings(instance.config ?? {}) : Option.none();
+        if (source === "claudeAgent" && Option.isNone(claudeConfig)) continue;
+        if (source === "codex" && Option.isNone(codexConfig)) continue;
+        const historyEnvironment = Option.isSome(claudeConfig)
+          ? claudeUsageReader.historyEnvironment?.(claudeConfig.value)
+          : Option.isSome(codexConfig)
+            ? codexUsageReader.historyEnvironment?.(codexConfig.value)
+            : piUsageReader.historyEnvironment?.(undefined);
+        const providerSecrets = yield* resolveProviderEnvironmentSecrets(
+          secrets,
+          instance.environment,
+          historyEnvironment ?? [],
+        );
+        // A history directory held in an unreadable secret would fall back to the host default,
+        // so the scan would show or import another account's sessions as this instance's.
+        if (providerSecrets.unreadable.length > 0) {
+          yield* Effect.logWarning(
+            "skipping a provider instance whose history directory secret could not be read",
+            { instanceId, unreadable: providerSecrets.unreadable },
+          );
+          continue;
+        }
         const environmentHome = (name: "CLAUDE_CONFIG_DIR" | "CODEX_HOME") => {
-          const configured = instance.environment?.findLast(
+          const configured = providerSecrets.environment.findLast(
             (variable) => variable.name === name,
           )?.value;
           return typeof configured === "string" ? configured : hostEnvironment[name];
         };
 
         let homePath: string;
-        if (source === "pi") {
+        if (Option.isSome(claudeConfig)) {
+          homePath = resolveClaudeConfigDir(
+            claudeConfig.value.homePath,
+            environmentHome("CLAUDE_CONFIG_DIR"),
+          );
+        } else if (Option.isSome(codexConfig)) {
+          const codexHome = environmentHome("CODEX_HOME");
+          const codexSettings =
+            codexConfig.value.homePath.trim().length === 0 &&
+            codexConfig.value.shadowHomePath.trim().length === 0 &&
+            codexHome?.trim()
+              ? { ...codexConfig.value, homePath: codexHome }
+              : codexConfig.value;
+          const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
+            Effect.provideService(Path.Path, path),
+          );
+          homePath = layout.sharedHomePath;
+        } else {
           const environment = yield* mergeProviderInstanceEnvironment(
-            instance.environment,
+            providerSecrets.environment,
             hostEnvironment,
           ).pipe(Effect.provideService(HostProcess.HomeDirectory, homeDir));
           homePath = resolvePiSessionsDir(
@@ -1844,27 +1891,6 @@ export const make = Effect.gen(function* () {
             piHome(environment, homeDir, platform),
             path,
           );
-        } else if (source === "claudeAgent") {
-          const config = decodeClaudeSettings(instance.config ?? {});
-          if (Option.isNone(config)) continue;
-          homePath = resolveClaudeConfigDir(
-            config.value.homePath,
-            environmentHome("CLAUDE_CONFIG_DIR"),
-          );
-        } else {
-          const config = decodeCodexSettings(instance.config ?? {});
-          if (Option.isNone(config)) continue;
-          const codexHome = environmentHome("CODEX_HOME");
-          const codexSettings =
-            config.value.homePath.trim().length === 0 &&
-            config.value.shadowHomePath.trim().length === 0 &&
-            codexHome?.trim()
-              ? { ...config.value, homePath: codexHome }
-              : config.value;
-          const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
-            Effect.provideService(Path.Path, path),
-          );
-          homePath = layout.sharedHomePath;
         }
 
         const homeKey = `${source}\0${yield* directoryIdentity(homePath)}`;

@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
   type ProviderInstallState,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -15,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
+import * as SecretResolverTestkit from "../secrets/SecretResolver.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
@@ -62,6 +64,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
     instance?: ProviderInstance;
     others?: ReadonlyArray<ProviderInstance>;
     settings?: Parameters<typeof ServerSettings.layerTest>[0];
+    readSecrets?: Parameters<typeof SecretResolverTestkit.layerTest>[0];
   } = {},
 ) {
   const calls: string[] = [];
@@ -77,6 +80,7 @@ const makeHarness = Effect.fn("providerInstallation.test.makeHarness")(function*
   let watches = 0;
   const dependencies = Layer.mergeAll(
     ServerSettings.layerTest(input.settings),
+    SecretResolverTestkit.layerTest(input.readSecrets),
     Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
       getInstance: (id) => Effect.succeed(all.find((entry) => entry.instanceId === id)),
       listInstances: Effect.succeed(all),
@@ -300,6 +304,47 @@ describe("provider installation routing", () => {
       assert.deepEqual(harness.calls, []);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  describe("secret-backed PATH", () => {
+    const pathSecret = { provider: SecretProviderId.make("vault"), reference: "kv/path#dirs" };
+    const withSecretPath = (readSecrets: Parameters<typeof SecretResolverTestkit.layerTest>[0]) =>
+      makeHarness({
+        readSecrets,
+        settings: {
+          providerInstances: {
+            [ProviderInstanceId.make("antigravity-work")]: {
+              driver,
+              config: { binaryPath: "agy-test" },
+              environment: [{ name: "PATH", value: pathSecret, sensitive: true }],
+            },
+          },
+        },
+      });
+
+    it.effect("protects a binary found through a PATH read from a secret", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const platform = yield* HostProcess.Platform;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-secret-path-" });
+        const executable = path.join(directory, platform === "win32" ? "agy-test.exe" : "agy-test");
+        yield* fs.writeFileString(executable, "test");
+        yield* fs.chmod(executable, 0o755);
+        const harness = yield* withSecretPath(() => [directory]);
+        yield* harness.router.remove({ instanceId });
+        assert.include(harness.protectedPaths(), executable);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    it.effect("fails the removal naming the variable and reference when it cannot be read", () =>
+      Effect.gen(function* () {
+        const harness = yield* withSecretPath(() => [undefined]);
+        const failed = yield* Effect.flip(harness.router.remove({ instanceId }));
+        assert.include(failed.detail, "PATH (vault:kv/path#dirs)");
+        assert.deepEqual(harness.calls, []);
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  });
 
   it.effect("protects another instance's binary found through its own PATH", () =>
     Effect.gen(function* () {

@@ -492,6 +492,7 @@ export type OpenCodeUsageReaderEnv = FileSystem.FileSystem | Path.Path;
 export const openCodeUsageReader: ProviderUsageReader<OpenCodeSettings, OpenCodeUsageReaderEnv> = {
   kind: "scan",
   provider: "opencode",
+  historyEnvironment: () => ["OPENCODE_DATA_DIR", "XDG_DATA_HOME"],
   scan: Effect.fn("openCodeUsageReader.scan")(function* ({
     instances,
     windowStartMs,

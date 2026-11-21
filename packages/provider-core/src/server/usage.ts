@@ -105,16 +105,21 @@ export interface ProviderUsageScanInput<Config> {
   readonly awaitRefresh: boolean;
 }
 
-interface ProviderUsageRateModel {
+interface ProviderUsageReaderBase<Config> {
   /**
    * The rate-table name for a model ID this provider records with a separate `rateModel`, so
    * usage mapped onto that ID prices like the provider's own records of it.
    */
   readonly rateModel?: (model: string) => string;
+  /**
+   * Variables that move where an instance's history lives. Their secrets must be readable before
+   * the instance is counted, or the default location would report another account's history.
+   */
+  readonly historyEnvironment?: (config: Config | undefined) => ReadonlyArray<string>;
 }
 
 export type ProviderUsageReader<Config, R> =
-  | (ProviderUsageRateModel & {
+  | (ProviderUsageReaderBase<Config> & {
       readonly kind: "transcripts";
       readonly provider: UsageProviderKind;
       readonly format: TranscriptUsageFormat<unknown>;
@@ -135,7 +140,7 @@ export type ProviderUsageReader<Config, R> =
         R
       >;
     })
-  | (ProviderUsageRateModel & {
+  | (ProviderUsageReaderBase<Config> & {
       readonly kind: "scan";
       readonly provider: UsageProviderKind;
       /** Fails only when the whole usage read cannot go on; an unreadable source is a status. */

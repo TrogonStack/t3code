@@ -131,6 +131,12 @@ export const piUsageReader: ProviderUsageReader<PiSettings, Path.Path> = {
   format: piUsageFormat,
   // Pi model IDs are `<provider>/<rate model>`.
   rateModel: (model) => model.slice(model.indexOf("/") + 1),
+  historyEnvironment: () => [
+    "PI_CODING_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR",
+    "HOME",
+    "USERPROFILE",
+  ],
   directories: Effect.fn("piUsageReader.directories")(function* ({ config, environment }) {
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;

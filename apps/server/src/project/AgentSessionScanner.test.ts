@@ -12,7 +12,9 @@ import {
   type OrchestrationProjectShell,
   ProjectId,
   ProviderDriverKind,
+  type ProviderInstanceConfig,
   ProviderInstanceId,
+  SecretProviderId,
   type ServerSettings as ContractServerSettings,
   ThreadId,
 } from "@t3tools/contracts";
@@ -34,6 +36,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
+import * as SecretResolverTestkit from "../secrets/SecretResolver.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 
@@ -67,6 +70,7 @@ interface ScannerTestInput {
     readonly sources: ReadonlyArray<AgentSessionImportSource>;
   };
   readonly processRunner?: Layer.Layer<ProcessRunner.ProcessRunner>;
+  readonly readSecrets?: Parameters<typeof SecretResolverTestkit.layerTest>[0];
 }
 
 const layerRuntimeRepository = (imported: ScannerTestInput["importedTranscripts"]) =>
@@ -131,6 +135,7 @@ const layerScannerTest = (input: ScannerTestInput) =>
         ),
         layerProjectStore(input.importedWorkspaceRoots ?? []),
         layerRuntimeRepository(input.importedTranscripts),
+        SecretResolverTestkit.layerTest(input.readSecrets),
       ),
     ),
   );
@@ -816,6 +821,110 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
         ).toBe(1);
       }),
     );
+
+    describe("secret-backed history directory", () => {
+      const secretHome = { provider: SecretProviderId.make("vault"), reference: "kv/codex#home" };
+      const unrelated = { provider: SecretProviderId.make("vault"), reference: "kv/codex#key" };
+      const scanCodexSecretHome = (
+        readSecrets: (home: string) => Parameters<typeof SecretResolverTestkit.layerTest>[0],
+        extraEnvironment: (home: string) => NonNullable<ProviderInstanceConfig["environment"]>,
+        config: (home: string) => Record<string, unknown> = () => ({}),
+      ) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const claudeHomePath = yield* makeTempDir("t3code-claude-legacy-");
+          const codexHomePath = yield* makeTempDir("t3code-codex-legacy-");
+          const secretCodexHome = yield* makeTempDir("t3code-codex-secret-");
+          const codexWorkspace = yield* makeTempDir("t3code-workspace-codex-secret-");
+          yield* writeTranscript({
+            filePath: path.join(
+              secretCodexHome,
+              "sessions",
+              "2026",
+              "01",
+              "01",
+              "rollout-session.jsonl",
+            ),
+            contents: codexRolloutLine(codexWorkspace),
+            mtimeMs: Date.parse("2026-01-02T00:00:00.000Z"),
+          });
+          const result = yield* runScan({
+            claudeHomePath,
+            codexHomePath,
+            readSecrets: readSecrets(secretCodexHome),
+            providerInstances: {
+              [ProviderInstanceId.make("codex")]: {
+                driver: ProviderDriverKind.make("codex"),
+                environment: [
+                  { name: "CODEX_HOME", value: secretHome, sensitive: true },
+                  ...extraEnvironment(secretCodexHome),
+                ],
+                config: config(secretCodexHome),
+              },
+            },
+          });
+          return { result, codexWorkspace };
+        });
+
+      it.effect("scans the directory a secret names", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            (home) => (references) => references.map(() => home),
+            () => [],
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
+      );
+
+      it.effect(
+        "skips the instance instead of scanning the default home when it is unreadable",
+        () =>
+          Effect.gen(function* () {
+            const { result } = yield* scanCodexSecretHome(
+              () => (references) => references.map(() => undefined),
+              () => [],
+            );
+            expect(result.candidates).toEqual([]);
+          }),
+      );
+
+      it.effect("scans a configured home path when the environment home secret is unreadable", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            () => (references) => references.map(() => undefined),
+            () => [],
+            (home) => ({ homePath: home }),
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
+      );
+
+      it.effect("lets a later configured home row win over an earlier secret one", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            () => (references) => references.map(() => "/nonexistent-codex-home"),
+            (home) => [{ name: "CODEX_HOME", value: home, sensitive: false }],
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
+      );
+
+      it.effect("does not skip an instance over a secret unrelated to its history directory", () =>
+        Effect.gen(function* () {
+          const { result, codexWorkspace } = yield* scanCodexSecretHome(
+            (home) => (references) =>
+              references.map((reference) =>
+                reference.reference === secretHome.reference ? home : undefined,
+              ),
+            () => [
+              { name: "OPENAI_API_KEY", value: unrelated, sensitive: true },
+              { name: "CLAUDE_CONFIG_DIR", value: unrelated, sensitive: true },
+            ],
+          );
+          expect(result.candidates.map((candidate) => candidate.path)).toEqual([codexWorkspace]);
+        }),
+      );
+    });
 
     it.effect("honors provider instance home directory environment variables", () =>
       Effect.gen(function* () {

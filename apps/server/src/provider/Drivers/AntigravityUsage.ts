@@ -128,6 +128,7 @@ export const antigravityUsageReader: ProviderUsageReader<AntigravitySettings, An
   kind: "scan",
   provider: "antigravity",
   rateModel: antigravityRateModel,
+  historyEnvironment: () => ["ANTIGRAVITY_DATA_DIR"],
   scan: ({ instances, windowStartMs }) =>
     AntigravityUsage.pipe(Effect.flatMap((usage) => usage.scan({ instances, windowStartMs }))),
 };
