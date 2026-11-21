@@ -68,10 +68,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
-import {
-  literalProviderInstanceEnvironment,
-  overlayProviderInstanceEnvironment,
-} from "@t3tools/provider-core/server/instanceEnvironment";
+import { overlayProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
@@ -1745,15 +1742,13 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     });
   }
 
+  let secretIndex = 0;
   let resolved = yield* overlayProviderInstanceEnvironment(
-    [
-      ...literalProviderInstanceEnvironment(instance.environment),
-      ...secretVariables.map(({ name }, index) => ({
-        name,
-        value: secretValues[index] ?? "",
-        sensitive: true,
-      })),
-    ],
+    (instance.environment ?? []).map((variable) =>
+      typeof variable.value === "string"
+        ? { ...variable, value: variable.value }
+        : { ...variable, value: secretValues[secretIndex++] ?? "", sensitive: true },
+    ),
     input.env ?? {},
   );
   if (instance.driver === "codex") {

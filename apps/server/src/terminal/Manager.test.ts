@@ -2754,11 +2754,19 @@ it.layer(
           driver: ProviderDriverKind.make("codex"),
           environment: [{ name: "PROVIDER_API_KEY", value: secret, sensitive: true }],
         },
+        [ProviderInstanceId.make("codex_secret_shadowed")]: {
+          driver: ProviderDriverKind.make("codex"),
+          environment: [
+            { name: "PROVIDER_API_KEY", value: secret, sensitive: true },
+            { name: "PROVIDER_API_KEY", value: "configured-later", sensitive: false },
+          ],
+        },
       },
     });
     const resolveWith = (
       read: SecretResolver.SecretResolver["Service"]["read"] | undefined,
       invalidate: SecretResolver.SecretResolver["Service"]["invalidate"] = () => Effect.void,
+      rawProviderInstanceId = "codex_secret",
     ) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
@@ -2767,7 +2775,7 @@ it.layer(
           deriveProviderInstanceConfigMap,
           serverSettings,
           path,
-          rawProviderInstanceId: "codex_secret",
+          rawProviderInstanceId,
           env: undefined,
           secrets:
             read === undefined
@@ -2780,10 +2788,16 @@ it.layer(
         });
       }).pipe(Effect.provide(settingsWithSecret));
 
-    it.effect("reads the secret into the terminal environment", () =>
+    it.effect("reads secrets into the terminal environment in configured order", () =>
       Effect.gen(function* () {
         const environment = yield* resolveWith(() => Effect.succeed(["sk-from-vault"]));
         expect(environment.PROVIDER_API_KEY).toBe("sk-from-vault");
+        const shadowed = yield* resolveWith(
+          () => Effect.succeed(["sk-from-vault"]),
+          undefined,
+          "codex_secret_shadowed",
+        );
+        expect(shadowed.PROVIDER_API_KEY).toBe("configured-later");
       }),
     );
 
