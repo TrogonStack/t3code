@@ -12,7 +12,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { FetchHttpClient, HttpClient } from "effect/http";
 import * as Undici from "undici";
-import { afterAll, afterEach, beforeAll, describe, expect } from "vite-plus/test";
+import { afterAll, afterEach, beforeAll, describe, expect, vi } from "vite-plus/test";
 
 import {
   builtinFetchUsesHttp2,
@@ -275,6 +275,37 @@ describe("makeBoundedLookup", () => {
       expect(await response.body.text()).toBe("resolved");
     } finally {
       await new Promise<void>((resolve) => plain.close(() => resolve()));
+    }
+  });
+
+  it("resolves an env proxy hostname through the bounded lookup for HTTPS requests", async () => {
+    const proxy = NodeHttp.createServer();
+    proxy.on("connect", (request: NodeHttp.IncomingMessage, client: NodeNet.Socket) => {
+      const [host, port] = (request.url ?? "").split(":");
+      const upstream = NodeNet.connect(Number(port), host, () => {
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    try {
+      const proxyUrl = `http://hung-proxy.test:${(proxy.address() as NodeNet.AddressInfo).port}`;
+      for (const name of ["https_proxy", "HTTPS_PROXY"]) vi.stubEnv(name, proxyUrl);
+      for (const name of ["no_proxy", "NO_PROXY"]) vi.stubEnv(name, "");
+      Undici.setGlobalDispatcher(new Undici.EnvHttpProxyAgent());
+      installHttp1FetchDispatcher({
+        lookup: makeBoundedLookup({
+          timeoutMs: 10,
+          lookup: hangingLookup,
+          resolver: resolverOf(["127.0.0.1"]),
+        }),
+      });
+      expect(await versionViaGlobalDispatcher()).toBe("1.1");
+    } finally {
+      vi.unstubAllEnvs();
+      proxy.closeAllConnections();
+      await new Promise<void>((resolve) => proxy.close(() => resolve()));
     }
   });
 });

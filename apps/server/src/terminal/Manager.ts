@@ -1734,13 +1734,14 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     (_, index) => (secretValues[index] ?? "").trim() === "",
   );
   if (unreadable.length > 0) {
+    // The resolver caches failed reads too, so a retry after unlocking must ask the provider again.
+    if (input.secrets !== undefined) {
+      yield* input.secrets.invalidate(unreadable.map(({ reference }) => reference));
+    }
     return yield* new TerminalProviderEnvironmentError({
       providerInstanceId,
-      cause: new Error(
-        `Could not read ${unreadable
-          .map(({ name, reference }) => `${name} (${reference.provider}:${reference.reference})`)
-          .join(", ")} from its secret provider. Unlock it, then try again.`,
-      ),
+      unreadableSecrets: unreadable,
+      cause: new Error("A configured secret could not be read from its secret provider."),
     });
   }
 

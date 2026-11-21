@@ -125,7 +125,7 @@ export function installHttp1FetchDispatcher(
           ...connectOptions,
           ...(options.lookup === undefined ? {} : { proxyTls: { lookup: options.lookup } }),
           // ProxyAgent's connector forces h2 and ignores allowH2; replace it for HTTPS proxies.
-          clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
+          clientFactory: (origin) => new undici.Pool(origin, { allowH2: false, ...connectOptions }),
         })
       : new undici.Agent({ allowH2: false, ...connectOptions }),
   );

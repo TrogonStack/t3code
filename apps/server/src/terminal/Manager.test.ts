@@ -2756,7 +2756,10 @@ it.layer(
         },
       },
     });
-    const resolveWith = (read: SecretResolver.SecretResolver["Service"]["read"] | undefined) =>
+    const resolveWith = (
+      read: SecretResolver.SecretResolver["Service"]["read"] | undefined,
+      invalidate: SecretResolver.SecretResolver["Service"]["invalidate"] = () => Effect.void,
+    ) =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -2771,7 +2774,7 @@ it.layer(
               ? undefined
               : SecretResolver.SecretResolver.of({
                   read,
-                  invalidate: () => Effect.void,
+                  invalidate,
                   label: (provider) => Effect.succeed(provider),
                 }),
         });
@@ -2784,13 +2787,16 @@ it.layer(
       }),
     );
 
-    it.effect("fails the launch naming the variable and reference when the read fails", () =>
+    it.effect("fails the launch naming the variable and forgets the failed read", () =>
       Effect.gen(function* () {
-        const error = yield* resolveWith(() => Effect.succeed([undefined])).pipe(Effect.flip);
+        const invalidated: Array<ReadonlyArray<unknown> | undefined> = [];
+        const error = yield* resolveWith(
+          () => Effect.succeed([undefined]),
+          (references) => Effect.sync(() => void invalidated.push(references)),
+        ).pipe(Effect.flip);
         expect(error._tag).toBe("TerminalProviderEnvironmentError");
-        const detail = String((error as { cause: unknown }).cause);
-        expect(detail).toContain("PROVIDER_API_KEY");
-        expect(detail).toContain("vault:kv/api#key");
+        expect(error.message).toContain("PROVIDER_API_KEY (vault:kv/api#key)");
+        expect(invalidated).toEqual([[secret]]);
       }),
     );
 

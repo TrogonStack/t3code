@@ -229,8 +229,12 @@ describe("DesktopBackendConfiguration", () => {
         const environment = yield* DesktopEnvironment.DesktopEnvironment;
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
 
-        const first = yield* configuration.resolvePrimary;
-        const second = yield* configuration.resolvePrimary;
+        const first = yield* configuration.resolvePrimary.pipe(
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+        const second = yield* configuration.resolvePrimary.pipe(
+          Effect.provideService(HostProcess.Environment, { UV_THREADPOOL_SIZE: "" }),
+        );
 
         assert.equal(first.executablePath, process.execPath);
         assert.deepEqual(first.args.slice(0, 3), [
@@ -242,7 +246,8 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.cwd, environment.backendCwd);
         assert.equal(first.captureOutput, true);
         assert.equal(first.env.ELECTRON_RUN_AS_NODE, "1");
-        assert.match(first.env.UV_THREADPOOL_SIZE ?? "", /^\d+$/);
+        assert.equal(first.env.UV_THREADPOOL_SIZE, "16");
+        assert.equal(second.env.UV_THREADPOOL_SIZE, "");
         assert.equal(first.env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING, "1");
         assert.isUndefined(first.env.T3CODE_PORT);
         assert.isUndefined(first.env.T3CODE_MODE);
