@@ -135,10 +135,7 @@ export function installHttp1FetchDispatcher(
  * Avoids uncaught idle-timeout errors on h2 streams (https://github.com/nodejs/undici/issues/5936),
  * and on macOS bounds name resolution so a hung getaddrinfo cannot starve the libuv threadpool.
  */
-export function keepOutboundFetchOnHttp1(
-  // oxlint-disable-next-line t3code/no-global-process-runtime -- Runs before ACP dispatch without loading the Effect graph.
-  platform = process.platform,
-): void {
+export function keepOutboundFetchOnHttp1(platform: NodeJS.Platform): void {
   const bounded = platform === "darwin";
   if (bounded || builtinFetchUsesHttp2(process.versions.undici)) {
     installHttp1FetchDispatcher(bounded ? { lookup: makeBoundedLookup() } : {});

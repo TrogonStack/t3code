@@ -1322,6 +1322,7 @@ if (context.update?.status === "pending") {
       yield* fs.writeFileString(envPath, "T3CODE_TEST_SERVICE_TOKEN=initial\n");
       vi.stubEnv("T3CODE_HOME", root);
       vi.stubEnv("T3CODE_TEST_SERVICE_TOKEN", "inherited");
+      vi.stubEnv("UV_THREADPOOL_SIZE", undefined);
       yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
       yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
       yield* fs.writeFileString(databasePath, "before trial");
@@ -1331,6 +1332,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
 appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
   token: process.env.T3CODE_TEST_SERVICE_TOKEN,
+  threadpool: process.env.UV_THREADPOOL_SIZE,
   update: context.update?.status ?? "active",
 }) + "\\n");
 if (context.update?.status === "pending") {
@@ -1391,9 +1393,9 @@ if (context.update?.status === "pending") {
         .split("\n")
         .map((line) => JSON.parse(line));
       assert.deepEqual(observations, [
-        { token: "initial", update: "active" },
-        { token: "initial", update: "pending" },
-        { token: "initial", update: "rolled-back" },
+        { token: "initial", threadpool: "16", update: "active" },
+        { token: "initial", threadpool: "16", update: "pending" },
+        { token: "initial", threadpool: "16", update: "rolled-back" },
       ]);
       assert.equal((yield* HostProcess.Environment).T3CODE_TEST_SERVICE_TOKEN, "inherited");
       assert.equal(yield* fs.readFileString(envPath), "T3CODE_TEST_SERVICE_TOKEN=changed\n");

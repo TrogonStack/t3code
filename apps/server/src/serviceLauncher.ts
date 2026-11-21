@@ -1176,7 +1176,12 @@ export class Launcher {
     };
     const spawnArguments = runtimeSpawnArguments(paths);
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
-      env: { ...this.#environment, [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) },
+      env: {
+        ...this.#environment,
+        // A hung getaddrinfo holds a libuv thread for good; the default four starve everything else.
+        UV_THREADPOOL_SIZE: this.#environment.UV_THREADPOOL_SIZE ?? "16",
+        [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context),
+      },
       stdio:
         this.#output === undefined
           ? ["inherit", "inherit", "inherit", "ipc"]
