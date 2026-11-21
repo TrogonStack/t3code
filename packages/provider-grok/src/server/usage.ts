@@ -200,6 +200,7 @@ export const grokUsageReader: ProviderUsageReader<GrokSettings, Path.Path> = {
   kind: "transcripts",
   provider: "grok",
   format: grokUsageFormat,
+  historyEnvironment: () => ["GROK_HOME"],
   directories: Effect.fn("grokUsageReader.directories")(function* ({ environment }) {
     const path = yield* Path.Path;
     const homeDirectory = yield* HostProcess.HomeDirectory;

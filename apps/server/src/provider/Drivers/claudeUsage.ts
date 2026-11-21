@@ -136,6 +136,8 @@ export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> =
   kind: "transcripts",
   provider: "claude",
   format: claudeUsageFormat,
+  historyEnvironment: (config) =>
+    config === undefined || config.homePath.trim() ? [] : ["CLAUDE_CONFIG_DIR"],
   directories: Effect.fn("claudeUsageReader.directories")(function* ({ config, environment }) {
     if (config === undefined) return [];
     const path = yield* Path.Path;

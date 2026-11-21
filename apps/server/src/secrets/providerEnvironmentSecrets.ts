@@ -2,20 +2,6 @@ import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 import type * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as Effect from "effect/Effect";
 
-const PROVIDER_HOME_ENVIRONMENT_NAMES = new Map<string, ReadonlyArray<string>>([
-  ["claudeAgent", ["CLAUDE_CONFIG_DIR"]],
-  ["codex", ["CODEX_HOME"]],
-  ["antigravity", ["ANTIGRAVITY_DATA_DIR"]],
-  ["pi", ["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"]],
-]);
-
-/**
- * Variables that place a driver's session history on disk. Readers that only look for a
- * transcript directory need these resolved, and nothing else.
- */
-export const providerHomeEnvironmentNames = (driver: string): ReadonlyArray<string> =>
-  PROVIDER_HOME_ENVIRONMENT_NAMES.get(driver) ?? [];
-
 export interface ProviderEnvironmentSecrets {
   /** Literal variables plus every secret that was read, ready to overlay on a process environment. */
   readonly environment: ReadonlyArray<{

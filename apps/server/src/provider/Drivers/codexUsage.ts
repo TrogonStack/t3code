@@ -548,6 +548,10 @@ export const codexUsageReader: ProviderUsageReader<
     }
     return speeds;
   }),
+  historyEnvironment: (config) =>
+    config === undefined || config.setupMode === "managed" || config.homePath.trim()
+      ? []
+      : ["CODEX_HOME"],
   directories: Effect.fn("codexUsageReader.directories")(function* ({ config, environment }) {
     if (config === undefined) return [];
     const path = yield* Path.Path;

@@ -31,10 +31,7 @@ import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 import { formatMalformedUsageWarning } from "@t3tools/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
-import {
-  providerHomeEnvironmentNames,
-  resolveProviderEnvironmentSecrets,
-} from "../secrets/providerEnvironmentSecrets.ts";
+import { resolveProviderEnvironmentSecrets } from "../secrets/providerEnvironmentSecrets.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
 import type { ProviderDriver } from "@t3tools/provider-core/server/driver";
@@ -377,10 +374,11 @@ export const make = Effect.gen(function* () {
     const resolved = yield* Effect.forEach(
       entries,
       Effect.fnUntraced(function* ([instanceId, instance, configured]) {
+        const config = Option.getOrUndefined(decodeConfig(instance.config ?? {}));
         const providerSecrets = yield* resolveProviderEnvironmentSecrets(
           secrets,
           instance.environment,
-          providerHomeEnvironmentNames(driver.driverKind),
+          driver.usage?.historyEnvironment?.(config) ?? [],
         );
         // Counting the default home for an instance whose own home cannot be read would
         // report the wrong history as if it were complete, so the instance is skipped.
@@ -393,7 +391,7 @@ export const make = Effect.gen(function* () {
         }
         const instanceConfig: ProviderUsageInstance<Config> = {
           instanceId,
-          config: Option.getOrUndefined(decodeConfig(instance.config ?? {})),
+          config,
           environment: yield* mergeProviderInstanceEnvironment(
             providerSecrets.environment,
             hostEnvironment,

@@ -38,15 +38,14 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
+import { claudeUsageReader } from "../provider/Drivers/claudeUsage.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { codexUsageReader } from "../provider/Drivers/codexUsage.ts";
 import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
-import {
-  providerHomeEnvironmentNames,
-  resolveProviderEnvironmentSecrets,
-} from "../secrets/providerEnvironmentSecrets.ts";
+import { resolveProviderEnvironmentSecrets } from "../secrets/providerEnvironmentSecrets.ts";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
-import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
+import { piHome, piUsageReader, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import {
@@ -1769,18 +1768,15 @@ export const make = Effect.gen(function* () {
           source === "codex" ? decodeCodexSettings(instance.config ?? {}) : Option.none();
         if (source === "claudeAgent" && Option.isNone(claudeConfig)) continue;
         if (source === "codex" && Option.isNone(codexConfig)) continue;
-        // A configured home path wins over the environment, so its secret is not needed then.
-        const configuredHome =
-          Option.exists(claudeConfig, (config) => config.homePath.trim().length > 0) ||
-          Option.exists(
-            codexConfig,
-            (config) =>
-              config.homePath.trim().length > 0 || config.shadowHomePath.trim().length > 0,
-          );
+        const historyEnvironment = Option.isSome(claudeConfig)
+          ? claudeUsageReader.historyEnvironment?.(claudeConfig.value)
+          : Option.isSome(codexConfig)
+            ? codexUsageReader.historyEnvironment?.(codexConfig.value)
+            : piUsageReader.historyEnvironment?.(undefined);
         const providerSecrets = yield* resolveProviderEnvironmentSecrets(
           secrets,
           instance.environment,
-          configuredHome ? [] : providerHomeEnvironmentNames(source),
+          historyEnvironment ?? [],
         );
         // A history directory held in an unreadable secret would fall back to the host default,
         // so the scan would show or import another account's sessions as this instance's.
@@ -1807,7 +1803,9 @@ export const make = Effect.gen(function* () {
         } else if (Option.isSome(codexConfig)) {
           const codexHome = environmentHome("CODEX_HOME");
           const codexSettings =
-            !configuredHome && codexHome?.trim()
+            codexConfig.value.homePath.trim().length === 0 &&
+            codexConfig.value.shadowHomePath.trim().length === 0 &&
+            codexHome?.trim()
               ? { ...codexConfig.value, homePath: codexHome }
               : codexConfig.value;
           const layout = yield* resolveCodexHomeLayout(codexSettings).pipe(
