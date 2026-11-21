@@ -217,6 +217,9 @@ overrides:
   # zod 3 has a high advisory (GHSA-mrhx-c7xc-m3w5) fixed only in 4.6.6. @vercel/config only
   # builds a z.object of z.string().regex() and calls parse, which zod 4 keeps unchanged.
   "@vercel/config>zod": 4.6.7
+  # minimatch 7 to 11.0.0 have a ReDoS advisory with no patched 9.x or 10.x release.
+  # 11 keeps the same exports and engines, so the electron and expo tooling runs unchanged.
+  "minimatch@>=7 <11.0.1": 11.0.9
 
 packageExtensions:
   "@clerk/expo@*":
