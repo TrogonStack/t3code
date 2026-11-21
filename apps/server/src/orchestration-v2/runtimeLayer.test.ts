@@ -4945,6 +4945,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
             NodeServices.layer,
             NodeCrypto.layer,
             Layer.mock(PullRequestService.PullRequestService)({
+              invalidate: () => Effect.void,
               detail: () =>
                 Effect.succeed({
                   ...watchedPullRequestDetail({
@@ -5206,6 +5207,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         NodeServices.layer,
         NodeCrypto.layer,
         Layer.mock(PullRequestService.PullRequestService)({
+          invalidate: () => Effect.void,
           detail: () =>
             Effect.sync(() => ({
               ...watchedPullRequestDetail({
@@ -5559,6 +5561,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           NodeServices.layer,
           NodeCrypto.layer,
           Layer.mock(PullRequestService.PullRequestService)({
+            invalidate: () => Effect.void,
             detail: () =>
               Effect.sync(() => ({
                 ...watchedPullRequestDetail({

@@ -9219,7 +9219,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const error = yield* driver.commit(cwd, "Empty", "").pipe(Effect.flip);
 
-        assert.include(error.message, "nothing to commit");
+        assert.strictEqual(error._tag, "GitNothingToCommitError");
       }),
     );
 

@@ -1867,7 +1867,8 @@ describe("MessagesTimeline thread find", () => {
   it("reveals the previous match in a table without scrolling a sibling table", async () => {
     setup();
     const columns = Array.from({ length: 12 }, (_, index) => `DiagnosticsColumn${index}`);
-    const cells = ["needle", ...columns.slice(1, -1), "needle"];
+    // The first column stays pinned while a table scrolls, so the match sits in the second.
+    const cells = [columns[0], "needle", ...columns.slice(2, -1), "needle"];
     const table = [columns, columns.map(() => "---"), cells]
       .map((row) => `| ${row.join(" | ")} |`)
       .join("\n");
@@ -1899,14 +1900,18 @@ describe("MessagesTimeline thread find", () => {
     sibling.scrollLeft = sibling.scrollWidth;
     const siblingOffset = sibling.scrollLeft;
     const clip = viewport.getBoundingClientRect();
-    expect(viewport.querySelector("td")!.getBoundingClientRect().right).toBeLessThan(clip.left);
+    expect(viewport.querySelector("td:nth-child(2)")!.getBoundingClientRect().right).toBeLessThan(
+      clip.left,
+    );
     expect(siblingOffset).toBeGreaterThan(0);
 
     await screen.rerender(element(0, 2));
     await vi.waitFor(() => {
       const [match] = CSS.highlights.get("t3-thread-find-active") ?? [];
       if (!(match instanceof Range)) throw new Error("Missing active match range");
-      expect(match.startContainer.parentElement?.closest("td")).toBe(viewport.querySelector("td"));
+      expect(match.startContainer.parentElement?.closest("td")).toBe(
+        viewport.querySelector("td:nth-child(2)"),
+      );
       expect(match.getBoundingClientRect().left).toBeGreaterThanOrEqual(clip.left - 1);
     });
     expect(sibling.scrollLeft).toBe(siblingOffset);
