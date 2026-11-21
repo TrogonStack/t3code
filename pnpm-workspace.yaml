@@ -220,6 +220,12 @@ overrides:
   # minimatch 7 to 11.0.0 have a ReDoS advisory with no patched 9.x or 10.x release.
   # 11 keeps the same exports and engines, so the electron and expo tooling runs unchanged.
   "minimatch@>=7 <11.0.1": 11.0.9
+  # glob 9 to 14.0.1 keep walking after an abort; @electron/asar already moved to 14.
+  "glob@>=9 <14.0.2": 14.0.6
+  # xml2js before 0.5.0 allows prototype pollution; dbus-next only calls parseString.
+  "dbus-next>xml2js": 0.6.2
+  # KaTeX before 0.18.2 has a trust bypass advisory, and the web app already renders with 0.18.
+  "katex@<0.18.2": 0.18.10
 
 packageExtensions:
   "@clerk/expo@*":
