@@ -4,6 +4,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Layer from "effect/Layer";
 import { Argument, Command } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
@@ -121,16 +122,21 @@ export const cli = makeCli();
 
 export function runCli() {
   extendConnectionAttemptTimeout();
-  keepOutboundFetchOnHttp1();
-  offerCliInstall({
-    args: process.argv.slice(2),
-    // A child started over IPC (a service launcher) has no one to answer.
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY) && process.send === undefined,
-    foreground: inTerminalForeground,
-    confirm: confirmCliInstall,
-  }).pipe(
-    // The offer handles its own errors; even an unexpected defect must not stop the command.
-    Effect.catchDefect(() => Effect.succeed(true)),
+  HostProcess.Platform.pipe(
+    Effect.map(keepOutboundFetchOnHttp1),
+    Effect.andThen(
+      offerCliInstall({
+        args: process.argv.slice(2),
+        // A child started over IPC (a service launcher) has no one to answer.
+        interactive:
+          Boolean(process.stdin.isTTY && process.stdout.isTTY) && process.send === undefined,
+        foreground: inTerminalForeground,
+        confirm: confirmCliInstall,
+      }).pipe(
+        // The offer handles its own errors; even an unexpected defect must not stop the command.
+        Effect.catchDefect(() => Effect.succeed(true)),
+      ),
+    ),
     Effect.flatMap((proceed) =>
       proceed
         ? Command.run(cli, { version: packageJson.version })

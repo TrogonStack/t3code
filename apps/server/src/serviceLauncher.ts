@@ -1215,10 +1215,19 @@ export class Launcher {
       ...(update === undefined ? {} : { update }),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
+    // Windows reads names without regard to case, so any spelling there is the user's override.
+    const threadpoolSizeSet = Object.keys(this.#environment).some(
+      (name) => name.toUpperCase() === "UV_THREADPOOL_SIZE",
+    );
     const appendStdout = this.#output === undefined && isRegularFile(1);
     const appendStderr = this.#output === undefined && isRegularFile(2);
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
-      env: { ...this.#environment, [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) },
+      env: {
+        ...this.#environment,
+        // A hung getaddrinfo holds a libuv thread for good; the default four starve everything else.
+        ...(threadpoolSizeSet ? {} : { UV_THREADPOOL_SIZE: "16" }),
+        [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context),
+      },
       stdio:
         this.#output === undefined
           ? ["inherit", appendStdout ? "pipe" : "inherit", appendStderr ? "pipe" : "inherit", "ipc"]

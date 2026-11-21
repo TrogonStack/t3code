@@ -12,11 +12,13 @@ import {
   type TerminalOpenInput,
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
   retainedTerminalHistory,
   terminalSequenceEnd,
   terminalSequenceStateAfter,
   TerminalProviderInstanceNotFoundError,
 } from "@t3tools/contracts";
+import * as SecretResolver from "@t3tools/secret-provider-core/server/SecretResolver";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as NodePtyAdapter from "./NodePtyAdapter.ts";
@@ -40,7 +42,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as TestClock from "effect/testing/TestClock";
-import { expect, vi } from "vite-plus/test";
+import { describe, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -2803,6 +2805,82 @@ it.layer(
       ),
     ),
   );
+
+  describe("secret-backed provider environment", () => {
+    const secret = { provider: SecretProviderId.make("vault"), reference: "kv/api#key" };
+    const settingsWithSecret = ServerSettings.layerTest({
+      providerInstances: {
+        [ProviderInstanceId.make("codex_secret")]: {
+          driver: ProviderDriverKind.make("codex"),
+          environment: [{ name: "PROVIDER_API_KEY", value: secret, sensitive: true }],
+        },
+        [ProviderInstanceId.make("codex_secret_shadowed")]: {
+          driver: ProviderDriverKind.make("codex"),
+          environment: [
+            { name: "PROVIDER_API_KEY", value: secret, sensitive: true },
+            { name: "PROVIDER_API_KEY", value: "configured-later", sensitive: false },
+          ],
+        },
+      },
+    });
+    const resolveWith = (
+      read: SecretResolver.SecretResolver["Service"]["read"] | undefined,
+      invalidate: SecretResolver.SecretResolver["Service"]["invalidate"] = () => Effect.void,
+      rawProviderInstanceId = "codex_secret",
+    ) =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const serverSettings = yield* ServerSettings.ServerSettingsService;
+        return yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+          deriveProviderInstanceConfigMap,
+          serverSettings,
+          path,
+          rawProviderInstanceId,
+          env: undefined,
+          secrets:
+            read === undefined
+              ? undefined
+              : SecretResolver.SecretResolver.of({
+                  read,
+                  invalidate,
+                  label: (provider) => Effect.succeed(provider),
+                }),
+        });
+      }).pipe(Effect.provide(settingsWithSecret));
+
+    it.effect("reads secrets into the terminal environment in configured order", () =>
+      Effect.gen(function* () {
+        const environment = yield* resolveWith(() => Effect.succeed(["sk-from-vault"]));
+        expect(environment.PROVIDER_API_KEY).toBe("sk-from-vault");
+        const shadowed = yield* resolveWith(
+          () => Effect.succeed(["sk-from-vault"]),
+          undefined,
+          "codex_secret_shadowed",
+        );
+        expect(shadowed.PROVIDER_API_KEY).toBe("configured-later");
+      }),
+    );
+
+    it.effect("fails the launch naming the variable and forgets the failed read", () =>
+      Effect.gen(function* () {
+        const invalidated: Array<ReadonlyArray<unknown> | undefined> = [];
+        const error = yield* resolveWith(
+          () => Effect.succeed([undefined]),
+          (references) => Effect.sync(() => void invalidated.push(references)),
+        ).pipe(Effect.flip);
+        expect(error._tag).toBe("TerminalProviderEnvironmentError");
+        expect(error.message).toContain("PROVIDER_API_KEY (vault:kv/api#key)");
+        expect(invalidated).toEqual([[secret]]);
+      }),
+    );
+
+    it.effect("fails the launch when no secret resolver is available", () =>
+      Effect.gen(function* () {
+        const error = yield* resolveWith(undefined).pipe(Effect.flip);
+        expect(error._tag).toBe("TerminalProviderEnvironmentError");
+      }),
+    );
+  });
 
   it.effect("restarts a running terminal when the resolved provider environment changes", () =>
     Effect.gen(function* () {
