@@ -1,6 +1,9 @@
 const SAFE_ERROR_LABEL =
   /^(?:Error|EvalError|RangeError|ReferenceError|SyntaxError|TypeError|URIError|AggregateError|DOMException|[A-Za-z][A-Za-z0-9]*(?:Error|Failure))$/;
 const SAFE_TRACE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const SAFE_SIGNAL = /^SIG[A-Z0-9]{1,16}$/;
+const SAFE_REASON = /^[a-z][a-z0-9_]{0,63}$/;
+const SAFE_OPERATION = /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/;
 const STACK_FRAME_LIMIT = 32;
 
 export interface SafeErrorLogAttributes {
@@ -8,7 +11,45 @@ export interface SafeErrorLogAttributes {
   readonly errorName?: string;
   readonly errorTag?: string;
   readonly traceId?: string;
+  readonly signal?: string;
+  readonly exitCode?: number;
+  readonly reason?: string;
+  readonly operation?: string;
   readonly stack?: string;
+}
+
+function readPatternField(error: unknown, key: string, pattern: RegExp): string | undefined {
+  try {
+    if (typeof error !== "object" || error === null) return undefined;
+    const value = (error as Record<string, unknown>)[key];
+    return typeof value === "string" && pattern.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readExitCode(error: unknown): number | undefined {
+  try {
+    if (typeof error !== "object" || error === null) return undefined;
+    const value = (error as { readonly exitCode?: unknown }).exitCode;
+    return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Only fixed-shape top-level fields: no messages, details, or nested causes, which can carry paths and secrets.
+function readDiagnosticFields(error: unknown) {
+  const signal = readPatternField(error, "signal", SAFE_SIGNAL);
+  const exitCode = readExitCode(error);
+  const reason = readPatternField(error, "reason", SAFE_REASON);
+  const operation = readPatternField(error, "operation", SAFE_OPERATION);
+  return {
+    ...(signal !== undefined ? { signal } : {}),
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(operation !== undefined ? { operation } : {}),
+  };
 }
 
 function readSafeLabel(value: unknown): string | undefined {
@@ -90,6 +131,7 @@ export function safeErrorLogAttributes(error: unknown): SafeErrorLogAttributes {
       ...(errorName !== undefined ? { errorName } : {}),
       ...(errorTag !== undefined ? { errorTag } : {}),
       ...(traceId !== undefined ? { traceId } : {}),
+      ...readDiagnosticFields(error),
       ...(stack !== undefined ? { stack } : {}),
     };
   }
@@ -105,5 +147,6 @@ export function safeErrorLogAttributes(error: unknown): SafeErrorLogAttributes {
             : "primitive",
     ...(errorTag !== undefined ? { errorTag } : {}),
     ...(traceId !== undefined ? { traceId } : {}),
+    ...readDiagnosticFields(error),
   };
 }

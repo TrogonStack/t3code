@@ -46,4 +46,45 @@ describe("safeErrorLogAttributes", () => {
 
     expect(attributes).toEqual({ errorType: "object" });
   });
+
+  it("keeps validated signal, exit code, reason, and operation fields", () => {
+    const error = Object.assign(new Error("message-secret-sentinel"), {
+      _tag: "GitCommandError",
+      signal: "SIGABRT",
+      exitCode: 134,
+      reason: "not_a_repository",
+      operation: "GitWorkflowService.listRefs",
+    });
+
+    expect(safeErrorLogAttributes(error)).toMatchObject({
+      errorTag: "GitCommandError",
+      signal: "SIGABRT",
+      exitCode: 134,
+      reason: "not_a_repository",
+      operation: "GitWorkflowService.listRefs",
+    });
+    expect(
+      safeErrorLogAttributes({ signal: "SIGKILL", exitCode: 1, operation: "Git.status" }),
+    ).toEqual({ errorType: "object", signal: "SIGKILL", exitCode: 1, operation: "Git.status" });
+  });
+
+  it("drops diagnostic fields that do not match their fixed shape", () => {
+    const attributes = safeErrorLogAttributes(
+      Object.assign(new Error("x"), {
+        signal: "SIGABRT at /Users/me/secret",
+        exitCode: 1.5,
+        reason: "Not A Reason: token=secret",
+        operation: "has spaces /Users/me",
+      }),
+    );
+
+    expect(attributes).not.toHaveProperty("signal");
+    expect(attributes).not.toHaveProperty("exitCode");
+    expect(attributes).not.toHaveProperty("reason");
+    expect(attributes).not.toHaveProperty("operation");
+    expect(safeErrorLogAttributes({ signal: "sigabrt", exitCode: "1", reason: 5 })).toEqual({
+      errorType: "object",
+    });
+    expect(safeErrorLogAttributes({ exitCode: Number.NaN })).toEqual({ errorType: "object" });
+  });
 });

@@ -16,7 +16,11 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 
-import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
+import {
+  VcsProcessExitError,
+  VcsProcessOutputReadError,
+  VcsProcessSpawnError,
+} from "@t3tools/contracts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -53,6 +57,44 @@ const captureProcessResult = (
   );
 
 describe("VcsProcess.run", () => {
+  it.effect("records the signal that killed the process as a structured field", () =>
+    Effect.gen(function* () {
+      const error = yield* captureProcessResult(
+        Effect.fail(
+          new ProcessRunner.ProcessReadError({
+            command: "git",
+            argumentCount: 2,
+            cwd: "/workspace",
+            stream: "exitCode",
+            cause: new Error("Process interrupted due to receipt of signal: 'SIGABRT'"),
+          }),
+        ),
+      );
+      assert.instanceOf(error, VcsProcessOutputReadError);
+      assert.strictEqual(error.signal, "SIGABRT");
+      assert.include(error.message, "terminated by SIGABRT");
+    }),
+  );
+
+  it.effect("leaves the signal unset when reading the exit code fails for another reason", () =>
+    Effect.gen(function* () {
+      const error = yield* captureProcessResult(
+        Effect.fail(
+          new ProcessRunner.ProcessReadError({
+            command: "git",
+            argumentCount: 2,
+            cwd: "/workspace",
+            stream: "exitCode",
+            cause: new Error("boom"),
+          }),
+        ),
+      );
+      assert.instanceOf(error, VcsProcessOutputReadError);
+      assert.strictEqual(error.signal, undefined);
+      assert.include(error.message, "failed to read exitCode");
+    }),
+  );
+
   it.effect("explains a locked Git index and allows restore after the lock is released", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

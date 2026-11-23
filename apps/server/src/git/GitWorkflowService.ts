@@ -33,6 +33,7 @@ import { trimAsciiWhitespace } from "@t3tools/contracts";
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import { signalField } from "../vcs/processSignal.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 
 export class GitWorkflowService extends Context.Service<
@@ -250,6 +251,7 @@ export const make = Effect.gen(function* () {
               operation,
               cwd,
               detail: "Failed to detect a VCS repository for this Git workflow.",
+              ...signalField(cause),
               cause,
             }),
         ),
@@ -272,6 +274,7 @@ export const make = Effect.gen(function* () {
             command: "vcs-route",
             cwd,
             detail: "Failed to detect a VCS repository for this Git command.",
+            ...signalField(cause),
             cause,
           }),
       ),
@@ -300,6 +303,7 @@ export const make = Effect.gen(function* () {
               operation: "GitWorkflowService.repositoryRoot",
               cwd,
               detail: "Failed to detect a VCS repository for this Git workflow.",
+              ...signalField(cause),
               cause,
             }),
         ),

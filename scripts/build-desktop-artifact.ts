@@ -2894,6 +2894,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           "T3 Code lets commands run by terminals and coding agents control other apps.",
         NSSpeechRecognitionUsageDescription:
           "T3 Code transcribes your dictation on this Mac when you choose Apple Speech.",
+        NSRemovableVolumesUsageDescription:
+          "T3 Code reads project files you open from external drives.",
+        NSNetworkVolumesUsageDescription:
+          "T3 Code reads project files you open from network volumes.",
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [

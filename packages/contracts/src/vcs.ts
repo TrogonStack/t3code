@@ -202,10 +202,15 @@ export class VcsProcessOutputReadError extends Schema.TaggedError<VcsProcessOutp
   {
     ...VcsProcessBoundaryErrorFields,
     stream: Schema.Literals(["stdout", "stderr", "exitCode"]),
+    // Set when the child was killed by a signal, such as SIGABRT.
+    signal: Schema.optional(Schema.String),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
+    if (this.signal !== undefined) {
+      return `VCS process was terminated by ${this.signal} in ${this.operation}: ${this.command} (${this.cwd})`;
+    }
     return `VCS process failed to read ${this.stream} in ${this.operation}: ${this.command} (${this.cwd})`;
   }
 }
