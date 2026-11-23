@@ -6,6 +6,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as NodePlatformCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { CodexSettings, ProviderInstanceId } from "@t3tools/contracts";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Duration from "effect/Duration";
@@ -155,6 +156,7 @@ await Effect.runPromise(
         SourceControlProviderRegistry.layer.pipe(
           Layer.provide(SourceControlBuiltInDrivers.layer),
           Layer.provide(SecretResolver.layer),
+          Layer.provide(FeatureFlags.layer),
           Layer.provide(ServerSettings.layerTest()),
           Layer.provide(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer))),
           Layer.provide(GitVcsDriver.layer),
