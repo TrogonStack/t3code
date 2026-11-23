@@ -1,16 +1,17 @@
-import type { Element, Root } from "hast";
-import remarkGfm from "remark-gfm";
-import remarkParse from "remark-parse";
-import remarkRehype from "remark-rehype";
-import { unified } from "unified";
+import type { Element } from "hast";
 import { describe, expect, it } from "vite-plus/test";
 
+import { wordsHast } from "../../markdown/wordsHast";
 import { MARKDOWN_TABLE_COLUMN_FLOOR_CH, markdownTableMinWidth } from "./markdownTableLayout";
 
-const processor = unified().use(remarkParse).use(remarkGfm).use(remarkRehype);
-
 function tableFrom(markdown: string): Element {
-  const root = processor.runSync(processor.parse(markdown)) as Root;
+  const root = wordsHast(markdown, {
+    math: false,
+    breaks: false,
+    escapeHtml: true,
+    insights: false,
+    extensions: {},
+  });
   const table = root.children.find(
     (node): node is Element => node.type === "element" && node.tagName === "table",
   );
