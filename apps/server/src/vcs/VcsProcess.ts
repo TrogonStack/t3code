@@ -24,6 +24,7 @@ import type { SourceControlProcessInput } from "@t3tools/source-control-core/ser
 
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { findProcessSignal } from "./processSignal.ts";
 
 export interface VcsProcessInput {
   readonly operation: string;
@@ -296,12 +297,15 @@ export const make = Effect.gen(function* () {
                 stdinBytes: error.stdinBytes,
                 cause: error.cause,
               }),
-            ProcessReadError: (error) =>
-              new VcsProcessOutputReadError({
+            ProcessReadError: (error) => {
+              const signal = findProcessSignal(error.cause);
+              return new VcsProcessOutputReadError({
                 ...baseError,
                 stream: error.stream,
+                ...(signal === undefined ? {} : { signal }),
                 cause: error.cause,
-              }),
+              });
+            },
           }),
         ),
       );

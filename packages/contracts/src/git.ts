@@ -392,12 +392,15 @@ export class GitCommandError extends Schema.TaggedError<GitCommandError>()("GitC
   stderrLength: Schema.optional(Schema.Number),
   outputLength: Schema.optional(Schema.Number),
   reason: ForwardCompatibleOptional(GitCommandFailureReason),
+  // Set when the git process was killed by a signal, such as SIGABRT.
+  signal: Schema.optional(Schema.String),
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
     const reason = this.reason === undefined ? "" : ` (${this.reason})`;
-    return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}${reason}`;
+    const signal = this.signal === undefined ? "" : ` (terminated by ${this.signal})`;
+    return `Git command failed in ${this.operation} (${this.cwd}): ${this.detail}${reason}${signal}`;
   }
 }
 
@@ -417,11 +420,13 @@ export class TextGenerationError extends Schema.TaggedError<TextGenerationError>
 export class GitManagerError extends Schema.TaggedError<GitManagerError>()("GitManagerError", {
   operation: Schema.String,
   cwd: Schema.String,
+  signal: Schema.optional(Schema.String),
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {
   override get message(): string {
-    return `Git manager failed in ${this.operation}: ${this.detail}`;
+    const signal = this.signal === undefined ? "" : ` (terminated by ${this.signal})`;
+    return `Git manager failed in ${this.operation}: ${this.detail}${signal}`;
   }
 }
 
