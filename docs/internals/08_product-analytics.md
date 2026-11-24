@@ -38,5 +38,5 @@ an authenticated connection does not count as product use.
 - Delivery ([`AnalyticsService.ts`](../../apps/server/src/telemetry/AnalyticsService.ts)) attaches a
   UUID per event, backs off on failure, and drops batches after bounded retries so a stuck batch
   cannot loop forever.
-- Dev-runner servers and CI smoke tests disable telemetry (and relay tracing) by default so they do
-  not inflate install counts; set `T3CODE_TELEMETRY_ENABLED=true` to test locally.
+- Telemetry and relay tracing are opt-in: nothing is sent, and provider login files are not read
+  for identity, unless `T3CODE_TELEMETRY_ENABLED=true`. Set it to test locally.

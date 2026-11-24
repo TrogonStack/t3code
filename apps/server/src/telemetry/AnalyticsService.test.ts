@@ -113,20 +113,19 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
-const analyticsLayerWith = (client: HttpClient.HttpClient, policy?: ManagedPolicyDocument) =>
+const destination = { T3CODE_POSTHOG_KEY: "phc_test_key", T3CODE_POSTHOG_HOST: "http://localhost" };
+const optedIn = { T3CODE_TELEMETRY_ENABLED: true, ...destination };
+
+const analyticsLayerWith = (
+  client: HttpClient.HttpClient,
+  policy?: ManagedPolicyDocument,
+  config: Readonly<Record<string, unknown>> = optedIn,
+) =>
   AnalyticsService.layer.pipe(
     Layer.provideMerge(
       ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
     ),
-    Layer.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          T3CODE_TELEMETRY_ENABLED: true,
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
-        }),
-      ),
-    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(HostProcess.Platform, "win32"),
@@ -151,6 +150,7 @@ const sendFor = (
     AnalyticsService.AnalyticsService | Effect.Services<typeof getTelemetryIdentity>
   > = recordTwentyEvents,
   policy?: ManagedPolicyDocument,
+  config: Readonly<Record<string, unknown>> = optedIn,
 ) =>
   Effect.gen(function* () {
     const batches: Array<ReadonlyArray<SentEvent>> = [];
@@ -165,7 +165,7 @@ const sendFor = (
         return yield* respond(request);
       }),
     );
-    const runtimeLayer = analyticsLayerWith(client, policy);
+    const runtimeLayer = analyticsLayerWith(client, policy, config);
 
     yield* Effect.gen(function* () {
       yield* record;
@@ -177,6 +177,47 @@ const sendFor = (
   });
 
 it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService test", (it) => {
+  it.effect("sends nothing unless telemetry is opted in", () =>
+    Effect.gen(function* () {
+      const batches = yield* sendFor(
+        1,
+        respondWithStatus(204),
+        recordTwentyEvents,
+        undefined,
+        destination,
+      );
+      assert.deepEqual(batches, []);
+    }),
+  );
+
+  it.effect("sends nothing when opted in without a destination", () =>
+    Effect.gen(function* () {
+      const batches = yield* sendFor(1, respondWithStatus(204), recordTwentyEvents, undefined, {
+        T3CODE_TELEMETRY_ENABLED: true,
+      });
+      assert.deepEqual(batches, []);
+    }),
+  );
+
+  it.effect("stays off after desktop shell discovery when the shell sets no preference", () =>
+    Effect.gen(function* () {
+      const env: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
+      const batches = yield* sendFor(
+        0,
+        respondWithStatus(204),
+        Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          delete env.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING;
+          yield* analytics.record("test.no-preference");
+          yield* analytics.flush;
+        }),
+        undefined,
+        destination,
+      ).pipe(Effect.provideService(HostProcess.Environment, env));
+      assert.deepEqual(batches, []);
+    }),
+  );
+
   it.effect("waits for desktop shell consent and honors a late telemetry opt-out", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
