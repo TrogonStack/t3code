@@ -5360,7 +5360,8 @@ it.effect("reads a commit's diff only for a commit the change request lists", ()
 
     yield* service.diff({ ...ref, commit: "AAAAAAA" });
     yield* service.diffFileContents({ ...ref, ...file, commit: "aaaaaaa" });
-    assert.deepStrictEqual(read, [listed, listed]);
+    // The diff also reads .gitattributes at that commit to fold generated files.
+    assert.deepStrictEqual(read, [listed, listed, listed]);
   }),
 );
 

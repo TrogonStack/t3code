@@ -137,6 +137,7 @@ describe("mergeProviderInstanceEnvironment", () => {
           LD_LIBRARY_PATH: keptLibraryPath,
           XDG_DATA_DIRS: "/usr/share",
           ...(environment ? { CUSTOM_VALUE: "set" } : {}),
+          OTEL_RESOURCE_ATTRIBUTES: LAUNCHED,
         });
       }),
   );
