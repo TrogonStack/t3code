@@ -945,3 +945,38 @@ it.live("restores a recorded repository the project stopped tracking as its work
     }),
   ),
 );
+
+// A slow fetch must be named while it runs, not only once it is done.
+it.live("reports which repositories are still being checked out", () =>
+  withState((state) =>
+    Effect.gen(function* () {
+      const { path, tmp, repository } = yield* fixture;
+      const shop = path.join(tmp, "shop");
+      const api = yield* repository("shop/api");
+      const web = yield* repository("shop/web");
+      state.workspaceRoot = shop;
+      state.trackedFolders = tracked(api, web);
+      const taskFolders = yield* TaskFolders.TaskFolders;
+      const plan = yield* taskFolders.plan({
+        projectId,
+        repositories: [{ path: api }, { path: web }],
+      });
+      const reports: Array<{ running: ReadonlyArray<string>; done: number; total: number }> = [];
+
+      yield* taskFolders.create({
+        plan: plan!,
+        branch: "feature",
+        projectStart: { refName: "main", baseRefName: "main" },
+        startFromOrigin: false,
+        onRepository: (report) => Effect.sync(() => reports.push(report)),
+      });
+
+      for (const name of ["api", "web"]) {
+        const started = reports.findIndex((report) => report.running.includes(name));
+        assert.isAtLeast(started, 0);
+        assert.isBelow(reports[started]!.done, 2);
+      }
+      assert.deepEqual(reports.at(-1), { running: [], done: 2, total: 2 });
+    }),
+  ),
+);

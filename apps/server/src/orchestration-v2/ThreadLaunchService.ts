@@ -860,9 +860,12 @@ const make = Effect.gen(function* () {
                       createdWorktreePath = taskFolder.projectPath;
                       createdBranch = claimedBranch;
                     }),
-                  onRepository: ({ name, done, total }) =>
+                  onRepository: ({ running, done, total }) =>
                     setupTracker.stage(threadId, "checkout", {
-                      detail: `${name} (${done} of ${total})`,
+                      detail:
+                        running.length === 0
+                          ? `${done} of ${total} repositories`
+                          : `${running.join(", ")} (${done} of ${total} done)`,
                     }),
                 })
                 .pipe(

@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -106,8 +107,9 @@ export class TaskFolders extends Context.Service<
       readonly projectProgress?: GitVcsDriver.CreateWorktreeProgress;
       /** As soon as the folder is recorded, so a cancelled caller knows what to remove. */
       readonly onClaimed?: (taskFolder: TaskFolder, branch: string) => Effect.Effect<void>;
+      /** When a repository starts and when it finishes; `running` names the ones in flight. */
       readonly onRepository?: (progress: {
-        readonly name: string;
+        readonly running: ReadonlyArray<string>;
         readonly done: number;
         readonly total: number;
       }) => Effect.Effect<void>;
@@ -231,6 +233,7 @@ const isGitCommandError = Schema.is(GitCommandError);
 const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const digest = yield* Digest.Digest;
   const config = yield* ServerConfig.ServerConfig;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -264,6 +267,7 @@ const make = Effect.gen(function* () {
     projectFolders(project).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
   // The repository that pins a submodule owns its checkout: Git, a hook or a setup script puts it
   // in that repository's worktree, so it never gets one of its own here.
@@ -1050,6 +1054,13 @@ const make = Effect.gen(function* () {
           yield* linkFolder(taskPlan.projectRoot, empty.projectPath, taskPlan.trackedRepositories);
         }
         let finished = 0;
+        const running: string[] = [];
+        const reportRepositories = () =>
+          input.onRepository?.({
+            running: [...running],
+            done: finished,
+            total: taskPlan.repositories.length,
+          }) ?? Effect.void;
         // Whatever the project put at a skipped path also stands for the repositories inside it.
         const skipped: string[] = [];
         // A repository inside another waits for the one that holds it.
@@ -1069,13 +1080,25 @@ const make = Effect.gen(function* () {
             (repository) =>
               (skipped.some((outer) => isWithinRoot(path, repository.path, outer))
                 ? Effect.succeed(null)
-                : createRepositoryWorktree(
-                    empty,
-                    repository,
-                    branch,
-                    input.startFromOrigin,
-                    input.baseBranch,
-                    recordBranch(repository.path),
+                : Effect.suspend(() => {
+                    running.push(repository.name);
+                    return reportRepositories();
+                  }).pipe(
+                    Effect.andThen(
+                      createRepositoryWorktree(
+                        empty,
+                        repository,
+                        branch,
+                        input.startFromOrigin,
+                        input.baseBranch,
+                        recordBranch(repository.path),
+                      ),
+                    ),
+                    Effect.ensuring(
+                      Effect.sync(() => {
+                        running.splice(running.indexOf(repository.name), 1);
+                      }),
+                    ),
                   )
               ).pipe(
                 Effect.tap((worktree) =>
@@ -1086,13 +1109,7 @@ const make = Effect.gen(function* () {
                       created.push(worktree.repository);
                       repositoriesStartedFromOrigin ||= worktree.fromOrigin;
                     }
-                    return (
-                      input.onRepository?.({
-                        name: repository.name,
-                        done: finished,
-                        total: taskPlan.repositories.length,
-                      }) ?? Effect.void
-                    );
+                    return reportRepositories();
                   }),
                 ),
                 Effect.mapError(fail("create", `Could not create the ${repository.name} worktree`)),

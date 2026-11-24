@@ -193,6 +193,33 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
     }),
   );
 
+  it.effect("leaves out repositories in folders the project's Git ignores", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* makeTempDir;
+      for (const folder of ["tmp/scratch/.git", "api/.git", "packages/web/.git"]) {
+        yield* fileSystem.makeDirectory(path.join(workspaceRoot, folder), { recursive: true });
+      }
+      const names = Effect.map(WorkspaceFolders.discoverFolders(workspaceRoot), (folders) =>
+        folders.map((folder) => folder.name).toSorted(),
+      );
+      // Outside a repository nothing is ignored.
+      assert.deepEqual(yield* names, ["api", "scratch", "web"]);
+
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"));
+      yield* fileSystem.writeFileString(
+        path.join(workspaceRoot, ".git", "HEAD"),
+        "ref: refs/heads/main\n",
+      );
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git", "objects"));
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git", "refs"));
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, ".gitignore"), "tmp\n");
+
+      assert.deepEqual(yield* names, ["api", "web"]);
+    }),
+  );
+
   it.effect("does not walk a project's folders when t3.json ignores the whole project", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
