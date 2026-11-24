@@ -2,6 +2,7 @@ import type {
   ProviderInstanceEnvironment,
   ResolvedProviderInstanceEnvironment,
 } from "@t3tools/contracts";
+import { stripAppImageRuntimeEnv } from "@t3tools/shared/appImageRuntimeEnv";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
@@ -87,13 +88,15 @@ export const overlayProviderInstanceEnvironment = Effect.fn(function* (
   environment: ProviderInstanceEnvironment | ResolvedProviderEnvironment | undefined,
   baseEnv: NodeJS.ProcessEnv,
 ) {
+  // Commands the agent runs inherit this env; the AppImage mount's libraries would shadow the system's.
+  const hostEnv = stripAppImageRuntimeEnv(baseEnv);
   if (!environment || environment.length === 0) {
-    return baseEnv;
+    return hostEnv;
   }
 
   const home = yield* HostProcess.HomeDirectory;
   const windows = (yield* HostProcess.Platform) === "win32";
-  const next: NodeJS.ProcessEnv = { ...baseEnv };
+  const next: NodeJS.ProcessEnv = { ...hostEnv };
   for (const variable of environment) {
     // An unresolved secret reference carries no value; the registry resolves it for the provider.
     if (typeof variable.value !== "string") continue;
