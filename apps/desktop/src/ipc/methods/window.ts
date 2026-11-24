@@ -102,8 +102,9 @@ export const installRelayTelemetryEnabled = Effect.fn("desktop.ipc.window.instal
         result: Schema.NullOr(Schema.Boolean),
         handler: () =>
           shellEnvironment.discoveryFinished.pipe(
+            // Opting in can come from the login shell, so stay undecided until it is read.
             Effect.map((known) =>
-              !policyAllows || !isRelayTracingEnabled(env) ? false : known ? true : null,
+              !policyAllows ? false : known ? isRelayTracingEnabled(env) : null,
             ),
           ),
       }),
