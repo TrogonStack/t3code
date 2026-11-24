@@ -24,8 +24,10 @@ import * as Path from "effect/Path";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 
@@ -324,34 +326,40 @@ export const discoverFolders = Effect.fn("WorkspaceFolders.discover")(function* 
 });
 
 // Clones under a folder the project's Git ignores, such as `tmp/`, are scratch, not part of it.
-const gitIgnoredFolders = Effect.fnUntraced(function* (
+const gitIgnoredFolders = Effect.fn("WorkspaceFolders.gitIgnoredFolders")(function* (
   root: string,
   relativePaths: ReadonlyArray<string>,
 ) {
-  if (relativePaths.length === 0) return new Set<string>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // Without its own `.git`, Git would apply the rules of a repository the project sits inside.
+  const isRepository = yield* fileSystem
+    .exists(path.join(root, ".git"))
+    .pipe(Effect.orElseSucceed(() => false));
+  if (relativePaths.length === 0 || !isRepository) return new Set<string>();
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  // Exit 1 means nothing matched; outside a repository git exits 128. Either way none are ignored.
+  const environment = yield* HostProcess.Environment;
+  const platform = yield* HostProcess.Platform;
+  // Exit 1 means nothing matched; any failure leaves every repository in.
   const output = yield* spawner
     .string(
-      ChildProcess.make(
-        "git",
-        [
-          "-c",
-          "core.fsmonitor=false",
-          "-c",
-          "core.quotePath=false",
-          "check-ignore",
-          "--",
-          ...relativePaths,
-        ],
-        { cwd: root, env: yield* HostProcess.Environment, stdin: "ignore", stderr: "ignore" },
-      ),
+      ChildProcess.make("git", ["-c", "core.fsmonitor=false", "check-ignore", "--stdin", "-z"], {
+        cwd: root,
+        env: {
+          ...environment,
+          ...VcsProcess.unsetInheritedRepositoryEnv(environment, platform),
+        },
+        stdin: Stream.make(
+          new TextEncoder().encode(relativePaths.map((entry) => `${entry}\0`).join("")),
+        ),
+        stderr: "ignore",
+      }),
     )
     .pipe(
       Effect.timeout("10 seconds"),
       Effect.orElseSucceed(() => ""),
     );
-  return new Set(output.split("\n").filter((entry) => entry !== ""));
+  return new Set(output.split("\0").filter((entry) => entry !== ""));
 });
 
 /**

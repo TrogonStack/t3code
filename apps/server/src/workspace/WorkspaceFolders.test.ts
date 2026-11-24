@@ -198,14 +198,19 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const workspaceRoot = yield* makeTempDir;
-      for (const folder of ["tmp/scratch/.git", "api/.git", "packages/web/.git"]) {
+      for (const folder of [
+        "tmp/scratch/.git",
+        'tmp/we"ird/.git',
+        "api/.git",
+        "packages/web/.git",
+      ]) {
         yield* fileSystem.makeDirectory(path.join(workspaceRoot, folder), { recursive: true });
       }
       const names = Effect.map(WorkspaceFolders.discoverFolders(workspaceRoot), (folders) =>
         folders.map((folder) => folder.name).toSorted(),
       );
       // Outside a repository nothing is ignored.
-      assert.deepEqual(yield* names, ["api", "scratch", "web"]);
+      assert.deepEqual(yield* names, ["api", "scratch", 'we"ird', "web"]);
 
       yield* fileSystem.makeDirectory(path.join(workspaceRoot, ".git"));
       yield* fileSystem.writeFileString(
@@ -217,6 +222,13 @@ it.layer(NodeServices.layer)("WorkspaceFolders", (it) => {
       yield* fileSystem.writeFileString(path.join(workspaceRoot, ".gitignore"), "tmp\n");
 
       assert.deepEqual(yield* names, ["api", "web"]);
+
+      // A plain project folder inside that repository keeps its own repositories.
+      const nested = path.join(workspaceRoot, "tmp");
+      const nestedNames = Effect.map(WorkspaceFolders.discoverFolders(nested), (folders) =>
+        folders.map((folder) => folder.name).toSorted(),
+      );
+      assert.deepEqual(yield* nestedNames, ["scratch", 'we"ird']);
     }),
   );
 

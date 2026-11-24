@@ -3081,7 +3081,7 @@ it.live("launches into a task folder and leaves nothing behind when its setup is
           ["agent", "pending"],
         ],
       );
-      assert.match(stages[1]?.detail ?? "", /\(2 of 2\)$/);
+      assert.equal(stages[1]?.detail, "2 of 2 repositories");
 
       assert.isTrue(yield* tracker.cancel(launched.threadId));
 
