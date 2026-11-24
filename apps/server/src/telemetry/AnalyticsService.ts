@@ -66,6 +66,9 @@ function retryDelayMs(failures: number, random: number): number {
 
 const TelemetryEnvConfig = Config.all({
   // No default destination: opting in sends nothing until the user names their own endpoint.
+  // Upstream defaults, kept for reference:
+  // posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m")),
+  // posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.withDefault("https://ingest.t3.codes")),
   posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.option),
   posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.option),
   enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
