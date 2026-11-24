@@ -22,6 +22,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
@@ -204,6 +205,7 @@ export const make = Effect.gen(function* () {
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const isWorktreeContainer = yield* makeIsWorktreeContainer.pipe(
     Effect.provide(ProcessRunner.layer),
@@ -246,6 +248,7 @@ export const make = Effect.gen(function* () {
     const discovered = yield* discoverFolders(row.workspaceRoot).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     if (sameProjectFolders(mergeProjectFolders(discovered, row.trackedFolders), row.trackedFolders))
       return;
@@ -323,6 +326,7 @@ export const make = Effect.gen(function* () {
     projectFolders({ workspaceRoot, trackedFolders: added }).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
 
   const normalizeTrackedFolders = (

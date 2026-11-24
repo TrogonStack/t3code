@@ -21,9 +21,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { isWithinRoot } from "./KnownWorkspaces.ts";
 import * as TaskFolderStore from "./TaskFolderStore.ts";
 
@@ -274,7 +278,11 @@ const scanFolders = Effect.fn("WorkspaceFolders.scan")(function* (
  */
 export const discoverFolders = Effect.fn("WorkspaceFolders.discover")(function* (
   workspaceRoot: string,
-): Effect.fn.Return<ReadonlyArray<ProjectTrackedFolder>, never, FileSystem.FileSystem | Path.Path> {
+): Effect.fn.Return<
+  ReadonlyArray<ProjectTrackedFolder>,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const { realPath, ownsHistory } = yield* folderProbes;
@@ -308,7 +316,50 @@ export const discoverFolders = Effect.fn("WorkspaceFolders.discover")(function* 
       ),
     { concurrency: DETECTION_CONCURRENCY },
   );
-  return inside.map((folder) => ({ path: folder.path, name: folder.name, discovered: true }));
+  const gitIgnored = yield* gitIgnoredFolders(
+    root,
+    inside.map((folder) => path.relative(root, folder.path).split(path.sep).join("/")),
+  );
+  return inside
+    .filter((folder) => !gitIgnored.has(path.relative(root, folder.path).split(path.sep).join("/")))
+    .map((folder) => ({ path: folder.path, name: folder.name, discovered: true }));
+});
+
+// Clones under a folder the project's Git ignores, such as `tmp/`, are scratch, not part of it.
+const gitIgnoredFolders = Effect.fn("WorkspaceFolders.gitIgnoredFolders")(function* (
+  root: string,
+  relativePaths: ReadonlyArray<string>,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // Without its own `.git`, Git would apply the rules of a repository the project sits inside.
+  const isRepository = yield* fileSystem
+    .exists(path.join(root, ".git"))
+    .pipe(Effect.orElseSucceed(() => false));
+  if (relativePaths.length === 0 || !isRepository) return new Set<string>();
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const environment = yield* HostProcess.Environment;
+  const platform = yield* HostProcess.Platform;
+  // Exit 1 means nothing matched; any failure leaves every repository in.
+  const output = yield* spawner
+    .string(
+      ChildProcess.make("git", ["-c", "core.fsmonitor=false", "check-ignore", "--stdin", "-z"], {
+        cwd: root,
+        env: {
+          ...environment,
+          ...VcsProcess.unsetInheritedRepositoryEnv(environment, platform),
+        },
+        stdin: Stream.make(
+          new TextEncoder().encode(relativePaths.map((entry) => `${entry}\0`).join("")),
+        ),
+        stderr: "ignore",
+      }),
+    )
+    .pipe(
+      Effect.timeout("10 seconds"),
+      Effect.orElseSucceed(() => ""),
+    );
+  return new Set(output.split("\0").filter((entry) => entry !== ""));
 });
 
 /**
@@ -336,7 +387,7 @@ export const projectFolders = Effect.fn("WorkspaceFolders.projectFolders")(funct
 }): Effect.fn.Return<
   ReadonlyArray<ProjectTrackedFolder>,
   never,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   return mergeProjectFolders(yield* discoverFolders(project.workspaceRoot), project.trackedFolders);
 });
@@ -359,6 +410,7 @@ export const sameProjectFolders = (
 const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const taskFolders = yield* TaskFolderStore.TaskFolderStore;
 
@@ -390,6 +442,7 @@ const make = Effect.gen(function* () {
     projectFolders(project).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
 
   // `identity` is `root` in the checkout the thread's was made from: it names the same submodule

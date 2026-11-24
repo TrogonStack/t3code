@@ -15,7 +15,8 @@ There is no list to keep. A project covers every repository inside its folder: T
 level down, and one level further inside folders that are not repositories themselves, such as
 `src` or `packages`. It reads the disk each time, so a repository you clone there is part of the
 project straight away, and one you delete is gone from it. Worktrees of another repository are left
-out.
+out, and so are repositories the project's Git ignores, such as scratch clones in an ignored `tmp`
+folder.
 
 **Settings → Projects → Repositories** shows what the project covers on each machine.
 

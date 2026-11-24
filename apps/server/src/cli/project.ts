@@ -16,6 +16,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/cli";
@@ -315,6 +316,7 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
     | HttpClient.HttpClient
     | Path.Path
     | WorkspacePaths.WorkspacePaths
+    | ChildProcessSpawner.ChildProcessSpawner
   >,
 ) {
   const logLevel = yield* GlobalFlag.LogLevel;
