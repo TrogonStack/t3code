@@ -113,24 +113,19 @@ const recordTwentyEvents = Effect.gen(function* () {
   }
 });
 
+const destination = { T3CODE_POSTHOG_KEY: "phc_test_key", T3CODE_POSTHOG_HOST: "http://localhost" };
+const optedIn = { T3CODE_TELEMETRY_ENABLED: true, ...destination };
+
 const analyticsLayerWith = (
   client: HttpClient.HttpClient,
   policy?: ManagedPolicyDocument,
-  telemetryEnabled: boolean | null = true,
+  config: Readonly<Record<string, unknown>> = optedIn,
 ) =>
   AnalyticsService.layer.pipe(
     Layer.provideMerge(
       ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-retry-" }),
     ),
-    Layer.provide(
-      ConfigProvider.layer(
-        ConfigProvider.fromUnknown({
-          ...(telemetryEnabled === null ? {} : { T3CODE_TELEMETRY_ENABLED: telemetryEnabled }),
-          T3CODE_POSTHOG_KEY: "phc_test_key",
-          T3CODE_POSTHOG_HOST: "http://localhost",
-        }),
-      ),
-    ),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
     Layer.provide(
       Layer.mergeAll(
         Layer.succeed(HostProcess.Platform, "win32"),
@@ -155,7 +150,7 @@ const sendFor = (
     AnalyticsService.AnalyticsService | Effect.Services<typeof getTelemetryIdentity>
   > = recordTwentyEvents,
   policy?: ManagedPolicyDocument,
-  telemetryEnabled: boolean | null = true,
+  config: Readonly<Record<string, unknown>> = optedIn,
 ) =>
   Effect.gen(function* () {
     const batches: Array<ReadonlyArray<SentEvent>> = [];
@@ -170,7 +165,7 @@ const sendFor = (
         return yield* respond(request);
       }),
     );
-    const runtimeLayer = analyticsLayerWith(client, policy, telemetryEnabled);
+    const runtimeLayer = analyticsLayerWith(client, policy, config);
 
     yield* Effect.gen(function* () {
       yield* record;
@@ -189,8 +184,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         respondWithStatus(204),
         recordTwentyEvents,
         undefined,
-        null,
+        destination,
       );
+      assert.deepEqual(batches, []);
+    }),
+  );
+
+  it.effect("sends nothing when opted in without a destination", () =>
+    Effect.gen(function* () {
+      const batches = yield* sendFor(1, respondWithStatus(204), recordTwentyEvents, undefined, {
+        T3CODE_TELEMETRY_ENABLED: true,
+      });
       assert.deepEqual(batches, []);
     }),
   );
@@ -208,7 +212,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           yield* analytics.flush;
         }),
         undefined,
-        null,
+        destination,
       ).pipe(Effect.provideService(HostProcess.Environment, env));
       assert.deepEqual(batches, []);
     }),

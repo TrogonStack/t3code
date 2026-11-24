@@ -1,13 +1,13 @@
 # Product usage data
 
-Product usage events and relay connection traces are off unless you opt in. Set
-`T3CODE_TELEMETRY_ENABLED=true` in the server's environment to turn them on.
+Product usage events and relay connection traces are off unless you opt in. Product usage events
+have no default destination: set `T3CODE_TELEMETRY_ENABLED=true` together with `T3CODE_POSTHOG_HOST`
+and `T3CODE_POSTHOG_KEY` for a PostHog-compatible endpoint you choose.
 
-When enabled, the T3 Code server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
-associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and
-Claude accounts when you are signed in, and a random identifier for each device that connects. The endpoint keeps a copy of each
-event and forwards events to PostHog. Events include the provider, model, reasoning effort,
+When enabled, the T3 Code server sends product usage events to that endpoint, associated with a
+hashed account or installation identifier. To count how many installations one person uses, the
+server also sends hashed account identifiers: your T3 Connect account, your OpenAI and Claude
+accounts when you are signed in, and a random identifier for each device that connects. Events include the provider, model, reasoning effort,
 permission mode, turn and request results, duration, release channel, and token counts when
 available. Child-agent token counts are reported separately from the main agent's. Events include
 the model ID the provider used, including custom models and models served by a custom endpoint.
