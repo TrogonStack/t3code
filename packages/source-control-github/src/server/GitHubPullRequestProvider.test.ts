@@ -586,6 +586,7 @@ it.effect("adds unstarted same-repository workflow runs as pending, not as appro
             canWrite: true,
             canTriage: true,
             canUpdate: true,
+            canAdminister: false,
             didAuthor: false,
             mergeCapabilities: { merge: true, squash: true, rebase: true },
             autoMergeAllowed: true,
