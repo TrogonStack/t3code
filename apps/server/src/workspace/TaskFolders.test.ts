@@ -1144,6 +1144,7 @@ it.live("reports which repositories are still being checked out", () =>
         branch: "feature",
         projectStart: { refName: "main", baseRefName: "main" },
         startFromOrigin: false,
+        projectCommands: "permitted",
         onRepository: (report) => Effect.sync(() => reports.push(report)),
       });
 
