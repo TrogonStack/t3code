@@ -56,7 +56,6 @@
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "effect-acp": "workspace:*",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   }
 }

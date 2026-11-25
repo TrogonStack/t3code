@@ -781,7 +781,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         createOpenCodeSdkClient({
           baseUrl: url,
           directory: input.directory,
-          ...(serverPassword !== undefined ? { serverPassword } : {}),
+          serverPassword,
         }),
         input.environment,
       )

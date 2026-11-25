@@ -248,7 +248,7 @@ it("reads the first diff page once the pointer rests on the Code tab", async () 
   const code = screen.getByRole("button", { name: "Code", exact: true });
   await expect.element(code).toBeVisible();
 
-  // userEvent actions advance fake timers while they run, which would skip past the rest delay.
+  // userEvent advances fake timers while it runs (vitest#11242), blurring the 150 ms boundary.
   await act(() => code.element().dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
   await act(() => vi.advanceTimersByTime(149));
   expect(reads.diff).toEqual([]);
