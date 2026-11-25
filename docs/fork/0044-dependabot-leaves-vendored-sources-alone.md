@@ -1,6 +1,6 @@
 # 0044: Dependabot leaves vendored sources alone
 
-- PR: pending
+- PR: [TrogonStack/t3code#256](https://github.com/TrogonStack/t3code/pull/256)
 - Status: active
 
 ## What you can do now
