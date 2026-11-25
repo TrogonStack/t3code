@@ -59,3 +59,5 @@ Each entry uses these sections:
   active, [#235](https://github.com/TrogonStack/t3code/pull/235)
 - **0043** [Escape returns focus to the composer](./0043-escape-returns-to-the-composer.md)
   active, [#169](https://github.com/TrogonStack/t3code/pull/169)
+- **0044** [Dependabot leaves vendored sources alone](./0044-dependabot-leaves-vendored-sources-alone.md)
+  active, [#256](https://github.com/TrogonStack/t3code/pull/256)
