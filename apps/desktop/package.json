@@ -43,8 +43,7 @@
     "gt": "2.27.0",
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.0.0",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   },
   "productName": "T3 Code (Beta)"
 }

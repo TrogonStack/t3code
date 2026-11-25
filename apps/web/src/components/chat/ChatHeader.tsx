@@ -152,7 +152,14 @@ export const ChatHeader = memo(function ChatHeader({
       document.fonts.removeEventListener("loadingdone", measure);
       stopObserving();
     };
-  }, [activeProjectName, activeThreadTitle, parentThreadLink, interfaceFont, isRenamingTitle]);
+  }, [
+    // Title, font and rename changes resize the breadcrumb text without resizing the list, so it re-measures.
+    activeProjectName,
+    activeThreadTitle,
+    parentThreadLink,
+    interfaceFont,
+    isRenamingTitle,
+  ]);
   const renameCommittedRef = useRef(false);
   const startRename = () => {
     if (
