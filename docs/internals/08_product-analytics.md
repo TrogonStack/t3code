@@ -1,8 +1,8 @@
 # Product analytics
 
 The server owns analytics delivery, opt-out, and identity for every connected client. Clients never
-load the PostHog browser SDK, PostHog person profiles stay disabled, and visiting hosted web without
-an authenticated connection does not count as product use.
+load an analytics browser SDK, and visiting hosted web without an authenticated connection does not
+count as product use.
 
 ## Identity
 
@@ -43,4 +43,5 @@ an authenticated connection does not count as product use.
   UUID per event, backs off on failure, and drops batches after bounded retries so a stuck batch
   cannot loop forever.
 - Telemetry and relay tracing are opt-in: nothing is sent, and provider login files are not read
-  for identity, unless `T3CODE_TELEMETRY_ENABLED=true`. Set it to test locally.
+  for identity, unless `T3CODE_TELEMETRY_ENABLED=true`. Set it to test locally. `DO_NOT_TRACK=1`
+  wins over the opt-in; a managed policy that denies telemetry overrides everything.

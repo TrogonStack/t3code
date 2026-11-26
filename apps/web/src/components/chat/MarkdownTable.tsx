@@ -12,8 +12,8 @@ import { Button } from "../ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "../ui/dialog";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { ScrollArea } from "../ui/scroll-area";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { reportMarkdownActionFailure, type TableCopyFormat } from "./markdownActionFailure";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import type { markdownTableMinWidth } from "./markdownTableLayout";
 
 const TABLE_COPY_SERIALIZERS: Record<TableCopyFormat, (table: Element) => string> = {
@@ -64,25 +64,18 @@ function TableCopyMenu({
           {copied ? <T>Copied</T> : <T>Copy</T>}
         </MenuTrigger>
       ) : (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <MenuTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost-muted"
-                    size="icon-xs"
-                    aria-label={copyLabel}
-                  />
-                }
-              />
-            }
-          >
-            {icon}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{copyLabel}</TooltipPopup>
-        </Tooltip>
+        <SharedTooltipTrigger
+          render={
+            <MenuTrigger
+              render={
+                <Button type="button" variant="ghost-muted" size="icon-xs" aria-label={copyLabel} />
+              }
+            />
+          }
+          label={copyLabel}
+        >
+          {icon}
+        </SharedTooltipTrigger>
       )}
       <MenuPopup align="end">
         <MenuItem onClick={() => handleCopy("markdown")}>
@@ -123,24 +116,20 @@ export function MarkdownTable({ children, minWidth, style, ...props }: MarkdownT
       {/* Stays within the row's px-1: the chat lane clips sideways overflow. */}
       <div className="mt-0.5 -mx-1 flex items-center justify-end gap-0.5 select-none">
         <span className="chat-markdown-table-expand flex">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost-muted"
-                  size="icon-xs"
-                  aria-label={gt("Expand table")}
-                  onClick={() => setExpanded(true)}
-                />
-              }
-            >
-              <Maximize2Icon className="size-3" />
-            </TooltipTrigger>
-            <TooltipPopup side="top">
-              <T>Expand table</T>
-            </TooltipPopup>
-          </Tooltip>
+          <SharedTooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost-muted"
+                size="icon-xs"
+                aria-label={gt("Expand table")}
+                onClick={() => setExpanded(true)}
+              />
+            }
+            label={<T>Expand table</T>}
+          >
+            <Maximize2Icon className="size-3" />
+          </SharedTooltipTrigger>
         </span>
         <TableCopyMenu getTable={() => containerRef.current?.querySelector("table")} />
       </div>

@@ -8,7 +8,7 @@
 - Run the server without sending product usage events or relay connection traces anywhere until
   you set `T3CODE_TELEMETRY_ENABLED=true`.
 - Send product usage events only to a PostHog-compatible endpoint you choose. Opting in without
-  `T3CODE_POSTHOG_HOST` and `T3CODE_POSTHOG_KEY` still sends nothing.
+  `T3CODE_TELEMETRY_HOST` and `T3CODE_TELEMETRY_KEY` still sends nothing.
 - Keep your installation free of a telemetry identifier until you opt in.
 
 ## Why
