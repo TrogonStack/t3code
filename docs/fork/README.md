@@ -61,3 +61,5 @@ Each entry uses these sections:
   active, [#169](https://github.com/TrogonStack/t3code/pull/169)
 - **0044** [Dependabot leaves vendored sources alone](./0044-dependabot-leaves-vendored-sources-alone.md)
   active, [#256](https://github.com/TrogonStack/t3code/pull/256)
+- **0045** [Watch Dog babysits a pull request until it is green](./0045-watch-dog-babysits-a-pull-request.md)
+  active, [#177](https://github.com/TrogonStack/t3code/pull/177)
