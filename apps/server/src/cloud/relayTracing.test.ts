@@ -69,6 +69,8 @@ it("reports the server's relay tracing policy to clients", () => {
   assert.isFalse(allowedFor({}, undefined));
   assert.isTrue(allowedFor({ T3CODE_TELEMETRY_ENABLED: "true" }, undefined));
   assert.isFalse(allowedFor({ T3CODE_TELEMETRY_ENABLED: "false" }, undefined));
+  assert.isFalse(allowedFor({ CI: "true" }, undefined));
+  assert.isTrue(allowedFor({ CI: "true", T3CODE_TELEMETRY_ENABLED: "true" }, undefined));
   assert.isFalse(
     allowedFor(
       { T3CODE_TELEMETRY_ENABLED: "true" },

@@ -1,5 +1,6 @@
-// T3 ingest retains events and forwards to PostHog; UUIDs deduplicate retries there.
+// T3 ingest retains events and deduplicates retries by UUID.
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { isDoNotTrackSet } from "@t3tools/shared/otelEnvironment";
 import type { ClientOs } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
@@ -69,11 +70,11 @@ function retryDelayMs(failures: number, random: number): number {
 const TelemetryEnvConfig = Config.all({
   // No default destination: opting in sends nothing until the user names their own endpoint.
   // Upstream defaults, kept for reference:
-  // posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m")),
-  // posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.withDefault("https://ingest.t3.codes")),
-  posthogKey: Config.String("T3CODE_POSTHOG_KEY").pipe(Config.option),
-  posthogHost: Config.String("T3CODE_POSTHOG_HOST").pipe(Config.option),
-  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(false)),
+  // ingestKey: Config.String("T3CODE_TELEMETRY_KEY").pipe(Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m")),
+  // ingestHost: Config.String("T3CODE_TELEMETRY_HOST").pipe(Config.withDefault("https://ingest.t3.codes")),
+  ingestKey: Config.String("T3CODE_TELEMETRY_KEY").pipe(Config.option),
+  ingestHost: Config.String("T3CODE_TELEMETRY_HOST").pipe(Config.option),
+  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.option),
   flushBatchSize: Config.Number("T3CODE_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),
   maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
@@ -125,23 +126,32 @@ function serverOsFromNodePlatform(platform: string): ClientOs {
 export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const destination = Option.all({
-    apiKey: telemetryConfig.posthogKey,
-    host: telemetryConfig.posthogHost,
+    apiKey: telemetryConfig.ingestKey,
+    host: telemetryConfig.ingestHost,
   });
   const hostEnvironment = yield* HostProcess.Environment;
   const awaitingShellConsent = hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1";
+  // Fork: telemetry stays off until the user opts in, CI or not.
+  const enabledByDefault = false;
+  const enabledAtStartup = Option.getOrElse(telemetryConfig.enabled, () => enabledByDefault);
   // A managed policy can switch analytics off over the environment, never on.
   const policyAllows =
     ManagedPolicy.deniedBy(yield* ManagedPolicy.ManagedPolicy, "telemetry") === undefined;
   // A cached PATH does not establish consent from the current login shell.
   const telemetryEnabled = Effect.suspend(() => {
-    if (!policyAllows || Option.isNone(destination)) return Effect.succeed(false);
-    if (!awaitingShellConsent) return Effect.succeed(telemetryConfig.enabled);
+    if (
+      !enabledAtStartup ||
+      !policyAllows ||
+      isDoNotTrackSet(hostEnvironment) ||
+      Option.isNone(destination)
+    )
+      return Effect.succeed(false);
+    if (!awaitingShellConsent) return Effect.succeed(true);
     if (hostEnvironment.T3CODE_DESKTOP_SHELL_DISCOVERY_PENDING === "1")
       return Effect.succeed(false);
     const preference = hostEnvironment.T3CODE_TELEMETRY_ENABLED;
     return Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(
-      Config.withDefault(false),
+      Config.withDefault(enabledByDefault),
       Effect.provideService(
         ConfigProvider.ConfigProvider,
         ConfigProvider.fromEnv({
