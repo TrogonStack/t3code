@@ -348,6 +348,44 @@ describe("thread execution presentation", () => {
     expect(deriveResumableRunId(providerError, deriveThreadRuntime(providerError))).toBeNull();
   });
 
+  it("offers to resume a run that failed on provider capacity so another model can take over", () => {
+    const failed = {
+      ...run("capacity", 1, "failed"),
+      rootNodeId: NodeId.make("root"),
+      completedAt: now,
+    };
+    const item = {
+      id: TurnItemId.make("capacity-error"),
+      threadId: v2Projection.thread.id,
+      runId: failed.id,
+      nodeId: failed.rootNodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      type: "error" as const,
+      status: "failed" as const,
+      title: "Provider error",
+      startedAt: now,
+      completedAt: now,
+      updatedAt: now,
+      failure: {
+        class: "provider_error" as const,
+        message: "Selected model is at capacity. Please try a different model.",
+        code: "serverOverloaded",
+        retryable: false,
+      },
+    };
+    const capacity = { ...v2Projection, runs: [failed], turnItems: [item] };
+    expect(deriveResumableRunId(capacity, deriveThreadRuntime(capacity))).toBe(failed.id);
+    const other = {
+      ...capacity,
+      turnItems: [{ ...item, failure: { ...item.failure, code: "other" } }],
+    };
+    expect(deriveResumableRunId(other, deriveThreadRuntime(other))).toBeNull();
+  });
+
   it("keeps live activity attached to an executing run when a newer run is queued", () => {
     const runningRun = run("run-running", 1, "running");
     const queuedRun = run("run-queued", 2, "queued");
