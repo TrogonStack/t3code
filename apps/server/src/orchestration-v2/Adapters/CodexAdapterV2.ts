@@ -171,6 +171,9 @@ import { buildWorkspaceInstructions } from "@t3tools/provider-core/server/runtim
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_CAPACITY_MAX_RETRIES = 5;
+// Codex's own reconnects cannot fix a model at capacity, so a notice that carries
+// no recovery within this window fails the turn instead of the generic retry budget.
+const CODEX_CAPACITY_NOTICE_BUDGET_MS = 60_000;
 // How long Stop waits for Codex to end the turn before the user is offered Force stop.
 const CODEX_STOP_CONFIRM_TIMEOUT_MS = 10_000;
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -1370,6 +1373,13 @@ function codexUsageLimitError(
     code === "rateLimitExceeded" ||
     codexExhaustionHttpStatus(errorInfo) === 429
   );
+}
+
+function codexCapacityNotice(
+  code: string | null,
+  ...texts: ReadonlyArray<string | null | undefined>
+): boolean {
+  return code === "serverOverloaded" || texts.some((text) => /\bat capacity\b/i.test(text ?? ""));
 }
 
 function codexTerminalFailureClass(
@@ -5632,8 +5642,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               maxAttempts: progress?.maxAttempts ?? null,
               retryDelayMs: null,
             };
-            const code = codexErrorInfoCode(payload.error.codexErrorInfo);
+            const nativeCode = codexErrorInfoCode(payload.error.codexErrorInfo);
             const additionalDetails = payload.error.additionalDetails?.trim();
+            const capacity =
+              !codexUsageLimitError(nativeCode, payload.error.codexErrorInfo) &&
+              codexCapacityNotice(nativeCode, payload.error.message, additionalDetails);
+            // Capacity keeps one identity whether Codex or T3 retried it, so clients can offer a model swap.
+            const code = capacity ? "serverOverloaded" : nativeCode;
             const failure = withCodexManagedFailure(
               makeProviderFailure({
                 message:
@@ -5643,9 +5658,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 code,
                 class: codexUsageLimitError(code, payload.error.codexErrorInfo)
                   ? "usage_limit"
-                  : code?.startsWith("http") === true || code?.startsWith("responseStream") === true
-                    ? "transport_error"
-                    : "provider_error",
+                  : capacity
+                    ? "provider_error"
+                    : code?.startsWith("http") === true ||
+                        code?.startsWith("responseStream") === true
+                      ? "transport_error"
+                      : "provider_error",
                 retryable: true,
               }),
               payload.error,
@@ -5657,7 +5675,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               id: previous === undefined ? codexFailureItemId(context) : previous.id,
               ...(previous?.context === undefined ? {} : { context: previous.context }),
               nativeMessage: payload.error.message,
-              nativeCode: code,
+              nativeCode,
               nativeDetails: additionalDetails
                 ? (payload.error.additionalDetails ?? additionalDetails)
                 : payload.error.message,
@@ -5679,7 +5697,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               Effect.delay(
                 Math.max(
                   0,
-                  PROVIDER_RETRY_BUDGET_MS -
+                  (capacity ? CODEX_CAPACITY_NOTICE_BUDGET_MS : PROVIDER_RETRY_BUDGET_MS) -
                     (DateTime.toEpochMillis(updatedAt) - DateTime.toEpochMillis(state.startedAt)),
                 ),
               ),

@@ -6257,6 +6257,109 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect(
+    "fails a stalled capacity retry promptly with a capacity failure and stops the Codex turn",
+    () =>
+      Effect.gen(function* () {
+        const scenario = "codex-capacity-retry-stall";
+        const nativeThreadId = `native-${scenario}-thread`;
+        const nativeTurnId = `native-${scenario}-turn`;
+        const retryNotice = (attempt: number) => ({
+          type: "emit_inbound" as const,
+          label: `error/retry-${attempt}`,
+          frame: {
+            method: "error",
+            params: {
+              threadId: nativeThreadId,
+              turnId: nativeTurnId,
+              willRetry: true,
+              error: {
+                message: `Reconnecting... ${attempt}/5`,
+                additionalDetails: "Selected model is at capacity. Please try a different model.",
+                codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+              },
+            },
+          },
+        });
+        const transcript = makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Continue." }),
+            retryNotice(1),
+            // A later notice in the same retry window must not push the deadline back.
+            { ...retryNotice(2), afterMs: 30 * 1000 },
+            {
+              type: "expect_outbound",
+              label: "turn/interrupt",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: { threadId: nativeThreadId, turnId: nativeTurnId },
+              },
+            },
+            { type: "emit_inbound", label: "turn/interrupt", frame: { id: 4, result: {} } },
+            {
+              type: "emit_inbound",
+              label: "turn/completed",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "interrupted" }),
+                },
+              },
+            },
+          ],
+        });
+        const retryShown = yield* Deferred.make<void>();
+        const interruptSent = yield* Deferred.make<void>();
+        const harness = yield* makeCodexReplayHarness(
+          transcript,
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "error"
+              ? Deferred.succeed(retryShown, undefined)
+              : Effect.void,
+          (method) =>
+            method === "turn/interrupt" ? Deferred.succeed(interruptSent, undefined) : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            text: "Continue.",
+            attemptId: RunAttemptId.make(`attempt-${scenario}`),
+          }),
+        );
+        yield* Deferred.await(retryShown);
+        yield* TestClock.adjust("59 seconds");
+        assert.isEmpty(harness.terminalEvents());
+        yield* TestClock.adjust("1 second");
+        yield* harness.firstTerminal;
+        yield* Deferred.await(interruptSent);
+        const terminal = harness.terminalEvents()[0];
+        assert.equal(terminal?.status, "failed");
+        if (terminal?.status !== "failed") return;
+        assert.equal(terminal.failure.class, "provider_error");
+        assert.equal(terminal.failure.code, "serverOverloaded");
+        assert.equal(
+          terminal.failure.message,
+          "Selected model is at capacity. Please try a different model.",
+        );
+        assert.equal(terminal.retry?.attempt, 2);
+        assert.equal(terminal.threadDisposition, "reusable");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            IdAllocator.layer,
+            McpProviderSessions.layer,
+            NodeServices.layer,
+            NodeCrypto.layer,
+          ),
+        ),
+      ),
+  );
+
   it.effect.each(["completed", "interrupted"] as const)(
     "retains Codex reasoning parts when the turn is %s",
     (terminalStatus) =>

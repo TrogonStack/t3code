@@ -6,6 +6,9 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+/** A provider reported its model at capacity; the failure says nothing about the thread itself. */
+export const PROVIDER_CAPACITY_FAILURE_CODE = "serverOverloaded";
+
 type ErrorTurnItem = Extract<OrchestrationV2TurnItem, { type: "error" }>;
 /** Only error items are read, so callers may pass items stripped of other fields. */
 type FailureScanTurnItem =
