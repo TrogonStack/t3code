@@ -5372,7 +5372,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const result = yield* executeGit(
       "GitVcsDriver.readReviewCommitMessage",
       cwd,
-      ["show", "-s", "--no-notes", "--no-show-signature", "--format=%B", sha],
+      ["show", "-s", "--no-notes", "--no-show-signature", "--format=%s", sha],
       { maxOutputBytes: 8_192, appendTruncationMarker: true },
     );
     const endOfSubject = result.stdout.indexOf("\n");
@@ -7829,6 +7829,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   return GitVcsDriver.GitVcsDriver.of({
     execute,
     status,
+    readCurrentBranch: Effect.fnUntraced(function* (cwd) {
+      return yield* readCurrentBranch("GitVcsDriver.readCurrentBranch", cwd);
+    }),
     statusDetails,
     statusDetailsLocal,
     statusDetailsRemote,

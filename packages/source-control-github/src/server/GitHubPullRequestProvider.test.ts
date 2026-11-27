@@ -846,6 +846,7 @@ describe("getChangeRequest commits", () => {
               committedDate: "2026-07-06T00:00:00Z",
               additions: 18,
               deletions: 7,
+              changedFiles: 12,
               authors: [],
             },
             {
@@ -875,6 +876,7 @@ describe("getChangeRequest commits", () => {
         messageHeadline: "the newest commit gh pr view drops",
         additions: 18,
         deletions: 7,
+        changedFiles: 12,
       });
     }).pipe(
       Effect.provide(
