@@ -20,6 +20,7 @@ export const orchestrationEventsProcessedTotal = Metric.counter(
   "t3_orchestration_events_processed_total",
   {
     description: "Total orchestration intent events processed by runtime reactors.",
+    incremental: true,
   },
 );
 
@@ -82,6 +83,7 @@ export const providerTurnDuration = Metric.timer("t3_provider_turn_duration", {
 
 export const providerRuntimeEventsTotal = Metric.counter("t3_provider_runtime_events_total", {
   description: "Total canonical provider runtime events processed.",
+  incremental: true,
 });
 
 // OTLP carries the unit, and Prometheus names the series by it: a unitless gauge gains `_ratio`.
