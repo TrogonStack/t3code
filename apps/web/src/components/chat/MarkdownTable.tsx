@@ -16,11 +16,17 @@ import { reportMarkdownActionFailure, type TableCopyFormat } from "./markdownAct
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import type { markdownTableMinWidth } from "./markdownTableLayout";
 
-const TABLE_COPY_SERIALIZERS: Record<TableCopyFormat, (table: Element) => string> = {
+type TableTextFormat = Exclude<TableCopyFormat, "png">;
+
+const TABLE_COPY_SERIALIZERS: Record<TableTextFormat, (table: Element) => string> = {
   markdown: serializeTableElementToMarkdown,
   csv: serializeTableElementToCsv,
   html: serializeTableElementToHtml,
 };
+
+// Loaded on first use; the clipboard write still starts inside the click.
+const renderTablePng = (table: HTMLTableElement) =>
+  import("./tablePng").then((module) => module.renderTablePng(table));
 
 type MarkdownTableProps = ComponentProps<"table"> & {
   minWidth?: ReturnType<typeof markdownTableMinWidth>;
@@ -35,14 +41,21 @@ function TableCopyMenu({
   labeled?: boolean;
 }) {
   const gt = useGT();
-  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<TableCopyFormat>({
+  const {
+    copyToClipboard,
+    copyPngToClipboard,
+    isCopied: copied,
+  } = useCopyToClipboard<TableCopyFormat>({
     timeout: 1200,
     onError: (cause, format) =>
       reportMarkdownActionFailure({ operation: "copy-table", format }, cause),
   });
   const copyLabel = copied ? gt("Copied") : gt("Copy table");
+  // Insecure origins (plain http over a LAN or tailnet) have no async clipboard for images.
+  const canCopyPng =
+    typeof ClipboardItem !== "undefined" && typeof navigator.clipboard?.write === "function";
 
-  const handleCopy = (format: TableCopyFormat) => {
+  const handleCopy = (format: TableTextFormat) => {
     const table = getTable();
     if (!table) return;
     const text = TABLE_COPY_SERIALIZERS[format](table);
@@ -53,6 +66,12 @@ function TableCopyMenu({
       format === "html" ? { "text/html": `<meta charset="utf-8">${text}` } : undefined,
       { requireHtml: format === "html" },
     );
+  };
+
+  const handleCopyPng = () => {
+    const table = getTable();
+    if (!table) return;
+    copyPngToClipboard(() => renderTablePng(table), "png");
   };
 
   const icon = copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />;
@@ -87,6 +106,11 @@ function TableCopyMenu({
         <MenuItem onClick={() => handleCopy("html")}>
           <T>Copy as HTML</T>
         </MenuItem>
+        {canCopyPng ? (
+          <MenuItem onClick={handleCopyPng}>
+            <T>Copy as PNG</T>
+          </MenuItem>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
