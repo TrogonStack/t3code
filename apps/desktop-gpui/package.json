@@ -1,0 +1,11 @@
+{
+  "name": "@t3tools/desktop-gpui",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "sh scripts/bundle.sh debug run",
+    "build": "cargo build --locked --release",
+    "bundle": "sh scripts/bundle.sh release build",
+    "test": "cargo test --locked"
+  }
+}

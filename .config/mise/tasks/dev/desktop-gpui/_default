@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#MISE description="Start the GPUI desktop app attached to the main checkout's running dev server"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+
+# The normal dev server is the main checkout's `vp run dev:desktop`: port 13773, state in ~/.t3/dev.
+url="${T3CODE_GPUI_SERVER_URL:-http://127.0.0.1:13773}"
+main_checkout=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+
+if ! curl -fsS -m 3 "$url/.well-known/t3/environment" >/dev/null; then
+  echo "[desktop-gpui] no T3 dev server at $url; start it with 'mise run dev:desktop' in $main_checkout" >&2
+  exit 1
+fi
+
+# A saved Keychain session wins over this token, so minting one each launch only matters when
+# the session is missing or revoked. No T3CODE_HOME and a dev URL resolve to ~/.t3/dev, never
+# the live ~/.t3/userdata. Run from the main checkout so the CLI matches the server's schema.
+token=$(cd "$main_checkout" && env -u T3CODE_HOME VITE_DEV_SERVER_URL="http://127.0.0.1:5733" \
+  node apps/server/src/bin.ts pair --label "GPUI dev" 2>/dev/null | sed -n 's/^ *Token: *//p')
+[ -n "$token" ] || { echo "[desktop-gpui] could not mint a pairing token" >&2; exit 1; }
+
+# Device settings (fonts, language, time format) live in client-settings.json in the state dir,
+# the same file the Electron dev app reads, so both show the same values.
+cd apps/desktop-gpui
+T3CODE_GPUI_SERVER_URL="$url" T3CODE_GPUI_PAIRING_TOKEN="$token" \
+  T3CODE_GPUI_HOME="${T3CODE_GPUI_HOME:-$HOME/.t3/dev}" exec sh scripts/bundle.sh debug run "$@"

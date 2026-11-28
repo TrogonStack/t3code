@@ -1,0 +1,118 @@
+# defaults
+## Navigation
+Command Palette: Toggle	mod+k	!terminalFocus	Default	mod+k	!terminalFocus	
+Editor: Open Favorite	mod+o		Default	mod+o		
+File Picker: Toggle	mod+p	!terminalFocus	Default	mod+p	!terminalFocus	
+Project Search: Toggle	mod+shift+f	!terminalFocus	Default	mod+shift+f	!terminalFocus	
+Right Panel: Close	mod+w	!terminalFocus	Default	mod+w	!terminalFocus	
+Right Panel: New	mod+t	rightPanelOpen && !terminalFocus	Default	mod+t	rightPanelOpen && !terminalFocus	
+Right Panel: Toggle	mod+alt+b		Default	mod+alt+b		
+Sidebar: Toggle	mod+b		Default	mod+b		
+## Threads
+Chat: Find	mod+f	!terminalFocus && !previewFocus	Default	mod+f	!terminalFocus && !previewFocus	
+Chat: New	mod+n	!terminalFocus	Default	mod+n	!terminalFocus	
+Chat: New	mod+shift+o	!terminalFocus	Default	mod+shift+o	!terminalFocus	
+Chat: New Local	mod+shift+n	!terminalFocus	Default	mod+shift+n	!terminalFocus	
+Chat: New Without Project	mod+alt+n	!terminalFocus	Default	mod+alt+n	!terminalFocus	
+Pull Request: Copy Number	mod+shift+k	!terminalFocus	Default	mod+shift+k	!terminalFocus	
+Pull Request: Copy Link or Thread	mod+shift+c	!terminalFocus	Default	mod+shift+c	!terminalFocus	
+Queue: Edit Last Queued Message	alt+arrowup	composerFocus	Default	alt+arrowup	composerFocus	
+Thread: Jump: 1	mod+1	!modelPickerOpen && isDesktop	Default	mod+1	!modelPickerOpen && isDesktop	
+Thread: Jump: 2	mod+2	!modelPickerOpen && isDesktop	Default	mod+2	!modelPickerOpen && isDesktop	
+Thread: Jump: 3	mod+3	!modelPickerOpen && isDesktop	Default	mod+3	!modelPickerOpen && isDesktop	
+Thread: Jump: 4	mod+4	!modelPickerOpen && isDesktop	Default	mod+4	!modelPickerOpen && isDesktop	
+Thread: Jump: 5	mod+5	!modelPickerOpen && isDesktop	Default	mod+5	!modelPickerOpen && isDesktop	
+Thread: Jump: 6	mod+6	!modelPickerOpen && isDesktop	Default	mod+6	!modelPickerOpen && isDesktop	
+Thread: Jump: 7	mod+7	!modelPickerOpen && isDesktop	Default	mod+7	!modelPickerOpen && isDesktop	
+Thread: Jump: 8	mod+8	!modelPickerOpen && isDesktop	Default	mod+8	!modelPickerOpen && isDesktop	
+Thread: Jump: 9	mod+9	!modelPickerOpen && isDesktop	Default	mod+9	!modelPickerOpen && isDesktop	
+Thread: Next	mod+shift+]		Default	mod+shift+]		
+Thread: Pin	mod+shift+p	!terminalFocus	Default	mod+shift+p	!terminalFocus	
+Thread: Previous	mod+shift+[		Default	mod+shift+[		
+Thread: Settle	mod+shift+s	!terminalFocus	Default	mod+shift+s	!terminalFocus	
+Queue: Send First Queued Message	mod+shift+enter	!terminalFocus	Default	mod+shift+enter	!terminalFocus	
+Thread: Undo	mod+z	!terminalFocus && !editableFocus	Default	mod+z	!terminalFocus && !editableFocus	
+## Composer
+Composer: Branch	mod+shift+g	!terminalFocus	Default	mod+shift+g	!terminalFocus	
+Composer: Effort	mod+shift+e	!terminalFocus	Default	mod+shift+e	!terminalFocus	
+Composer: Host	mod+shift+h	!terminalFocus	Default	mod+shift+h	!terminalFocus	
+Composer: Mode	mod+shift+a	!terminalFocus	Default	mod+shift+a	!terminalFocus	
+Composer: Previous Worktree	mod+shift+l	!terminalFocus	Default	mod+shift+l	!terminalFocus	
+Composer: Opposite Queue or Steer Action	mod+enter	composerFocus && turnRunning	Default	mod+enter	composerFocus && turnRunning	
+Composer: Send and Start New Thread	mod+alt+enter	composerFocus && !draftThreadRoute	Default	mod+alt+enter	composerFocus && !draftThreadRoute	
+Composer: Start in Background	mod+alt+enter	composerFocus && draftThreadRoute	Default	mod+alt+enter	composerFocus && draftThreadRoute	
+Composer: Start in Background	mod+enter	composerFocus && draftThreadRoute	Default	mod+enter	composerFocus && draftThreadRoute	
+Composer: Stash	mod+s	!terminalFocus	Default	mod+s	!terminalFocus	
+Composer: Workspace	mod+shift+x	!terminalFocus	Default	mod+shift+x	!terminalFocus	
+Model Picker: Jump: 1	mod+1	modelPickerOpen && isDesktop	Default	mod+1	modelPickerOpen && isDesktop	
+Model Picker: Jump: 2	mod+2	modelPickerOpen && isDesktop	Default	mod+2	modelPickerOpen && isDesktop	
+Model Picker: Jump: 3	mod+3	modelPickerOpen && isDesktop	Default	mod+3	modelPickerOpen && isDesktop	
+Model Picker: Jump: 4	mod+4	modelPickerOpen && isDesktop	Default	mod+4	modelPickerOpen && isDesktop	
+Model Picker: Jump: 5	mod+5	modelPickerOpen && isDesktop	Default	mod+5	modelPickerOpen && isDesktop	
+Model Picker: Jump: 6	mod+6	modelPickerOpen && isDesktop	Default	mod+6	modelPickerOpen && isDesktop	
+Model Picker: Jump: 7	mod+7	modelPickerOpen && isDesktop	Default	mod+7	modelPickerOpen && isDesktop	
+Model Picker: Jump: 8	mod+8	modelPickerOpen && isDesktop	Default	mod+8	modelPickerOpen && isDesktop	
+Model Picker: Jump: 9	mod+9	modelPickerOpen && isDesktop	Default	mod+9	modelPickerOpen && isDesktop	
+Model Picker: Next Provider	mod+shift+arrowdown	modelPickerOpen	Default	mod+shift+arrowdown	modelPickerOpen	
+Model Picker: Previous Provider	mod+shift+arrowup	modelPickerOpen	Default	mod+shift+arrowup	modelPickerOpen	
+Model Picker: Toggle	mod+shift+m	!terminalFocus	Default	mod+shift+m	!terminalFocus	
+## Terminal
+Terminal: Close	mod+w	terminalFocus	Default	mod+w	terminalFocus	
+Terminal: New	mod+n	terminalFocus	Default	mod+n	terminalFocus	
+Terminal: Split	mod+d	terminalFocus	Default	mod+d	terminalFocus	
+Terminal: Split Vertical	mod+shift+d	terminalFocus	Default	mod+shift+d	terminalFocus	
+Terminal: Toggle	mod+j		Default	mod+j		
+## Preview & diff
+Diff: Toggle	mod+d	!terminalFocus	Default	mod+d	!terminalFocus	
+Preview: Focus URL	mod+l	previewFocus	Default	mod+l	previewFocus	
+Preview: Refresh	mod+r	previewFocus	Default	mod+r	previewFocus	
+Preview: Reset Zoom	mod+0	previewFocus	Default	mod+0	previewFocus	
+Preview: Toggle	mod+shift+j		Default	mod+shift+j		
+Preview: Zoom In	mod++	previewFocus	Default	mod++	previewFocus	
+Preview: Zoom In	mod+=	previewFocus	Default	mod+=	previewFocus	
+Preview: Zoom Out	mod+-	previewFocus	Default	mod+-	previewFocus	
+## Appearance
+Appearance: Cycle	mod+alt+shift+a	!terminalFocus	Default	mod+alt+shift+a	!terminalFocus	
+Theme: Select	mod+alt+a	!terminalFocus	Default	mod+alt+a	!terminalFocus	
+Theme Editor: Toggle	mod+alt+shift+t		Default	mod+alt+shift+t		
+## Other
+Navigation: Back	mod+[	!terminalFocus	Default	mod+[	!terminalFocus	
+Navigation: Forward	mod+]	!terminalFocus	Default	mod+]	!terminalFocus	
+Thread Panel: Toggle	mod+shift+b	!terminalFocus	Default	mod+shift+b	!terminalFocus	
+Usage: Open	mod+u	!terminalFocus	Default	mod+u	!terminalFocus	
+Usage: Cost	c	usagePageOpen	Default	c	usagePageOpen	
+Usage: Tokens	t	usagePageOpen	Default	t	usagePageOpen	
+Usage: Limits	l	usagePageOpen	Default	l	usagePageOpen	
+Usage: Period: Past 24h	mod+shift+1	usagePageOpen	Default	mod+shift+1	usagePageOpen	
+Usage: Period: 7 days	mod+shift+2	usagePageOpen	Default	mod+shift+2	usagePageOpen	
+Usage: Period: 30 days	mod+shift+3	usagePageOpen	Default	mod+shift+3	usagePageOpen	
+Usage: Period: 90 days	mod+shift+4	usagePageOpen	Default	mod+shift+4	usagePageOpen	
+Reopen Closed Tab	mod+shift+t		Default	mod+shift+t		
+Focus Next Workspace Area	f6		Default	f6		
+Focus Next Workspace Area	mod+f6		Default	mod+f6		
+Focus Previous Workspace Area	mod+shift+f6		Default	mod+shift+f6		
+Focus Previous Workspace Area	shift+f6		Default	shift+f6		
+# defaults:search:ctrl
+# defaults:search:usage
+## Other
+Usage: Open	mod+u	!terminalFocus	Default	mod+u	!terminalFocus	
+Usage: Cost	c	usagePageOpen	Default	c	usagePageOpen	
+Usage: Tokens	t	usagePageOpen	Default	t	usagePageOpen	
+Usage: Limits	l	usagePageOpen	Default	l	usagePageOpen	
+Usage: Period: Past 24h	mod+shift+1	usagePageOpen	Default	mod+shift+1	usagePageOpen	
+Usage: Period: 7 days	mod+shift+2	usagePageOpen	Default	mod+shift+2	usagePageOpen	
+Usage: Period: 30 days	mod+shift+3	usagePageOpen	Default	mod+shift+3	usagePageOpen	
+Usage: Period: 90 days	mod+shift+4	usagePageOpen	Default	mod+shift+4	usagePageOpen	
+# custom:search:ctrl
+## Navigation
+Command Palette: Toggle	ctrl+k		Custom	mod+k	!terminalFocus	
+# custom:search:usage
+## Other
+Usage: Open	mod+u	!terminalFocus	Default	mod+u	!terminalFocus	
+Usage: Cost	c	usagePageOpen	Default	c	usagePageOpen	
+Usage: Tokens	t	usagePageOpen	Default	t	usagePageOpen	
+Usage: Limits	l	usagePageOpen	Default	l	usagePageOpen	
+Usage: Period: Past 24h	mod+shift+1	usagePageOpen	Default	mod+shift+1	usagePageOpen	
+Usage: Period: 7 days	mod+shift+2	usagePageOpen	Default	mod+shift+2	usagePageOpen	
+Usage: Period: 30 days	mod+shift+3	usagePageOpen	Default	mod+shift+3	usagePageOpen	
+Usage: Period: 90 days	mod+shift+4	usagePageOpen	Default	mod+shift+4	usagePageOpen	

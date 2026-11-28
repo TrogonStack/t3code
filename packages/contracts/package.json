@@ -21,6 +21,7 @@
     }
   },
   "scripts": {
+    "generate": "node scripts/export-rpc-json-schema.ts",
     "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },

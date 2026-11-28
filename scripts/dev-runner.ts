@@ -85,6 +85,8 @@ const MODE_ARGS = {
   "dev:server": ["run", "--filter=t3", "dev"],
   "dev:web": ["run", "--filter=@t3tools/web", "dev"],
   "dev:desktop": ["run", "--filter=@t3tools/desktop", "--filter=@t3tools/web", "dev"],
+  // The native client spawns its own server; no Vite or web server runs.
+  "dev:desktop-gpui": ["run", "--filter=@t3tools/desktop-gpui", "dev"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 // `--built`: the web package rebuilds into apps/web/dist and the backend serves
@@ -155,7 +157,7 @@ export class DevRunnerProcessError extends Schema.TaggedError<DevRunnerProcessEr
   "DevRunnerProcessError",
   {
     operation: Schema.Literals(["spawn", "wait-for-exit"]),
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop", "dev:desktop-gpui"]),
     executable: Schema.Literal("vp"),
     argumentCount: Schema.Number,
     shell: Schema.Boolean,
@@ -170,7 +172,7 @@ export class DevRunnerProcessError extends Schema.TaggedError<DevRunnerProcessEr
 export class DevRunnerProcessExitError extends Schema.TaggedError<DevRunnerProcessExitError>()(
   "DevRunnerProcessExitError",
   {
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop", "dev:desktop-gpui"]),
     executable: Schema.Literal("vp"),
     argumentCount: Schema.Number,
     shell: Schema.Boolean,
@@ -206,7 +208,7 @@ export class DevRunnerHostNotProxiableError extends Schema.TaggedError<DevRunner
 export class DevRunnerBuiltNeedsShareError extends Schema.TaggedError<DevRunnerBuiltNeedsShareError>()(
   "DevRunnerBuiltNeedsShareError",
   {
-    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop"]),
+    mode: Schema.Literals(["dev", "dev:server", "dev:web", "dev:desktop", "dev:desktop-gpui"]),
   },
 ) {
   override get message(): string {
@@ -335,6 +337,7 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   const configuredBaseDir = t3Home?.trim() || undefined;
   const resolvedBaseDir = yield* resolveBaseDir(configuredBaseDir);
   const isDesktopMode = mode === "dev:desktop";
+  const isGpuiMode = mode === "dev:desktop-gpui";
 
   const output: NodeJS.ProcessEnv = {
     ...baseEnv,
@@ -348,7 +351,16 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   // The server stores an explicit home's state in userdata, which for ~/.t3 is the live
   // install. Left implicit, dev state goes to ~/.t3/dev.
   const isLiveHome = resolvedBaseDir === path.join(yield* HostProcess.HomeDirectory, ".t3");
-  if (configuredBaseDir !== undefined && !isLiveHome) {
+  if (isGpuiMode) {
+    // The app hands this home to its server through the bootstrap payload, so it
+    // must never fall back to the live ~/.t3.
+    const gpuiHome =
+      configuredBaseDir === undefined
+        ? path.join(path.dirname(import.meta.dirname), ".t3")
+        : resolvedBaseDir;
+    output.T3CODE_HOME = gpuiHome;
+    output.T3CODE_GPUI_HOME = gpuiHome;
+  } else if (configuredBaseDir !== undefined && !isLiveHome) {
     output.T3CODE_HOME = resolvedBaseDir;
   } else {
     delete output.T3CODE_HOME;
@@ -363,7 +375,32 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
   // install of the developer's real accounts. Set it explicitly to opt in.
   output.T3CODE_TELEMETRY_ENABLED = baseEnv.T3CODE_TELEMETRY_ENABLED ?? "false";
 
-  if (!isDesktopMode) {
+  if (isGpuiMode) {
+    output.T3CODE_GPUI_SERVER_PORT = String(serverPort);
+    output.T3CODE_GPUI_SERVER_COMMAND = yield* HostProcess.ExecutablePath;
+    output.T3CODE_GPUI_SERVER_ENTRY = path.join(
+      path.dirname(import.meta.dirname),
+      "apps/server/src/bin.ts",
+    );
+    // No web client runs, so nothing may point one at a backend, and the app's
+    // server takes its settings from the bootstrap payload alone.
+    for (const name of [
+      "PORT",
+      "HOST",
+      "VITE_DEV_SERVER_URL",
+      "VITE_HTTP_URL",
+      "VITE_WS_URL",
+      "T3CODE_PORT",
+      "T3CODE_MODE",
+      "T3CODE_NO_BROWSER",
+      "T3CODE_HOST",
+      "T3CODE_DESKTOP_WS_URL",
+      "T3CODE_SINGLE_ORIGIN_DEV",
+      "T3CODE_DEV_AUTH_TOKEN",
+    ]) {
+      delete output[name];
+    }
+  } else if (!isDesktopMode) {
     output.T3CODE_PORT = String(serverPort);
     // An inherited HOST pins Vite's HMR socket via explicitHost in apps/web/vite.config.ts.
     // Only desktop mode should set it.
@@ -398,13 +435,13 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
 
   // Agent shells inherit the parent T3 server's bind settings; only --host widens the dev server.
   delete output.T3CODE_LAN;
-  if (!isDesktopMode && host !== undefined) {
+  if (!isDesktopMode && !isGpuiMode && host !== undefined) {
     output.T3CODE_HOST = host;
   } else {
     delete output.T3CODE_HOST;
   }
 
-  if (!isDesktopMode) {
+  if (!isDesktopMode && !isGpuiMode) {
     output.T3CODE_NO_BROWSER = browser === true ? "0" : "1";
   }
 
@@ -598,7 +635,7 @@ export const resolveModePortOffsets = Effect.fn("dev-runner.resolveModePortOffse
     return { serverOffset: startOffset, webOffset };
   }
 
-  if (mode === "dev:server") {
+  if (mode === "dev:server" || mode === "dev:desktop-gpui") {
     if (hasExplicitServerPort) {
       return { serverOffset: startOffset, webOffset: startOffset };
     }
@@ -736,6 +773,7 @@ const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (i
 
   if (
     input.mode !== "dev:server" &&
+    input.mode !== "dev:desktop-gpui" &&
     !(yield* exists(path.join(repoRoot, "apps/web/node_modules/.vite/deps/_metadata.json")))
   ) {
     yield* runRepoScript("apps/web/scripts/warm-dep-cache.ts", [], input.env);
@@ -857,7 +895,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
   const baseDir = env.T3CODE_HOME ?? (yield* DEFAULT_T3_HOME);
 
   yield* Effect.logInfo(
-    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
+    `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT ?? env.T3CODE_GPUI_SERVER_PORT)} webPort=${String(env.PORT)} baseDir=${baseDir}`,
   );
 
   // Mirrors the server's deriveServerPaths: an explicit home uses userdata.
@@ -867,7 +905,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
   );
   if (
     !input.dryRun &&
-    (input.mode === "dev" || input.mode === "dev:server") &&
+    (input.mode === "dev" || input.mode === "dev:server" || input.mode === "dev:desktop-gpui") &&
     (yield* isStateDirOwned(stateDir))
   ) {
     return yield* new DevRunnerStateDirOwnedError({ stateDir });
@@ -897,6 +935,10 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
     } else if (input.mode === "dev:desktop") {
       yield* Effect.logWarning(
         "[dev-runner] --share is not supported for dev:desktop (the renderer is pinned to loopback). Use `dev`, which runs the whole browser stack.",
+      );
+    } else if (input.mode === "dev:desktop-gpui") {
+      yield* Effect.logWarning(
+        "[dev-runner] --share is not supported for dev:desktop-gpui (the app talks to its own loopback server). Use `dev`, which runs the whole browser stack.",
       );
     } else {
       // acquireRelease, not share-then-addFinalizer: the mapping outlives this
