@@ -52,6 +52,26 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
       }),
     );
 
+    it.effect("gives a symlinked Claude home the continuation key of its target", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.realPath(yield* fileSystem.makeTempDirectoryScoped());
+        const target = path.join(root, ".claude");
+        const link = path.join(root, ".claude-second-account");
+        yield* fileSystem.makeDirectory(target);
+        yield* fileSystem.symlink(target, link);
+
+        const direct = yield* makeClaudeContinuationGroupKey({ homePath: target });
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: link })).toBe(direct);
+        expect(
+          yield* makeClaudeContinuationGroupKey({ homePath: "" }, { CLAUDE_CONFIG_DIR: link }),
+        ).toBe(direct);
+        // The spawned process keeps the literal path, because Claude keys its login by that path.
+        expect((yield* makeClaudeEnvironment({ homePath: link })).CLAUDE_CONFIG_DIR).toBe(link);
+      }).pipe(Effect.scoped),
+    );
+
     it.effect("separates capability probes by cwd", () =>
       Effect.gen(function* () {
         const config = { binaryPath: "claude", homePath: "" };
@@ -214,11 +234,13 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         expect(yield* mergeClaudeProcessEnvironment({ homePath }, undefined, host)).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "t3-code",
           KEEP: "1",
+          OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
         });
         expect(yield* mergeClaudeProcessEnvironment({ homePath }, instance, host)).toEqual({
           CLAUDE_CODE_ENTRYPOINT: "instance",
           CLAUDE_EFFORT: "low",
           KEEP: "1",
+          OTEL_RESOURCE_ATTRIBUTES: "t3code.launched=true",
         });
 
         yield* fileSystem.writeFileString(

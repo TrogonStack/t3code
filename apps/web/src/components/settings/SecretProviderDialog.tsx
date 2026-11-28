@@ -1,6 +1,7 @@
 import type { EnvironmentId, SecretProviderConfig, SecretProviderId } from "@t3tools/contracts";
 import * as Result from "effect/Result";
 import { useState } from "react";
+import { msg, T, useGT, useMessages, Var } from "gt-react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";
@@ -39,24 +40,29 @@ import {
 import { SecretInput } from "./SecretInput";
 import { SecretProviderKindIcon } from "./SecretProviderKindIcon";
 
-const NAME_PLACEHOLDERS: Readonly<Record<SupportedSecretProviderKind, string>> = {
-  one_password: "Personal",
-  openbao: "Homelab",
-  aws_secrets_manager: "Production",
-};
+const NAME_PLACEHOLDERS = {
+  one_password: msg("Personal"),
+  openbao: msg("Homelab"),
+  aws_secrets_manager: msg("Production"),
+} as const satisfies Readonly<Record<SupportedSecretProviderKind, unknown>>;
 
 const AUTH_OPTIONS = [
-  { auth: "token", label: "Token", description: "The token below, stored with the provider." },
+  {
+    auth: "token",
+    label: msg("Token"),
+    description: msg("The token below, stored with the provider."),
+  },
   {
     auth: "env",
-    label: "BAO_TOKEN on the server",
-    description: "The server process must have BAO_TOKEN set.",
+    label: msg("BAO_TOKEN on the server"),
+    description: msg("The server process must have BAO_TOKEN set."),
   },
   {
     auth: "cli",
-    label: "bao CLI login",
-    description:
+    label: msg("bao CLI login"),
+    description: msg(
       "Runs bao print token on the server, so bao must be installed and logged in there.",
+    ),
   },
 ] as const;
 
@@ -97,6 +103,8 @@ export function SecretProviderDialog({
   readonly existingIds: ReadonlySet<string>;
   readonly existing?: { readonly id: SecretProviderId; readonly config: SecretProviderConfig };
 }) {
+  const messages = useMessages();
+  const gt = useGT();
   const updateSettings = useUpdateEnvironmentSettings(environmentId);
   const [draft, setDraft] = useState<SecretProviderDraft>(
     existing ? draftFromSecretProvider(existing.config) : EMPTY_SECRET_PROVIDER_DRAFT,
@@ -106,6 +114,7 @@ export function SecretProviderDialog({
     draft,
     existingIds,
     existing ? { mode: "edit", id: existing.id } : { mode: "add" },
+    messages,
   );
   const issues: SecretProviderDraftIssues = Result.isFailure(result) ? result.failure : {};
   const fieldError = (field: keyof SecretProviderDraftIssues) =>
@@ -144,11 +153,15 @@ export function SecretProviderDialog({
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {existing ? `Edit ${existing.config.label}` : "Add a secret provider"}
+            {existing
+              ? gt("Edit {label}", { label: existing.config.label })
+              : gt("Add a secret provider")}
           </DialogTitle>
           <DialogDescription>
-            Provider variables on {environmentLabel} can read values from it by name. Values are
-            read on that server when a provider starts.
+            <T>
+              Provider variables on <Var>{environmentLabel}</Var> can read values from it by name.
+              Values are read on that server when a provider starts.
+            </T>
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -161,7 +174,9 @@ export function SecretProviderDialog({
             }}
           >
             <div className="grid gap-1.5">
-              <Label htmlFor="secret-provider-kind">Kind</Label>
+              <Label htmlFor="secret-provider-kind">
+                <T>Kind</T>
+              </Label>
               <Select
                 value={draft.kind}
                 disabled={existing !== undefined}
@@ -184,10 +199,12 @@ export function SecretProviderDialog({
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label htmlFor="secret-provider-name">Name</Label>
+              <Label htmlFor="secret-provider-name">
+                <T>Name</T>
+              </Label>
               <Input
                 id="secret-provider-name"
-                placeholder={NAME_PLACEHOLDERS[draft.kind]}
+                placeholder={messages(NAME_PLACEHOLDERS[draft.kind])}
                 value={draft.name}
                 onChange={(event) => update({ name: event.target.value })}
                 maxLength={64}
@@ -209,7 +226,9 @@ export function SecretProviderDialog({
             </div>
             {draft.kind === "one_password" ? (
               <div className="grid gap-1.5">
-                <Label htmlFor="secret-provider-account">Account</Label>
+                <Label htmlFor="secret-provider-account">
+                  <T>Account</T>
+                </Label>
                 <Autocomplete
                   items={listedAccounts}
                   itemToStringValue={(item) => item.account}
@@ -247,15 +266,19 @@ export function SecretProviderDialog({
                 </Autocomplete>
                 <FieldError id="secret-provider-account-error" message={accountError} />
                 <p className="text-xs text-muted-foreground">
-                  Accounts the op CLI is signed into are suggested. Type any other shorthand,
-                  sign-in address without https://, or ID.
+                  <T>
+                    Accounts the op CLI is signed into are suggested. Type any other shorthand,
+                    sign-in address without https://, or ID.
+                  </T>
                 </p>
               </div>
             ) : null}
             {draft.kind === "openbao" ? (
               <>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-address">Address</Label>
+                  <Label htmlFor="secret-provider-address">
+                    <T>Address</T>
+                  </Label>
                   <Input
                     id="secret-provider-address"
                     placeholder="https://bao.example:8200"
@@ -270,7 +293,9 @@ export function SecretProviderDialog({
                   <FieldError id="secret-provider-address-error" message={addressError} />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-mount">Mount</Label>
+                  <Label htmlFor="secret-provider-mount">
+                    <T>Mount</T>
+                  </Label>
                   <Input
                     id="secret-provider-mount"
                     placeholder={DEFAULT_OPENBAO_MOUNT}
@@ -285,7 +310,9 @@ export function SecretProviderDialog({
                   <FieldError id="secret-provider-mount-error" message={mountError} />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-namespace">Namespace (optional)</Label>
+                  <Label htmlFor="secret-provider-namespace">
+                    <T>Namespace (optional)</T>
+                  </Label>
                   <Input
                     id="secret-provider-namespace"
                     placeholder="admin/platform"
@@ -300,7 +327,9 @@ export function SecretProviderDialog({
                   <FieldError id="secret-provider-namespace-error" message={namespaceError} />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-auth">Authentication</Label>
+                  <Label htmlFor="secret-provider-auth">
+                    <T>Authentication</T>
+                  </Label>
                   <Select
                     value={draft.auth}
                     onValueChange={(auth) => {
@@ -308,21 +337,25 @@ export function SecretProviderDialog({
                     }}
                   >
                     <SelectTrigger id="secret-provider-auth">
-                      <SelectValue>{authOption?.label}</SelectValue>
+                      <SelectValue>{authOption ? messages(authOption.label) : null}</SelectValue>
                     </SelectTrigger>
                     <SelectPopup>
                       {AUTH_OPTIONS.map((option) => (
                         <SelectItem key={option.auth} value={option.auth}>
-                          {option.label}
+                          {messages(option.label)}
                         </SelectItem>
                       ))}
                     </SelectPopup>
                   </Select>
-                  <p className="text-xs text-muted-foreground">{authOption?.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {authOption ? messages(authOption.description) : null}
+                  </p>
                 </div>
                 {draft.auth === "token" ? (
                   <div className="grid gap-1.5">
-                    <Label htmlFor="secret-provider-token">Token</Label>
+                    <Label htmlFor="secret-provider-token">
+                      <T>Token</T>
+                    </Label>
                     <SecretInput
                       id="secret-provider-token"
                       placeholder="s.xxxxxxxxxxxxxxxxxxxxxxxx"
@@ -342,7 +375,9 @@ export function SecretProviderDialog({
             {draft.kind === "aws_secrets_manager" ? (
               <>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-region">Region</Label>
+                  <Label htmlFor="secret-provider-region">
+                    <T>Region</T>
+                  </Label>
                   <Input
                     id="secret-provider-region"
                     placeholder="us-east-1"
@@ -357,7 +392,9 @@ export function SecretProviderDialog({
                   <FieldError id="secret-provider-region-error" message={regionError} />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="secret-provider-profile">Profile (optional)</Label>
+                  <Label htmlFor="secret-provider-profile">
+                    <T>Profile (optional)</T>
+                  </Label>
                   <Input
                     id="secret-provider-profile"
                     placeholder="production"
@@ -371,8 +408,10 @@ export function SecretProviderDialog({
                   />
                   <FieldError id="secret-provider-profile-error" message={profileError} />
                   <p className="text-xs text-muted-foreground">
-                    Credentials come from the aws CLI configuration on the server: this profile, or
-                    its default chain when empty.
+                    <T>
+                      Credentials come from the aws CLI configuration on the server: this profile,
+                      or its default chain when empty.
+                    </T>
                   </p>
                 </div>
               </>
@@ -381,14 +420,14 @@ export function SecretProviderDialog({
         </DialogPanel>
         <DialogFooter variant="bare">
           <Button variant="outline" onClick={onClose}>
-            Cancel
+            <T>Cancel</T>
           </Button>
           <Button
             type="submit"
             form="secret-provider-form"
             disabled={submitted && Result.isFailure(result)}
           >
-            {existing ? "Save changes" : "Add provider"}
+            {existing ? gt("Save changes") : gt("Add provider")}
           </Button>
         </DialogFooter>
       </DialogPopup>

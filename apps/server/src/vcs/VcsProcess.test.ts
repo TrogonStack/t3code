@@ -16,7 +16,11 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/process";
 
-import { VcsProcessExitError, VcsProcessSpawnError } from "@t3tools/contracts";
+import {
+  VcsProcessExitError,
+  VcsProcessOutputReadError,
+  VcsProcessSpawnError,
+} from "@t3tools/contracts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as VcsProcess from "./VcsProcess.ts";
 
@@ -53,6 +57,44 @@ const captureProcessResult = (
   );
 
 describe("VcsProcess.run", () => {
+  it.effect("records the signal that killed the process as a structured field", () =>
+    Effect.gen(function* () {
+      const error = yield* captureProcessResult(
+        Effect.fail(
+          new ProcessRunner.ProcessReadError({
+            command: "git",
+            argumentCount: 2,
+            cwd: "/workspace",
+            stream: "exitCode",
+            cause: new Error("Process interrupted due to receipt of signal: 'SIGABRT'"),
+          }),
+        ),
+      );
+      assert.instanceOf(error, VcsProcessOutputReadError);
+      assert.strictEqual(error.signal, "SIGABRT");
+      assert.include(error.message, "terminated by SIGABRT");
+    }),
+  );
+
+  it.effect("leaves the signal unset when reading the exit code fails for another reason", () =>
+    Effect.gen(function* () {
+      const error = yield* captureProcessResult(
+        Effect.fail(
+          new ProcessRunner.ProcessReadError({
+            command: "git",
+            argumentCount: 2,
+            cwd: "/workspace",
+            stream: "exitCode",
+            cause: new Error("boom"),
+          }),
+        ),
+      );
+      assert.instanceOf(error, VcsProcessOutputReadError);
+      assert.strictEqual(error.signal, undefined);
+      assert.include(error.message, "failed to read exitCode");
+    }),
+  );
+
   it.effect("explains a locked Git index and allows restore after the lock is released", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -92,7 +134,7 @@ describe("VcsProcess.run", () => {
       yield* fs.remove(lock);
       yield* git(restore);
       expect(yield* fs.readFileString(file)).toBe("before\n");
-    }).pipe(provideLive, Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(provideLive, Effect.provide(NodeServices.layer)),
   );
 
   it.effect.each([
@@ -147,6 +189,55 @@ describe("VcsProcess.run", () => {
         const encoded = yield* encodeExitError(error);
         expect(encoded).not.toContain("private");
       }),
+  );
+
+  // Without LANG, macOS Git follows the system language, as in an app launched from Finder.
+  it.effect("reads Git failures in English when Git would follow the system language", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const service = yield* VcsProcess.make.pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          ProcessRunner.ProcessRunner.of({
+            run: (input) =>
+              Effect.sync(() => {
+                attempts += 1;
+                return {
+                  stdout: "",
+                  stderr:
+                    attempts % 2 === 0
+                      ? ""
+                      : input.env?.LANGUAGE === "C"
+                        ? "fatal: Unable to create '/private/repo/.git/index.lock': File exists.\n"
+                        : "致命錯誤: 無法建立「/private/repo/.git/index.lock」：File exists。\n",
+                  code: ChildProcessSpawner.ExitCode(attempts % 2 === 0 ? 0 : 128),
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
+          }),
+        ),
+      );
+
+      const capture = yield* service
+        .run({
+          ...baseInput,
+          operation: VcsProcess.CHECKPOINT_CAPTURE_OPERATION,
+          args: ["add", "--all"],
+        })
+        .pipe(Effect.exit, Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust("1 second");
+      expect(Exit.isSuccess(yield* Fiber.join(capture))).toBe(true);
+      expect(attempts).toBe(2);
+
+      attempts = 0;
+      const error = yield* Effect.flip(service.run(baseInput));
+      assert.instanceOf(error, VcsProcessExitError);
+      expect(error.detail).toBe(VcsProcess.GIT_INDEX_LOCKED_DETAIL);
+    }),
   );
 
   it.effect.each([

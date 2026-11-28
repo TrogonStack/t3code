@@ -1,5 +1,6 @@
 import type { EnvironmentId, PullRequestLinkedThreadsResult } from "@t3tools/contracts";
 
+import type { DraftId } from "./composerDraftStore";
 import { dispatchCommandPalette, isCommandPaletteMounted } from "./commandPaletteStore";
 
 export interface CommandPaletteLinkedThreads {
@@ -9,11 +10,8 @@ export interface CommandPaletteLinkedThreads {
 
 export interface CommandPaletteOpenDetail {
   readonly open?: "add-project" | "new-thread-in";
-  /**
-   * Prefills the add project path so the palette opens on a confirmation of
-   * that folder. Ignored by the other intents.
-   */
-  readonly path?: string;
+  /** With add-project: the draft the new project is picked for. */
+  readonly draftId?: DraftId | null;
   readonly query?: string;
   readonly linkedThreads?: CommandPaletteLinkedThreads;
 }
@@ -27,7 +25,7 @@ export function openCommandPalette(detail: CommandPaletteOpenDetail = {}): void 
   } else if (detail.open === "add-project") {
     dispatchCommandPalette({
       _tag: "OpenAddProject",
-      ...(detail.path ? { path: detail.path } : {}),
+      ...(detail.draftId ? { draftId: detail.draftId } : {}),
     });
   } else if (detail.query !== undefined) {
     dispatchCommandPalette({

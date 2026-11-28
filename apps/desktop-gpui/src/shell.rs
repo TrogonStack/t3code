@@ -13,8 +13,8 @@ use crate::wire::generated::{
 };
 use crate::wire::generated::{
     OrchestrationSubscribeShellSuccess as Item,
-    OrchestrationSubscribeShellSuccessVariant4Location as Location,
-    OrchestrationSubscribeShellSuccessVariant5Location as RemovedLocation,
+    OrchestrationSubscribeShellSuccessVariant5Location as Location,
+    OrchestrationSubscribeShellSuccessVariant6Location as RemovedLocation,
 };
 use crate::wire::{Project, Thread};
 use std::cmp::Ordering;
@@ -479,7 +479,9 @@ impl ShellState {
         match item {
             // The completion marker carries nothing the counts need.
             Item::Variant0 { .. } => false,
-            Item::Variant1 {
+            // Only sent to resumes with `afterSequence`, which this client never sends.
+            Item::Variant1 { .. } => false,
+            Item::Variant2 {
                 snapshot,
                 resolved_repository_identity_roots: resolved,
                 ..
@@ -512,7 +514,7 @@ impl ShellState {
                 self.seeded = true;
                 true
             }
-            Item::Variant2 {
+            Item::Variant3 {
                 sequence, project, ..
             } => {
                 if !self.advance(sequence) {
@@ -521,7 +523,7 @@ impl ShellState {
                 self.projects.insert(project.id.clone(), project);
                 true
             }
-            Item::Variant3 {
+            Item::Variant4 {
                 sequence,
                 project_id,
                 ..
@@ -532,7 +534,7 @@ impl ShellState {
                 self.projects.remove(&project_id);
                 true
             }
-            Item::Variant4 {
+            Item::Variant5 {
                 sequence,
                 location,
                 thread,
@@ -552,7 +554,7 @@ impl ShellState {
                 }
                 true
             }
-            Item::Variant5 {
+            Item::Variant6 {
                 sequence,
                 thread_id,
                 location,

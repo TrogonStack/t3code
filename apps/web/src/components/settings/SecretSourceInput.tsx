@@ -6,13 +6,15 @@ import {
   type SecretProviderKind,
 } from "@t3tools/contracts";
 import { builtInSecretProviderDefinitions } from "@t3tools/secret-provider-definitions/registry";
+import { invalidSecretReferenceText } from "@t3tools/client-runtime/secret-request";
+import { hasFeatureFlag } from "@t3tools/client-runtime/state/server";
 import { useAtomValue } from "@effect/atom-react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { useGT, useMessages } from "gt-react";
 import { AlertTriangleIcon, CheckIcon, KeyRoundIcon, RefreshCwIcon, TypeIcon } from "lucide-react";
 import { useState, type ComponentProps, type ComponentType, type ReactNode } from "react";
 
-import { isSecretsFeatureEnabled } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -20,10 +22,10 @@ import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Spinner } from "../ui/spinner";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SecretInput } from "./SecretInput";
 import { classifySecretProvider } from "./SecretProviderDialog.logic";
 import { secretProviderKindIcon } from "./SecretProviderKindIcon";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 export interface SecretSource {
   readonly id: SecretProviderId;
@@ -40,9 +42,9 @@ export function useSecretSources(environmentId: EnvironmentId): ReadonlyArray<Se
   const providers = useEnvironmentSettings(environmentId, (settings) => settings.secretProviders);
   const supported = useAtomValue(
     serverEnvironment.configValueAtom(environmentId),
-    (config) => config?.secretReferences === true,
+    (config) => hasFeatureFlag(config, "secretProviders") && config?.secretReferences === true,
   );
-  if (!isSecretsFeatureEnabled || !supported) return NO_SECRET_SOURCES;
+  if (!supported) return NO_SECRET_SOURCES;
   return (Object.entries(providers) as Array<[SecretProviderId, SecretProviderConfig]>)
     .filter(([, config]) => classifySecretProvider(config).kind !== "unsupported")
     .map(([id, config]) => ({ id, kind: config.kind, label: config.label }));
@@ -64,6 +66,73 @@ function SourceLabel(props: {
   );
 }
 
+/** Picks Value (`null`) or one of `sources`; a `value` no longer among them stays listed. */
+export function SecretSourceSelect(props: {
+  readonly value: SecretProviderId | null;
+  readonly sources: ReadonlyArray<Pick<SecretSource, "id" | "kind" | "label">>;
+  readonly label: string;
+  readonly disabled?: boolean;
+  readonly onValueChange: (provider: SecretProviderId | null) => void;
+}) {
+  const gt = useGT();
+  const { value, sources } = props;
+  const selected = sources.find((source) => source.id === value);
+  const known = value === null || selected !== undefined;
+  const title =
+    value === null
+      ? gt("Value", { $context: "secret source: a value typed in directly" })
+      : (selected?.label ?? value);
+  return (
+    <Select
+      value={value ?? STORED_VALUE}
+      onValueChange={(next) =>
+        props.onValueChange(
+          next === STORED_VALUE || next === null ? null : (next as SecretProviderId),
+        )
+      }
+      {...(props.disabled === undefined ? {} : { disabled: props.disabled })}
+    >
+      <SelectTrigger
+        size="sm"
+        className="w-auto min-w-0 shrink-0"
+        aria-label={gt("{label} source", { label: props.label })}
+        title={title}
+        data-icon-only=""
+      >
+        <SelectValue>
+          <SourceIcon
+            icon={
+              value === null
+                ? TypeIcon
+                : selected === undefined
+                  ? KeyRoundIcon
+                  : secretProviderKindIcon(selected.kind)
+            }
+          />
+        </SelectValue>
+      </SelectTrigger>
+      <SelectPopup align="start" alignItemWithTrigger={false}>
+        <SelectItem value={STORED_VALUE}>
+          <SourceLabel
+            icon={TypeIcon}
+            label={gt("Value", { $context: "secret source: a value typed in directly" })}
+          />
+        </SelectItem>
+        {sources.map((source) => (
+          <SelectItem key={source.id} value={source.id}>
+            <SourceLabel icon={secretProviderKindIcon(source.kind)} label={source.label} />
+          </SelectItem>
+        ))}
+        {known ? null : (
+          <SelectItem value={value}>
+            <SourceLabel icon={KeyRoundIcon} label={value} />
+          </SelectItem>
+        )}
+      </SelectPopup>
+    </Select>
+  );
+}
+
 type SecretCheck =
   | { readonly status: "checking" }
   | { readonly status: "resolved" }
@@ -74,8 +143,14 @@ function SecretCheckButton(props: {
   readonly environmentId: EnvironmentId;
   readonly secret: SecretReference;
   readonly label: string;
+  readonly disabled?: boolean | undefined;
 }) {
+  const gt = useGT();
   const { environmentId, secret } = props;
+  const supported = useAtomValue(
+    serverEnvironment.configValueAtom(environmentId),
+    (config) => config?.environment.capabilities.secretSourceCheck === true,
+  );
   const canCheck = useAtomValue(serverEnvironment.checkSecretSource.permissionAtom(environmentId));
   const checkSecretSource = useAtomCommand(serverEnvironment.checkSecretSource);
   const secretKey = `${secret.provider}\u0000${secret.reference}`;
@@ -86,62 +161,60 @@ function SecretCheckButton(props: {
   const state = check?.secretKey === secretKey ? check.state : undefined;
 
   const run = async () => {
-    setCheck({ secretKey, state: { status: "checking" } });
+    const pending = { secretKey, state: { status: "checking" } } as const;
+    setCheck(pending);
     const response = await checkSecretSource({ environmentId, input: { source: secret } });
     const next: SecretCheck =
       response._tag !== "Success"
-        ? { status: "failed", detail: "Could not reach the server" }
+        ? { status: "failed", detail: gt("Could not reach the server") }
         : response.value._tag === "Resolved"
           ? { status: "resolved" }
           : { status: "failed", detail: response.value.detail };
-    setCheck((previous) =>
-      previous?.secretKey === secretKey ? { secretKey, state: next } : previous,
-    );
+    setCheck((previous) => (previous === pending ? { secretKey, state: next } : previous));
   };
 
+  if (!supported) return null;
   const description = !canCheck
-    ? "You cannot check secrets on this environment"
+    ? gt("You cannot check secrets on this environment")
     : state === undefined
-      ? "Check that the secret resolves"
+      ? gt("Check that the secret resolves")
       : state.status === "checking"
-        ? "Checking the secret"
+        ? gt("Checking the secret")
         : state.status === "resolved"
-          ? "Secret resolved"
+          ? gt("Secret resolved")
           : state.detail;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span className="inline-flex">
-            <Button
-              type="button"
-              size="icon-micro"
-              variant="ghost-muted"
-              disabled={!canCheck || state?.status === "checking"}
-              onClick={() => void run()}
-              aria-label={
-                state?.status === "failed"
-                  ? `${props.label} failed: ${state.detail}`
-                  : state?.status === "resolved"
-                    ? `${props.label} resolved`
-                    : props.label
-              }
-            >
-              {state?.status === "checking" ? (
-                <Spinner />
-              ) : state?.status === "resolved" ? (
-                <CheckIcon className="size-3 text-success-foreground" />
-              ) : state?.status === "failed" ? (
-                <AlertTriangleIcon className="size-3 text-destructive" />
-              ) : (
-                <RefreshCwIcon className="size-3" />
-              )}
-            </Button>
-          </span>
-        }
-      />
-      <TooltipPopup side="top">{description}</TooltipPopup>
-    </Tooltip>
+    <SharedTooltipTrigger
+      render={
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="icon-micro"
+            variant="ghost-muted"
+            disabled={props.disabled === true || !canCheck || state?.status === "checking"}
+            onClick={() => void run()}
+            aria-label={
+              state?.status === "failed"
+                ? gt("{label} failed: {detail}", { label: props.label, detail: state.detail })
+                : state?.status === "resolved"
+                  ? gt("{label} resolved", { label: props.label })
+                  : props.label
+            }
+          >
+            {state?.status === "checking" ? (
+              <Spinner />
+            ) : state?.status === "resolved" ? (
+              <CheckIcon className="text-success-foreground" />
+            ) : state?.status === "failed" ? (
+              <AlertTriangleIcon className="text-destructive" />
+            ) : (
+              <RefreshCwIcon />
+            )}
+          </Button>
+        </span>
+      }
+      label={description}
+    />
   );
 }
 
@@ -171,6 +244,8 @@ export function SecretSourceInput({
   ...rest
 }: SecretSourceInputProps) {
   // A provider picked here applies once a reference for it is committed.
+  const gt = useGT();
+  const messages = useMessages();
   const [pendingProvider, setPendingProvider] = useState<SecretProviderId | null>(null);
   const [rejectedReference, setRejectedReference] = useState<string | null>(null);
   const secret = typeof value === "string" ? undefined : value;
@@ -179,57 +254,25 @@ export function SecretSourceInput({
   const reference = secret !== undefined && secret.provider === provider ? secret.reference : "";
   const providerSource = sources.find((source) => source.id === provider);
   const definition = providerSource && builtInSecretProviderDefinitions.find(providerSource.kind);
-  const label = input["aria-label"] ?? "Secret";
-  const providerLabel = (id: SecretProviderId) =>
-    sources.find((source) => source.id === id)?.label ?? id;
-  const providerIcon = (id: SecretProviderId) => {
-    const kind = sources.find((source) => source.id === id)?.kind;
-    return kind === undefined ? KeyRoundIcon : secretProviderKindIcon(kind);
-  };
-
+  const label = input["aria-label"] ?? gt("Secret");
   const source =
     sources.length === 0 && provider === null ? null : (
-      <Select
-        value={provider ?? STORED_VALUE}
-        onValueChange={(value) => {
+      <SecretSourceSelect
+        value={provider}
+        sources={sources}
+        label={label}
+        onValueChange={(next) => {
           setRejectedReference(null);
-          if (value === STORED_VALUE || value === null) {
+          if (next === null) {
             setPendingProvider(null);
             onValidityChange?.(true);
             if (secret !== undefined) onSecretChange(undefined);
             return;
           }
-          const next = value as SecretProviderId;
           onValidityChange?.(next === secret?.provider);
           setPendingProvider(next === secret?.provider ? null : next);
         }}
-      >
-        <SelectTrigger
-          size="sm"
-          className="w-auto min-w-0 shrink-0"
-          aria-label={`${label} source`}
-          title={provider === null ? "Value" : providerLabel(provider)}
-        >
-          <SelectValue>
-            <SourceIcon icon={provider === null ? TypeIcon : providerIcon(provider)} />
-          </SelectValue>
-        </SelectTrigger>
-        <SelectPopup align="start" alignItemWithTrigger={false}>
-          <SelectItem value={STORED_VALUE}>
-            <SourceLabel icon={TypeIcon} label="Value" />
-          </SelectItem>
-          {sources.map((source) => (
-            <SelectItem key={source.id} value={source.id}>
-              <SourceLabel icon={providerIcon(source.id)} label={source.label} />
-            </SelectItem>
-          ))}
-          {provider !== null && !sources.some((source) => source.id === provider) ? (
-            <SelectItem value={provider}>
-              <SourceLabel icon={KeyRoundIcon} label={provider} />
-            </SelectItem>
-          ) : null}
-        </SelectPopup>
-      </Select>
+      />
     );
 
   const valueField =
@@ -268,20 +311,26 @@ export function SecretSourceInput({
             autoComplete="off"
             placeholder={definition?.referencePlaceholder}
             spellCheck={false}
-            aria-label={`${label} reference`}
+            aria-label={gt("{label} reference", { label })}
             aria-invalid={rejectedReference !== null}
           />
-          {environmentId !== undefined && secret !== undefined && pendingProvider === null ? (
+          {environmentId !== undefined &&
+          secret !== undefined &&
+          pendingProvider === null &&
+          rejectedReference === null ? (
             <SecretCheckButton
               environmentId={environmentId}
               secret={secret}
-              label={`Check ${label}`}
+              label={gt("Check {label}", { label })}
+              disabled={input.disabled}
             />
           ) : null}
         </div>
         {rejectedReference !== null ? (
           <p className="text-2xs text-destructive">
-            {definition?.invalidReferenceMessage ?? "Enter a valid secret reference."}
+            {definition
+              ? invalidSecretReferenceText(definition.invalidReferenceMessage, messages)
+              : gt("Enter a valid secret reference.")}
           </p>
         ) : null}
       </div>

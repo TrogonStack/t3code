@@ -77,29 +77,9 @@ const hostSettingsSchemas = new Map(
 export function collectSourceControlHostSecretReferences(
   hosts: SourceControlHostsSettings,
 ): ReadonlyArray<SecretReference> {
-  return [...hostSettingsSchemas].flatMap(([kind, schema]) => [
-    ...secretReferencesInSettings(schema, hosts[kind]).map(({ reference }) => reference),
-    ...perHostSecretReferences(kind, hosts[kind]).map(({ reference }) => reference),
-  ]);
-}
-
-/** References kept per hostname, such as GitHub `tokens`, which the schema walker does not reach. */
-function perHostSecretReferences(
-  kind: string,
-  fields: Readonly<Record<string, unknown>> | undefined,
-): ReadonlyArray<{
-  readonly field: string;
-  readonly serverHost: string;
-  readonly reference: SecretReference;
-}> {
-  if (fields === undefined) return [];
-  return (SOURCE_CONTROL_HOST_SECRET_FIELDS.get(kind) ?? []).flatMap((field) => {
-    const value = fields[field];
-    if (value === null || typeof value !== "object" || isSecretReference(value)) return [];
-    return Object.entries(value).flatMap(([serverHost, reference]) =>
-      isSecretReference(reference) ? [{ field, serverHost, reference }] : [],
-    );
-  });
+  return [...hostSettingsSchemas].flatMap(([kind, schema]) =>
+    secretReferencesInSettings(schema, hosts[kind]).map(({ reference }) => reference),
+  );
 }
 
 /** Replaces each secret provider reference in one host kind's credential fields with the secret it names. */
@@ -113,14 +93,7 @@ export const resolveSourceControlHostSecrets = Effect.fn("SourceControlHost.reso
     const fields = hosts[kind];
     if (schema === undefined || fields === undefined) return hosts;
     const resolved = yield* resolveSettingsSecrets(resolver, schema, fields);
-    const pending = perHostSecretReferences(kind, resolved);
-    if (pending.length === 0) return resolved === fields ? hosts : { ...hosts, [kind]: resolved };
-    const values = yield* resolver.read(pending.map(({ reference }) => reference));
-    const next: Record<string, unknown> = { ...resolved };
-    pending.forEach(({ field, serverHost }, index) => {
-      next[field] = { ...(next[field] as object), [serverHost]: values[index] ?? "" };
-    });
-    return { ...hosts, [kind]: next };
+    return resolved === fields ? hosts : { ...hosts, [kind]: resolved };
   },
 );
 
@@ -131,16 +104,27 @@ const collectUsageLimitSecretReferences = (
     isSecretReference(managementKey) ? [managementKey] : [],
   );
 
-const collectEasSecretReferences = (
-  hosts: ServerSettings["easDeviceHosts"],
+const collectDeviceHostSecretReferences = (
+  settings: Pick<ServerSettings, "easDeviceHosts" | "simlockDeviceHosts">,
 ): ReadonlyArray<SecretReference> =>
-  hosts.flatMap(({ accessToken }) => (isSecretReference(accessToken) ? [accessToken] : []));
+  [
+    ...settings.easDeviceHosts.map(({ accessToken }) => accessToken),
+    ...settings.simlockDeviceHosts.map(({ agentToken }) => agentToken),
+  ].filter(isSecretReference);
 
 /** Settings that cannot be read clear every cached secret, so a refresh never keeps a stale one. */
 export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")(function* <E>(
   resolver: SecretResolver.SecretResolver["Service"],
   settings: Effect.Effect<
-    Pick<ServerSettings, "sourceControlHosts" | "usageLimitSources" | "easDeviceHosts">,
+    Pick<
+      ServerSettings,
+      | "sourceControlHosts"
+      | "usageLimitSources"
+      | "textGenerators"
+      | "easDeviceHosts"
+      | "simlockDeviceHosts"
+      | "cloudSpeechCredentials"
+    >,
     E
   >,
 ) {
@@ -148,7 +132,11 @@ export const invalidateSettingsSecrets = Effect.fn("SettingsSecrets.invalidate")
     Effect.map((current) => [
       ...collectSourceControlHostSecretReferences(current.sourceControlHosts),
       ...collectUsageLimitSecretReferences(current.usageLimitSources),
-      ...collectEasSecretReferences(current.easDeviceHosts),
+      ...Object.values(current.textGenerators).flatMap(({ apiKey }) =>
+        isSecretReference(apiKey) ? [apiKey] : [],
+      ),
+      ...collectDeviceHostSecretReferences(current),
+      ...Object.values(current.cloudSpeechCredentials).filter(isSecretReference),
     ]),
     Effect.orElseSucceed(() => undefined),
   );

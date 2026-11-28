@@ -23,6 +23,9 @@ import {
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import { msg } from "gt-react";
+
+import { m, type MessageResolver } from "../../i18n/messages";
 
 const decodeSecretProviderId = Schema.decodeOption(SecretProviderId);
 const decodeOnePasswordConfig = Schema.decodeUnknownOption(OnePasswordSecretProviderConfig);
@@ -218,11 +221,12 @@ export function secretProviderFromDraft(
   draft: SecretProviderDraft,
   existingIds: ReadonlySet<string>,
   target: SecretProviderTarget,
+  resolve: MessageResolver = m,
 ): Result.Result<
   { readonly id: SecretProviderId; readonly config: SecretProviderConfig },
   SecretProviderDraftIssues
 > {
-  const label = decodeField(SecretProviderLabel, draft.name, "Enter a name.");
+  const label = decodeField(SecretProviderLabel, draft.name, resolve(msg("Enter a name.")));
 
   let id: SecretProviderId | null = null;
   let nameIssue: string | undefined;
@@ -230,9 +234,9 @@ export function secretProviderFromDraft(
     nameIssue = label.failure;
   } else {
     id = target.mode === "edit" ? target.id : secretProviderIdFromName(label.success);
-    if (id === null) nameIssue = "The name needs at least one letter or digit.";
+    if (id === null) nameIssue = resolve(msg("The name needs at least one letter or digit."));
     else if (target.mode === "add" && existingIds.has(id))
-      nameIssue = "A secret provider with this name exists.";
+      nameIssue = resolve(msg("A secret provider with this name exists."));
   }
 
   const done = (config: unknown, issues: SecretProviderDraftIssues) =>
@@ -256,7 +260,7 @@ export function secretProviderFromDraft(
       const account = decodeField(
         OnePasswordSecretProviderConfig.fields.account,
         draft.account,
-        "Enter the 1Password account.",
+        resolve(msg("Enter the 1Password account.")),
       );
       return done(
         { account: Result.isSuccess(account) ? account.success : undefined },
@@ -264,16 +268,22 @@ export function secretProviderFromDraft(
       );
     }
     case "openbao": {
-      const address = decodeField(OpenBaoAddress, draft.address, "Enter the OpenBao address.");
+      const address = decodeField(
+        OpenBaoAddress,
+        draft.address,
+        resolve(msg("Enter the OpenBao address.")),
+      );
       const mount = decodeField(
         OpenBaoMount,
         draft.mount.trim() || DEFAULT_OPENBAO_MOUNT,
-        "Enter the mount.",
+        resolve(msg("Enter the mount.")),
       );
       const namespace = optionalField(OpenBaoNamespace, draft.namespace);
       const token = draft.token.trim() || draft.storedToken;
       const tokenIssue =
-        draft.auth === "token" && token.length === 0 ? "Enter the OpenBao token." : undefined;
+        draft.auth === "token" && token.length === 0
+          ? resolve(msg("Enter the OpenBao token."))
+          : undefined;
       const issues = withName({
         ...issuesOf({ address, mount, namespace }),
         ...(tokenIssue === undefined ? {} : { token: tokenIssue }),
@@ -292,7 +302,7 @@ export function secretProviderFromDraft(
       );
     }
     case "aws_secrets_manager": {
-      const region = decodeField(AwsRegion, draft.region, "Enter the AWS region.");
+      const region = decodeField(AwsRegion, draft.region, resolve(msg("Enter the AWS region.")));
       const profile = optionalField(AwsProfile, draft.profile);
       const issues = withName(issuesOf({ region, profile }));
       return done(

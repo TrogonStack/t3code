@@ -38,7 +38,6 @@
     "@types/node": "catalog:",
     "drizzle-kit": "1.0.0-rc.5",
     "vite": "catalog:",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   }
 }

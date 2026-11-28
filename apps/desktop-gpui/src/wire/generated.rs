@@ -90,6 +90,11 @@ pub struct DefaultProjectScriptsItem {
     pub run_on_settle: ::std::option::Option<bool>,
     #[serde(rename = "runOnWorktreeCreate")]
     pub run_on_worktree_create: bool,
+    #[serde(
+        rename = "stopOnSettle",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub stop_on_settle: ::std::option::Option<bool>,
 }
 ///`DefaultProjectScriptsItemIcon`
 #[derive(
@@ -166,10 +171,30 @@ impl ::std::convert::TryFrom<::std::string::String> for DefaultProjectScriptsIte
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct EndedWatch {
     #[serde(
+        rename = "approvalAnnounced",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub approval_announced: ::std::option::Option<bool>,
+    #[serde(
+        rename = "awaitingApproval",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub awaiting_approval: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
+    #[serde(
+        rename = "awaitingBaseline",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub awaiting_baseline: ::std::option::Option<EndedWatchAwaitingBaseline>,
+    #[serde(
         rename = "checksAwaitedSince",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub checks_awaited_since: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "checksPending",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub checks_pending: ::std::option::Option<bool>,
     pub conflicting: bool,
     #[serde(rename = "failedChecks")]
     pub failed_checks: ::std::vec::Vec<::std::string::String>,
@@ -177,6 +202,11 @@ pub struct EndedWatch {
     pub head_sha: ::std::option::Option<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub instructions: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "mergeQueueRemovalId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub merge_queue_removal_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "owedChecks",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -188,13 +218,126 @@ pub struct EndedWatch {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub passed_checks: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
+    #[serde(
+        rename = "rebaseRequired",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub rebase_required: ::std::option::Option<bool>,
     #[serde(rename = "remarkIds")]
     pub remark_ids: ::std::vec::Vec<::std::string::String>,
     #[serde(rename = "remarksThrough")]
     pub remarks_through: ::std::string::String,
     #[serde(rename = "startedAt")]
     pub started_at: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub until: ::std::option::Option<EndedWatchUntil>,
     pub wakes: i64,
+}
+///`EndedWatchAwaitingBaseline`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum EndedWatchAwaitingBaseline {
+    #[serde(rename = "all")]
+    All,
+    #[serde(rename = "checks")]
+    Checks,
+}
+impl ::std::fmt::Display for EndedWatchAwaitingBaseline {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::All => f.write_str("all"),
+            Self::Checks => f.write_str("checks"),
+        }
+    }
+}
+impl ::std::str::FromStr for EndedWatchAwaitingBaseline {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "all" => Ok(Self::All),
+            "checks" => Ok(Self::Checks),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for EndedWatchAwaitingBaseline {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for EndedWatchAwaitingBaseline {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`EndedWatchUntil`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum EndedWatchUntil {
+    #[serde(rename = "merged")]
+    Merged,
+}
+impl ::std::fmt::Display for EndedWatchUntil {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Merged => f.write_str("merged"),
+        }
+    }
+}
+impl ::std::str::FromStr for EndedWatchUntil {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "merged" => Ok(Self::Merged),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for EndedWatchUntil {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for EndedWatchUntil {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
 }
 ///`EnvironmentAuthorizationErrorEncoded`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
@@ -426,6 +569,168 @@ impl ::std::convert::TryFrom<::std::string::String> for GoalStatus {
         value.parse()
     }
 }
+///`Issues`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct Issues(pub ::std::vec::Vec<IssuesItem>);
+impl ::std::ops::Deref for Issues {
+    type Target = ::std::vec::Vec<IssuesItem>;
+    fn deref(&self) -> &::std::vec::Vec<IssuesItem> {
+        &self.0
+    }
+}
+impl ::std::convert::From<Issues> for ::std::vec::Vec<IssuesItem> {
+    fn from(value: Issues) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<::std::vec::Vec<IssuesItem>> for Issues {
+    fn from(value: ::std::vec::Vec<IssuesItem>) -> Self {
+        Self(value)
+    }
+}
+///`IssuesItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct IssuesItem {
+    #[serde(rename = "displayKey")]
+    pub display_key: ::std::string::String,
+    pub host: ::std::string::String,
+    pub key: ::std::string::String,
+    #[serde(rename = "linkedAt")]
+    pub linked_at: ::std::string::String,
+    #[serde(rename = "projectId")]
+    pub project_id: ::std::string::String,
+    pub scope: ::std::string::String,
+    pub source: IssuesItemSource,
+    pub title: ::std::string::String,
+    pub tracker: ::std::string::String,
+    pub url: ::std::string::String,
+}
+///`IssuesItemSource`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum IssuesItemSource {
+    #[serde(rename = "manual")]
+    Manual,
+    #[serde(rename = "agent")]
+    Agent,
+}
+impl ::std::fmt::Display for IssuesItemSource {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Manual => f.write_str("manual"),
+            Self::Agent => f.write_str("agent"),
+        }
+    }
+}
+impl ::std::str::FromStr for IssuesItemSource {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "manual" => Ok(Self::Manual),
+            "agent" => Ok(Self::Agent),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for IssuesItemSource {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for IssuesItemSource {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`LastTitleRegeneration`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct LastTitleRegeneration {
+    #[serde(rename = "completedAt")]
+    pub completed_at: ::std::string::String,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub message: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "requestId")]
+    pub request_id: ::std::string::String,
+    pub status: LastTitleRegenerationStatus,
+}
+///`LastTitleRegenerationStatus`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum LastTitleRegenerationStatus {
+    #[serde(rename = "renamed")]
+    Renamed,
+    #[serde(rename = "unchanged")]
+    Unchanged,
+    #[serde(rename = "failed")]
+    Failed,
+}
+impl ::std::fmt::Display for LastTitleRegenerationStatus {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Renamed => f.write_str("renamed"),
+            Self::Unchanged => f.write_str("unchanged"),
+            Self::Failed => f.write_str("failed"),
+        }
+    }
+}
+impl ::std::str::FromStr for LastTitleRegenerationStatus {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "renamed" => Ok(Self::Renamed),
+            "unchanged" => Ok(Self::Unchanged),
+            "failed" => Ok(Self::Failed),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for LastTitleRegenerationStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String> for LastTitleRegenerationStatus {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
 ///`LimitRecovery`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 pub struct LimitRecovery {
@@ -460,6 +765,11 @@ pub struct Lineage {
     pub root_thread_id: ::std::string::String,
     #[serde(rename = "sideChat", skip_serializing_if = "::std::option::Option::is_none")]
     pub side_chat: ::std::option::Option<bool>,
+    #[serde(
+        rename = "workflowStep",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub workflow_step: ::std::option::Option<bool>,
 }
 ///`LineageRelationshipToParent`
 #[derive(
@@ -735,6 +1045,16 @@ pub struct OrchestrationSubscribeShellPayload {
     )]
     pub after_sequence: ::std::option::Option<i64>,
     #[serde(
+        rename = "httpSnapshotFallback",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub http_snapshot_fallback: ::std::option::Option<bool>,
+    #[serde(
+        rename = "knownProjectIdentities",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub known_project_identities: ::std::option::Option<::std::string::String>,
+    #[serde(
         rename = "omitIdleSubagents",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
@@ -755,36 +1075,37 @@ pub struct OrchestrationSubscribeShellPayload {
 #[serde(untagged)]
 pub enum OrchestrationSubscribeShellSuccess {
     Variant0 { kind: OrchestrationSubscribeShellSuccessVariant0Kind },
-    Variant1 {
-        kind: OrchestrationSubscribeShellSuccessVariant1Kind,
+    Variant1 { kind: OrchestrationSubscribeShellSuccessVariant1Kind },
+    Variant2 {
+        kind: OrchestrationSubscribeShellSuccessVariant2Kind,
         #[serde(
             rename = "resolvedRepositoryIdentityRoots",
             default,
             skip_serializing_if = "::std::vec::Vec::is_empty"
         )]
         resolved_repository_identity_roots: ::std::vec::Vec<::std::string::String>,
-        snapshot: OrchestrationSubscribeShellSuccessVariant1Snapshot,
-    },
-    Variant2 {
-        kind: OrchestrationSubscribeShellSuccessVariant2Kind,
-        project: ProjectsEntry,
-        sequence: i64,
+        snapshot: OrchestrationSubscribeShellSuccessVariant2Snapshot,
     },
     Variant3 {
         kind: OrchestrationSubscribeShellSuccessVariant3Kind,
-        #[serde(rename = "projectId")]
-        project_id: ::std::string::String,
+        project: ProjectsEntry,
         sequence: i64,
     },
     Variant4 {
         kind: OrchestrationSubscribeShellSuccessVariant4Kind,
-        location: OrchestrationSubscribeShellSuccessVariant4Location,
+        #[serde(rename = "projectId")]
+        project_id: ::std::string::String,
         sequence: i64,
-        thread: ThreadsEntry,
     },
     Variant5 {
         kind: OrchestrationSubscribeShellSuccessVariant5Kind,
         location: OrchestrationSubscribeShellSuccessVariant5Location,
+        sequence: i64,
+        thread: ThreadsEntry,
+    },
+    Variant6 {
+        kind: OrchestrationSubscribeShellSuccessVariant6Kind,
+        location: OrchestrationSubscribeShellSuccessVariant6Location,
         sequence: i64,
         #[serde(rename = "threadId")]
         thread_id: ::std::string::String,
@@ -856,13 +1177,13 @@ for OrchestrationSubscribeShellSuccessVariant0Kind {
     PartialOrd
 )]
 pub enum OrchestrationSubscribeShellSuccessVariant1Kind {
-    #[serde(rename = "snapshot")]
-    Snapshot,
+    #[serde(rename = "snapshot-required")]
+    SnapshotRequired,
 }
 impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant1Kind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::Snapshot => f.write_str("snapshot"),
+            Self::SnapshotRequired => f.write_str("snapshot-required"),
         }
     }
 }
@@ -872,7 +1193,7 @@ impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant1Kind {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
-            "snapshot" => Ok(Self::Snapshot),
+            "snapshot-required" => Ok(Self::SnapshotRequired),
             _ => Err("invalid value".into()),
         }
     }
@@ -894,33 +1215,6 @@ for OrchestrationSubscribeShellSuccessVariant1Kind {
         value.parse()
     }
 }
-///`OrchestrationSubscribeShellSuccessVariant1Snapshot`
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct OrchestrationSubscribeShellSuccessVariant1Snapshot {
-    #[serde(rename = "archivedThreads")]
-    pub archived_threads: Threads,
-    #[serde(
-        rename = "olderSettled",
-        skip_serializing_if = "::std::option::Option::is_none"
-    )]
-    pub older_settled: ::std::option::Option<
-        OrchestrationSubscribeShellSuccessVariant1SnapshotOlderSettled,
-    >,
-    pub projects: Projects,
-    #[serde(rename = "schemaVersion")]
-    pub schema_version: ::std::num::NonZeroU64,
-    #[serde(rename = "snapshotSequence")]
-    pub snapshot_sequence: i64,
-    pub threads: Threads,
-}
-///`OrchestrationSubscribeShellSuccessVariant1SnapshotOlderSettled`
-#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
-pub struct OrchestrationSubscribeShellSuccessVariant1SnapshotOlderSettled {
-    #[serde(rename = "asOfSequence")]
-    pub as_of_sequence: i64,
-    pub before: ::std::string::String,
-    pub counts: Counts,
-}
 ///`OrchestrationSubscribeShellSuccessVariant2Kind`
 #[derive(
     ::serde::Deserialize,
@@ -935,13 +1229,13 @@ pub struct OrchestrationSubscribeShellSuccessVariant1SnapshotOlderSettled {
     PartialOrd
 )]
 pub enum OrchestrationSubscribeShellSuccessVariant2Kind {
-    #[serde(rename = "project.updated")]
-    ProjectUpdated,
+    #[serde(rename = "snapshot")]
+    Snapshot,
 }
 impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant2Kind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::ProjectUpdated => f.write_str("project.updated"),
+            Self::Snapshot => f.write_str("snapshot"),
         }
     }
 }
@@ -951,7 +1245,7 @@ impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant2Kind {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
-            "project.updated" => Ok(Self::ProjectUpdated),
+            "snapshot" => Ok(Self::Snapshot),
             _ => Err("invalid value".into()),
         }
     }
@@ -973,6 +1267,33 @@ for OrchestrationSubscribeShellSuccessVariant2Kind {
         value.parse()
     }
 }
+///`OrchestrationSubscribeShellSuccessVariant2Snapshot`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct OrchestrationSubscribeShellSuccessVariant2Snapshot {
+    #[serde(rename = "archivedThreads")]
+    pub archived_threads: Threads,
+    #[serde(
+        rename = "olderSettled",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub older_settled: ::std::option::Option<
+        OrchestrationSubscribeShellSuccessVariant2SnapshotOlderSettled,
+    >,
+    pub projects: Projects,
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: ::std::num::NonZeroU64,
+    #[serde(rename = "snapshotSequence")]
+    pub snapshot_sequence: i64,
+    pub threads: Threads,
+}
+///`OrchestrationSubscribeShellSuccessVariant2SnapshotOlderSettled`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct OrchestrationSubscribeShellSuccessVariant2SnapshotOlderSettled {
+    #[serde(rename = "asOfSequence")]
+    pub as_of_sequence: i64,
+    pub before: ::std::string::String,
+    pub counts: Counts,
+}
 ///`OrchestrationSubscribeShellSuccessVariant3Kind`
 #[derive(
     ::serde::Deserialize,
@@ -987,13 +1308,13 @@ for OrchestrationSubscribeShellSuccessVariant2Kind {
     PartialOrd
 )]
 pub enum OrchestrationSubscribeShellSuccessVariant3Kind {
-    #[serde(rename = "project.removed")]
-    ProjectRemoved,
+    #[serde(rename = "project.updated")]
+    ProjectUpdated,
 }
 impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant3Kind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::ProjectRemoved => f.write_str("project.removed"),
+            Self::ProjectUpdated => f.write_str("project.updated"),
         }
     }
 }
@@ -1003,7 +1324,7 @@ impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant3Kind {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
-            "project.removed" => Ok(Self::ProjectRemoved),
+            "project.updated" => Ok(Self::ProjectUpdated),
             _ => Err("invalid value".into()),
         }
     }
@@ -1039,13 +1360,13 @@ for OrchestrationSubscribeShellSuccessVariant3Kind {
     PartialOrd
 )]
 pub enum OrchestrationSubscribeShellSuccessVariant4Kind {
-    #[serde(rename = "thread.updated")]
-    ThreadUpdated,
+    #[serde(rename = "project.removed")]
+    ProjectRemoved,
 }
 impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant4Kind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::ThreadUpdated => f.write_str("thread.updated"),
+            Self::ProjectRemoved => f.write_str("project.removed"),
         }
     }
 }
@@ -1055,7 +1376,7 @@ impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant4Kind {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
-            "thread.updated" => Ok(Self::ThreadUpdated),
+            "project.removed" => Ok(Self::ProjectRemoved),
             _ => Err("invalid value".into()),
         }
     }
@@ -1077,63 +1398,6 @@ for OrchestrationSubscribeShellSuccessVariant4Kind {
         value.parse()
     }
 }
-///`OrchestrationSubscribeShellSuccessVariant4Location`
-#[derive(
-    ::serde::Deserialize,
-    ::serde::Serialize,
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd
-)]
-pub enum OrchestrationSubscribeShellSuccessVariant4Location {
-    #[serde(rename = "active")]
-    Active,
-    #[serde(rename = "archive")]
-    Archive,
-}
-impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant4Location {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        match *self {
-            Self::Active => f.write_str("active"),
-            Self::Archive => f.write_str("archive"),
-        }
-    }
-}
-impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant4Location {
-    type Err = self::error::ConversionError;
-    fn from_str(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        match value {
-            "active" => Ok(Self::Active),
-            "archive" => Ok(Self::Archive),
-            _ => Err("invalid value".into()),
-        }
-    }
-}
-impl ::std::convert::TryFrom<&str>
-for OrchestrationSubscribeShellSuccessVariant4Location {
-    type Error = self::error::ConversionError;
-    fn try_from(
-        value: &str,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        value.parse()
-    }
-}
-impl ::std::convert::TryFrom<::std::string::String>
-for OrchestrationSubscribeShellSuccessVariant4Location {
-    type Error = self::error::ConversionError;
-    fn try_from(
-        value: ::std::string::String,
-    ) -> ::std::result::Result<Self, self::error::ConversionError> {
-        value.parse()
-    }
-}
 ///`OrchestrationSubscribeShellSuccessVariant5Kind`
 #[derive(
     ::serde::Deserialize,
@@ -1148,13 +1412,13 @@ for OrchestrationSubscribeShellSuccessVariant4Location {
     PartialOrd
 )]
 pub enum OrchestrationSubscribeShellSuccessVariant5Kind {
-    #[serde(rename = "thread.removed")]
-    ThreadRemoved,
+    #[serde(rename = "thread.updated")]
+    ThreadUpdated,
 }
 impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant5Kind {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
         match *self {
-            Self::ThreadRemoved => f.write_str("thread.removed"),
+            Self::ThreadUpdated => f.write_str("thread.updated"),
         }
     }
 }
@@ -1164,7 +1428,7 @@ impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant5Kind {
         value: &str,
     ) -> ::std::result::Result<Self, self::error::ConversionError> {
         match value {
-            "thread.removed" => Ok(Self::ThreadRemoved),
+            "thread.updated" => Ok(Self::ThreadUpdated),
             _ => Err("invalid value".into()),
         }
     }
@@ -1236,6 +1500,115 @@ for OrchestrationSubscribeShellSuccessVariant5Location {
 }
 impl ::std::convert::TryFrom<::std::string::String>
 for OrchestrationSubscribeShellSuccessVariant5Location {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`OrchestrationSubscribeShellSuccessVariant6Kind`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum OrchestrationSubscribeShellSuccessVariant6Kind {
+    #[serde(rename = "thread.removed")]
+    ThreadRemoved,
+}
+impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant6Kind {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::ThreadRemoved => f.write_str("thread.removed"),
+        }
+    }
+}
+impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant6Kind {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "thread.removed" => Ok(Self::ThreadRemoved),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str> for OrchestrationSubscribeShellSuccessVariant6Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for OrchestrationSubscribeShellSuccessVariant6Kind {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: ::std::string::String,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+///`OrchestrationSubscribeShellSuccessVariant6Location`
+#[derive(
+    ::serde::Deserialize,
+    ::serde::Serialize,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd
+)]
+pub enum OrchestrationSubscribeShellSuccessVariant6Location {
+    #[serde(rename = "active")]
+    Active,
+    #[serde(rename = "archive")]
+    Archive,
+}
+impl ::std::fmt::Display for OrchestrationSubscribeShellSuccessVariant6Location {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        match *self {
+            Self::Active => f.write_str("active"),
+            Self::Archive => f.write_str("archive"),
+        }
+    }
+}
+impl ::std::str::FromStr for OrchestrationSubscribeShellSuccessVariant6Location {
+    type Err = self::error::ConversionError;
+    fn from_str(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        match value {
+            "active" => Ok(Self::Active),
+            "archive" => Ok(Self::Archive),
+            _ => Err("invalid value".into()),
+        }
+    }
+}
+impl ::std::convert::TryFrom<&str>
+for OrchestrationSubscribeShellSuccessVariant6Location {
+    type Error = self::error::ConversionError;
+    fn try_from(
+        value: &str,
+    ) -> ::std::result::Result<Self, self::error::ConversionError> {
+        value.parse()
+    }
+}
+impl ::std::convert::TryFrom<::std::string::String>
+for OrchestrationSubscribeShellSuccessVariant6Location {
     type Error = self::error::ConversionError;
     fn try_from(
         value: ::std::string::String,
@@ -1482,8 +1855,17 @@ pub struct PendingBackgroundTasksItemSubtype0 {
     )]
     pub child_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub command: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub description: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "itemId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub item_id: ::std::option::Option<::std::string::String>,
     pub kind: PendingBackgroundTasksItemSubtype0Kind,
+    #[serde(
+        rename = "nativeItemId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub native_item_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "parentTaskId",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -1494,6 +1876,13 @@ pub struct PendingBackgroundTasksItemSubtype0 {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub provider_instance_id: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "runId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub run_id: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "sourceThreadId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(rename = "taskId")]
     pub task_id: ::std::string::String,
 }
@@ -1555,13 +1944,29 @@ pub struct PendingBackgroundTasksItemSubtype1 {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub awaited: ::std::option::Option<bool>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub command: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub description: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "itemId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub item_id: ::std::option::Option<::std::string::String>,
     pub kind: PendingBackgroundTasksItemSubtype1Kind,
+    #[serde(
+        rename = "nativeItemId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub native_item_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "parentTaskId",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub parent_task_id: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "runId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub run_id: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "sourceThreadId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(rename = "taskId")]
     pub task_id: ::std::string::String,
 }
@@ -1623,13 +2028,29 @@ pub struct PendingBackgroundTasksItemSubtype2 {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub awaited: ::std::option::Option<bool>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub command: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub description: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "itemId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub item_id: ::std::option::Option<::std::string::String>,
     pub kind: PendingBackgroundTasksItemSubtype2Kind,
+    #[serde(
+        rename = "nativeItemId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub native_item_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "parentTaskId",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub parent_task_id: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "runId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub run_id: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "sourceThreadId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(rename = "taskId")]
     pub task_id: ::std::string::String,
 }
@@ -1691,13 +2112,29 @@ pub struct PendingBackgroundTasksItemSubtype3 {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub awaited: ::std::option::Option<bool>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub command: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub description: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "itemId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub item_id: ::std::option::Option<::std::string::String>,
     pub kind: PendingBackgroundTasksItemSubtype3Kind,
+    #[serde(
+        rename = "nativeItemId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub native_item_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "parentTaskId",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub parent_task_id: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "runId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub run_id: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "sourceThreadId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(rename = "taskId")]
     pub task_id: ::std::string::String,
 }
@@ -1759,14 +2196,30 @@ pub struct PendingBackgroundTasksItemSubtype4 {
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub awaited: ::std::option::Option<bool>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub command: ::std::option::Option<::std::string::String>,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub description: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "itemId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub item_id: ::std::option::Option<::std::string::String>,
     #[serde(skip_serializing_if = "::std::option::Option::is_none")]
     pub kind: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "nativeItemId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub native_item_id: ::std::option::Option<::std::string::String>,
     #[serde(
         rename = "parentTaskId",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub parent_task_id: ::std::option::Option<::std::string::String>,
+    #[serde(rename = "runId", skip_serializing_if = "::std::option::Option::is_none")]
+    pub run_id: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "sourceThreadId",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub source_thread_id: ::std::option::Option<::std::string::String>,
     #[serde(rename = "taskId")]
     pub task_id: ::std::string::String,
 }
@@ -1818,6 +2271,8 @@ pub enum PermissionsEntry {
     RelayRead,
     #[serde(rename = "relay:write")]
     RelayWrite,
+    #[serde(rename = "relay:configure")]
+    RelayConfigure,
 }
 impl ::std::fmt::Display for PermissionsEntry {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
@@ -1839,6 +2294,7 @@ impl ::std::fmt::Display for PermissionsEntry {
             Self::AccessWrite => f.write_str("access:write"),
             Self::RelayRead => f.write_str("relay:read"),
             Self::RelayWrite => f.write_str("relay:write"),
+            Self::RelayConfigure => f.write_str("relay:configure"),
         }
     }
 }
@@ -1865,6 +2321,7 @@ impl ::std::str::FromStr for PermissionsEntry {
             "access:write" => Ok(Self::AccessWrite),
             "relay:read" => Ok(Self::RelayRead),
             "relay:write" => Ok(Self::RelayWrite),
+            "relay:configure" => Ok(Self::RelayConfigure),
             _ => Err("invalid value".into()),
         }
     }
@@ -2356,6 +2813,11 @@ pub struct ProjectsEntry {
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub favicon_path: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "hasCustomTitle",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub has_custom_title: ::std::option::Option<bool>,
     pub id: ::std::string::String,
     #[serde(rename = "pinnedAt", skip_serializing_if = "::std::option::Option::is_none")]
     pub pinned_at: ::std::option::Option<::std::string::String>,
@@ -2371,6 +2833,11 @@ pub struct ProjectsEntry {
     pub repository_identity: ::std::option::Option<RepositoryIdentity>,
     pub scripts: DefaultProjectScripts,
     pub title: ::std::string::String,
+    #[serde(
+        rename = "trackedFolders",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub tracked_folders: ::std::option::Option<TrackedFolders>,
     #[serde(rename = "updatedAt")]
     pub updated_at: ::std::string::String,
     #[serde(rename = "workspaceRoot")]
@@ -2471,6 +2938,13 @@ pub enum ProjectsMutatePayload {
         #[serde(skip_serializing_if = "::std::option::Option::is_none")]
         scripts: ::std::option::Option<DefaultProjectScripts>,
         title: ::std::string::String,
+        #[serde(
+            rename = "trackedFolders",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        tracked_folders: ::std::option::Option<
+            ::std::vec::Vec<ProjectsMutatePayloadVariant0TrackedFoldersItem>,
+        >,
         #[serde(rename = "type")]
         type_: ProjectsMutatePayloadVariant0Type,
         #[serde(rename = "workspaceRoot")]
@@ -2516,8 +2990,27 @@ pub enum ProjectsMutatePayload {
         scripts: ::std::option::Option<DefaultProjectScripts>,
         #[serde(skip_serializing_if = "::std::option::Option::is_none")]
         title: ::std::option::Option<::std::string::String>,
+        #[serde(
+            rename = "trackFolders",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        track_folders: ::std::option::Option<
+            ::std::vec::Vec<ProjectsMutatePayloadVariant1TrackFoldersItem>,
+        >,
+        #[serde(
+            rename = "trackedFolders",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        tracked_folders: ::std::option::Option<
+            ::std::vec::Vec<ProjectsMutatePayloadVariant1TrackedFoldersItem>,
+        >,
         #[serde(rename = "type")]
         type_: ProjectsMutatePayloadVariant1Type,
+        #[serde(
+            rename = "untrackFolders",
+            skip_serializing_if = "::std::option::Option::is_none"
+        )]
+        untrack_folders: ::std::option::Option<::std::vec::Vec<::std::string::String>>,
         #[serde(
             rename = "workspaceRoot",
             skip_serializing_if = "::std::option::Option::is_none"
@@ -2534,6 +3027,12 @@ pub enum ProjectsMutatePayload {
         #[serde(rename = "type")]
         type_: ProjectsMutatePayloadVariant2Type,
     },
+}
+///`ProjectsMutatePayloadVariant0TrackedFoldersItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct ProjectsMutatePayloadVariant0TrackedFoldersItem {
+    pub name: ::std::string::String,
+    pub path: ::std::string::String,
 }
 ///`ProjectsMutatePayloadVariant0Type`
 #[derive(
@@ -2892,6 +3391,18 @@ for ProjectsMutatePayloadVariant1ProjectIconVariant1Kind {
         value.parse()
     }
 }
+///`ProjectsMutatePayloadVariant1TrackFoldersItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct ProjectsMutatePayloadVariant1TrackFoldersItem {
+    pub name: ::std::string::String,
+    pub path: ::std::string::String,
+}
+///`ProjectsMutatePayloadVariant1TrackedFoldersItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct ProjectsMutatePayloadVariant1TrackedFoldersItem {
+    pub name: ::std::string::String,
+    pub path: ::std::string::String,
+}
 ///`ProjectsMutatePayloadVariant1Type`
 #[derive(
     ::serde::Deserialize,
@@ -3045,6 +3556,11 @@ pub struct ProjectsMutateSuccess {
     pub repository_identity: ::std::option::Option<RepositoryIdentity>,
     pub scripts: DefaultProjectScripts,
     pub title: ::std::string::String,
+    #[serde(
+        rename = "trackedFolders",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub tracked_folders: ::std::option::Option<TrackedFolders>,
     #[serde(rename = "updatedAt")]
     pub updated_at: ::std::string::String,
     #[serde(rename = "workspaceRoot")]
@@ -3426,6 +3942,11 @@ pub struct Snapshot {
     pub mergeability: ::std::option::Option<SnapshotMergeability>,
     #[serde(rename = "mergedAt", skip_serializing_if = "::std::option::Option::is_none")]
     pub merged_at: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "rebaseRequired",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub rebase_required: ::std::option::Option<bool>,
     #[serde(
         rename = "reviewDecision",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -3905,6 +4426,8 @@ pub struct ThreadsEntry {
     pub id: ::std::string::String,
     #[serde(rename = "interactionMode")]
     pub interaction_mode: ThreadsEntryInteractionMode,
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub issues: ::std::option::Option<Issues>,
     #[serde(rename = "itemCount")]
     pub item_count: i64,
     #[serde(
@@ -3923,10 +4446,20 @@ pub struct ThreadsEntry {
     )]
     pub last_error_code: ::std::option::Option<::std::string::String>,
     #[serde(
+        rename = "lastTitleRegeneration",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub last_title_regeneration: ::std::option::Option<LastTitleRegeneration>,
+    #[serde(
         rename = "lastVisitedAt",
         skip_serializing_if = "::std::option::Option::is_none"
     )]
     pub last_visited_at: ::std::option::Option<::std::string::String>,
+    #[serde(
+        rename = "latestRunBackgroundWake",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub latest_run_background_wake: ::std::option::Option<bool>,
     #[serde(
         rename = "latestRunCompletedAt",
         skip_serializing_if = "::std::option::Option::is_none"
@@ -4072,6 +4605,11 @@ pub struct ThreadsEntry {
     pub usage_limit_reset_at: ::std::option::Option<::std::string::String>,
     #[serde(rename = "visibleItemCount")]
     pub visible_item_count: i64,
+    #[serde(
+        rename = "workflowRun",
+        skip_serializing_if = "::std::option::Option::is_none"
+    )]
+    pub workflow_run: ::std::option::Option<WorkflowRun>,
     #[serde(
         rename = "worktreePath",
         deserialize_with = "::std::option::Option::deserialize"
@@ -4665,6 +5203,8 @@ pub struct ThreadsEntryPendingRuntimeRequest {
     pub created_at: ::std::string::String,
     pub id: ::std::string::String,
     pub kind: ThreadsEntryPendingRuntimeRequestKind,
+    #[serde(rename = "userOnly", skip_serializing_if = "::std::option::Option::is_none")]
+    pub user_only: ::std::option::Option<bool>,
 }
 ///`ThreadsEntryPendingRuntimeRequestKind`
 #[derive(
@@ -4963,6 +5503,34 @@ pub struct ThreadsEntryTitleRegeneration {
     #[serde(rename = "startedAt")]
     pub started_at: ::std::string::String,
 }
+///`TrackedFolders`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+#[serde(transparent)]
+pub struct TrackedFolders(pub ::std::vec::Vec<TrackedFoldersItem>);
+impl ::std::ops::Deref for TrackedFolders {
+    type Target = ::std::vec::Vec<TrackedFoldersItem>;
+    fn deref(&self) -> &::std::vec::Vec<TrackedFoldersItem> {
+        &self.0
+    }
+}
+impl ::std::convert::From<TrackedFolders> for ::std::vec::Vec<TrackedFoldersItem> {
+    fn from(value: TrackedFolders) -> Self {
+        value.0
+    }
+}
+impl ::std::convert::From<::std::vec::Vec<TrackedFoldersItem>> for TrackedFolders {
+    fn from(value: ::std::vec::Vec<TrackedFoldersItem>) -> Self {
+        Self(value)
+    }
+}
+///`TrackedFoldersItem`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct TrackedFoldersItem {
+    #[serde(skip_serializing_if = "::std::option::Option::is_none")]
+    pub discovered: ::std::option::Option<bool>,
+    pub name: ::std::string::String,
+    pub path: ::std::string::String,
+}
 ///`WireRoot`
 #[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
 #[serde(transparent)]
@@ -4982,6 +5550,16 @@ impl ::std::convert::From<::serde_json::Value> for WireRoot {
     fn from(value: ::serde_json::Value) -> Self {
         Self(value)
     }
+}
+///`WorkflowRun`
+#[derive(::serde::Deserialize, ::serde::Serialize, Clone, Debug)]
+pub struct WorkflowRun {
+    #[serde(rename = "environmentId")]
+    pub environment_id: ::std::string::String,
+    #[serde(rename = "runId")]
+    pub run_id: ::std::string::String,
+    pub step: ::std::string::String,
+    pub workflow: ::std::string::String,
 }
 /// Error types.
 pub mod error {

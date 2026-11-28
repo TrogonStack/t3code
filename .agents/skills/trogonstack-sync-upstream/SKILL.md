@@ -7,6 +7,8 @@ description: Merge the latest pingdotgg/t3code upstream main into this TrogonSta
 
 This fork tracks [pingdotgg/t3code](https://github.com/pingdotgg/t3code) as the `upstream` remote and carries a small set of intentional divergences. Syncing is always a **merge**, never a rebase: rebasing would rewrite fork history and break published PR references.
 
+**The goal is to stay in sync with upstream.** Every fork-only behavior is a standing cost: it conflicts on every sync and drifts further over time. A ledger entry in `docs/fork/` is the strong reason to keep a divergence. Fork-only code without one is not automatically wrong, so never roll it back wholesale or by reflex. Compare it against upstream's version, then decide and say why: take upstream's, keep the fork's, or merge the two. Default to upstream when the behavior is equivalent or the fork's gain is marginal. Keep the fork's when it is clearly better, and then add a ledger entry for it or propose the change upstream. List each such comparison in the PR body.
+
 ## 1. Prepare
 
 Every sync runs in its own linked worktree, never in the main checkout. The main checkout is often serving the developer's live T3 Code session and carries their uncommitted work; a sync installs dependencies, rewrites the lockfile, and runs the full suite, none of which should touch that.
@@ -39,10 +41,21 @@ Default to upstream's shape and re-apply the fork's intent on top of it. Concret
 - If the conflicting area belongs to a ledger divergence, keep the fork behavior and adapt it to upstream's new structure. Do not silently drop a divergence.
 - If the fork's version of something is a superset of what upstream added, keep the fork's version and skip the redundant upstream piece (this happened in PR #9 with bootstrap-dispatch logic already covered by the fork's `ThreadBootstrapService`).
 - If upstream merged an equivalent of a fork divergence, take upstream's version and delete the corresponding ledger entry outright (numbers are never reused; git history is the record).
-- Everything else: take upstream.
+- Everything else: take upstream. Fork-only code with no ledger entry gets a short comparison first (what each side does and what the fork gains, if anything). If upstream does the same job, or the fork's gain is marginal, converge on upstream. If the fork's version is clearly better, keep it and either add a ledger entry or propose it upstream. Do not revert it without that comparison, and surface the call in the PR body.
 - For conflicts under `.repos/` (vendored subtrees), do not hand-merge; take either side to complete the merge, then regenerate with `vpr sync:repos` (or `vpr sync:repos --repo <id>`) so `.repos/` matches the installed dependency versions.
 
 Record every nontrivial resolution decision as you go; each one becomes a PR body bullet.
+
+### Keep the ledger honest
+
+The ledger drifts when divergences ship without an entry and when upstream catches up without anyone deleting one. Every sync reconciles it, in the same PR, so the decision is written down while the context is fresh:
+
+- Fork-only behavior you keep that has no entry: add one (product focused, per `docs/fork/README.md`), including why the fork's version is worth the sync cost.
+- An entry whose divergence upstream now covers, or that the sync reverted: delete it.
+- An entry whose reason no longer holds, or that no longer matches the code: rewrite or delete it.
+- Fork-only code you reverted to upstream's version: nothing to add to the ledger, but the PR body states what the fork did, what upstream does, and why converging was right.
+
+If you cannot tell why a divergence exists, say so in the PR body and ask rather than guessing in either direction.
 
 ### Generated files
 
@@ -66,11 +79,22 @@ vp lint --report-unused-disable-directives
 
 Fix fallout on the sync branch before opening the PR. If upstream bumped a dependency that has a vendored subtree, confirm `.repos/` was synced in the same change.
 
+### Pin GitHub Actions
+
+The TrogonStack org requires every action to be pinned to a full commit SHA. Upstream does not, so any tag ref it adds (`actions/cache@v6`) makes the whole workflow fail at startup with zero jobs, and CI silently never runs. After the merge, list offenders:
+
+```
+git grep -nE "uses: [^.][^@ ]*@" -- .github | grep -vE "@[0-9a-f]{40}"
+```
+
+Pin each one to the SHA its tag points at, keeping the tag as a trailing comment (`uses: actions/cache@<sha> # v6.1.0`). Reuse a SHA already pinned elsewhere in the repo for the same action and major version. Resolve new ones with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` and dereference annotated tags through `git/tags/<sha>`. Commit the pins separately as `ci: pin GitHub Actions to commit SHAs`. Third-party actions must also match the org allowlist (`gh api repos/TrogonStack/t3code/actions/permissions/selected-actions`).
+
 ## 5. Open and merge the PR
 
 1. Commit with DCO sign-off (`git commit -s`). Conflict resolutions belong in the merge commit; follow-up fixes go in separate conventional commits on the branch.
 2. Push the branch and open a PR against `main`:
    - Title: `chore: sync with upstream pingdotgg/t3code main`
    - Body: bullets only, each explaining the why of a nontrivial resolution decision (what was kept, dropped, or renumbered, and why). No file lists, no test plan section.
-3. Merge the PR with a **merge commit**, never squash. Squashing would drop the `upstream/main` merge parent, so the next sync would re-conflict on everything already resolved.
-4. Share the PR link, then remove the worktree from the main checkout (`git worktree remove ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}`) and delete the sync branch.
+3. Wait for CI on the PR and merge only when it is green. A CI run that ends in `startup_failure` with no jobs is a workflow file problem (usually an unpinned action), not a pass. DCO fails on every sync because upstream commits carry no sign-off; that check alone does not block.
+4. Merge the PR with a **merge commit**, never squash. Squashing would drop the `upstream/main` merge parent, so the next sync would re-conflict on everything already resolved.
+5. Share the PR link, then remove the worktree from the main checkout (`git worktree remove ../t3code-wt-sync-upstream-{YYYYMMDD}-{NUM}`) and delete the sync branch.

@@ -6,6 +6,9 @@ import {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+/** A provider reported its model at capacity; the failure says nothing about the thread itself. */
+export const PROVIDER_CAPACITY_FAILURE_CODE = "serverOverloaded";
+
 type ErrorTurnItem = Extract<OrchestrationV2TurnItem, { type: "error" }>;
 /** Only error items are read, so callers may pass items stripped of other fields. */
 type FailureScanTurnItem =
@@ -16,6 +19,13 @@ export function latestRootProviderFailure(
   run: OrchestrationV2Run | null,
   turnItems: ReadonlyArray<FailureScanTurnItem>,
 ): OrchestrationV2ProviderFailure | null {
+  return latestRootProviderFailureItem(run, turnItems)?.failure ?? null;
+}
+
+export function latestRootProviderFailureItem(
+  run: OrchestrationV2Run | null,
+  turnItems: ReadonlyArray<FailureScanTurnItem>,
+): ErrorTurnItem | null {
   if (run?.status !== "failed") return null;
   let latest: ErrorTurnItem | null = null;
   for (const item of turnItems) {
@@ -35,7 +45,7 @@ export function latestRootProviderFailure(
       latest = item;
     }
   }
-  return latest?.failure ?? null;
+  return latest;
 }
 
 export function threadErrorSummary(
@@ -81,6 +91,26 @@ export function manuallyResumableRun(
     : run;
 }
 
+/**
+ * Work started now would run in the project checkout, not the worktree the thread asked for. A
+ * failed or interrupted setup leaves the request standing until a worktree exists or later work
+ * has run past it.
+ */
+export function orchestrationV2WorktreePending(
+  worktreePath: string | null,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  const latest = latestExecutedRun(runs);
+  return (
+    worktreePath === null &&
+    (latest?.status === "preparing" ||
+      latest?.status === "failed" ||
+      latest?.status === "interrupted") &&
+    latest.startedAt === null &&
+    latest.workspacePreparation?.type === "worktree"
+  );
+}
+
 /** Held queues can execute out of ordinal order; unfinished runs count as latest. */
 export function runRanAfter(
   run: Pick<OrchestrationV2Run, "ordinal" | "completedAt">,
@@ -120,7 +150,24 @@ export function latestUnheldRun(
   let latest: OrchestrationV2Run | null = null;
   for (const run of runs) {
     if (run.status === "queued" && run.queueHeld === true) continue;
+    if (outlivedBeforeStart(run, runs)) continue;
     if (latest === null || run.ordinal > latest.ordinal) latest = run;
   }
   return latest;
+}
+
+// Steering a queued message cancels its run before it starts and hands the message to the
+// earlier run, which outlives the cancellation; that earlier run then presents as latest.
+function outlivedBeforeStart(
+  run: OrchestrationV2Run,
+  runs: ReadonlyArray<OrchestrationV2Run>,
+): boolean {
+  if (run.status !== "cancelled" || run.startedAt !== null || !run.completedAt) return false;
+  const cancelledAt = DateTime.toEpochMillis(run.completedAt);
+  return runs.some(
+    (earlier) =>
+      earlier.ordinal < run.ordinal &&
+      earlier.status !== "queued" &&
+      (!earlier.completedAt || DateTime.toEpochMillis(earlier.completedAt) >= cancelledAt),
+  );
 }

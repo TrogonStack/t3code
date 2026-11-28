@@ -5,6 +5,8 @@ import {
   injectMcpAppCsp,
   injectMcpAppThemeBootstrap,
   injectMcpAppCookieBootstrap,
+  clampMcpAppHeight,
+  MCP_APP_COLOR_SCHEME_PARAM,
   mcpAppContentSecurityPolicy,
   mcpAppToolCallableByApp,
   mcpAppToolResourceUri,
@@ -17,8 +19,13 @@ describe("mcpAppContentSecurityPolicy", () => {
     const policy = mcpAppContentSecurityPolicy(undefined);
     expect(policy).toContain("default-src 'none'");
     expect(policy).toContain("connect-src 'none'");
-    expect(policy).toContain("frame-src 'none'");
+    expect(policy).toContain("frame-src blob:;");
     expect(policy).not.toContain("'self'");
+  });
+
+  it("lets apps frame their own blob: documents alongside declared frame origins", () => {
+    const policy = mcpAppContentSecurityPolicy({ frameDomains: ["https://embed.test"] });
+    expect(policy).toContain("frame-src blob: https://embed.test;");
   });
 
   it("allows exactly the declared origins", () => {
@@ -100,6 +107,28 @@ describe("injectMcpAppThemeBootstrap", () => {
     expect(style.colorScheme).toBe("light");
     send(initialized);
     expect(style.colorScheme).toBe("dark");
+  });
+
+  it("applies only a valid scheme from the frame URL before any message arrives", () => {
+    const html = injectMcpAppThemeBootstrap("<p>app</p>");
+    const script = html.slice(html.indexOf("<script>") + 8, html.indexOf("</script>"));
+    const initialScheme = (search: string) => {
+      const head: Array<{ name?: string; content?: string }> = [];
+      NodeVM.runInNewContext(script, {
+        URLSearchParams,
+        location: { search },
+        window: { parent: {}, addEventListener: () => {} },
+        document: {
+          createElement: () => ({}),
+          head: { append: (element: (typeof head)[number]) => head.push(element) },
+        },
+      });
+      return head.find((element) => element.name === "color-scheme")?.content ?? "normal";
+    };
+    expect(initialScheme(`?a=1&${MCP_APP_COLOR_SCHEME_PARAM}=dark`)).toBe("dark");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=light`)).toBe("light");
+    expect(initialScheme(`?${MCP_APP_COLOR_SCHEME_PARAM}=normal`)).toBe("normal");
+    expect(initialScheme("")).toBe("normal");
   });
 });
 
@@ -224,11 +253,15 @@ describe("mcpAppFromToolItem", () => {
 
 describe("MCP App cookie bootstrap", () => {
   const vendor = `<script>document.cookie.split(";");document.cookie="analytics=1";document.root="rendered";</script>`;
-  const execute = (html: string, document: object) => {
+  const execute = (html: string, document: object, self: object = {}) => {
     for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
-      NodeVM.runInNewContext(script[1]!, { document });
+      NodeVM.runInNewContext(script[1]!, { document, self });
     }
   };
+  const blockedCookieStore = (error: unknown) => ({
+    getAll: () => Promise.reject(error),
+    addEventListener: () => {},
+  });
 
   it("lets cookie-reading startup code render in an opaque document without granting storage", () => {
     const blocked = new DOMException("Opaque origin", "SecurityError");
@@ -262,6 +295,21 @@ describe("MCP App cookie bootstrap", () => {
     expect(() => Reflect.get(prototype, "cookie")).toThrow(blocked);
   });
 
+  it("gives the Cookie Store API an empty jar in an opaque document", async () => {
+    const blocked = new DOMException("Opaque origin", "SecurityError");
+    const native = blockedCookieStore(blocked);
+    const self: { origin: string; cookieStore: CookieStore } = Object.create({
+      cookieStore: native,
+    });
+    self.origin = "null";
+    execute(injectMcpAppCookieBootstrap(vendor), { cookie: "", root: "" }, self);
+    await expect(self.cookieStore.getAll()).resolves.toEqual([]);
+    await expect(self.cookieStore.get("session")).resolves.toBeNull();
+    await expect(self.cookieStore.set("session", "secret")).resolves.toBeUndefined();
+    await expect(self.cookieStore.getAll()).resolves.toEqual([]);
+    expect(() => self.cookieStore.addEventListener("change", () => {})).not.toThrow();
+  });
+
   it("leaves other cookie failures unchanged", () => {
     const failure = new TypeError("Unexpected cookie failure");
     const document = Object.defineProperty({}, "cookie", {
@@ -271,5 +319,21 @@ describe("MCP App cookie bootstrap", () => {
     });
     expect(() => execute(injectMcpAppCookieBootstrap(vendor), document)).toThrow(failure);
     expect(() => Reflect.get(document, "cookie")).toThrow(failure);
+  });
+
+  it("keeps a real origin's Cookie Store", () => {
+    const native = blockedCookieStore(new TypeError("Unexpected cookie failure"));
+    const self = { origin: "https://app.example", cookieStore: native };
+    execute(injectMcpAppCookieBootstrap(vendor), { cookie: "", root: "" }, self);
+    expect(self.cookieStore).toBe(native);
+  });
+});
+
+describe("clampMcpAppHeight", () => {
+  it("collapses an app that reports it has nothing to show", () => {
+    expect(clampMcpAppHeight(0)).toBe(0);
+    expect(clampMcpAppHeight(-5)).toBe(0);
+    expect(clampMcpAppHeight(12)).toBe(80);
+    expect(clampMcpAppHeight(Number.NaN)).toBe(320);
   });
 });

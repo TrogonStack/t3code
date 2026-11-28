@@ -382,7 +382,10 @@ fn pin_mutation(project_id: &str, pinned: bool, command_id: String) -> ProjectMu
         project_id: project_id.to_owned(),
         scripts: None,
         title: None,
+        track_folders: None,
+        tracked_folders: None,
         type_: ProjectMutationType::ProjectUpdate,
+        untrack_folders: None,
         workspace_root: None,
     }
 }
@@ -401,6 +404,7 @@ fn create_mutation(
         project_id: project_id.to_owned(),
         scripts: None,
         title: title.to_owned(),
+        tracked_folders: None,
         type_: ProjectMutationCreateType::ProjectCreate,
         workspace_root: workspace_root.to_owned(),
     }
