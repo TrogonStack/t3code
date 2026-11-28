@@ -560,11 +560,14 @@ const GIT_FAILURE_REASON_DETAILS: Partial<Record<GitCommandFailureReason, string
     "The remote has commits this branch doesn't have. Pull or rebase, then push again.",
   config_locked:
     "Another Git process kept the repository's config locked. Wait for it to finish, then retry.",
+  mise_config_untrusted:
+    "A Git hook ran mise, and mise refused a config file it does not trust. Run `mise trust` for that project, then retry.",
 };
 
-function gitFailureDetail(reason: GitCommandFailureReason | null): string {
+function gitFailureDetail(reason: GitCommandFailureReason | null, fallback?: string): string {
   return (
     (reason === null ? undefined : GIT_FAILURE_REASON_DETAILS[reason]) ??
+    fallback ??
     "Git command exited with a non-zero status."
   );
 }
@@ -580,6 +583,9 @@ const GIT_DIAGNOSTIC_LINE_PATTERN = /^(?:fatal|error):|^!\s|^\s+!\s/;
 const SSH_TRANSPORT_REFUSAL_PATTERN =
   /Permission denied \((?:publickey|password|keyboard-interactive)|Permission denied, please try again|Host key verification failed/i;
 
+// A hook's tool runs through a mise shim, and mise's refusal is not a Git diagnostic line.
+const MISE_UNTRUSTED_CONFIG_PATTERN = /^mise ERROR Config files? in .+ (?:is|are) not trusted\./im;
+
 function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
   const diagnostics = stderr
     .split(/\r?\n/)
@@ -589,14 +595,15 @@ function classifyGitFailure(stderr: string): GitCommandFailureReason | null {
         (!/^remote:/.test(line) && SSH_TRANSPORT_REFUSAL_PATTERN.test(line)),
     )
     .join("\n");
-  if (diagnostics.length === 0) return null;
-  if (isNonRepositoryGitStderr(diagnostics)) return "not_a_repository";
-  for (const [pattern, reason] of GIT_FAILURE_REASON_PATTERNS) {
-    if (!pattern.test(diagnostics)) continue;
-    if (reason === "ref_not_found" && GIT_NOT_A_COMMIT_PATTERN.test(diagnostics)) continue;
-    return reason;
+  if (diagnostics.length > 0) {
+    if (isNonRepositoryGitStderr(diagnostics)) return "not_a_repository";
+    for (const [pattern, reason] of GIT_FAILURE_REASON_PATTERNS) {
+      if (!pattern.test(diagnostics)) continue;
+      if (reason === "ref_not_found" && GIT_NOT_A_COMMIT_PATTERN.test(diagnostics)) continue;
+      return reason;
+    }
   }
-  return null;
+  return MISE_UNTRUSTED_CONFIG_PATTERN.test(stderr) ? "mise_config_untrusted" : null;
 }
 
 const COMMIT_FAILURE_OUTPUT_MAX_CHARS = 1_000;
@@ -1643,7 +1650,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           new GitCommandError({
             ...gitCommandContext({ operation, cwd, args }),
             ...(reason === null ? {} : { reason }),
-            detail: options.fallbackErrorDetail ?? gitFailureDetail(reason),
+            detail: gitFailureDetail(reason, options.fallbackErrorDetail),
             ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
             stdoutLength: result.stdout.length,
             stderrLength: result.stderr.length,
