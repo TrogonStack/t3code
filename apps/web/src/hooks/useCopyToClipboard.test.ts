@@ -52,6 +52,57 @@ describe("writeTextToClipboard", () => {
     vi.unstubAllGlobals();
   });
 
+  it("copies through the document when the async clipboard says it is not focused", async () => {
+    const notFocused = new DOMException("Document is not focused.", "NotAllowedError");
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        write: vi.fn().mockRejectedValue(notFocused),
+        writeText: vi.fn().mockRejectedValue(notFocused),
+      },
+    });
+    vi.stubGlobal(
+      "ClipboardItem",
+      class {
+        constructor(readonly data: Record<string, Blob>) {}
+      },
+    );
+    const copied: Record<string, string> = {};
+    const textarea = {
+      value: "",
+      style: {},
+      setAttribute: vi.fn(),
+      addEventListener: (_: string, listener: (event: unknown) => void) => {
+        textarea.copy = listener;
+      },
+      removeEventListener: vi.fn(),
+      focus: vi.fn(),
+      select: vi.fn(),
+      setSelectionRange: vi.fn(),
+      remove: vi.fn(),
+      copy: (_event: unknown) => {},
+    };
+    vi.stubGlobal("document", {
+      activeElement: null,
+      body: { appendChild: vi.fn() },
+      createElement: () => textarea,
+      execCommand: () => {
+        textarea.copy({
+          clipboardData: { setData: (type: string, data: string) => (copied[type] = data) },
+          preventDefault: vi.fn(),
+        });
+        return true;
+      },
+    });
+    const fragment = JSON.stringify({ version: 1, source: {}, records: [] });
+
+    await expect(
+      writeTextToClipboard("Thread", undefined, { [COMPOSER_CONTEXT_CLIPBOARD_MIME]: fragment }),
+    ).resolves.toBe(true);
+    expect(copied["text/plain"]).toBe("Thread");
+    expect(copied[COMPOSER_CONTEXT_CLIPBOARD_MIME]).toBe(fragment);
+  });
+
   it("keeps caller-built rich HTML when attaching a context fragment", async () => {
     const write = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("window", {});
