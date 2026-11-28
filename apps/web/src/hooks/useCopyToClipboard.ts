@@ -213,6 +213,13 @@ export async function writeTextToClipboard(
     await navigator.clipboard.writeText(value);
     return true;
   } catch (cause) {
+    // The async API rejects when the document lost focus, e.g. to a native context menu.
+    if (
+      typeof document !== "undefined" &&
+      !document.hasFocus() &&
+      writeTextWithExecCommand(value, extraFlavors, options?.requireHtml)
+    )
+      return true;
     throw new ClipboardWriteError({ ...clipboardTargetFields(target, "failure"), cause });
   }
 }
