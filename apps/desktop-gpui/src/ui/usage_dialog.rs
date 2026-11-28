@@ -915,7 +915,7 @@ fn curve_path(
     map: &impl Fn(f64, f64) -> gpui::Point<Pixels>,
     mut builder: PathBuilder,
     close_to: Option<f64>,
-) -> Option<gpui::Path<Pixels>> {
+) -> Option<gpui::Path> {
     let first = curves.first()?;
     let last = curves.last()?;
     builder.move_to(map(first.from.x, first.from.y));

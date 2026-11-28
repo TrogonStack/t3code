@@ -12,10 +12,10 @@ base64 = "0.23"
 bytes = "1"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
-gpui = { package = "gpui-pre", version = "=0.3.11" }
-gpui-component = "=0.9.0"
-gpui-kit-assets = "=0.9.0"
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit"] }
+gpui = { package = "gpui-pre", version = "=0.3.14" }
+gpui-component = "=0.11.0"
+gpui-kit-assets = "=0.11.0"
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["font-kit"] }
 hex = "0.4.3"
 hmac = "0.13.0"
 http-body = "1"
