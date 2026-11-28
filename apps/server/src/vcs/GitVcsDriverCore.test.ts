@@ -3153,6 +3153,73 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
     }),
   );
   describe("structured errors", () => {
+    it.effect("names an untrusted mise config instead of the worktree fallback", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "mise-untrusted");
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/post-checkout",
+          [
+            "#!/bin/sh",
+            "echo 'mise ERROR error parsing config file: /private/worktree/mise.toml' >&2",
+            "echo 'mise ERROR Config files in /private/worktree/mise.toml are not trusted.' >&2",
+            "echo 'Trust them with `mise trust`.' >&2",
+            "exit 1",
+            "",
+          ].join("\n"),
+        );
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/mise-untrusted",
+          })
+          .pipe(Effect.flip);
+
+        assert.deepInclude(error, { reason: "mise_config_untrusted", exitCode: 1 });
+        assert.include(error.detail, "mise trust");
+        assert.notInclude(error.detail, "git worktree add failed");
+        assert.notInclude(error.message, "/private/worktree");
+      }),
+    );
+
+    it.effect("keeps the worktree fallback when a hook fails for another reason", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const path = yield* Path.Path;
+        const fs = yield* FileSystem.FileSystem;
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "hook-failed");
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/post-checkout",
+          "#!/bin/sh\necho 'mise ERROR something else broke' >&2\nexit 1\n",
+        );
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+
+        const error = yield* driver
+          .createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/hook-failed",
+          })
+          .pipe(Effect.flip);
+
+        assert.isUndefined(error.reason);
+        assert.equal(error.detail, "git worktree add failed");
+      }),
+    );
+
     it.effect("does not retain git arguments or stderr in command failures", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
