@@ -83,6 +83,7 @@ describe("writeTextToClipboard", () => {
       copy: (_event: unknown) => {},
     };
     vi.stubGlobal("document", {
+      hasFocus: () => false,
       activeElement: null,
       body: { appendChild: vi.fn() },
       createElement: () => textarea,
